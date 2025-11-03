@@ -1,4 +1,14 @@
-# vibe-bot（Telegram → Mac CLI → Telegram 回推）
+# vibego
+
+**通过 Telegram 随时随地驱动你的终端 AI CLI（支持 Codex / ClaudeCode）**
+
+## 功能介绍
+
+1. 通过 Telegram 随时随地驱动你的终端 AI CLI;
+2. 通过 telegram 做到简单的任务管理与缺陷报告，可在 Telegram 中直接记录并追踪；
+3. 通过 telegram 随时在 Codex / ClaudeCode 终端 CLI 间一键切换；
+4. 通过 Telegram Bot API 的 HTTPS 请求通道传输指令到 CLI，链路全程由 TLS 加密保护。
+5. 运行期日志和状态文件统一写入本机 ~/.config/vibego/，敏感数据不出终端；
 
 ## 环境依赖
 
@@ -19,19 +29,6 @@
   source ~/.config/vibego/runtime/.venv/bin/activate
   ```
   如需自定义位置，可设置 `VIBEGO_RUNTIME_ROOT` 指向目标目录（pipx 安装用户无需额外操作）。
-
-## 目录结构
-
-- `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / 预留 Gemini）。
-- `scripts/run_bot.sh`：一键启动脚本（自动建 venv、启动 tmux + 模型 CLI + bot）。
-- `scripts/stop_bot.sh`：终止当前项目 worker（tmux + bot 进程）。
-- `scripts/start_tmux_codex.sh`：底层 tmux/CLI 启动器，被 `run_bot.sh` 调用，默认以 `tmux -u` 强制启用 UTF-8。
-- `scripts/models/`：模型配置模块（`common.sh`/`codex.sh`/`claudecode.sh`/`gemini.sh`）。
-- `logs/<model>/<project>/`：运行日志（`run_bot.log`、`model.log`、`bot.pid`、`current_session.txt`），默认位于
-  `~/.config/vibego/logs/`。
-    - `model.log` 由 `scripts/log_writer.py` 控制，单文件上限 20MB，仅保留最近 24 小时的归档（可通过 `MODEL_LOG_MAX_BYTES`、
-      `MODEL_LOG_RETENTION_SECONDS` 覆盖）。
-- `.env.example`：环境配置模板（复制为 `.env` 后按需修改）。
 
 ## 快速开始
 
@@ -57,6 +54,19 @@ vibego start         # 启动 master 服务
 6. Master 会在展示项目列表或每 24 小时自动检测 PyPI 最新版本，如发现更新会提醒管理员执行 `/upgrade` 完成自升级。
 
 > CLI 会自动安装 Python 依赖并在 `~/.config/vibego/` 下准备 `logs/`、`state/` 等运行期目录，避免污染仓库工作区。
+
+## 目录结构
+
+- `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / 预留 Gemini）。
+- `scripts/run_bot.sh`：一键启动脚本（自动建 venv、启动 tmux + 模型 CLI + bot）。
+- `scripts/stop_bot.sh`：终止当前项目 worker（tmux + bot 进程）。
+- `scripts/start_tmux_codex.sh`：底层 tmux/CLI 启动器，被 `run_bot.sh` 调用，默认以 `tmux -u` 强制启用 UTF-8。
+- `scripts/models/`：模型配置模块（`common.sh`/`codex.sh`/`claudecode.sh`/`gemini.sh`）。
+- `logs/<model>/<project>/`：运行日志（`run_bot.log`、`model.log`、`bot.pid`、`current_session.txt`），默认位于
+  `~/.config/vibego/logs/`。
+    - `model.log` 由 `scripts/log_writer.py` 控制，单文件上限 20MB，仅保留最近 24 小时的归档（可通过 `MODEL_LOG_MAX_BYTES`、
+      `MODEL_LOG_RETENTION_SECONDS` 覆盖）。
+- `.env.example`：环境配置模板（复制为 `.env` 后按需修改）。
 
 ## 日志 & 目录
 
