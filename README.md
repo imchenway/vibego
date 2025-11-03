@@ -12,48 +12,31 @@
 
 ## 环境依赖
 
-- 建议使用 Homebrew 安装核心命令行工具，保证脚本依赖一致：
-  ```bash
-  brew install python3 tmux codex
-  ```
-  Homebrew 官方文档说明可以通过 `brew install` 安装 Python 及 tmux，Codex CLI 官方文档同样推荐使用 Homebrew。安装完成后可执行
-  `python3 --version`、`tmux -V` 和 `codex --version` 验证环境。
-- 首次使用 Codex CLI 需通过 ChatGPT 登录：
-  ```bash
-  codex login
-  ```
-  登录成功后会在本地写入凭据（默认为 `~/.codex/auth.json`）。若需使用 API Key，可执行 `codex login --api-key <key>`。
-- 项目脚本默认调用 Homebrew 提供的 `python3`。若需要隔离依赖，可提前在运行期目录创建虚拟环境（与脚本默认路径保持一致）：
-  ```bash
-  python3 -m venv ~/.config/vibego/runtime/.venv
-  source ~/.config/vibego/runtime/.venv/bin/activate
-  ```
-  如需自定义位置，可设置 `VIBEGO_RUNTIME_ROOT` 指向目标目录（pipx 安装用户无需额外操作）。
+```bash
+brew install python@3.11 tmux
+python3 -m venv ~/.config/vibego/runtime/venv
+source ~/.config/vibego/runtime/venv/bin/activate
+```
 
 ## 快速开始
 
+### 创建并获取 telegram bot token
 建议通过 PyPI 安装的 `vibego` 命令完成初始化与启动，示例：
 
+- 首次创建 Token 可参考 Telegram 官方 BotFather 指南（<https://core.telegram.org/bots#botfather>）：
+    1) 在 Telegram 客户端搜索 `@BotFather` 并开始对话；
+    2) 发送 `/start`，然后依次发送 `/newbot`，根据提示输入机器人名称与用户名；
+    3) BotFather 将返回以 `123456789:ABC...` 形式的 HTTP API Token，请妥善保存；
+    4) 若需重新获取或重置 Token，可在同一对话中发送 `/token`，选择目标机器人后领取新令牌。
+
+### 安装 & 启动 vibego
+
+执行该步骤之前，确保您的终端已经安装并登录了 codex /claudeCode，且已经准备好了 telegram bot token。
 ```bash
 pipx install vibego  # 或者 pip install --user vibego
 vibego init          # 初始化配置目录并写入 Master Bot Token
 vibego start         # 启动 master 服务
 ```
-
-若在本仓库内调试，可执行：
-
-1. 安装依赖：`brew install python tmux`（若需要代理，请提前配置）。
-2. 初始化配置：`python -m vibego_cli init` 或 `./scripts/vibego init`，按提示输入 Telegram Master Bot Token。
-
-- 初始化会在 `~/.config/vibego/` 下创建 `.env`、`config/projects.json`、`config/master.db` 等文件。
-
-3. 启动 master：`python -m vibego_cli start`。启动后请在 Telegram 中向 Bot 发送 `/start` 完成授权。
-4. 查看状态或停止服务：运行 `python -m vibego_cli status`、`python -m vibego_cli stop`。
-5. 若曾在仓库内生成运行期数据，可执行 `./scripts/migrate_runtime.sh` 将数据库、日志与状态文件迁移到 `~/.config/vibego/`
-   ，防止敏感信息留在仓库目录。
-6. Master 会在展示项目列表或每 24 小时自动检测 PyPI 最新版本，如发现更新会提醒管理员执行 `/upgrade` 完成自升级。
-
-> CLI 会自动安装 Python 依赖并在 `~/.config/vibego/` 下准备 `logs/`、`state/` 等运行期目录，避免污染仓库工作区。
 
 ## 目录结构
 
