@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.vibe.bot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/USERNAME/.config/vibego/runtime/.venv/bin/python</string>
+    <string>/Users/USERNAME/vibe-bot/bot.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/USERNAME/vibe-bot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+    <key>VIBEGO_CONFIG_DIR</key><string>/Users/USERNAME/.config/vibego</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/USERNAME/.config/vibego/logs/launchd-bot.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/USERNAME/.config/vibego/logs/launchd-bot.err.log</string>
+</dict>
+</plist>
