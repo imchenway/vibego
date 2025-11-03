@@ -1,0 +1,4 @@
+include README.md
+include scripts/requirements.txt
+recursive-include scripts *.sh *.py
+recursive-include config *.example

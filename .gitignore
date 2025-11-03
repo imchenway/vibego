@@ -1,0 +1,56 @@
+# Python artifacts
+__pycache__/
+.pycache/
+*.py[cod]
+
+# Virtual environments
+.venv/
+.venv*/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node dependencies
+node_modules/
+
+# Logs and runtime outputs
+vibe.out.log
+*.log
+*.log.*
+*.pid
+*.db-shm
+*.db-wal
+logs/
+test-results/
+scripts/logs/
+coverage.xml
+.coverage
+.coverage.*
+vibe.log
+
+# Runtime state
+state/
+data/
+config/master.db
+config/projects.json
+config/projects.json.*.bak
+config/*.db
+vibebot.db
+
+# IDE/editor folders
+.idea/
+.vscode/
+.py311test/
+
+# macOS
+.DS_Store
+
+# Python build artifacts
+*.egg-info/
+dist/
+build/
+
+# Launch agents
+launchd/*.plist
