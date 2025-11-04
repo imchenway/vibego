@@ -1,4 +1,4 @@
-"""验证完整的处理流程"""
+"""Verify complete processing flow"""
 
 import sys
 from pathlib import Path
@@ -9,69 +9,69 @@ sys.path.insert(0, str(project_root))
 from bot import _unescape_if_already_escaped, _prepare_model_payload
 
 print("\n" + "=" * 80)
-print("验证：智能反转义 + 格式化流程")
+print("Validation: smart escaping + Formatting process")
 print("=" * 80 + "\n")
 
-# 测试用户提供的真实场景
-original_input = r"""\#\#\# 📋 后续步骤
+# Test real-life scenarios provided by users
+original_input = r"""\#\#\# 📋 Next steps
 
-1\. \*\*重启 Bot 服务\*\*以应用修复：
+1\. \*\*Restart the Bot service\*\*To apply the fix:
    \`\`\`bash
    python -m vibego\_cli stop
    \`\`\`"""
 
-print("第1步：原始输入（存储在数据库中的内容）")
+print("Step 1: Raw input (what is stored in the database)")
 print("-" * 80)
 print(original_input)
 print()
 
-# 模拟 _format_task_detail 的处理
-print("第2步：智能反转义（_unescape_if_already_escaped）")
+# simulation _format_task_detail processing
+print("Step 2: Smart Unescaping (_unescape_if_already_escaped)")
 print("-" * 80)
 cleaned = _unescape_if_already_escaped(original_input)
 print(cleaned)
 print()
 
-print("第3步：准备发送到 Telegram（_prepare_model_payload）")
+print("Step 3: Prepare to send to Telegram (_prepare_model_payload)")
 print("-" * 80)
 final = _prepare_model_payload(cleaned)
 print(final)
 print()
 
 print("=" * 80)
-print("关键检查")
+print("critical check")
 print("=" * 80)
 
 checks = {
-    "步骤2后：代码块标记正常": "```bash" in cleaned,
-    "步骤2后：粗体格式正常": "**重启 Bot 服务**" in cleaned,
-    "步骤2后：代码块内保持转义": "vibego\\_cli" in cleaned,
-    "步骤3后：代码块标记保持": "```bash" in final,
-    "步骤3后：粗体符合 Markdown": "*重启 Bot 服务*" in final,
-    "步骤3后：代码块内下划线被保护": "vibego\\_cli" in final,
+    "After step 2: Code block tags are ok": "```bash" in cleaned,
+    "After step 2: Bold formatting is OK": "**Restart the Bot service**" in cleaned,
+    "After step 2: Keep escaping within code blocks": "vibego\\_cli" in cleaned,
+    "After Step 3: Code block tags remain": "```bash" in final,
+    "After Step 3: Bold conforms to Markdown": "*Restart the Bot service*" in final,
+    "After step 3: Underlines within code blocks are protected": "vibego\\_cli" in final,
 }
 
 for name, passed in checks.items():
-    status = "✅" if passed else "❌"
+    status = "PASS" if passed else "FAIL"
     print(f"{status} {name}")
 
 print()
 print("=" * 80)
-print("说明")
+print("illustrate")
 print("=" * 80)
 print("""
-预期行为：
-1. 步骤2（反转义）：清理外部的转义字符，保护代码块内容
-   - 代码块标记：\`\`\`bash → ```bash ✅
-   - 粗体文本：\*\*文本\*\* → **文本** ✅
-   - 代码块内：vibego\_cli → vibego\_cli ✅ （保持不变）
+Expected behavior:
+1. Step 2 (anti-escaping): Clean up external escape characters and protect the code block content
+   - Code block tag: \`\`\`bash → ```bash (ok)
+   - Bold text:\*\*text\*\* → **text** (ok)
+   - Within the code block: vibego\_cli → vibego\_cli (ok - remains unchanged)
 
-2. 步骤3（格式化）：转换为 Telegram Markdown 格式
-   - 代码块标记：```bash → ```bash ✅
-   - 粗体文本：**文本** → *文本* ✅
-   - 代码块内：vibego\_cli → vibego\_cli ✅（代码块内容不变）
+2. Step 3 (Formatting): Convert to Telegram Markdown format
+   - Code block markers:```bash → ```bash (ok)
+   - Boldtext: **text** → *text* (ok)
+   - Within the code block: vibego\_cli → vibego\_cli (ok - code block remains unchanged)
 
-注意：Telegram 在渲染时会：
-- 识别 \`\`\` 并显示为代码块
-- 代码块内的 vibego\_cli 显示为 vibego_cli （下划线正常显示）
+Note: Telegram will:
+- identify \`\`\` and displayed as a code block
+- vibego\ inside code block_cli Shown as vibego_cli (The underline is displayed normally)
 """)

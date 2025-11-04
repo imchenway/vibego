@@ -1,4 +1,4 @@
-"""命令行文本解析工具。"""
+"""Utilities for parsing command-style text payloads."""
 from __future__ import annotations
 
 import re
@@ -9,7 +9,7 @@ ESCAPED_PIPE_RE = re.compile(r"\\\|")
 
 
 def _split_segments(raw: str) -> list[str]:
-    """按未转义的 `|` 分割字符串，并恢复转义管道。"""
+    """Split by unescaped ``|`` characters and restore escaped pipes."""
 
     if not raw:
         return []
@@ -35,7 +35,7 @@ def _split_segments(raw: str) -> list[str]:
 
 
 def parse_structured_text(raw: str) -> Tuple[str, Dict[str, str]]:
-    """解析命令参数，返回主体文本与 key=value 字段。"""
+    """Parse command arguments and return the body together with key/value fields."""
 
     segments = _split_segments(raw)
     if not segments:
@@ -54,7 +54,7 @@ def parse_structured_text(raw: str) -> Tuple[str, Dict[str, str]]:
 
 
 def parse_simple_kv(raw: str) -> Dict[str, str]:
-    """仅解析 key=value 片段，忽略主体文本。"""
+    """Parse only ``key=value`` segments and ignore the body text."""
 
     _, extra = parse_structured_text(raw)
     return extra

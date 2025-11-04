@@ -111,13 +111,13 @@ def reply_bot_env():
         bot._bot = original_bot
 
 
-def _plan_event(status: str, explanation: str = "同步进度") -> dict:
+def _plan_event(status: str, explanation: str = "Sync progress") -> dict:
     arguments = json.dumps(
         {
             "explanation": explanation,
             "plan": [
                 {
-                    "step": "处理任务",
+                    "step": "processing tasks",
                     "status": status,
                 }
             ],
@@ -150,16 +150,16 @@ def test_plan_incomplete_keeps_watcher(plan_test_env):
     chat_id = 101
     env["append_events"]([
         _plan_event("in_progress"),
-        _final_event("处理完成"),
+        _final_event("Processing completed"),
     ])
     bot.SESSION_OFFSETS[str(env["session"])] = 0
 
     result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
 
     assert result is False
-    assert env["dummy_bot"].sent_messages  # plan消息已发送
+    assert env["dummy_bot"].sent_messages  # planMessage sent
     assert env["dummy_bot"].sent_messages[-1][3] is True
-    assert env["replies"]  # 最终回复已返回
+    assert env["replies"]  # Final reply returned
     assert bot.CHAT_PLAN_COMPLETION[chat_id] is False
     assert chat_id in bot.CHAT_PLAN_TEXT
 
@@ -169,21 +169,21 @@ def test_plan_complete_after_final_message(plan_test_env):
     chat_id = 202
     env["append_events"]([
         _plan_event("in_progress"),
-        _final_event("初步完成"),
+        _final_event("Preliminary completion"),
     ])
     bot.SESSION_OFFSETS[str(env["session"])] = 0
     first = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
     assert first is False
 
     env["append_events"]([
-        _plan_event("completed", "最终收尾"),
+        _plan_event("completed", "Final finishing"),
     ])
 
     second = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
 
     assert second is True
-    assert env["dummy_bot"].sent_messages  # 已发送过计划
-    assert env["dummy_bot"].edited_messages  # 最终完成触发编辑
+    assert env["dummy_bot"].sent_messages  # Plans have been sent
+    assert env["dummy_bot"].edited_messages  # Final completion of trigger editing
     assert chat_id not in bot.CHAT_PLAN_TEXT
     assert chat_id not in bot.CHAT_PLAN_COMPLETION
 
@@ -199,8 +199,8 @@ def test_plan_completed_without_final_response(plan_test_env):
     result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
 
     assert result is False
-    assert env["dummy_bot"].sent_messages  # 计划消息已发送
-    assert not env["replies"]  # 尚未发送最终回复
+    assert env["dummy_bot"].sent_messages  # Scheduled message sent
+    assert not env["replies"]  # No final reply has been sent yet
     assert bot.CHAT_PLAN_COMPLETION[chat_id] is True
 
 
@@ -210,30 +210,30 @@ def test_plan_disabled_falls_back(monkeypatch, plan_test_env):
     monkeypatch.setattr(bot, "ENABLE_PLAN_PROGRESS", False)
     env["append_events"]([
         _plan_event("in_progress"),
-        _final_event("已关闭计划"),
+        _final_event("Program closed"),
     ])
     bot.SESSION_OFFSETS[str(env["session"])] = 0
 
     result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
 
     assert result is True
-    assert not env["dummy_bot"].sent_messages  # 未启用计划时不会发送计划消息
-    assert env["replies"]  # 正常返回最终响应
+    assert not env["dummy_bot"].sent_messages  # Scheduled messages are not sent when scheduling is not enabled
+    assert env["replies"]  # Return final response normally
 
 
 def test_plan_metadata_missing_treated_incomplete(plan_test_env):
     env = plan_test_env
     chat_id = 505
     event = _plan_event("in_progress")
-    # 移除 status 字段模拟模型缺省
+    # Remove status field to simulate model default
     event["payload"]["arguments"] = json.dumps({
         "plan": [
             {
-                "step": "处理任务",
+                "step": "processing tasks",
             }
         ]
     })
-    env["append_events"]([event, _final_event("继续等待")])
+    env["append_events"]([event, _final_event("Keep waiting")])
     bot.SESSION_OFFSETS[str(env["session"])] = 0
 
     result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
@@ -251,13 +251,13 @@ def test_plan_edit_flow_keeps_waiting(plan_test_env):
     assert first is False
 
     env["append_events"]([
-        _plan_event("in_progress", "追加检查"),
+        _plan_event("in_progress", "Additional checks"),
     ])
     second = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
 
     assert second is False
     assert env["dummy_bot"].sent_messages
-    assert env["dummy_bot"].edited_messages  # 重复进度触发编辑
+    assert env["dummy_bot"].edited_messages  # Repeat progress trigger edit
     assert chat_id in bot.CHAT_PLAN_TEXT
 
 
@@ -265,7 +265,7 @@ def test_plan_progress_uses_plain_text_by_default(plan_test_env):
     env = plan_test_env
     chat_id = 6161
 
-    asyncio.run(bot._update_plan_progress(chat_id, "计划内容", plan_completed=False))
+    asyncio.run(bot._update_plan_progress(chat_id, "Plan content", plan_completed=False))
 
     assert env["dummy_bot"].sent_messages
     assert env["dummy_bot"].sent_messages[-1][2] is None
@@ -275,9 +275,9 @@ def test_plan_progress_edit_plain_text(plan_test_env):
     env = plan_test_env
     chat_id = 6262
     bot.CHAT_PLAN_MESSAGES[chat_id] = 1
-    bot.CHAT_PLAN_TEXT[chat_id] = "旧文本"
+    bot.CHAT_PLAN_TEXT[chat_id] = "old text"
 
-    asyncio.run(bot._update_plan_progress(chat_id, "新文本", plan_completed=False))
+    asyncio.run(bot._update_plan_progress(chat_id, "new text", plan_completed=False))
 
     assert env["dummy_bot"].edited_messages
     assert env["dummy_bot"].edited_messages[-1][3] is None
@@ -288,7 +288,7 @@ def test_plan_progress_honors_custom_parse_mode(monkeypatch, plan_test_env):
     chat_id = 6363
     monkeypatch.setattr(bot, "PLAN_PROGRESS_PARSE_MODE", ParseMode.MARKDOWN)
 
-    asyncio.run(bot._update_plan_progress(chat_id, "**计划内容**", plan_completed=False))
+    asyncio.run(bot._update_plan_progress(chat_id, "**Plan content**", plan_completed=False))
 
     assert env["dummy_bot"].sent_messages
     assert env["dummy_bot"].sent_messages[-1][2] == ParseMode.MARKDOWN.value
@@ -299,7 +299,7 @@ def test_plan_finalization_clears_state(plan_test_env):
     chat_id = 707
     env["append_events"]([
         _plan_event("in_progress"),
-        _final_event("处理中"),
+        _final_event("Processing"),
     ])
     bot.SESSION_OFFSETS[str(env["session"])] = 0
     asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
@@ -330,7 +330,7 @@ def test_update_plan_progress_send_failure(monkeypatch, plan_test_env):
     env = plan_test_env
     bot._bot = FailingBot()
 
-    result = asyncio.run(bot._update_plan_progress(808, "计划内容", plan_completed=False))
+    result = asyncio.run(bot._update_plan_progress(808, "Plan content", plan_completed=False))
 
     assert result is False
     assert 808 not in bot.CHAT_PLAN_TEXT
@@ -346,11 +346,11 @@ def test_update_plan_progress_edit_failure(plan_test_env):
     env = plan_test_env
     chat_id = 909
     bot.CHAT_PLAN_MESSAGES[chat_id] = 1
-    bot.CHAT_PLAN_TEXT[chat_id] = "旧文本"
+    bot.CHAT_PLAN_TEXT[chat_id] = "old text"
     bot.CHAT_PLAN_COMPLETION[chat_id] = False
     bot._bot = EditFailBot()
 
-    result = asyncio.run(bot._update_plan_progress(chat_id, "新文本", plan_completed=False))
+    result = asyncio.run(bot._update_plan_progress(chat_id, "new text", plan_completed=False))
 
     assert result is False
     assert chat_id not in bot.CHAT_PLAN_TEXT
@@ -361,7 +361,7 @@ def test_final_message_without_plan_returns_true(plan_test_env):
     env = plan_test_env
     chat_id = 1001
     env["append_events"]([
-        _final_event("直接完成"),
+        _final_event("Complete directly"),
     ])
     bot.SESSION_OFFSETS[str(env["session"])] = 0
 
@@ -375,7 +375,7 @@ def test_final_message_without_plan_returns_true(plan_test_env):
 def test_final_message_same_text_new_session(plan_test_env):
     env = plan_test_env
     chat_id = 1111
-    text = "重复文本"
+    text = "Repeat text"
 
     env["append_events"]([
         _final_event(text),
@@ -404,7 +404,7 @@ def test_final_message_same_text_new_session(plan_test_env):
 def test_duplicate_messages_sent_once(plan_test_env):
     env = plan_test_env
     chat_id = 1404
-    message_text = "重复测试"
+    message_text = "Repeat test"
     events = [_final_event(message_text) for _ in range(3)]
     env["append_events"](events)
     bot.SESSION_OFFSETS[str(env["session"])] = 0
@@ -421,7 +421,7 @@ def test_clear_last_message_allows_new_delivery(plan_test_env):
     chat_id = 1505
     session_key = str(env["session"])
     bot.SESSION_OFFSETS[session_key] = 0
-    bot.CHAT_LAST_MESSAGE.setdefault(chat_id, {})[session_key] = "旧消息"
+    bot.CHAT_LAST_MESSAGE.setdefault(chat_id, {})[session_key] = "old news"
 
     bot._clear_last_message(chat_id)
 
@@ -433,16 +433,16 @@ def test_clear_last_message_allows_new_delivery(plan_test_env):
 
 def test_reply_large_text_attachment(reply_bot_env):
     chat_id = 1901
-    long_text = f"{bot.MODEL_COMPLETION_PREFIX}\n\n" + ("内容较长\n" * (bot.TELEGRAM_MESSAGE_LIMIT // 3 + 10))
+    long_text = f"{bot.MODEL_COMPLETION_PREFIX}\n\n" + ("Long content\n" * (bot.TELEGRAM_MESSAGE_LIMIT // 3 + 10))
 
     delivered = asyncio.run(bot.reply_large_text(chat_id, long_text))
 
-    assert reply_bot_env.sent_messages, "应发送摘要提示"
+    assert reply_bot_env.sent_messages, "Summary reminder should be sent"
     summary = reply_bot_env.sent_messages[-1][1]
-    assert "附件" in summary
+    assert "appendix" in summary
     assert delivered == summary
 
-    assert reply_bot_env.sent_documents, "应发送附件"
+    assert reply_bot_env.sent_documents, "appendix should be sent"
     doc_chat_id, buffered_file, caption, parse_mode = reply_bot_env.sent_documents[-1]
     assert doc_chat_id == chat_id
     assert isinstance(buffered_file, BufferedInputFile)
@@ -454,7 +454,7 @@ def test_reply_large_text_attachment(reply_bot_env):
 
 def test_reply_large_text_short_message(reply_bot_env):
     chat_id = 1902
-    short_text = f"{bot.MODEL_COMPLETION_PREFIX}\n\n结果很短"
+    short_text = f"{bot.MODEL_COMPLETION_PREFIX}\n\nThe result is short"
 
     delivered = asyncio.run(bot.reply_large_text(chat_id, short_text))
 
@@ -512,7 +512,7 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
             captured_answers.append((text, kwargs))
             return SimpleNamespace(message_id=len(captured_answers))
 
-    msg = DummyMessage("测试指令")
+    msg = DummyMessage("test instructions")
     try:
         asyncio.run(bot.on_text(msg))
     finally:
@@ -526,7 +526,7 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
         bot.CHAT_LAST_MESSAGE.clear()
         bot.CHAT_FAILURE_NOTICES.clear()
 
-    assert captured_answers, "应返回会话确认信息"
+    assert captured_answers, "Session confirmation should be returned"
     prompt_text, kwargs = captured_answers[-1]
-    assert "思考中" in prompt_text
+    assert "Thinking" in prompt_text
     assert kwargs.get("disable_notification") is True

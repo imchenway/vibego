@@ -18,7 +18,7 @@ from bot import _prepare_model_payload, _prepare_model_payload_variants  # noqa:
         ("**bold** text", "*bold* text"),
         ("__italic__", "_italic_"),
         ("`code_snippet`", "`code_snippet`"),
-        ("普通文本 (test)", "普通文本 (test)"),
+        ("normal text (test)", "normal text (test)"),
         ("raw *literal* star", "raw *literal* star"),
         ("multiline\nline2", "multiline\nline2"),
     ],
@@ -28,17 +28,17 @@ def test_prepare_model_payload_markdown(source: str, expected: str) -> None:
 
 
 def test_prepare_model_payload_preserves_checklist() -> None:
-    text = "- [ ] 第一项\n- [ ] 第二项"
+    text = "- [ ] First item\n- [ ] Second item"
     assert _prepare_model_payload(text) == text
 
 
 def test_prepare_model_payload_handles_list_numbers() -> None:
-    text = "1. 选择 A\n2. 选择 B"
+    text = "1. Select A\n2. Option B"
     assert _prepare_model_payload(text) == text
 
 
 def test_prepare_model_payload_variants_returns_single_payload() -> None:
-    text = "纯文本内容"
+    text = "Plain text content"
     primary, fallback = _prepare_model_payload_variants(text)
-    assert primary == "纯文本内容"
+    assert primary == "Plain text content"
     assert fallback is None

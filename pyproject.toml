@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vibego"
 version = "0.2.58"
-description = "vibego CLI：用于初始化与管理 Telegram Master Bot 的工具"
+description = "vibego CLI: tools for bootstrapping and managing the Telegram Master Bot"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "Hypha" }
+    { name = "DavidChan" }
 ]
 license = "LicenseRef-Proprietary"
 dependencies = [

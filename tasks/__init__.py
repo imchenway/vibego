@@ -1,4 +1,4 @@
-"""任务管理模块，对外暴露核心服务接口。"""
+"""Task management module exposing the primary service interfaces."""
 
 from .service import TaskService
 from .models import TaskRecord, TaskNoteRecord, TaskHistoryRecord

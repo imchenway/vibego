@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 公共工具：模型脚本/运行脚本/停止脚本共享
+# Public Tools: Model Scripts/run script/Stop script sharing
 
-# 避免重复定义时覆盖
+# Avoid overwriting when repeating definitions
 if [[ -n "${_MODEL_COMMON_LOADED:-}" ]]; then
   return
 fi
@@ -31,7 +31,7 @@ CONFIG_ROOT="${CONFIG_ROOT:-$(resolve_config_root)}"
 LOG_ROOT="${LOG_ROOT:-$CONFIG_ROOT/logs}"
 TMUX_SESSION_PREFIX="${TMUX_SESSION_PREFIX:-vibe}"
 
-# 将任意路径/名称转换为 tmux/session 等安全的 slug
+# Change any path/Name converted to tmux/session Wait for a safe slug
 sanitize_slug() {
   local input="$1"
   if [[ -z "$input" ]]; then
@@ -53,7 +53,7 @@ project_slug_from_workdir() {
     printf 'project'
     return
   fi
-  # 将绝对路径改写为与 Claude 类似的 -Users-... 形式
+  # Rewrite the absolute path to something similar to Claude -Users-... form
   local replaced
   replaced=$(printf '%s' "$path" | sed 's#/#-#g')
   replaced="${replaced#-}"

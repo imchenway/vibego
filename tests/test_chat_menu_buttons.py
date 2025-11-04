@@ -154,7 +154,7 @@ def test_master_broadcast_handles_empty_targets(caplog):
 
 
 class _DummyMessage:
-    """用于模拟 master 项目按钮触发的测试消息。"""
+    """Used to simulate test messages triggered by master project buttons."""
 
     def __init__(self, text: str, chat_id: int = 999, message_id: int = 123) -> None:
         self.text = text
@@ -169,7 +169,7 @@ class _DummyMessage:
 
 
 class _DummyManager:
-    """模拟授权通过的 master manager。"""
+    """Impersonates the authorized master manager."""
 
     def __init__(self) -> None:
         self.invocations = []
@@ -231,9 +231,9 @@ def test_master_projects_button_uses_new_text_without_refresh(monkeypatch):
         (master.MASTER_MENU_BUTTON_TEXT, False),
         (f"{master.MASTER_MENU_BUTTON_TEXT} ", False),
         ("\u200b" + master.MASTER_MENU_BUTTON_TEXT + "\u200d", False),
-        ("📂项目列表", True),
-        ("项目列表", True),
-        (" 项目 列表 ", True),
+        ("📂Project list", True),
+        ("Project list", True),
+        (" Project list ", True),
         ("📂 Projects", True),
         ("projects", True),
         ("Project List", True),

@@ -19,7 +19,7 @@ MODEL_SESSION_ROOT="${MODEL_SESSION_ROOT:-${CODEX_SESSION_ROOT:-$HOME/.codex/ses
 MODEL_SESSION_GLOB="${MODEL_SESSION_GLOB:-rollout-*.jsonl}"
 SESSION_POINTER_FILE="${SESSION_POINTER_FILE:-$LOG_ROOT/${MODEL_NAME:-codex}/${PROJECT_NAME:-project}/current_session.txt}"
 
-# 避免 oh-my-zsh 在非交互环境弹出更新提示
+# Avoid oh-my-zsh popping up update prompts in non-interactive environments
 export DISABLE_UPDATE_PROMPT="${DISABLE_UPDATE_PROMPT:-true}"
 
 expand_path() {
@@ -40,7 +40,7 @@ KILL_SESSION=0
 
 usage() {
   cat <<USAGE
-用法：${0##*/} [--dry-run] [--force] [--restart] [--kill]
+usage:${0##*/} [--dry-run] [--force] [--restart] [--kill]
 USAGE
 }
 
@@ -51,13 +51,13 @@ while [[ $# -gt 0 ]]; do
     --restart) RESTART=1; FORCE_START=1 ;;
     --kill) KILL_SESSION=1 ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "未知参数: $1" >&2; usage; exit 1 ;;
+    *) echo "unknown parameters: $1" >&2; usage; exit 1 ;;
   esac
   shift
 done
 
 if ! command -v tmux >/dev/null 2>&1; then
-  echo "tmux 未安装" >&2
+  echo "tmux Not installed" >&2
   exit 1
 fi
 
@@ -98,12 +98,12 @@ else
   fi
 fi
 
-# 启动前先进行一次清理，避免旧日志超限
+# Clean up before starting to avoid old logs exceeding the limit.
 if ! env \
   MODEL_LOG_MAX_BYTES="$MODEL_LOG_MAX_BYTES" \
   MODEL_LOG_RETENTION_SECONDS="$MODEL_LOG_RETENTION_SECONDS" \
   "$PYTHON_EXEC" "$LOG_WRITER" "$LOG_PATH" </dev/null; then
-  echo "预处理日志文件失败" >&2
+  echo "Preprocessing log file failed" >&2
   exit 1
 fi
 
@@ -115,7 +115,7 @@ printf -v PIPE_CMD 'env MODEL_LOG_MAX_BYTES=%q MODEL_LOG_RETENTION_SECONDS=%q %q
   "$LOG_PATH"
 run_tmux pipe-pane -o -t "$SESSION_NAME" "$PIPE_CMD"
 
-# 同步环境变量到 tmux 服务端，避免复用旧会话时丢失设置
+# Synchronize environment variables to the tmux server to avoid losing settings when reusing old sessions
 run_tmux set-environment -t "$SESSION_NAME" DISABLE_UPDATE_PROMPT "${DISABLE_UPDATE_PROMPT:-true}"
 if [[ -n "${CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING:-}" ]]; then
   run_tmux set-environment -t "$SESSION_NAME" CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING "${CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING}"
@@ -138,7 +138,7 @@ fi
 
 
 if (( DRY_RUN )); then
-  printf '[dry-run] 会话日志路径: %s\n' "$SESSION_POINTER_FILE"
+  printf '[dry-run] Session log path: %s\n' "$SESSION_POINTER_FILE"
   exit 0
 fi
 

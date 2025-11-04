@@ -63,13 +63,13 @@ def test_task_detail_actions_include_back_button():
     task = TaskRecord(
         id="TASK_100",
         project_slug="proj",
-        title="测试任务",
+        title="Test tasks",
         status="todo",
-        description="描述",
+        description="describe",
     )
     markup = bot._build_task_actions(task)
 
-    assert markup.inline_keyboard[-1][0].text == "⬅️ 返回任务列表"
+    assert markup.inline_keyboard[-1][0].text == "⬅️ Return to task list"
     assert markup.inline_keyboard[-1][0].callback_data == bot.TASK_DETAIL_BACK_CALLBACK
 
 
@@ -92,7 +92,7 @@ def test_task_detail_back_callback_triggers_command(monkeypatch):
         message_id=50,
         date=datetime.now(UTC),
         chat=chat,
-        text="任务详情",
+        text="Mission details",
         from_user=bot_user,
     )
     callback = DummyCallback(base_message, human_user, bot.TASK_DETAIL_BACK_CALLBACK)
@@ -129,7 +129,7 @@ def test_task_detail_back_callback_missing_context(monkeypatch):
 
 def test_task_detail_callback_edits_in_place(monkeypatch):
     async def fake_render(task_id: str):
-        return f"任务详情：{task_id}", InlineKeyboardMarkup(inline_keyboard=[])
+        return f"Mission details: {task_id}", InlineKeyboardMarkup(inline_keyboard=[])
 
     monkeypatch.setattr(bot, "_render_task_detail", fake_render)
 
@@ -141,7 +141,7 @@ def test_task_detail_callback_edits_in_place(monkeypatch):
 
     asyncio.run(bot.on_task_detail_callback(callback))  # type: ignore[arg-type]
 
-    assert message.edits, "应通过编辑消息展示任务详情"
+    assert message.edits, "Mission details should be displayed via edit message"
     top_state = bot._peek_task_view(message.chat.id, message.message_id)
     assert top_state is not None and top_state.kind == "detail"
 
@@ -150,7 +150,7 @@ def test_task_detail_callback_edits_in_place(monkeypatch):
 
 def test_task_detail_back_edits_to_previous_view(monkeypatch):
     async def fake_render_view(state):
-        return "返回后的列表", InlineKeyboardMarkup(inline_keyboard=[])
+        return "Returned list", InlineKeyboardMarkup(inline_keyboard=[])
 
     monkeypatch.setattr(bot, "_render_task_view_from_state", fake_render_view)
 
@@ -163,8 +163,8 @@ def test_task_detail_back_edits_to_previous_view(monkeypatch):
 
     asyncio.run(bot.on_task_detail_back(callback))  # type: ignore[arg-type]
 
-    assert message.edits, "应通过编辑消息恢复列表"
-    assert callback.answers and callback.answers[-1]["text"] == "已返回任务列表"
+    assert message.edits, "The list should be restored by editing the message"
+    assert callback.answers and callback.answers[-1]["text"] == "Returned to task list"
     remaining_state = bot._peek_task_view(message.chat.id, message.message_id)
     assert remaining_state is not None and remaining_state.kind == "list"
 
@@ -194,18 +194,18 @@ def test_build_task_history_view_contains_return_button():
     task = TaskRecord(
         id="TASK_HISTORY",
         project_slug="proj",
-        title="查看历史测试",
+        title="View historical tests",
         status="test",
     )
     history = _make_history_records(task.id, bot.TASK_HISTORY_PAGE_SIZE + 2)
 
     text, markup, page, total_pages = bot._build_task_history_view(task, history, page=1)
 
-    assert "任务 TASK_HISTORY 事件历史" in text
+    assert "TASK_HISTORY event history" in text
     assert total_pages == 2
     assert page == 1
     last_row = markup.inline_keyboard[-1]
-    assert last_row[0].text == "⬅️ 返回任务详情"
+    assert last_row[0].text == "⬅️ Return to Mission details"
     assert last_row[0].callback_data == f"{bot.TASK_HISTORY_BACK_CALLBACK}:{task.id}"
 
 
@@ -214,7 +214,7 @@ def test_task_history_callback_sends_code_block_message(monkeypatch):
     task = TaskRecord(
         id=task_id,
         project_slug="proj",
-        title="分页历史",
+        title="Pagination history",
         status="test",
     )
     history = _make_history_records(task_id, bot.TASK_HISTORY_PAGE_SIZE + 2)
@@ -233,8 +233,8 @@ def test_task_history_callback_sends_code_block_message(monkeypatch):
 
     asyncio.run(bot.on_task_history(callback))  # type: ignore[arg-type]
 
-    assert not message.edits, "历史视图不应再编辑原消息"
-    assert message.calls, "历史视图应通过发送新消息展示"
+    assert not message.edits, "History view should no longer edit the original message"
+    assert message.calls, "The history view should be displayed by sending a new message"
     latest_call = message.calls[-1]
     assert latest_call["text"].startswith("```\n")
     assert latest_call["text"].rstrip().endswith("```")
@@ -256,7 +256,7 @@ def test_task_history_page_callback_updates_state(monkeypatch):
     task = TaskRecord(
         id=task_id,
         project_slug="proj",
-        title="分页跳转",
+        title="Page jump",
         status="test",
     )
     history = _make_history_records(task_id, bot.TASK_HISTORY_PAGE_SIZE + 3)
@@ -284,12 +284,12 @@ def test_task_history_page_callback_updates_state(monkeypatch):
     )
     asyncio.run(bot.on_task_history_page(page_callback))  # type: ignore[arg-type]
 
-    assert not history_message.edits, "分页切换不应编辑原历史消息"
-    assert history_message.calls, "分页切换应发送新的历史消息"
+    assert not history_message.edits, "Paging switching should not edit original historical messages"
+    assert history_message.calls, "Pagination switching should send new history messages"
     top_state = bot._peek_task_view(history_message.chat.id, history_message.sent_messages[-1].message_id)
     assert top_state is not None and top_state.kind == "history"
     assert top_state.data["page"] == 1
-    assert page_callback.answers and "已展示第 1/" in (page_callback.answers[-1]["text"] or "")
+    assert page_callback.answers and "Shown 1/" in (page_callback.answers[-1]["text"] or "")
 
     bot._clear_task_view(history_message.chat.id, history_message.sent_messages[-1].message_id)
 
@@ -299,12 +299,12 @@ def test_history_view_respects_telegram_limit(monkeypatch):
     task = TaskRecord(
         id=task_id,
         project_slug="proj",
-        title="超长历史分页",
+        title="Extra long history paging",
         status="todo",
     )
-    # 构造足够长的历史记录，触发按字符限制拆分页。
+    # Construct a history long enough to trigger page splitting by character limit.
     history: list[TaskHistoryRecord] = []
-    long_payload = "模型自动摘要内容。" + "很长的描述" * 400
+    long_payload = "Model automatically summarizes content." + "Very long describe" * 400
     for idx in range(12):
         history.append(
             TaskHistoryRecord(
@@ -324,7 +324,7 @@ def test_history_view_respects_telegram_limit(monkeypatch):
 
     assert total_pages > max(1, (len(history) + bot.TASK_HISTORY_PAGE_SIZE - 1) // bot.TASK_HISTORY_PAGE_SIZE)
     assert page == total_pages
-    assert markup.inline_keyboard[-1][0].text == "⬅️ 返回任务详情"
+    assert markup.inline_keyboard[-1][0].text == "⬅️ Return to Mission details"
     assert len(bot._prepare_model_payload(text)) <= bot.TELEGRAM_MESSAGE_LIMIT
 
 
@@ -333,7 +333,7 @@ def test_history_view_truncates_when_limit_is_small(monkeypatch):
     task = TaskRecord(
         id=task_id,
         project_slug="proj",
-        title="超限截断提示",
+        title="Over limit truncation prompt",
         status="todo",
     )
     record = TaskHistoryRecord(
@@ -341,10 +341,10 @@ def test_history_view_truncates_when_limit_is_small(monkeypatch):
         task_id=task_id,
         field="description",
         old_value="",
-        new_value="极长的测试内容" * 200,
+        new_value="Extremely long test content" * 200,
         actor="tester",
         event_type=bot.HISTORY_EVENT_MODEL_SUMMARY,
-        payload=json.dumps({"content": "极长的测试内容" * 200}),
+        payload=json.dumps({"content": "Extremely long test content" * 200}),
         created_at="2025-10-20T10:00:00+08:00",
     )
 
@@ -361,7 +361,7 @@ def test_task_history_back_returns_detail(monkeypatch):
     task = TaskRecord(
         id=task_id,
         project_slug="proj",
-        title="返回详情",
+        title="Return details",
         status="test",
     )
     history = _make_history_records(task_id, bot.TASK_HISTORY_PAGE_SIZE + 1)
@@ -372,7 +372,7 @@ def test_task_history_back_returns_detail(monkeypatch):
 
     async def fake_render_detail(target_id: str):
         assert target_id == task_id
-        return "任务详情：返回", InlineKeyboardMarkup(inline_keyboard=[])
+        return "Mission details: return", InlineKeyboardMarkup(inline_keyboard=[])
 
     monkeypatch.setattr(bot, "_render_task_history", fake_render_history)
     monkeypatch.setattr(bot, "_render_task_detail", fake_render_detail)
@@ -394,12 +394,12 @@ def test_task_history_back_returns_detail(monkeypatch):
     )
     asyncio.run(bot.on_task_history_back(back_callback))  # type: ignore[arg-type]
 
-    assert not history_message.edits, "返回详情不应编辑原历史消息"
-    assert history_message.calls, "返回详情应发送新的任务详情消息"
+    assert not history_message.edits, "Return detailsOriginal historical messages should not be edited"
+    assert history_message.calls, "Return detailsA new Mission details message should be sent"
     detail_message = history_message.sent_messages[-1]
     top_state = bot._peek_task_view(detail_message.chat.id, detail_message.message_id)
     assert top_state is not None and top_state.kind == "detail"
     assert bot._peek_task_view(history_message.chat.id, history_message.message_id) is None
-    assert back_callback.answers and back_callback.answers[-1]["text"] == "已返回任务详情"
+    assert back_callback.answers and back_callback.answers[-1]["text"] == "alreadyReturn to Mission details"
 
     bot._clear_task_view(detail_message.chat.id, detail_message.message_id)

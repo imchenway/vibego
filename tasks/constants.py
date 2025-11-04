@@ -1,4 +1,4 @@
-"""任务模块常量。"""
+"""Constants shared across the task module."""
 
 TASK_STATUSES = (
     "research",

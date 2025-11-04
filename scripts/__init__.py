@@ -1,2 +1,1 @@
-"""脚本模块标记，便于打包工具识别此目录。"""
-
+"""Marker module so packaging tools treat this directory as a package."""

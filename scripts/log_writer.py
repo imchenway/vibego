@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""面向 tmux pipe-pane 的日志写入器。
+"""Log writer for tmux pipe-pane.
 
-功能：
-- 将 stdin 写入指定日志文件，确保主文件大小不超过阈值（默认 20MB）。
-- 超过阈值时将现有文件按时间戳归档，并创建新的主文件。
-- 定期清理超过保留时间（默认 24 小时）的归档文件。
+Features:
+- Stream stdin to a target log file while keeping the primary file under a
+  configurable size (default 20 MB).
+- When the threshold is exceeded, archive the current file with a timestamp
+  suffix and create a fresh primary log.
+- Periodically delete archived logs that exceed the retention window
+  (default 24 hours).
 
-通过环境变量控制：
-- MODEL_LOG_MAX_BYTES：主日志文件最大字节数，默认 20971520 (20MB)
-- MODEL_LOG_RETENTION_SECONDS：归档文件保留时长，默认 86400 秒 (24h)
+Environment variables:
+- MODEL_LOG_MAX_BYTES: maximum size of the primary log file, default 20971520 (20 MB).
+- MODEL_LOG_RETENTION_SECONDS: retention period for archived files, default 86400 seconds (24 h).
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ DEFAULT_RETENTION_SECONDS = 24 * 60 * 60
 
 
 def _env_int(name: str, default: int) -> int:
-    """读取整数型环境变量，解析失败时返回默认值。"""
+    """Read an integer environment variable with graceful fallback."""
 
     raw = os.environ.get(name)
     if raw is None:
@@ -41,7 +44,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def cleanup_archives(base_path: Path, retention_seconds: int) -> None:
-    """删除超过保留时间的归档日志。"""
+    """Remove archived logs that exceed the retention period."""
 
     cutoff = time.time() - retention_seconds
     pattern = f"{base_path.stem}-*.log"
@@ -58,7 +61,7 @@ def cleanup_archives(base_path: Path, retention_seconds: int) -> None:
 
 
 def rotate_log(base_path: Path) -> Path:
-    """将当前主日志按时间戳归档，并返回归档后的路径。"""
+    """Archive the current primary log and return the archive path."""
 
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     archive_name = f"{base_path.stem}-{timestamp}.log"
@@ -72,13 +75,13 @@ def rotate_log(base_path: Path) -> Path:
     try:
         base_path.rename(archive_path)
     except FileNotFoundError:
-        # 文件可能已被外部删除，此时无需归档
+        # External processes may have removed the file; skip archival in that case.
         return archive_path
     return archive_path
 
 
 def main() -> int:
-    """执行日志写入循环，处理滚动与归档清理。"""
+    """Run the logging loop, handling rotation and archive cleanup."""
 
     if len(sys.argv) != 2:
         sys.stderr.write("Usage: log_writer.py <log_file>\n")
@@ -91,7 +94,7 @@ def main() -> int:
     retention_seconds = _env_int("MODEL_LOG_RETENTION_SECONDS", DEFAULT_RETENTION_SECONDS)
 
     def open_log_file() -> tuple[int, object]:
-        """打开日志文件并返回当前大小及文件句柄。"""
+        """Open the log file and return the current size together with the handle."""
 
         fp = log_path.open("ab", buffering=0)
         try:

@@ -1,4 +1,4 @@
-"""依赖检测与安装辅助函数。"""
+"""Helper functions for dependency detection and installation."""
 
 from __future__ import annotations
 
@@ -10,30 +10,30 @@ from typing import Iterable, List, Tuple
 
 
 DEPENDENCY_COMMANDS: Tuple[Tuple[str, str], ...] = (
-    ("python3", "请安装 Python 3.11+（推荐通过 Homebrew：brew install python）"),
-    ("tmux", "请安装 tmux（brew install tmux）"),
+    ("python3", "Install Python 3.11+ (Homebrew: brew install python)"),
+    ("tmux", "Install tmux (brew install tmux)"),
 )
 
 
 def check_cli_dependencies() -> List[str]:
-    """逐项检测 CLI 依赖，返回缺失项提示列表。"""
+    """Check every CLI dependency and return a list of missing ones."""
 
     missing: List[str] = []
     for command, hint in DEPENDENCY_COMMANDS:
         if shutil.which(command) is None:
-            missing.append(f"{command} 未找到：{hint}")
+            missing.append(f"{command} is missing: {hint}")
     return missing
 
 
 def ensure_python_packages(requirements: Iterable[str], *, pip_executable: Path) -> None:
-    """确保指定 pip 安装了所需依赖。"""
+    """Install the required Python packages using the provided pip executable."""
 
     cmd = [str(pip_executable), "install", "-q", *requirements]
     subprocess.run(cmd, check=True)
 
 
 def install_requirements(requirements_file: Path, *, pip_executable: Path) -> None:
-    """基于 requirements.txt 安装项目依赖。"""
+    """Install project dependencies from a requirements file."""
 
     subprocess.run(
         [str(pip_executable), "install", "-r", str(requirements_file)],
@@ -42,8 +42,7 @@ def install_requirements(requirements_file: Path, *, pip_executable: Path) -> No
 
 
 def python_version_ok() -> bool:
-    """检测当前运行 CLI 的 Python 版本是否符合要求。"""
+    """Return True when the running Python version satisfies the minimum requirement."""
 
     major, minor = sys.version_info.major, sys.version_info.minor
     return (major, minor) >= (3, 11)
-

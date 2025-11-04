@@ -17,7 +17,7 @@ import bot
 
 @pytest.fixture(autouse=True)
 def _force_claudecode(monkeypatch):
-    """确保测试始终走 ClaudeCode 分支。"""
+    """Make sure your tests always go to the ClaudeCode branch."""
 
     monkeypatch.setattr(bot, "ACTIVE_MODEL", "claudecode")
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "claudecode")
@@ -31,10 +31,10 @@ def test_extract_claudecode_assistant_message():
         "message": {
             "id": "msg_test",
             "content": [
-                {"type": "thinking", "thinking": "隐藏思考"},
-                {"type": "text", "text": "第一段输出"},
+                {"type": "thinking", "thinking": "hidden thinking"},
+                {"type": "text", "text": "First paragraph of output"},
                 {"type": "tool_use", "name": "Bash", "input": {"command": "pwd"}},
-                {"type": "text", "text": "第二段输出"},
+                {"type": "text", "text": "Second section output"},
                 {
                     "type": "tool_result",
                     "output": "command result",
@@ -47,7 +47,7 @@ def test_extract_claudecode_assistant_message():
     assert result is not None
     kind, text, metadata = result
     assert kind == bot.DELIVERABLE_KIND_MESSAGE
-    assert "第一段输出" in text and "第二段输出" in text
+    assert "First paragraph of output" in text and "Second section output" in text
     assert metadata == {"message_id": "msg_test"}
 
 
@@ -78,7 +78,7 @@ def test_extract_claudecode_sidechain_message_ignored():
         "message": {
             "id": "msg_side",
             "content": [
-                {"type": "text", "text": "欢迎语"},
+                {"type": "text", "text": "Welcome"},
             ],
         },
     }
@@ -92,14 +92,14 @@ def test_extract_claudecode_fallback_text():
         "type": "assistant",
         "message": {
             "id": "msg_fallback",
-            "text": "直接文本",
+            "text": "direct text",
         },
     }
     result = bot._extract_deliverable_payload(event, event_timestamp=None)
     assert result is not None
     kind, text, metadata = result
     assert kind == bot.DELIVERABLE_KIND_MESSAGE
-    assert text == "直接文本"
+    assert text == "direct text"
     assert metadata == {"message_id": "msg_fallback"}
 
 

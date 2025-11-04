@@ -1,4 +1,4 @@
-"""最终验证：确认 Telegram 消息发送流程和 parse_mode 配置"""
+"""Final verification: Confirm Telegram message sending process and parse_mode Configuration"""
 
 import os
 import sys
@@ -19,142 +19,142 @@ from bot import (
 )
 
 print("\n" + "=" * 80)
-print("最终验证：Telegram 消息发送流程")
+print("Final verification: Telegram message sending process")
 print("=" * 80 + "\n")
 
-# 第一个问题：parse_mode 配置
-print("问题1：当前 parse_mode 配置")
+# The first question: parse_mode Configuration
+print("Question 1: Current parse_mode Configuration")
 print("-" * 80)
-print(f"MODEL_OUTPUT_PARSE_MODE 值: {MODEL_OUTPUT_PARSE_MODE}")
-print(f"_parse_mode_value() 返回: {repr(_parse_mode_value())}")
-print(f"_IS_MARKDOWN_V2 标志: {_IS_MARKDOWN_V2}")
+print(f"MODEL_OUTPUT_PARSE_MODE value: {MODEL_OUTPUT_PARSE_MODE}")
+print(f"_parse_mode_value() return: {repr(_parse_mode_value())}")
+print(f"_IS_MARKDOWN_V2 logo: {_IS_MARKDOWN_V2}")
 print()
 
 if MODEL_OUTPUT_PARSE_MODE:
-    print(f"✅ parse_mode 已配置为: {MODEL_OUTPUT_PARSE_MODE.value}")
+    print(f"parse_mode configured for: {MODEL_OUTPUT_PARSE_MODE.value}")
 else:
-    print("❌ parse_mode 未配置（将发送纯文本）")
+    print("FAIL: parse_mode not configured (will send plain text)")
 print()
 
-# 第二个问题：完整的消息处理流程
-print("问题2：完整的消息处理流程验证")
+# Second question: Complete message processing process
+print("Question 2: Complete message processing process verification")
 print("-" * 80)
 
-# 模拟用户提供的实际场景
-test_input = r"""\#\#\# 📋 后续步骤
+# Simulate actual scenarios provided by users
+test_input = r"""\#\#\# 📋 Next steps
 
-1\. \*\*重启 Bot 服务\*\*以应用修复：
+1\. \*\*Restart the Bot service\*\*To apply the fix:
    \`\`\`bash
    python -m vibego\_cli stop
    python -m vibego\_cli start
    \`\`\`
 
-2\. \*\*验证 TASK\_0011\*\*：
-   - 在 Telegram 中点击任务
-   - 应该可以看到完整的任务详情"""
+2\. \*\*Verify TASK\_0011\*\*: 
+   - Click on the task in Telegram
+   - You should be able to see complete mission details"""
 
-print("步骤1：原始输入（数据库中存储的内容）")
-print(f"  前100字符: {repr(test_input[:100])}...")
+print("Step 1: Raw input (what is stored in the database)")
+print(f"  first 100 characters: {repr(test_input[:100])}...")
 print()
 
-# 步骤2：格式化任务详情时的智能反转义
-print("步骤2：_format_task_detail 调用 _unescape_if_already_escaped")
+# Step 2: Smart anti-escaping when formatting task details
+print("Step 2:_format_task_detail call _unescape_if_already_escaped")
 cleaned = _unescape_if_already_escaped(test_input)
-print(f"  前100字符: {repr(cleaned[:100])}...")
+print(f"  first 100 characters: {repr(cleaned[:100])}...")
 print()
 
-# 步骤3：准备发送到 Telegram
-print("步骤3：_answer_with_markdown 调用 _prepare_model_payload")
+# Step 3: Prepare to send to Telegram
+print("Step 3:_answer_with_markdown call _prepare_model_payload")
 final = _prepare_model_payload(cleaned)
-print(f"  前100字符: {repr(final[:100])}...")
+print(f"  first 100 characters: {repr(final[:100])}...")
 print()
 
-# 步骤4：实际发送到 Telegram
-print("步骤4：message.answer() 发送到 Telegram API")
-print(f"  调用: message.answer(text, parse_mode={repr(_parse_mode_value())}, ...)")
+# Step 4: Actual Send to Telegram
+print("Step 4: message.answer() Send to Telegram API")
+print(f"  call: message.answer(text, parse_mode={repr(_parse_mode_value())}, ...)")
 print()
 
-# 关键验证
+# key verification
 print("=" * 80)
-print("关键验证点")
+print("key verification points")
 print("=" * 80)
 
 checks = {
-    "1. parse_mode 配置正确": _parse_mode_value() == "Markdown",
-    "2. 步骤2后代码块标记正常": "```bash" in cleaned,
-    "3. 步骤2后粗体格式正常": "**重启 Bot 服务**" in cleaned,
-    "4. 步骤2后代码块内保持转义": "vibego\\_cli" in cleaned,
-    "5. 步骤3后粗体符合 Markdown 语法": "*重启 Bot 服务*" in final,
-    "6. 步骤3后代码块标记不转义": "```bash" in final,
-    "7. 步骤3后代码块内保持转义": "vibego\\_cli" in final,
+    "1. parse_mode Configurationcorrect": _parse_mode_value() == "Markdown",
+    "2. Code block marking is normal after step 2": "```bash" in cleaned,
+    "3. Bold format is normal after step 2": "**Restart the Bot service**" in cleaned,
+    "4. Keep escaping within the code block after step 2": "vibego\\_cli" in cleaned,
+    "5. After step 3, the bold text conforms to Markdown syntax.": "*Restart the Bot service*" in final,
+    "6. Code block markers are not escaped after step 3": "```bash" in final,
+    "7. Keep escaping within the code block after step 3": "vibego\\_cli" in final,
 }
 
 all_passed = True
 for name, passed in checks.items():
-    status = "✅" if passed else "❌"
+    status = "PASS" if passed else "FAIL"
     if not passed:
         all_passed = False
     print(f"{status} {name}")
 
 print()
 print("=" * 80)
-print("Telegram 渲染预览")
+print("Telegram Render preview")
 print("=" * 80)
 print("""
-Telegram 收到的数据：
+Telegram Data received:
   parse_mode: "Markdown"
-  text: "### 📋 后续步骤\\n\\n1. *重启 Bot 服务*以应用修复：\\n   ```bash\\n   python -m vibego_cli stop\\n   python -m vibego_cli start\\n   ```"
+  text: "### 📋 Next steps\\n\\n1. *Restart the Bot service*To apply the fix:\\n   ```bash\\n   python -m vibego_cli stop\\n   python -m vibego_cli start\\n   ```"
 
-Telegram 渲染效果：
+Telegram Rendering effect:
   ┌─────────────────────────────────────────┐
-  │ ### 📋 后续步骤                         │
+  │ ### 📋 Next steps                         │
   │                                         │
-  │ 1. **重启 Bot 服务**以应用修复：        │
+  │ 1. **Restart the Bot service**To apply the fix:        │
   │    ┌─────────────────────────────────┐ │
   │    │ python -m vibego_cli stop       │ │
   │    │ python -m vibego_cli start      │ │
   │    └─────────────────────────────────┘ │
   │                                         │
-  │ 2. **验证 TASK_0011**：                 │
-  │    - 在 Telegram 中点击任务             │
-  │    - 应该可以看到完整的任务详情         │
+  │ 2. **Verify TASK_0011**:                  │
+  │    - Click on the task in Telegram             │
+  │    - You should be able to see complete task details         │
   └─────────────────────────────────────────┘
 
-说明：
-  - 标题（###）正确渲染为三级标题
-  - 粗体（**文本**）正确渲染为粗体
-  - 代码块（```）正确渲染为灰色背景框
-  - 代码块内的 vibego_cli 显示为 vibego_cli（下划线正常）
+Description:
+  - title (###)Correctly rendered as third-level headings
+  - Bold (**text**)Renders correctly as bold
+  - code block (```)Renders correctly as a gray background box
+  - vibego inside code block_cli Shown as vibego_cli(Underscore is normal)
 """)
 
 print("=" * 80)
-print("实际 API 调用示例")
+print("actual API callExample")
 print("=" * 80)
 print("""
-Python 代码（bot.py:2760-2764）：
+Python code (bot.py:2760-2764): 
   sent = await message.answer(
-      prepared,                    # 已转义的文本
+      prepared,                    # text already escaped in bot.py
       parse_mode="Markdown",       # Telegram parse_mode
-      reply_markup=reply_markup,   # 按钮键盘
+      reply_markup=reply_markup,   # button keyboard
   )
 
-Telegram Bot API 请求：
+Telegram Bot API Request:
   POST https://api.telegram.org/bot{TOKEN}/sendMessage
   {
     "chat_id": 123456789,
-    "text": "### 📋 后续步骤\\n\\n1. *重启 Bot 服务*...",
+    "text": "### 📋 Next steps\\n\\n1. *Restart the Bot service*...",
     "parse_mode": "Markdown",
     "reply_markup": {...}
   }
 
-Telegram API 文档：
+Telegram API Documentation:
   https://core.telegram.org/bots/api#formatting-options
 """)
 
 print("=" * 80)
 if all_passed:
-    print("✅ 所有验证通过！Telegram 消息将正确显示 Markdown 格式")
+    print("All verification passed! Telegram messages will display correctly in Markdown format")
 else:
-    print("❌ 存在问题，需要检查配置")
+    print("FAIL: Issue detected, please check configuration")
 print("=" * 80)
 print()

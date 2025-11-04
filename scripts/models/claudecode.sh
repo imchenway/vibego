@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# ClaudeCode 模型配置
+# ClaudeCode Model configuration
 
-# 将工作目录转换为 Claude CLI 默认的 project key。
-# Claude 官方实现是简单地把绝对路径中的斜杠替换成连字符，并保留大小写。
+# Convert the working directory to Claude CLI default project key.
+# Claude The official implementation simply replaces slashes in absolute paths with hyphens, and preserve case.
 claude_project_key_from_workdir() {
   local path="$1"
   if [[ -z "$path" ]]; then
@@ -20,7 +20,7 @@ claude_project_key_from_workdir() {
 model_configure() {
   MODEL_NAME="ClaudeCode"
   MODEL_WORKDIR="${CLAUDE_WORKDIR:-${MODEL_WORKDIR:-$ROOT_DIR}}"
-  # 默认关闭文件快照，避免孤儿 CLI 持续写入 jsonl
+  # File snapshot is turned off by default, avoid orphans CLI Continuous writing jsonl
   CLAUDE_DISABLE_FILE_CHECKPOINTING="${CLAUDE_DISABLE_FILE_CHECKPOINTING:-1}"
   CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING="${CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING:-$CLAUDE_DISABLE_FILE_CHECKPOINTING}"
   export CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING

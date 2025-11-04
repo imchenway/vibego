@@ -58,7 +58,7 @@ def _build_manager(repo: ProjectRepository, tmp_path: Path) -> master.MasterMana
 
 
 def _build_fsm_state(chat_id: int = 1, user_id: int = 1) -> tuple[MemoryStorage, FSMContext]:
-    """构造 FSM 上下文，便于测试状态流程。"""
+    """Construct an FSM context to facilitate testing state processes."""
     storage = MemoryStorage()
     key = StorageKey(bot_id=0, chat_id=chat_id, user_id=user_id)
     return storage, FSMContext(storage=storage, key=key)
@@ -112,7 +112,7 @@ def test_repository_initial_import_creates_backup(tmp_path: Path):
     records = repo.list_projects()
     assert len(records) == 1
     backups = list(config_dir.glob("projects.json.*.bak"))
-    assert backups, "初始化应生成 JSON 备份"
+    assert backups, "Initialization should generate a JSON backup"
     exported = json.loads(json_path.read_text(encoding="utf-8"))
     assert exported[0]["project_slug"] == "init"
 
@@ -154,7 +154,7 @@ def test_repository_insert_normalizes_fields(repo: ProjectRepository, tmp_path: 
     assert stored.workdir == str(workdir_dir)
     exported = json.loads(repo.json_path.read_text(encoding="utf-8"))
     targets = [item for item in exported if item["bot_name"] == "MixedBot"]
-    assert targets, "JSON 应写入归一化后的记录"
+    assert targets, "JSON Normalized records should be written"
     assert targets[0]["project_slug"] == "mixed-slug"
 
 
@@ -212,14 +212,14 @@ def test_validate_field_rejects_duplicate_bot(repo: ProjectRepository):
     session = master.ProjectWizardSession(chat_id=1, user_id=1, mode="create")
     value, error = master._validate_field_value(session, "bot_name", "SampleBot")
     assert value is None
-    assert error == "该 bot 名已被其它项目占用"
+    assert error == "The bot name is already occupied by another project"
 
 
 def test_validate_workdir_requires_existing_path(repo: ProjectRepository, tmp_path: Path):
     session = master.ProjectWizardSession(chat_id=1, user_id=1, mode="create")
     missing_value, missing_error = master._validate_field_value(session, "workdir", str(tmp_path / "missing"))
     assert missing_value is None
-    assert "目录不存在" in missing_error
+    assert "Directory does not exist" in missing_error
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     value, error = master._validate_field_value(session, "workdir", str(workdir))
@@ -235,7 +235,7 @@ def test_start_project_create_registers_session(repo: ProjectRepository, tmp_pat
         await master._start_project_create(callback, manager)
 
     asyncio.run(_run())
-    assert callback.message._answers, "应发送提示消息"
+    assert callback.message._answers, "Alert message should be sent"
     assert callback.message.chat.id in master.PROJECT_WIZARD_SESSIONS
     assert master.PROJECT_WIZARD_SESSIONS[callback.message.chat.id].mode == "create"
 
@@ -249,7 +249,7 @@ def test_handle_wizard_cancel_clears_session(repo: ProjectRepository, tmp_path: 
 
     asyncio.run(_prepare())
     message = callback.message
-    message.text = "取消"
+    message.text = "Cancel"
 
     async def _cancel():
         await master._handle_wizard_message(message, manager)
@@ -273,8 +273,8 @@ def test_create_flow_writes_repository(repo: ProjectRepository, tmp_path: Path, 
     inputs = [
         "NewTesterBot",
         "222222:ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
-        "",  # 让系统自动生成 slug
-        "",  # 默认模型回落到 codex
+        "",  # Let the system automatically generate slug
+        "",  # Default model falls back to codex
         str(workdir),
         "-10001",
     ]
@@ -291,7 +291,7 @@ def test_create_flow_writes_repository(repo: ProjectRepository, tmp_path: Path, 
 
 
 def test_repository_delete_case_insensitive(repo: ProjectRepository):
-    """确保删除接口在大小写不同的情况下依旧可以命中项目。"""
+    """Ensure that the deletion interface can still hit the project even if the case is different."""
     repo.delete_project("SAMPLE")
     slugs = {record.project_slug for record in repo.list_projects()}
     assert "sample" not in slugs
@@ -307,7 +307,7 @@ def test_delete_flow_removes_project(repo: ProjectRepository, tmp_path: Path):
         await master._start_project_delete(callback, cfg, manager, fsm_state)
 
     asyncio.run(_prepare())
-    assert callback.message._answers, "应发送确认提示"
+    assert callback.message._answers, "A confirmation prompt should be sent"
     confirm = DummyCallback("project:delete_confirm:sample", message=callback.message)
 
     async def _route_confirm():
@@ -322,7 +322,7 @@ def test_delete_flow_removes_project(repo: ProjectRepository, tmp_path: Path):
     asyncio.run(_confirm())
     slugs = {record.project_slug for record in repo.list_projects()}
     assert "sample" not in slugs
-    # MemoryStorage 无需显式关闭，但保持引用以便垃圾回收使用
+    # MemoryStorage No need to explicitly close, but keep the reference for garbage collection
 
 
 def test_delete_flow_cancel(repo: ProjectRepository, tmp_path: Path):
@@ -352,7 +352,7 @@ def test_delete_flow_cancel(repo: ProjectRepository, tmp_path: Path):
     assert remaining_state is None
     slugs = {record.project_slug for record in repo.list_projects()}
     assert "sample" in slugs
-    assert cancel.message._answers[-1][0].startswith("已取消删除项目")
+    assert cancel.message._answers[-1][0].startswith("Deletion cancelled for project")
 
 
 def test_delete_flow_text_confirm(repo: ProjectRepository, tmp_path: Path):
@@ -368,7 +368,7 @@ def test_delete_flow_text_confirm(repo: ProjectRepository, tmp_path: Path):
     asyncio.run(_prepare())
 
     text_message = DummyMessage()
-    text_message.text = "确认删除"
+    text_message.text = "Confirm deletion"
     text_message.chat = callback.message.chat
     text_message.from_user = callback.message.from_user
     text_message.bot = callback.message.bot
@@ -380,7 +380,7 @@ def test_delete_flow_text_confirm(repo: ProjectRepository, tmp_path: Path):
     asyncio.run(_confirm())
     slugs = {record.project_slug for record in repo.list_projects()}
     assert "sample" not in slugs
-    assert any("已删除" in answer for answer, _ in text_message._answers)
+    assert any("deleted" in answer.lower() for answer, _ in text_message._answers)
 
 
 def test_delete_flow_text_cancel(repo: ProjectRepository, tmp_path: Path):
@@ -396,7 +396,7 @@ def test_delete_flow_text_cancel(repo: ProjectRepository, tmp_path: Path):
     asyncio.run(_prepare())
 
     text_message = DummyMessage(chat_id=1)
-    text_message.text = "取消"
+    text_message.text = "Cancel"
     text_message.chat = callback.message.chat
     text_message.from_user = callback.message.from_user
     text_message.bot = callback.message.bot
@@ -410,11 +410,11 @@ def test_delete_flow_text_cancel(repo: ProjectRepository, tmp_path: Path):
     assert current_state is None
     slugs = {record.project_slug for record in repo.list_projects()}
     assert "sample" in slugs
-    assert any("已取消删除项目" in answer for answer, _ in text_message._answers)
+    assert any("Deletion cancelled for project" in answer for answer, _ in text_message._answers)
 
 
 def test_delete_flow_fallbacks_to_original_slug(repo: ProjectRepository, tmp_path: Path):
-    """验证删除流程在 slug 归一化后可以成功执行。"""
+    """Verify that the removal process can be executed successfully after slug normalization."""
     record = repo.get_by_slug("sample")
     updated = ProjectRecord(
         bot_name=record.bot_name,
@@ -448,24 +448,24 @@ def test_delete_flow_fallbacks_to_original_slug(repo: ProjectRepository, tmp_pat
 
 
 def test_get_project_runtime_state_handles_casefold(repo: ProjectRepository, tmp_path: Path):
-    """确保辅助函数能兼容大小写差异并返回同一状态实例。"""
+    """Make sure the helper functions are case-compatible and return the same state instance."""
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager
     master.PROJECT_REPOSITORY = repo
 
-    # slug 大小写不同仍应命中
+    # slug Different case should still hit
     runtime_state_upper = master._get_project_runtime_state(manager, "SAMPLE")
     runtime_state_lower = master._get_project_runtime_state(manager, "sample")
     assert runtime_state_upper is runtime_state_lower
     assert runtime_state_upper.status == "stopped"
 
-    # 不存在的 slug 返回 None
+    # Return None for non-existent slug
     runtime_state_none = master._get_project_runtime_state(manager, "not-found")
     assert runtime_state_none is None
 
 
 def test_on_project_action_delete_starts_confirmation_flow(repo: ProjectRepository, tmp_path: Path):
-    """模拟按钮点击，验证删除流程可以正确进入确认状态。"""
+    """Simulate a button click to verify that the deletion process can correctly enter the confirmation state."""
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager
     master.PROJECT_REPOSITORY = repo
@@ -478,13 +478,13 @@ def test_on_project_action_delete_starts_confirmation_flow(repo: ProjectReposito
     asyncio.run(_invoke())
     state_value = asyncio.run(fsm_state.get_state())
     assert state_value == master.ProjectDeleteStates.confirming.state
-    assert callback.message._answers, "应提示用户确认删除"
+    assert callback.message._answers, "The user should be prompted to Confirm deletion"
     answer_text, _ = callback.message._answers[-1]
-    assert "确认删除项目" in answer_text
+    assert "Confirm deletion of project" in answer_text
 
 
 def test_on_project_action_delete_blocks_when_running(repo: ProjectRepository, tmp_path: Path):
-    """worker 运行中时应拒绝删除请求。"""
+    """worker Delete requests should be denied while running."""
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager
     master.PROJECT_REPOSITORY = repo
@@ -496,13 +496,13 @@ def test_on_project_action_delete_blocks_when_running(repo: ProjectRepository, t
         await master.on_project_action(callback, fsm_state)
 
     asyncio.run(_invoke())
-    assert callback._answers[-1] == ("请先停止该项目的 worker 后再删除。", True)
+    assert callback._answers[-1] == ("Please stop the worker of this project before deleting it.", True)
     assert not callback.message._answers
     assert asyncio.run(fsm_state.get_state()) is None
 
 
 def test_on_project_action_delete_unknown_slug(repo: ProjectRepository, tmp_path: Path):
-    """未知项目 slug 应立即返回提示。"""
+    """The unknown item slug should return the prompt immediately."""
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager
     master.PROJECT_REPOSITORY = repo
@@ -513,12 +513,12 @@ def test_on_project_action_delete_unknown_slug(repo: ProjectRepository, tmp_path
         await master.on_project_action(callback, fsm_state)
 
     asyncio.run(_invoke())
-    assert callback._answers[-1] == ("未知项目", True)
+    assert callback._answers[-1] == ("Unknown project", True)
     assert asyncio.run(fsm_state.get_state()) is None
 
 
 def test_on_project_action_delete_repeated_request(repo: ProjectRepository, tmp_path: Path):
-    """重复点击删除按钮时应提示流程已存在，避免重复覆盖 FSM。"""
+    """When you click the delete button repeatedly, you should be prompted that the process already exists to avoid overwriting the FSM repeatedly."""
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager
     master.PROJECT_REPOSITORY = repo
@@ -529,30 +529,33 @@ def test_on_project_action_delete_repeated_request(repo: ProjectRepository, tmp_
         await master.on_project_action(first_callback, fsm_state)
 
     asyncio.run(_first())
-    # 第二次点击
+    # second click
     second_callback = DummyCallback("project:delete:sample")
 
     async def _second():
         await master.on_project_action(second_callback, fsm_state)
 
     asyncio.run(_second())
-    assert second_callback._answers[-1] == ("当前删除流程已在确认中，请使用按钮完成操作。", True)
+    assert second_callback._answers[-1] == (
+        "The current deletion process is being confirmed, please use the buttons to finish the operation.",
+        True,
+    )
 
 
 def test_projects_overview_hides_create_button(repo: ProjectRepository, tmp_path: Path):
     manager = _build_manager(repo, tmp_path)
     text, markup = master._projects_overview(manager)
-    assert text == "请选择操作："
+    assert text == "Please select an action:"
     assert markup is not None
     labels = [btn.text for row in markup.inline_keyboard for btn in row]
-    assert "➕ 新增项目" not in labels
-    assert "🚀 启动全部项目" in labels
-    run_buttons = [label for label in labels if label.startswith("▶️ 启动")]
-    stop_buttons = [label for label in labels if label.startswith("⛔️ 停止")]
+    assert "➕ Add new items" not in labels
+    assert "🚀 Start all projects" in labels
+    run_buttons = [label for label in labels if label.startswith("▶️ start up")]
+    stop_buttons = [label for label in labels if label.startswith("⛔️ stop")]
     for label in run_buttons + stop_buttons:
-        if label == "⛔️ 停止全部项目":
+        if label == "⛔️ stopallproject":
             continue
-        assert "(" in label and label.endswith(")"), "运行/停止按钮应展示当前模型"
+        assert "(" in label and label.endswith(")"), "run/stopThe button should display the current model"
 
 
 def test_manage_action_sends_inline_menu(repo: ProjectRepository, tmp_path: Path, monkeypatch):
@@ -565,13 +568,13 @@ def test_manage_action_sends_inline_menu(repo: ProjectRepository, tmp_path: Path
         await master.on_project_action(callback, fsm_state)
 
     asyncio.run(_invoke())
-    assert callback.message._answers, "应发送管理选项"
+    assert callback.message._answers, "Management options should be sent"
     buttons = callback.message._answers[0][1]["reply_markup"].inline_keyboard
     texts = [btn.text for row in buttons for btn in row]
     callbacks = [btn.callback_data for row in buttons for btn in row]
-    assert "📝 编辑" in texts
-    assert any(text.startswith("🧠 切换模型（当前模型 ") for text in texts)
-    assert "🗑 删除" in texts
+    assert "📝 edit" in texts
+    assert any(text.startswith("🧠 Switch model (current model ") for text in texts)
+    assert "🗑 delete" in texts
     assert "project:switch_prompt:sample" in callbacks
     assert all(not cb.startswith("project:switch_to") for cb in callbacks)
 
@@ -593,16 +596,17 @@ def test_manage_button_handler_builds_keyboard(repo: ProjectRepository, tmp_path
     assert message._answers
     markup = message._answers[0][1]["reply_markup"]
     labels = [btn.text for row in markup.inline_keyboard for btn in row]
-    assert "➕ 新增项目" in labels
-    assert any(label.startswith("⚙️ 管理") for label in labels)
-    assert any(label.startswith("🧠 切换模型（当前模型 ") for label in labels)
-    assert "🔁 全部切换模型" in labels
+    assert "➕ New project" in labels
+    assert any(label.casefold().startswith("⚙️ manage") for label in labels)
+    assert any(label.startswith("🧠 Switch model (current model ") for label in labels)
+    assert "🔁 Switch all models" in labels
     rows = markup.inline_keyboard
     assert any(
-        row[0].text.startswith("⚙️ 管理") and row[1].text.startswith("🧠 切换模型（当前模型 ")
+        row[0].text.casefold().startswith("⚙️ manage")
+        and row[1].text.startswith("🧠 Switch model (current model ")
         for row in rows
         if len(row) >= 2
-    ), "项目管理列表应同排展示管理与模型按钮"
+    ), "projectmanageLists should be displayed in the same rowmanagebutton with model"
 
 
 def test_switch_prompt_displays_model_options(repo: ProjectRepository, tmp_path: Path):
@@ -619,7 +623,7 @@ def test_switch_prompt_displays_model_options(repo: ProjectRepository, tmp_path:
 
     asyncio.run(_invoke())
     assert callback._answers == [(None, False)]
-    assert callback_message._answers, "应弹出模型选择菜单"
+    assert callback_message._answers, "The model selection menu should pop up"
     reply_markup = callback_message._answers[-1][1]["reply_markup"]
     model_callbacks = [
         btn.callback_data
@@ -632,9 +636,9 @@ def test_switch_prompt_displays_model_options(repo: ProjectRepository, tmp_path:
         for row in reply_markup.inline_keyboard
         for btn in row
     ]
-    assert any(cb.startswith("project:switch_to:") for cb in model_callbacks), "应包含切换模型回调"
-    assert any(text.startswith("✅ ") for text in model_texts), "当前模型应以 ✅ 标记"
-    assert "project:refresh:*" in model_callbacks, "应提供返回列表按钮"
+    assert any(cb.startswith("project:switch_to:") for cb in model_callbacks), "Should include switch model callbacks"
+    assert any(text.startswith("[active] ") for text in model_texts), "The current model should be marked as active"
+    assert "project:refresh:*" in model_callbacks, "A return to list button should be provided"
 
 
 def test_refresh_action_skips_slug_validation(repo: ProjectRepository, tmp_path: Path, monkeypatch):
@@ -650,9 +654,9 @@ def test_refresh_action_skips_slug_validation(repo: ProjectRepository, tmp_path:
 
     asyncio.run(_invoke())
     assert callback._answers == [(None, False)]
-    assert callback_message._edits, "应刷新项目列表文本"
+    assert callback_message._edits, "Item list text should be refreshed"
     text, kwargs = callback_message._edits[0]
-    assert text == "请选择操作："
+    assert text == "Please select an action:"
     assert kwargs["reply_markup"] is not None
 
 
@@ -700,12 +704,12 @@ def test_switch_all_action_displays_model_options(repo: ProjectRepository, tmp_p
 
     asyncio.run(_invoke())
     assert callback._answers == [(None, False)]
-    assert callback.message._answers, "应展示全局模型选择键盘"
+    assert callback.message._answers, "The global model selection keyboard should be shown"
     markup = callback.message._answers[-1][1]["reply_markup"]
     button_texts = [btn.text for row in markup.inline_keyboard for btn in row]
     assert any("Codex" in text for text in button_texts)
     assert any("ClaudeCode" in text for text in button_texts)
-    assert any("取消" in text for text in button_texts)
+    assert any("Cancel" in text for text in button_texts)
 
 
 def test_switch_all_to_updates_all_models(repo: ProjectRepository, tmp_path: Path, monkeypatch):
@@ -743,4 +747,4 @@ def test_switch_all_to_updates_all_models(repo: ProjectRepository, tmp_path: Pat
         assert state.model == "claudecode"
         assert state.status == "stopped"
     summary_texts = [text for text, _ in callback.message._answers]
-    assert any("所有项目模型已切换为 ⚙️ ClaudeCode" in text for text in summary_texts)
+    assert any("All project models have been switched to ⚙️ ClaudeCode" in text for text in summary_texts)

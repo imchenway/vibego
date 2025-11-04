@@ -1,7 +1,8 @@
-"""vibego CLI 初始化与启动工具。
+"""vibego CLI bootstrap utilities.
 
-该包提供 `vibego` 命令的核心实现，封装了配置目录管理、
-依赖自检以及 master 服务启动/停止逻辑。"""
+The package exposes the core implementation behind the ``vibego`` command,
+including configuration directory management, dependency checks, and master
+service lifecycle helpers."""
 
 from __future__ import annotations
 

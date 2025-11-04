@@ -76,17 +76,17 @@ def test_task_list_view_contains_create_button(monkeypatch):
 
     text, markup = asyncio.run(bot._build_task_list_view(status=None, page=1, limit=10))
 
-    assert text.startswith("*任务列表*")
+    assert text.startswith("*task list*")
     buttons = [button.text for row in markup.inline_keyboard for button in row]
-    assert "🔍 搜索任务" in buttons
-    assert "➕ 创建任务" in buttons
+    assert "🔍 search tasks" in buttons
+    assert "➕ Create tasks" in buttons
 
 
 def test_task_list_view_renders_entries_with_icons(monkeypatch):
     task = TaskRecord(
         id="TASK_9001",
         project_slug="demo",
-        title="修复登录问题",
+        title="Fix login issues",
         status="research",
         priority=2,
         task_type="task",
@@ -113,8 +113,8 @@ def test_task_list_view_renders_entries_with_icons(monkeypatch):
 
     text, markup = asyncio.run(bot._build_task_list_view(status=None, page=1, limit=10))
 
-    assert "- 🛠️ 修复登录问题" not in text
-    assert "- ⚪ 修复登录问题" not in text
+    assert "- 🛠️ Fix login issues" not in text
+    assert "- ⚪ Fix login issues" not in text
     detail_buttons = [
         button.text
         for row in markup.inline_keyboard
@@ -126,7 +126,7 @@ def test_task_list_view_renders_entries_with_icons(monkeypatch):
     type_icon = bot.TASK_TYPE_EMOJIS.get(task.task_type) or "⚪"
     expected_prefix = f"{status_icon} {type_icon} "
     assert detail_buttons[0].startswith(expected_prefix)
-    assert "修复登录问题" in detail_buttons[0]
+    assert "Fix login issues" in detail_buttons[0]
 
 
 def test_task_list_create_callback_forwards_command(monkeypatch):
@@ -148,7 +148,7 @@ def test_task_list_create_callback_forwards_command(monkeypatch):
         message_id=42,
         date=datetime.now(UTC),
         chat=chat,
-        text="*任务列表*",
+        text="*task list*",
         from_user=bot_user,
     )
     callback = DummyCallback(base_message, human_user, bot.TASK_LIST_CREATE_CALLBACK)
@@ -200,7 +200,7 @@ def test_worker_create_button_triggers_task_new(monkeypatch):
 
 
 def test_compose_task_button_label_truncates_but_keeps_status():
-    long_title = "这是一个非常长的任务标题，用于验证状态图标仍然保留在按钮末尾，不会被截断或丢失"
+    long_title = "This is a very long task title to verify that the status icon remains at the end of the button and is not truncated or lost"
     task = TaskRecord(
         id="TASK_LONG",
         project_slug="demo",
@@ -235,62 +235,62 @@ def test_compose_task_button_label_truncates_but_keeps_status():
     [
         {
             "name": "normal_case",
-            "title": "修复登录问题",
+            "title": "Fix login issues",
             "status": "research",
             "task_type": "task",
             "max_length": 60,
             "expect_prefix": f"{bot._status_icon('research')} {bot.TASK_TYPE_EMOJIS['task']} ",
-            "expect_contains": "修复登录问题",
+            "expect_contains": "Fix login issues",
             "expect_ellipsis": False,
         },
         {
             "name": "no_status",
-            "title": "不含状态",
+            "title": "Without status",
             "status": "",
             "task_type": "task",
             "max_length": 30,
             "expect_prefix": f"{bot.TASK_TYPE_EMOJIS['task']} ",
-            "expect_contains": "不含状态",
+            "expect_contains": "Without status",
             "expect_ellipsis": False,
         },
         {
             "name": "unknown_status",
-            "title": "未知状态",
+            "title": "unknown status",
             "status": "blocked",
             "task_type": "task",
             "max_length": 30,
             "expect_prefix": f"{bot.TASK_TYPE_EMOJIS['task']} ",
-            "expect_contains": "未知状态",
+            "expect_contains": "unknown status",
             "expect_ellipsis": False,
         },
         {
             "name": "no_type",
-            "title": "无类型任务",
+            "title": "Untyped tasks",
             "status": "research",
             "task_type": None,
             "max_length": 40,
             "expect_prefix": f"{bot._status_icon('research')} ⚪ ",
-            "expect_contains": "无类型任务",
+            "expect_contains": "Untyped tasks",
             "expect_ellipsis": False,
         },
         {
             "name": "long_title_truncated",
-            "title": "这个标题超级超级长，需要被截断才能放进按钮里",
+            "title": "This title is super long and needs to be cut off to fit into the button.",
             "status": "test",
             "task_type": "defect",
             "max_length": 20,
             "expect_prefix": f"{bot._status_icon('test')} {bot.TASK_TYPE_EMOJIS['defect']} ",
-            "expect_contains": "这个标题超级超级长",
+            "expect_contains": "This title is super long",
             "expect_ellipsis": True,
         },
         {
             "name": "tight_limit",
-            "title": "极短限制",
+            "title": "Very short limit",
             "status": "test",
             "task_type": "risk",
             "max_length": 8,
             "expect_prefix": f"{bot._status_icon('test')} {bot.TASK_TYPE_EMOJIS['risk']} ",
-            "expect_exact": "🧪 ⚠️ 极短…",
+            "expect_exact": "🧪 ⚠️ Very short…",
             "expect_ellipsis": True,
         },
         {
@@ -300,37 +300,37 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "task_type": "requirement",
             "max_length": 20,
             "expect_prefix": f"{bot._status_icon('done')} {bot.TASK_TYPE_EMOJIS['requirement']} ",
-            "expect_exact": "✅ 📌 -",
+            "expect_exact": "[ok] [req] -",
             "expect_ellipsis": False,
         },
         {
             "name": "emoji_title",
-            "title": "🔥 紧急处理",
+            "title": "🔥 Emergency treatment",
             "status": "done",
             "task_type": "risk",
             "max_length": 25,
             "expect_prefix": f"{bot._status_icon('done')} {bot.TASK_TYPE_EMOJIS['risk']} ",
-            "expect_contains": "🔥 紧急处理",
+            "expect_contains": "🔥 Emergency treatment",
             "expect_ellipsis": False,
         },
         {
             "name": "multibyte_length",
-            "title": "多字节标题测试",
+            "title": "Multibyte header test",
             "status": "research",
             "task_type": "defect",
             "max_length": 15,
             "expect_prefix": f"{bot._status_icon('research')} {bot.TASK_TYPE_EMOJIS['defect']} ",
-            "expect_contains": "多字节标题测试",
+            "expect_contains": "Multibyte header test",
             "expect_ellipsis": False,
         },
         {
             "name": "status_alias",
-            "title": "Alias 状态",
+            "title": "Alias state",
             "status": "Research",
             "task_type": "task",
             "max_length": 30,
             "expect_prefix": f"{bot._status_icon('Research')} {bot.TASK_TYPE_EMOJIS['task']} ",
-            "expect_contains": "Alias 状态",
+            "expect_contains": "Alias state",
             "expect_ellipsis": False,
         },
     ],
@@ -383,13 +383,13 @@ def test_task_list_search_flow(monkeypatch):
     task = TaskRecord(
         id="TASK_0001",
         project_slug="demo",
-        title="修复登录问题",
+        title="Fix login issues",
         status="research",
         priority=2,
         task_type="task",
         tags=(),
         due_date=None,
-        description="登录接口异常",
+        description="Login interface exception",
         parent_id=None,
         root_id="TASK_0001",
         depth=0,
@@ -400,7 +400,7 @@ def test_task_list_search_flow(monkeypatch):
     )
 
     async def fake_search(self, keyword, *, page, page_size):
-        assert keyword == "登录"
+        assert keyword == "Log in"
         return [task], 1, 1
 
     monkeypatch.setattr(
@@ -413,20 +413,20 @@ def test_task_list_search_flow(monkeypatch):
         await bot.on_task_list_search(callback, state)  # type: ignore[arg-type]
         assert await state.get_state() == bot.TaskListSearchStates.waiting_keyword.state
         assert message.calls
-        assert "请输入任务搜索关键词" in message.calls[-1]["text"]
-        assert callback.answers and callback.answers[-1]["text"] == "请输入搜索关键词"
+        assert "Please enter task search keywords" in message.calls[-1]["text"]
+        assert callback.answers and callback.answers[-1]["text"] == "Please enter search keywords"
 
-        user_message = DummyMessage(text="登录")
+        user_message = DummyMessage(text="Log in")
         await bot.on_task_list_search_keyword(user_message, state)
         assert await state.get_state() is None
-        # 在 MarkdownV2 模式下会出现 * 或 _ 的格式化占位
+        # Appears in MarkdownV2 mode * or _ formatting placeholder
         assert message.edits
         header_text = message.edits[-1]["text"]
-        expected_headers = ("*任务搜索结果*", "\\*任务搜索结果\\*", "_任务搜索结果_")
+        expected_headers = ("*Task search results*", "\\*Task search results\\*", "_Task search results_")
         assert any(header in header_text for header in expected_headers)
-        assert "- 🛠️ 修复登录问题" not in message.edits[-1]["text"]
-        assert "- ⚪ 修复登录问题" not in message.edits[-1]["text"]
-        assert user_message.calls and "搜索完成" in user_message.calls[-1]["text"]
+        assert "- 🛠️ Fix login issues" not in message.edits[-1]["text"]
+        assert "- ⚪ Fix login issues" not in message.edits[-1]["text"]
+        assert user_message.calls and "Search completed" in user_message.calls[-1]["text"]
         markup: InlineKeyboardMarkup = message.edits[-1]["reply_markup"]
         detail_buttons = [
             button.text
@@ -439,7 +439,7 @@ def test_task_list_search_flow(monkeypatch):
         type_icon = bot.TASK_TYPE_EMOJIS.get(task.task_type) or "⚪"
         expected_prefix = f"{status_icon} {type_icon} "
         assert detail_buttons[0].startswith(expected_prefix)
-        assert "修复登录问题" in detail_buttons[0]
+        assert "Fix login issues" in detail_buttons[0]
 
     asyncio.run(_scenario())
 
@@ -451,21 +451,21 @@ def test_task_list_search_cancel_restores_list(monkeypatch):
     state, _storage = make_state(message)
 
     async def fake_list_view(status, page, limit):
-        return "*任务列表*", InlineKeyboardMarkup(inline_keyboard=[])
+        return "*task list*", InlineKeyboardMarkup(inline_keyboard=[])
 
     monkeypatch.setattr(bot, "_build_task_list_view", fake_list_view)
 
     async def _scenario():
         await bot.on_task_list_search(callback, state)  # type: ignore[arg-type]
-        cancel_message = DummyMessage(text="取消")
+        cancel_message = DummyMessage(text="Cancel")
         await bot.on_task_list_search_keyword(cancel_message, state)
         assert await state.get_state() is None
-        # 在 MarkdownV2 模式下会出现 * 或 _ 的格式化占位
+        # Appears in MarkdownV2 mode * or _ formatting placeholder
         assert message.edits
         header_text = message.edits[-1]["text"]
-        expected_headers = ("*任务列表*", "\\*任务列表\\*", "_任务列表_")
+        expected_headers = ("*task list*", "\\*task list\\*", "_task list_")
         assert any(header in header_text for header in expected_headers)
-        assert cancel_message.calls and "已返回任务列表" in cancel_message.calls[-1]["text"]
+        assert cancel_message.calls and "Task list has been returned" in cancel_message.calls[-1]["text"]
 
     asyncio.run(_scenario())
 
@@ -477,32 +477,32 @@ def test_task_service_search_tasks(tmp_path):
     async def _scenario():
         await service.initialize()
         await service.create_root_task(
-            title="修复登录功能",
+            title="repairLog inFunction",
             status="research",
             priority=2,
             task_type="task",
             tags=(),
             due_date=None,
-            description="处理登录接口报错",
+            description="Handling Log in interface error reports",
             actor="tester",
         )
         await service.create_root_task(
-            title="编写部署文档",
+            title="Write deployment documentation",
             status="test",
             priority=3,
             task_type="task",
             tags=(),
             due_date=None,
-            description="wiki 文档更新",
+            description="wiki Documentation updates",
             actor="tester",
         )
-        results, pages, total = await service.search_tasks("登录", page=1, page_size=10)
+        results, pages, total = await service.search_tasks("Log in", page=1, page_size=10)
         return results, pages, total
 
     results, pages, total = asyncio.run(_scenario())
     assert total == 1
     assert pages == 1
-    assert results[0].title == "修复登录功能"
+    assert results[0].title == "repairLog inFunction"
 
 
 def test_task_service_search_tasks_empty_keyword(tmp_path):
@@ -519,22 +519,22 @@ def test_task_service_search_tasks_empty_keyword(tmp_path):
 
 
 def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
-    """测试修复：在 MarkdownV2 模式下避免双重转义特殊字符"""
-    # 模拟 MarkdownV2 模式
+    """Test fix: avoid double escaping special characters in MarkdownV2 mode"""
+    # Emulate MarkdownV2 mode
     monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", True)
     monkeypatch.setattr(bot, "_IS_MARKDOWN", False)
 
-    # 创建包含特殊字符的任务
+    # Create tasks that contain special characters
     task = TaskRecord(
         id="TASK_0001",
         project_slug="demo",
-        title="修复登录-问题 (v2.0) [紧急]",
+        title="repairLog in-question (v2.0) [urgent]",
         status="research",
         priority=3,
         task_type="defect",
         tags=(),
         due_date=None,
-        description="登录接口异常! 需要修复 test_case.example",
+        description="Login interface exception! Need to fix test_case.example",
         parent_id="TASK_0000",
         root_id="TASK_0001",
         depth=0,
@@ -546,35 +546,35 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
 
     detail_text = bot._format_task_detail(task, notes=[])
 
-    # 在 MarkdownV2 模式下，特殊字符应该保持原样（不手动转义）
-    # 后续由 _prepare_model_payload() 统一转义
-    assert "修复登录-问题 (v2.0) [紧急]" in detail_text
-    assert "登录接口异常! 需要修复 test_case.example" in detail_text
+    # In MarkdownV2 mode, special characters should be left intact (not manually escaped)
+    # Follow-up by _prepare_model_payload() unified escaping
+    assert "repairLog in-question (v2.0) [urgent]" in detail_text
+    assert "Login interface exception! Need to fix test_case.example" in detail_text
     assert "TASK_0000" in detail_text
 
-    # 确保没有双重转义（例如 \\- 或 \\( ）
-    assert "\\-" not in detail_text  # 避免 \- 再次被转义
+    # Make sure there are no double escapes (e.g. \\- or \\( ）
+    assert "\\-" not in detail_text  # Avoid \- being escaped again
     assert "\\(" not in detail_text
     assert "\\[" not in detail_text
     assert "\\!" not in detail_text
 
 
 def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
-    """测试向后兼容：在传统 Markdown 模式下保持手动转义"""
-    # 模拟传统 Markdown 模式
+    """Test backward compatibility: keep manual escaping in legacy Markdown mode"""
+    # Simulate traditional Markdown mode
     monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", False)
     monkeypatch.setattr(bot, "_IS_MARKDOWN", True)
 
     task = TaskRecord(
         id="TASK_0002",
         project_slug="demo",
-        title="修复_登录问题",
+        title="repair_Log inquestion",
         status="test",
         priority=2,
         task_type="task",
         tags=(),
         due_date=None,
-        description="测试*描述*",
+        description="test*describe*",
         parent_id=None,
         root_id="TASK_0002",
         depth=0,
@@ -586,10 +586,10 @@ def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
 
     detail_text = bot._format_task_detail(task, notes=[])
 
-    # 在传统 Markdown 模式下，应该手动转义特殊字符
-    # _ 和 * 在 _MARKDOWN_ESCAPE_RE 中会被转义
-    assert "修复\\_登录问题" in detail_text  # _ 应该被转义为 \_
-    assert "测试\\*描述\\*" in detail_text  # * 应该被转义为 \*
+    # In traditional Markdown mode, special characters should be escaped manually
+    # _ and * exist _MARKDOWN_ESCAPE_RE will be escaped
+    assert "repair\\_Log inquestion" in detail_text  # _ should be escaped as \_
+    assert "test\\*describe\\*" in detail_text  # * should be escaped as \*
 
 
 @pytest.mark.parametrize(
@@ -597,13 +597,13 @@ def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
     [
         ("Fix [critical] bug", "research", "defect", "API endpoint /users fails"),
         ("Update API (v2.0)", "test", "task", "Refactor code: clean up"),
-        ("任务#123! 解决问题.", "done", "requirement", "描述: 完成-测试"),
+        ("Task#123! solve problems.", "done", "requirement", "describe: done-test"),
         ("Test_case.example", "research", "task", "File path: /path/to/file.txt"),
-        ("含特殊符号: ~`>#+=|{}", "test", "risk", "注意事项"),
+        ("Contains special symbols: ~`>#+=|{}", "test", "risk", "Things to note"),
     ],
 )
 def test_format_task_detail_various_special_chars(monkeypatch, title, status, task_type, description):
-    """测试各种特殊字符在 MarkdownV2 模式下的处理"""
+    """testProcessing of various special characters in exist MarkdownV2 mode"""
     monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", True)
     monkeypatch.setattr(bot, "_IS_MARKDOWN", False)
 
@@ -626,9 +626,9 @@ def test_format_task_detail_various_special_chars(monkeypatch, title, status, ta
         archived=False,
     )
 
-    # 不应该抛出异常
+    # should not throw exception
     detail_text = bot._format_task_detail(task, notes=[])
 
-    # 标题和描述应该保持原样（在 MarkdownV2 模式下）
+    # The title and describe should remain as is (in exist MarkdownV2 mode)
     assert title in detail_text
     assert description in detail_text

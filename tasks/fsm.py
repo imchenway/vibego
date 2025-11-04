@@ -1,11 +1,11 @@
-"""aiogram FSM 状态定义。"""
+"""aiogram FSM state definitions."""
 from __future__ import annotations
 
 from aiogram.fsm.state import State, StatesGroup
 
 
 class TaskCreateStates(StatesGroup):
-    """任务创建引导流程的状态集。"""
+    """States for the guided task creation flow."""
 
     waiting_title = State()
     waiting_type = State()
@@ -14,7 +14,7 @@ class TaskCreateStates(StatesGroup):
 
 
 class TaskEditStates(StatesGroup):
-    """任务编辑流程的状态集。"""
+    """States for editing existing tasks."""
 
     waiting_task_id = State()
     waiting_field_choice = State()
@@ -23,7 +23,7 @@ class TaskEditStates(StatesGroup):
 
 
 class TaskNoteStates(StatesGroup):
-    """任务备注追加流程的状态集。"""
+    """States for appending notes to a task."""
 
     waiting_task_id = State()
     waiting_content = State()
@@ -31,7 +31,7 @@ class TaskNoteStates(StatesGroup):
 
 
 class TaskBugReportStates(StatesGroup):
-    """缺陷报告流程状态。"""
+    """States for the defect reporting flow."""
 
     waiting_description = State()
     waiting_reproduction = State()
@@ -40,26 +40,26 @@ class TaskBugReportStates(StatesGroup):
 
 
 class TaskDescriptionStates(StatesGroup):
-    """任务描述编辑流程状态。"""
+    """States for editing task descriptions."""
 
     waiting_content = State()
     waiting_confirm = State()
 
 
 class TaskPushStates(StatesGroup):
-    """任务推送补充信息流程的状态集。"""
+    """States for sending supplemental task updates."""
 
     waiting_choice = State()
     waiting_supplement = State()
 
 
 class TaskListSearchStates(StatesGroup):
-    """任务列表搜索流程的状态集。"""
+    """States for searching within the task list."""
 
     waiting_keyword = State()
 
 
 class ProjectDeleteStates(StatesGroup):
-    """Master 项目删除确认流程的状态定义。"""
+    """States for confirming master project deletion."""
 
     confirming = State()

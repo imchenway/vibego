@@ -1,9 +1,9 @@
-# bot.py — Telegram 提示词 → Mac 执行 → 回推 (aiogram 3.x)
-# 说明：
-# - 使用长轮询，不需要公网端口；
-# - MODE=A: 直接以子进程方式调用你的 agent/codex CLI/HTTP（此处给出 CLI 示例）；
-# - MODE=B: 将提示词注入 tmux 会话（如 vibe），依靠 pipe-pane 写入的日志抽取本次输出；
-# - 安全：仅允许 ALLOWED_CHAT_ID（私聊你的 chat_id）；BOT_TOKEN 从 .env 读取；不要把 token 写进代码。
+# bot.py — Telegram prompt → macOS execution → pushback (aiogram 3.x)
+# Notes:
+# - Uses long polling, no public endpoint required.
+# - MODE=A: invoke your agent/Codex CLI/HTTP as a subprocess (CLI example shown here).
+# - MODE=B: inject prompts into a tmux session (e.g., vibe) and read output from pipe-pane logs.
+# - Security: only allow ALLOWED_CHAT_ID (your private chat_id); BOT_TOKEN is loaded from .env; never hardcode the token.
 
 from __future__ import annotations
 
@@ -69,9 +69,9 @@ from tasks.fsm import (
     TaskNoteStates,
     TaskPushStates,
 )
-# --- 简单 .env 加载 ---
+# --- Simple .env loading ---
 def load_env(p: str = ".env"):
-    """从指定路径加载 dotenv 格式的键值对到进程环境变量。"""
+    """Load dotenv-style key/value pairs into the process environment."""
 
     if not os.path.exists(p): 
         return
@@ -85,7 +85,7 @@ def load_env(p: str = ".env"):
 
 load_env()
 
-# --- 日志 & 上下文 ---
+# --- Logging & context ---
 PROJECT_NAME = os.environ.get("PROJECT_NAME", "").strip()
 ACTIVE_MODEL = (os.environ.get("ACTIVE_MODEL") or os.environ.get("MODEL_NAME") or "").strip()
 worker_log = create_logger(
@@ -97,7 +97,7 @@ worker_log = create_logger(
 )
 
 def _default_config_root() -> Path:
-    """解析配置根目录，优先读取显式环境变量并兼容 XDG 约定。"""
+    """Resolve the configuration root, preferring explicit environment variables with XDG fallback."""
 
     override = os.environ.get("MASTER_CONFIG_ROOT") or os.environ.get("VIBEGO_CONFIG_DIR")
     if override:
@@ -115,7 +115,7 @@ for _path in (CONFIG_DIR_PATH, STATE_DIR_PATH, LOG_DIR_PATH):
     _path.mkdir(parents=True, exist_ok=True)
 
 def _env_int(name: str, default: int) -> int:
-    """读取整型环境变量，解析失败时回退默认值。"""
+    """Read an integer environment variable, falling back to the default on failure."""
 
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -123,12 +123,12 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw.strip())
     except ValueError:
-        worker_log.warning("环境变量 %s=%r 解析为整数失败，已使用默认值 %s", name, raw, default)
+        worker_log.warning("Failed to parse environment variable %s=%r as int. Using default %s", name, raw, default)
         return default
 
 
 def _env_float(name: str, default: float) -> float:
-    """读取浮点型环境变量，解析失败时回退默认值。"""
+    """Read a float environment variable, falling back to the default on failure."""
 
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -136,7 +136,7 @@ def _env_float(name: str, default: float) -> float:
     try:
         return float(raw.strip())
     except ValueError:
-        worker_log.warning("环境变量 %s=%r 解析为浮点数失败，已使用默认值 %s", name, raw, default)
+        worker_log.warning("Failed to parse environment variable %s=%r as float. Using default %s", name, raw, default)
         return default
 
 _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
@@ -149,13 +149,13 @@ _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
     "html": ParseMode.HTML,
 }
 
-# 阶段提示统一追加 agents.md 信息，确保推送记录要求一致。
-AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。"
-# 推送到模型的阶段提示（vibe 与测试），合并统一后缀确保输出一致。
-VIBE_PHASE_PROMPT = f"进入vibe阶段{AGENTS_PHASE_SUFFIX}"
-TEST_PHASE_PROMPT = f"进入测试阶段{AGENTS_PHASE_SUFFIX}"
-# 报告缺陷时的专用前缀，插入在统一提示语之前
-BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。"
+# Append agents.md metadata to stage prompts to keep audit records consistent.
+AGENTS_PHASE_SUFFIX = ", then list the triggered agents.md stage, task name, and task code (e.g., /TASK_0001)."
+# Stage prompts sent to models (vibe and test) reuse the unified suffix for consistent output.
+VIBE_PHASE_PROMPT = f"Enter vibe stage{AGENTS_PHASE_SUFFIX}"
+TEST_PHASE_PROMPT = f"Enter test stage{AGENTS_PHASE_SUFFIX}"
+# Dedicated prefix when reporting defects, inserted before the unified stage prompt.
+BUG_REPORT_PREFIX = "Report a defect. Refer to the latest defect description at the bottom."
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -163,18 +163,18 @@ MODEL_OUTPUT_PARSE_MODE: Optional[ParseMode]
 if _parse_mode_key in _PARSE_MODE_CANDIDATES:
     MODEL_OUTPUT_PARSE_MODE = _PARSE_MODE_CANDIDATES[_parse_mode_key]
     if MODEL_OUTPUT_PARSE_MODE is None:
-        worker_log.info("模型输出将按纯文本发送")
+        worker_log.info("Model output will be sent as plain text")
     else:
         mode_value = (
             MODEL_OUTPUT_PARSE_MODE.value
             if isinstance(MODEL_OUTPUT_PARSE_MODE, ParseMode)
             else str(MODEL_OUTPUT_PARSE_MODE)
         )
-        worker_log.info("模型输出 parse_mode：%s", mode_value)
+        worker_log.info("Model output parse_mode: %s", mode_value)
 else:
     MODEL_OUTPUT_PARSE_MODE = ParseMode.MARKDOWN_V2
     worker_log.warning(
-        "未识别的 TELEGRAM_PARSE_MODE=%s，回退为 MarkdownV2",
+        "Unrecognised TELEGRAM_PARSE_MODE=%s, falling back to MarkdownV2",
         _parse_mode_env,
     )
 
@@ -183,22 +183,22 @@ _plan_parse_mode_key = _plan_parse_mode_env.replace("-", "").replace("_", "").lo
 PLAN_PROGRESS_PARSE_MODE: Optional[ParseMode]
 if not _plan_parse_mode_key:
     PLAN_PROGRESS_PARSE_MODE = None
-    worker_log.info("计划进度消息默认按纯文本发送")
+    worker_log.info("Plan progress messages default to plain text")
 elif _plan_parse_mode_key in _PARSE_MODE_CANDIDATES:
     PLAN_PROGRESS_PARSE_MODE = _PARSE_MODE_CANDIDATES[_plan_parse_mode_key]
     if PLAN_PROGRESS_PARSE_MODE is None:
-        worker_log.info("计划进度消息将按纯文本发送")
+        worker_log.info("Plan progress messages will be sent as plain text")
     else:
         mode_value = (
             PLAN_PROGRESS_PARSE_MODE.value
             if isinstance(PLAN_PROGRESS_PARSE_MODE, ParseMode)
             else str(PLAN_PROGRESS_PARSE_MODE)
         )
-        worker_log.info("计划进度消息 parse_mode：%s", mode_value)
+        worker_log.info("Plan progress parse_mode: %s", mode_value)
 else:
     PLAN_PROGRESS_PARSE_MODE = None
     worker_log.warning(
-        "未识别的 PLAN_PROGRESS_PARSE_MODE=%s，计划进度消息将按纯文本发送",
+        "Unrecognised PLAN_PROGRESS_PARSE_MODE=%s; plan progress messages default to plain text",
         _plan_parse_mode_env,
     )
 
@@ -207,7 +207,7 @@ _IS_MARKDOWN = MODEL_OUTPUT_PARSE_MODE == ParseMode.MARKDOWN
 
 
 def _parse_mode_value() -> Optional[str]:
-    """返回模型输出使用的 Telegram parse_mode 值。"""
+    """Return the Telegram parse_mode used for model output."""
 
     if MODEL_OUTPUT_PARSE_MODE is None:
         return None
@@ -215,7 +215,7 @@ def _parse_mode_value() -> Optional[str]:
 
 
 def _plan_parse_mode_value() -> Optional[str]:
-    """返回计划进度消息使用的 Telegram parse_mode 值。"""
+    """Return the Telegram parse_mode used for plan progress messages."""
 
     if PLAN_PROGRESS_PARSE_MODE is None:
         return None
@@ -225,24 +225,24 @@ def _plan_parse_mode_value() -> Optional[str]:
         else str(PLAN_PROGRESS_PARSE_MODE)
     )
 
-# --- 配置 ---
+# --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or ""
 if not BOT_TOKEN:
-    worker_log.error("BOT_TOKEN 未配置，程序退出")
+    worker_log.error("BOT_TOKEN is not configured; exiting.")
     sys.exit(1)
 
-MODE = os.environ.get("MODE", "B").upper()                      # A 或 B
+MODE = os.environ.get("MODE", "B").upper()                      # Modes: A or B
 
-# 模式A（CLI）
-AGENT_CMD = os.environ.get("AGENT_CMD", "")  # 例如: codex --project /path/to/proj --prompt -
-# 可扩展 HTTP：AGENT_HTTP=http://127.0.0.1:7001/api/run
+# Mode A (CLI)
+AGENT_CMD = os.environ.get("AGENT_CMD", "")  # Example: codex --project /path/to/proj --prompt -
+# Extend via HTTP: AGENT_HTTP=http://127.0.0.1:7001/api/run
 
-# 模式B（tmux）
+# Mode B (tmux)
 TMUX_SESSION = os.environ.get("TMUX_SESSION", "vibe")
 TMUX_LOG = os.environ.get("TMUX_LOG", str(Path(__file__).resolve().parent / "vibe.out.log"))
 IDLE_SECONDS = float(os.environ.get("IDLE_SECONDS", "3"))
-MAX_RETURN_CHARS = int(os.environ.get("MAX_RETURN_CHARS", "200000"))  # 超大文本转附件
-TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip()        # 可选代理 URL
+MAX_RETURN_CHARS = int(os.environ.get("MAX_RETURN_CHARS", "200000"))  # Oversized response sent as attachment
+TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip()        # Optional proxy URL
 CODEX_WORKDIR = os.environ.get("CODEX_WORKDIR", "").strip()
 CODEX_SESSION_FILE_PATH = os.environ.get("CODEX_SESSION_FILE_PATH", "").strip()
 CODEX_SESSIONS_ROOT = os.environ.get("CODEX_SESSIONS_ROOT", "").strip()
@@ -259,19 +259,19 @@ ENABLE_PLAN_PROGRESS = (os.environ.get("ENABLE_PLAN_PROGRESS", "1").strip().lowe
 AUTO_COMPACT_THRESHOLD = max(_env_int("AUTO_COMPACT_THRESHOLD", 0), 0)
 
 PLAN_STATUS_LABELS = {
-    "completed": "✅",
+    "completed": "done",
     "in_progress": "🔄",
     "pending": "⏳",
 }
 
 DELIVERABLE_KIND_MESSAGE = "message"
 DELIVERABLE_KIND_PLAN = "plan_update"
-MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
-TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
+MODEL_COMPLETION_PREFIX = "Model execution completed. Response follows:"
+TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage single-message limit
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
-    """标准化模型名称，便于后续按模型分支处理。"""
+    """Normalise the model name to simplify downstream branching."""
 
     source = raw_model
     if source is None:
@@ -281,7 +281,7 @@ def _canonical_model_name(raw_model: Optional[str] = None) -> str:
 
 
 def _model_display_label() -> str:
-    """返回当前活跃模型的友好名称。"""
+    """Return a user-friendly name for the active model."""
 
     raw = (os.environ.get("MODEL_NAME") or ACTIVE_MODEL or "codex").strip()
     normalized = _canonical_model_name(raw)
@@ -290,7 +290,7 @@ def _model_display_label() -> str:
         "claudecode": "ClaudeCode",
         "gemini": "Gemini",
     }
-    return mapping.get(normalized, raw or "模型")
+    return mapping.get(normalized, raw or "Model")
 
 
 MODEL_CANONICAL_NAME = _canonical_model_name()
@@ -298,14 +298,14 @@ MODEL_DISPLAY_LABEL = _model_display_label()
 
 
 def _is_claudecode_model() -> bool:
-    """判断当前 worker 是否运行 ClaudeCode 模型。"""
+    """Return True when the worker operates a ClaudeCode model."""
 
     return MODEL_CANONICAL_NAME == "claudecode"
 
 
 @dataclass
 class SessionDeliverable:
-    """描述 JSONL 会话中的单个推送事件。"""
+    """Describe a single deliverable item within the JSONL session."""
 
     offset: int
     kind: str
@@ -325,7 +325,7 @@ _bot: Bot | None = None
 
 
 def _mask_proxy(url: str) -> str:
-    """在 stderr 打印代理信息时隐藏凭据"""
+    """Mask credentials when printing proxy details on stderr."""
     if "@" not in url:
         return url
     parsed = urlparse(url)
@@ -335,7 +335,7 @@ def _mask_proxy(url: str) -> str:
 
 
 def _detect_proxy() -> tuple[Optional[str], Optional[BasicAuth], Optional[str]]:
-    """优先使用 TELEGRAM_PROXY，否则回落到常见环境变量"""
+    """Prefer TELEGRAM_PROXY and fall back to common environment variables."""
     candidates = [
         ("TELEGRAM_PROXY", TELEGRAM_PROXY),
         ("https_proxy", os.environ.get("https_proxy")),
@@ -367,12 +367,12 @@ def _detect_proxy() -> tuple[Optional[str], Optional[BasicAuth], Optional[str]]:
             netloc += f":{parsed.port}"
         proxy_raw = parsed._replace(netloc=netloc, path="", params="", query="", fragment="").geturl()
 
-    worker_log.info("使用代理(%s): %s", source, _mask_proxy(proxy_raw))
+    worker_log.info("Using proxy (%s): %s", source, _mask_proxy(proxy_raw))
     return proxy_raw, auth, source
 
-# 统一以 IPv4 访问 Telegram，避免部分网络环境下 IPv6 连接被丢弃
+# Always force IPv4 for Telegram to avoid IPv6 drops in certain environments
 def build_bot() -> Bot:
-    """按照网络环境与代理配置创建 aiogram Bot。"""
+    """Create the aiogram Bot instance based on network and proxy configuration."""
 
     proxy_url, proxy_auth, _ = _detect_proxy()
     session_kwargs = {
@@ -384,7 +384,7 @@ def build_bot() -> Bot:
         session_kwargs["proxy_auth"] = proxy_auth
 
     session = AiohttpSession(**session_kwargs)
-    # 内部 `_connector_init` 控制 TCPConnector 创建参数，此处强制 IPv4
+    # `_connector_init` controls TCPConnector creation; enforce IPv4 parameters here
     session._connector_init.update({  # type: ignore[attr-defined]
         "family": socket.AF_INET,
         "ttl_dns_cache": 60,
@@ -392,16 +392,16 @@ def build_bot() -> Bot:
     return Bot(token=BOT_TOKEN, session=session)
 
 def current_bot() -> Bot:
-    """返回懒加载的全局 Bot 实例。"""
+    """Return the lazily initialised global Bot instance."""
 
     global _bot
     if _bot is None:
         _bot = build_bot()
     return _bot
 
-# --- 工具函数 ---
+# --- Utility helpers ---
 async def _send_with_retry(coro_factory, *, attempts: int = SEND_RETRY_ATTEMPTS) -> None:
-    """对 Telegram 调用执行有限次重试。"""
+    """Execute a Telegram call with a bounded number of retries."""
 
     delay = SEND_RETRY_BASE_DELAY
     last_exc: Optional[Exception] = None
@@ -428,40 +428,40 @@ async def _send_with_retry(coro_factory, *, attempts: int = SEND_RETRY_ATTEMPTS)
 
 
 def _escape_markdown_v2(text: str) -> str:
-    """转义 MarkdownV2 特殊字符，保护代码块内容。
+    """Escape MarkdownV2 special characters while preserving code blocks.
 
-    注意：
-    - 使用分段处理，保护代码块（```...``` 和 `...`）
-    - Text().as_markdown() 会转义所有 MarkdownV2 特殊字符
-    - 只移除纯英文单词之间的连字符转义（如 "pre-release"）
-    - 保留数字、时间戳等其他情况的连字符转义（如 "2025-10-23"）
-    - 代码块内容不被转义，保持原样
+    Notes:
+    - Process segments so that code blocks (```...``` and `...`) stay intact.
+    - ``Text().as_markdown()`` escapes every MarkdownV2 special character.
+    - Remove hyphen escapes only between plain English words (e.g., ``pre-release``).
+    - Keep escapes for numbers/timestamps (e.g., ``2025-10-23``).
+    - Leave code block contents untouched.
     """
 
     def _escape_segment(segment: str) -> str:
-        """转义单个文本段落（非代码块）"""
+        """Escape a non-code segment."""
         escaped = Text(segment).as_markdown()
-        # 只移除纯英文字母之间的连字符转义
+        # Remove hyphen escapes only when surrounded by English letters
         escaped = re.sub(r"(?<=[a-zA-Z])\\-(?=[a-zA-Z])", "-", escaped)
-        # 移除斜杠的转义
+        # Remove escaping from forward slashes
         escaped = escaped.replace("\\/", "/")
         return escaped
 
-    # 分段处理：代码块保持原样，普通文本转义
+    # Process sections: keep code blocks intact, escape normal text
     pieces: list[str] = []
     last_index = 0
 
     for match in CODE_SEGMENT_RE.finditer(text):
-        # 处理代码块之前的普通文本
+        # Escape the normal text before the code block
         normal_part = text[last_index:match.start()]
         if normal_part:
             pieces.append(_escape_segment(normal_part))
 
-        # 代码块保持原样，不转义
+        # Keep code blocks untouched
         pieces.append(match.group(0))
         last_index = match.end()
 
-    # 处理最后一段普通文本
+    # Escape the trailing normal text segment
     if last_index < len(text):
         remaining = text[last_index:]
         pieces.append(_escape_segment(remaining))
@@ -472,7 +472,7 @@ def _escape_markdown_v2(text: str) -> str:
 LEGACY_DOUBLE_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 LEGACY_DOUBLE_UNDERLINE = re.compile(r"__(.+?)__", re.DOTALL)
 CODE_SEGMENT_RE = re.compile(r"(```.*?```|`[^`]*`)", re.DOTALL)
-# Markdown 标题模式（# - ####）
+# Markdown heading pattern (# - ####)
 MARKDOWN_HEADING = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
 
 
@@ -505,29 +505,29 @@ def _normalize_legacy_markdown(text: str) -> str:
     return "".join(pieces)
 
 
-# MarkdownV2 转义字符模式（用于检测已转义文本）
+# MarkdownV2 escape pattern (detects already-escaped text)
 _ESCAPED_MARKDOWN_PATTERN = re.compile(
-    r"\\[_*\[\]()~`>#+=|{}.!:-]"  # 添加了冒号
+    r"\\[_*\[\]()~`>#+=|{}.!:-]"  # Colon included
 )
 
-# 已转义的代码块模式（转义的反引号）
+# Escaped code block pattern (escaped backticks)
 _ESCAPED_CODE_BLOCK_PATTERN = re.compile(
     r"(\\\`\\\`\\\`.*?\\\`\\\`\\\`|\\\`[^\\\`]*?\\\`)",
     re.DOTALL
 )
 
 def _is_already_escaped(text: str) -> bool:
-    """检测文本是否已经包含 MarkdownV2 转义字符。
+    """Detect whether the text already contains MarkdownV2 escaping.
 
-    通过统计转义字符的出现频率来判断：
-    - 如果转义字符数量 >= 文本长度的 3%，认为已被转义（降低阈值）
-    - 或者如果有 2 个以上的连续转义模式（如 \*\*），也认为已被转义
-    - 或者包含已转义的代码块标记
+    Heuristics:
+    - If escaped characters make up at least 3% of the text, treat it as escaped.
+    - If there are two or more consecutive escape patterns (e.g., ``\*\*``), treat it as escaped.
+    - If escaped code block markers are present, treat it as escaped.
     """
     if not text:
         return False
 
-    # 检查是否有已转义的代码块标记
+    # Check for escaped code block markers
     if _ESCAPED_CODE_BLOCK_PATTERN.search(text):
         return True
 
@@ -535,21 +535,21 @@ def _is_already_escaped(text: str) -> bool:
     if not matches:
         return False
 
-    # 对于短文本，放宽检测条件
+    # Relax criteria for short text inputs
     if len(text) < 20:
-        # 短文本出现任意转义字符即可认定为已转义，防止重复转义
+        # Any escape in short text counts as already escaped to avoid double escaping
         if len(matches) >= 1:
             return True
     else:
-        # 检查转义字符密度（降低到 3%）
+        # Check the escape character density (threshold lowered to 3%)
         escape_count = len(matches)
         text_length = len(text)
         density = escape_count / text_length
 
-        if density >= 0.03:  # 3% 以上认为已被转义
+        if density >= 0.03:  # Density above 3% counts as escaped
             return True
 
-    # 检查是否有连续转义模式（如 \#\#\# 或 \*\*）
+    # Check for consecutive escape patterns (e.g., ``\#\#\#`` or ``\*\*``)
     consecutive_pattern = re.compile(r"(?:\\[_*\[\]()~`>#+=|{}.!:-]){2,}")
     if consecutive_pattern.search(text):
         return True
@@ -558,17 +558,13 @@ def _is_already_escaped(text: str) -> bool:
 
 
 def _unescape_markdown_v2(text: str) -> str:
-    """反转义 MarkdownV2 特殊字符。
-
-    将 \*, \_, \#, \[, \], \: 等转义字符还原为原始字符。
-    """
-    # 移除所有 MarkdownV2 转义的反斜杠
-    # 匹配模式：反斜杠 + 特殊字符（添加了冒号）
+    """Unescape MarkdownV2 special characters (e.g., ``\*`` → ``*``)."""
+    # Remove all MarkdownV2 escape backslashes; match backslash + special char (including colon)
     return re.sub(r"\\([_*\[\]()~`>#+=|{}.!:-])", r"\1", text)
 
 
 def _force_unescape_markdown(text: str) -> str:
-    """强制移除 MarkdownV2 转义，同时保护代码块语法不被破坏。"""
+    """Forcefully remove MarkdownV2 escapes while preserving code block syntax."""
     if not text:
         return text
 
@@ -576,13 +572,13 @@ def _force_unescape_markdown(text: str) -> str:
     code_blocks: list[str] = []
 
     def _preserve_code_block(match: re.Match[str]) -> str:
-        """临时替换代码块，防止内部字符被错误反转义。"""
+        """Temporarily replace code blocks to prevent undesired unescaping inside."""
         block = match.group(0)
         if block.startswith(r"\`\`\`"):
-            # 多行代码块保留内容，只修复边界反引号
+            # Multiline code blocks: keep content, fix boundary backticks
             unescaped_block = block.replace(r"\`", "`", 6)
         else:
-            # 单行代码块同理处理首尾反引号
+            # Single-line code blocks: adjust leading/trailing backticks
             unescaped_block = block.replace(r"\`", "`", 2)
 
         placeholder = f"__CODE_BLOCK_{len(code_blocks)}__"
@@ -599,7 +595,7 @@ def _force_unescape_markdown(text: str) -> str:
 
 
 def _unescape_if_already_escaped(text: str) -> str:
-    """智能检测并清理预转义文本，必要时触发强制反转义。"""
+    """Heuristically clean pre-escaped text and force unescape when required."""
     if not text:
         return text
     if not _is_already_escaped(text):
@@ -617,7 +613,7 @@ def _prepare_model_payload(text: str) -> str:
 
 
 def _prepare_model_payload_variants(text: str) -> tuple[str, Optional[str]]:
-    """返回首选与备用内容，默认为单一格式。"""
+    """Return the primary payload and an optional fallback variant."""
 
     payload = _prepare_model_payload(text)
     return payload, None
@@ -689,7 +685,7 @@ async def _send_with_markdown_guard(
             try:
                 await sender(fallback_payload)
                 worker_log.debug(
-                    "Markdown 优化回退为严格转义版本",
+                    "Markdown fallback succeeded with strictly escaped variant",
                     extra={"length": len(fallback_payload)},
                 )
                 return fallback_payload
@@ -701,7 +697,7 @@ async def _send_with_markdown_guard(
         sanitized: Optional[str]
         if _IS_MARKDOWN_V2:
             sanitized = _escape_markdown_v2(text)
-            # 保留代码块标记不转义（它们本身就是 Markdown 语法）
+            # Preserve native code block markers; they are valid Markdown syntax
             if "```" in text:
                 sanitized = sanitized.replace(r"\`\`\`", "```")
             if "`" in text:
@@ -713,7 +709,7 @@ async def _send_with_markdown_guard(
 
         if sanitized and sanitized != text:
             worker_log.debug(
-                "Markdown 解析失败，已对文本转义后重试",
+                "Markdown parsing failed; retrying with escaped payload",
                 extra={"length": len(text)},
             )
             try:
@@ -727,7 +723,7 @@ async def _send_with_markdown_guard(
             raise
 
         worker_log.warning(
-            "Markdown 解析仍失败，将以纯文本发送",
+            "Markdown parsing continues to fail; sending as plain text",
             extra={"length": len(text)},
         )
         await raw_sender(text)
@@ -735,14 +731,14 @@ async def _send_with_markdown_guard(
 
 
 async def _notify_send_failure_message(chat_id: int) -> None:
-    """向用户提示消息发送存在网络问题，避免重复刷屏。"""
+    """Notify the user about network issues while throttling repeated alerts."""
 
     now = time.monotonic()
     last_notice = CHAT_FAILURE_NOTICES.get(chat_id)
     if last_notice is not None and (now - last_notice) < SEND_FAILURE_NOTICE_COOLDOWN:
         return
 
-    notice = "发送结果时网络出现异常，系统正在尝试重试，请稍后再试。"
+    notice = "Network issues detected while sending the response. Retrying shortly; please wait."
     bot = current_bot()
 
     try:
@@ -761,7 +757,7 @@ async def _notify_send_failure_message(chat_id: int) -> None:
 
 
 def _prepend_completion_header(text: str) -> str:
-    """为模型输出添加完成提示，避免重复拼接。"""
+    """Prefix the model output with a completion header if missing."""
 
     if text.startswith(MODEL_COMPLETION_PREFIX):
         return text
@@ -777,12 +773,12 @@ async def reply_large_text(
     parse_mode: Optional[str] = None,
     preformatted: bool = False,
 ) -> str:
-    """向指定会话发送可能较长的文本，必要时退化为附件。
+    """Send potentially long text to a chat, degrading to an attachment if required.
 
-    :param chat_id: Telegram 会话标识。
-    :param text: 待发送内容。
-    :param parse_mode: 指定消息的 parse_mode，未提供时沿用全局默认值。
-    :param preformatted: 标记文本已按 parse_mode 处理，跳过内部转义。
+    :param chat_id: Telegram chat identifier.
+    :param text: Content to be delivered.
+    :param parse_mode: Explicit parse_mode override; defaults to global setting.
+    :param preformatted: When True, assume ``text`` already matches the parse_mode.
     """
     bot = current_bot()
     parse_mode_value = parse_mode if parse_mode is not None else _parse_mode_value()
@@ -811,7 +807,7 @@ async def reply_large_text(
         )
 
         worker_log.info(
-            "完成单条消息发送",
+            "Delivered single message successfully",
             extra={
                 "chat": chat_id,
                 "mode": "single",
@@ -823,7 +819,8 @@ async def reply_large_text(
     attachment_name = f"model-response-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
     summary_text = (
         f"{MODEL_COMPLETION_PREFIX}\n\n"
-        f"内容较长，已生成附件 `{attachment_name}`，请下载查看全文。"
+        f"The content is lengthy. An appendix `{attachment_name}` has been generated as an attachment. "
+        "Please download to view the full response."
     )
 
     summary_prepared, summary_fallback = _prepare_model_payload_variants(summary_text)
@@ -842,7 +839,7 @@ async def reply_large_text(
     await _send_with_retry(_send_document)
 
     worker_log.info(
-        "长文本已转附件发送",
+        "Delivered text as attachment due to length",
         extra={
             "chat": chat_id,
             "mode": "attachment",
@@ -854,7 +851,7 @@ async def reply_large_text(
     return delivered_summary
 
 def run_subprocess_capture(cmd: str, input_text: str = "") -> Tuple[int, str]:
-    # 同步执行 CLI，stdin 喂 prompt，捕获 stdout+stderr
+    # Run the CLI synchronously, piping prompt text via stdin and capturing stdout+stderr
     p = subprocess.Popen(
         shlex.split(cmd),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -874,7 +871,7 @@ def _tmux_cmd(tmux: str, *args: str) -> list[str]:
 def tmux_send_line(session: str, line: str):
     tmux = tmux_bin()
     subprocess.check_call(_tmux_cmd(tmux, "has-session", "-t", session))
-    # 发送一次 ESC，退出 Codex 可能的菜单或输入模式
+    # Send ESC once to exit potential Codex menus or input modes
     subprocess.call(
         _tmux_cmd(tmux, "send-keys", "-t", session, "Escape"),
         stdout=subprocess.DEVNULL,
@@ -902,7 +899,7 @@ def tmux_send_line(session: str, line: str):
     time.sleep(0.2 if is_claudecode else 0.05)
     subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
     if is_claudecode:
-        # Claude Code 会偶尔忽略首个 Enter，额外发送一次确保队列入列
+        # ClaudeCode occasionally ignores the first Enter; send an extra one to enqueue input
         time.sleep(0.1)
         subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
 
@@ -922,7 +919,7 @@ async def _reply_to_chat(
     parse_mode: Optional[str] = None,
     reply_markup: Optional[Any] = None,
 ) -> Optional[Message]:
-    """向聊天发送消息，优先复用原消息上下文。"""
+    """Send a message to a chat, reusing the reply context when available."""
 
     if reply_to is not None:
         return await reply_to.answer(
@@ -956,10 +953,10 @@ async def _send_session_ack(
     *,
     reply_to: Optional[Message],
 ) -> None:
-    model_label = (ACTIVE_MODEL or "模型").strip() or "模型"
+    model_label = (ACTIVE_MODEL or "Model").strip() or "Model"
     session_id = session_path.stem if session_path else "unknown"
     prompt_message = (
-        f"💭 {model_label}思考中，正在持续监听模型响应结果中。\n"
+        f"💭 {model_label} is processing. Listening for model output...\n"
         f"sessionId : {session_id}"
     )
     ack_message = await _reply_to_chat(
@@ -989,7 +986,7 @@ async def _dispatch_prompt_to_model(
     reply_to: Optional[Message],
     ack_immediately: bool = True,
 ) -> tuple[bool, Optional[Path]]:
-    """统一处理向模型推送提示后的会话绑定、确认与监听。"""
+    """Handle session binding, acknowledgement, and watcher setup after pushing a prompt."""
 
     prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
     if prev_watcher is not None:
@@ -1090,7 +1087,7 @@ async def _dispatch_prompt_to_model(
     if needs_session_wait and pointer_path is None:
         await _reply_to_chat(
             chat_id,
-            f"未检测到 {MODEL_DISPLAY_LABEL} 会话日志，请稍后重试。",
+            f"No {MODEL_DISPLAY_LABEL} session log detected yet. Please try again shortly.",
             reply_to=reply_to,
         )
         return False, None
@@ -1100,7 +1097,7 @@ async def _dispatch_prompt_to_model(
     except subprocess.CalledProcessError as exc:
         await _reply_to_chat(
             chat_id,
-            f"tmux错误：{exc}",
+            f"tmux error: {exc}",
             reply_to=reply_to,
         )
         return False, None
@@ -1112,7 +1109,7 @@ async def _dispatch_prompt_to_model(
         if session_path is None:
             await _reply_to_chat(
                 chat_id,
-                f"未检测到 {MODEL_DISPLAY_LABEL} 会话日志，请稍后重试。",
+                f"No {MODEL_DISPLAY_LABEL} session log detected yet. Please try again shortly.",
                 reply_to=reply_to,
             )
             return False, None
@@ -1173,7 +1170,7 @@ async def _dispatch_prompt_to_model(
                 return True, session_path
             await asyncio.sleep(0.3)
 
-    # 中断旧的延迟轮询（如果存在）
+    # Interrupt any previous long-polling task if it exists
     await _interrupt_long_poll(chat_id)
 
     watcher_task = asyncio.create_task(
@@ -1197,15 +1194,15 @@ async def _push_task_to_model(
     actor: Optional[str],
     is_bug_report: bool = False,
 ) -> tuple[bool, str, Optional[Path]]:
-    """推送任务信息到模型，并附带补充描述。
+    """Push task details to the model with optional supplemental description.
 
     Args:
-        task: 任务记录
-        chat_id: 聊天 ID
-        reply_to: 回复的消息
-        supplement: 补充描述
-        actor: 操作者
-        is_bug_report: 是否为缺陷报告推送
+        task: Task record being pushed.
+        chat_id: Telegram chat identifier.
+        reply_to: Original message to reply to, if any.
+        supplement: Additional description to append.
+        actor: Human operator triggering the push.
+        is_bug_report: When True, treat the push as a defect report.
     """
 
     history_text, history_count = await _build_history_context_for_model(task.id)
@@ -1245,12 +1242,12 @@ async def _push_task_to_model(
     )
     if not success:
         worker_log.warning(
-            "推送到模型失败：未能建立 Codex 会话",
+            "Failed to push task to the model: no Codex session established",
             extra={"task_id": task.id},
         )
     else:
         worker_log.info(
-            "已推送任务描述到模型",
+            "Task description pushed to the model",
             extra={
                 "task_id": task.id,
                 "status": task.status,
@@ -1275,20 +1272,20 @@ def _detect_environment_issues() -> tuple[list[str], Optional[Path]]:
     workdir_raw = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
     workdir_path: Optional[Path] = None
     if not workdir_raw:
-        issues.append("未配置工作目录 (MODEL_WORKDIR)")
+        issues.append("MODEL_WORKDIR is not configured")
     else:
         candidate = resolve_path(workdir_raw)
         if not candidate.exists():
-            issues.append(f"工作目录不存在: {workdir_raw}")
+            issues.append(f"Working directory does not exist: {workdir_raw}")
         elif not candidate.is_dir():
-            issues.append(f"工作目录不是文件夹: {workdir_raw}")
+            issues.append(f"Working directory is not a folder: {workdir_raw}")
         else:
             workdir_path = candidate
 
     try:
         tmux_bin()
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-        issues.append("未检测到 tmux，可通过 'brew install tmux' 安装")
+        issues.append("tmux not detected (install via `brew install tmux`)")
 
     model_cmd = os.environ.get("MODEL_CMD")
     if not model_cmd and (ACTIVE_MODEL or "").lower() == "codex":
@@ -1296,7 +1293,7 @@ def _detect_environment_issues() -> tuple[list[str], Optional[Path]]:
     if model_cmd:
         executable = _extract_executable(model_cmd)
         if executable and shutil.which(executable) is None:
-            issues.append(f"无法找到模型 CLI 可执行文件: {executable}")
+            issues.append(f"Model CLI executable not found: {executable}")
 
     return issues, workdir_path
 
@@ -1312,12 +1309,12 @@ def _format_env_issue_message() -> str:
             bullet_lines.extend([f"  {line}" for line in rest])
         else:
             bullet_lines.append(f"- {issue}")
-    return "当前 worker 环境存在以下问题，请先处理后再试：\n" + "\n".join(bullet_lines)
+    return "The current worker environment has issues; resolve them before retrying:\n" + "\n".join(bullet_lines)
 
 
 ENV_ISSUES, PRIMARY_WORKDIR = _detect_environment_issues()
 if ENV_ISSUES:
-    worker_log.error("环境自检失败: %s", "; ".join(ENV_ISSUES))
+    worker_log.error("Environment self-check failed: %s", "; ".join(ENV_ISSUES))
 
 ROOT_DIR_ENV = os.environ.get("ROOT_DIR")
 ROOT_DIR_PATH = Path(ROOT_DIR_ENV).expanduser() if ROOT_DIR_ENV else Path(__file__).resolve().parent
@@ -1337,7 +1334,7 @@ MEDIA_GROUP_AGGREGATION_DELAY = max(_env_float("TELEGRAM_MEDIA_GROUP_DELAY", 0.8
 
 @dataclass
 class TelegramSavedAttachment:
-    """记录单个附件的落地信息，便于提示模型读取。"""
+    """Record metadata about a saved attachment to guide model consumption."""
 
     kind: str
     display_name: str
@@ -1348,7 +1345,7 @@ class TelegramSavedAttachment:
 
 @dataclass
 class PendingMediaGroupState:
-    """聚合 Telegram 媒体组的临时缓存。"""
+    """Temporary cache for aggregating Telegram media group messages."""
 
     chat_id: int
     origin_message: Message
@@ -1362,15 +1359,15 @@ MEDIA_GROUP_STATE: dict[str, PendingMediaGroupState] = {}
 MEDIA_GROUP_LOCK = asyncio.Lock()
 
 ATTACHMENT_USAGE_HINT = (
-    "请按需读取附件：图片可使用 Codex 的 view_image 功能或 Claude Code 的文件引用能力；"
-    "文本/日志可直接通过 @<路径> 打开；若需其他处理请说明。"
+    "Review attachments as needed: use Codex `view_image` or ClaudeCode file references for images; "
+    "open text/log files via @<path>; request additional handling if required."
 )
 
 _FS_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def _attachment_directory_prefix_for_display(relative_path: str) -> Optional[str]:
-    """根据附件相对路径推导目录前缀，便于提示模型定位。"""
+    """Derive a directory prefix for display so the model can locate attachments."""
 
     path_str = (relative_path or "").strip()
     if not path_str:
@@ -1400,7 +1397,7 @@ def _attachment_directory_prefix_for_display(relative_path: str) -> Optional[str
 
 
 def _sanitize_fs_component(value: str, fallback: str) -> str:
-    """清理路径片段中的特殊字符，避免越权访问。"""
+    """Clean path components to remove special characters and prevent traversal."""
 
     stripped = (value or "").strip()
     cleaned = _FS_SAFE_PATTERN.sub("_", stripped)
@@ -1409,7 +1406,7 @@ def _sanitize_fs_component(value: str, fallback: str) -> str:
 
 
 def _format_relative_path(path: Path) -> str:
-    """将绝对路径转换为模型更易识别的相对路径。"""
+    """Convert an absolute path into a model-friendly relative representation."""
 
     try:
         rel = path.relative_to(ROOT_DIR_PATH)
@@ -1422,7 +1419,7 @@ def _format_relative_path(path: Path) -> str:
 
 
 def _directory_size(path: Path) -> int:
-    """计算目录占用的总字节数。"""
+    """Calculate the total size of a directory in bytes."""
 
     total = 0
     if not path.exists():
@@ -1437,7 +1434,7 @@ def _directory_size(path: Path) -> int:
 
 
 def _cleanup_attachment_storage() -> None:
-    """控制附件目录容量，避免磁盘被占满。"""
+    """Keep attachment storage within configured limits to avoid disk exhaustion."""
 
     if ATTACHMENT_TOTAL_LIMIT_BYTES <= 0:
         return
@@ -1453,7 +1450,7 @@ def _cleanup_attachment_storage() -> None:
             shutil.rmtree(folder, ignore_errors=True)
         except Exception as exc:  # noqa: BLE001
             worker_log.warning(
-                "清理旧附件目录失败：%s",
+                "Failed to clean old attachment directory: %s",
                 exc,
                 extra=_session_extra(path=folder),
             )
@@ -1462,7 +1459,7 @@ def _cleanup_attachment_storage() -> None:
 
 
 def _guess_extension(mime_type: Optional[str], fallback: str = ".bin") -> str:
-    """根据 MIME 类型推断扩展名。"""
+    """Infer a file extension from the MIME type."""
 
     if mime_type:
         guessed = mimetypes.guess_extension(mime_type, strict=False)
@@ -1472,19 +1469,19 @@ def _guess_extension(mime_type: Optional[str], fallback: str = ".bin") -> str:
 
 
 def _attachment_dir_for_message(message: Message, media_group_id: Optional[str] = None) -> Path:
-    """为当前消息生成附件目录，按项目标识 + 日期归档，便于模型定位。"""
+    """Create an attachment directory based on project slug and message date."""
 
-    # media_group_id 参数保留用于兼容旧调用，目前统一归档至日期目录。
+    # media_group_id retained for legacy callers; currently archives by date only.
     _ = media_group_id
 
-    # 优先使用项目 slug，回退到 bot 名称或通用前缀。
+    # Prefer the project slug, fall back to the bot username or a generic prefix.
     project_identifier = PROJECT_SLUG or ""
     sanitized_project = _sanitize_fs_component(project_identifier, "project")
     if sanitized_project == "project":
         bot_username = getattr(message.bot, "username", None)
         sanitized_project = _sanitize_fs_component(bot_username or "bot", "bot")
 
-    # 使用消息时间（UTC）格式化日期，确保相同日期的附件集中存放。
+    # Format the message timestamp (UTC) as a date to group attachments per day.
     event_time = message.date or datetime.now(UTC)
     try:
         event_time = event_time.astimezone(UTC)
@@ -1505,7 +1502,7 @@ async def _download_telegram_file(
     mime_type: Optional[str],
     target_dir: Path,
 ) -> Path:
-    """从 Telegram 下载文件并返回本地路径。"""
+    """Download a file from Telegram and return the local path."""
 
     bot = message.bot or current_bot()
     telegram_file = await bot.get_file(file_id)
@@ -1524,7 +1521,7 @@ async def _download_telegram_file(
 
 
 async def _collect_saved_attachments(message: Message, target_dir: Path) -> list[TelegramSavedAttachment]:
-    """下载消息中的所有附件，并返回保存记录。"""
+    """Download all attachments from a message and return their saved metadata."""
 
     saved: list[TelegramSavedAttachment] = []
 
@@ -1676,7 +1673,7 @@ def _build_prompt_with_attachments(
     text_part: Optional[str],
     attachments: Sequence[TelegramSavedAttachment],
 ) -> str:
-    """将文字与附件描述拼接成模型可读的提示。"""
+    """Combine text with attachment descriptions into a model-friendly prompt."""
 
     sections: list[str] = []
     base_text = (text_part or "").strip()
@@ -1689,27 +1686,27 @@ def _build_prompt_with_attachments(
             if directory_hint:
                 break
         if directory_hint:
-            lines = [f"附件列表（文件位于项目工作目录（{directory_hint}），可直接读取）："]
+            lines = [f"Attachment list (files located under project workspace {directory_hint}):"]
         else:
-            lines = ["附件列表（文件位于项目工作目录，可直接读取）："]
+            lines = ["Attachment list (files reside within the project workspace):"]
         for idx, item in enumerate(attachments, 1):
             lines.append(
-                f"{idx}. {item.display_name}（{item.mime_type}）→ {item.relative_path}"
+                f"{idx}. {item.display_name} ({item.mime_type}) → {item.relative_path}"
             )
         lines.append("")
         lines.append(ATTACHMENT_USAGE_HINT)
         sections.append("\n".join(lines))
     if not sections:
         fallback = [
-            "收到一条仅包含附件的消息，没有额外文字说明。",
-            "请直接阅读列出的附件并给出观察结果或结论。",
+            "Received a message containing only attachments with no additional description.",
+            "Review the listed attachments directly and provide observations or conclusions.",
         ]
         sections.append("\n".join(fallback))
     return "\n\n".join(sections).strip()
 
 
 async def _finalize_media_group_after_delay(media_group_id: str) -> None:
-    """在短暂延迟后合并媒体组消息，确保 Telegram 全部照片到齐。"""
+    """Aggregate media group messages after a short delay to ensure all items arrive."""
 
     try:
         await asyncio.sleep(MEDIA_GROUP_AGGREGATION_DELAY)
@@ -1728,14 +1725,14 @@ async def _finalize_media_group_after_delay(media_group_id: str) -> None:
         await _handle_prompt_dispatch(state.origin_message, prompt)
     except Exception as exc:  # noqa: BLE001
         worker_log.exception(
-            "媒体组消息推送模型失败：%s",
+            "Failed to push media group message to model: %s",
             exc,
             extra=_session_extra(media_group=media_group_id),
         )
 
 
 async def _enqueue_media_group_message(message: Message, text_part: Optional[str]) -> None:
-    """收集媒体组中的每一条消息，统一延迟推送。"""
+    """Accumulate messages in a media group and dispatch them after a short delay."""
 
     media_group_id = message.media_group_id
     if not media_group_id:
@@ -1762,7 +1759,7 @@ async def _enqueue_media_group_message(message: Message, text_part: Optional[str
     async with MEDIA_GROUP_LOCK:
         state = MEDIA_GROUP_STATE.get(media_group_id)
         if state is None:
-            # 若期间被清理，重新创建并继续积累，避免丢失后续内容。
+            # Recreate the state if cleaned during processing to avoid losing entries.
             state = PendingMediaGroupState(
                 chat_id=message.chat.id,
                 origin_message=message,
@@ -1774,7 +1771,7 @@ async def _enqueue_media_group_message(message: Message, text_part: Optional[str
         state.attachments.extend(attachments)
         if caption:
             state.captions.append(caption)
-        # 使用首条消息作为引用对象，便于 Telegram 回复。
+        # Use the earliest message as reply target for Telegram context.
         if state.origin_message.message_id > message.message_id:
             state.origin_message = message
         if state.finalize_task and not state.finalize_task.done():
@@ -1783,12 +1780,12 @@ async def _enqueue_media_group_message(message: Message, text_part: Optional[str
 
 
 async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
-    """统一封装向模型推送提示词的流程。"""
+    """Wrapper routine that pushes prompts to the model."""
 
     if ENV_ISSUES:
         message_text = _format_env_issue_message()
         worker_log.warning(
-            "拒绝处理消息，环境异常: %s",
+            "Rejecting message due to environment issues: %s",
             message_text,
             extra={**_session_extra(), "chat": message.chat.id},
         )
@@ -1800,7 +1797,7 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
 
     if MODE == "A":
         if not AGENT_CMD:
-            await message.answer("AGENT_CMD 未配置（.env）")
+            await message.answer("AGENT_CMD is not configured in .env")
             return
         rc, out = run_subprocess_capture(AGENT_CMD, input_text=prompt)
         out = out or ""
@@ -1811,27 +1808,27 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
     await _dispatch_prompt_to_model(message.chat.id, prompt, reply_to=message)
 
 BOT_COMMANDS: list[tuple[str, str]] = [
-    ("help", "查看全部命令"),
-    ("tasks", "任务命令清单"),
-    ("task_new", "创建任务"),
-    ("task_list", "查看任务列表"),
-    ("task_show", "查看任务详情"),
-    ("task_update", "更新任务字段"),
-    ("task_note", "添加任务备注"),
+    ("help", "View all commands"),
+    ("tasks", "Task command list"),
+    ("task_new", "Create a task"),
+    ("task_list", "Show task list"),
+    ("task_show", "View task details"),
+    ("task_update", "Update task fields"),
+    ("task_note", "Add task note"),
 ]
 
 COMMAND_KEYWORDS: set[str] = {command for command, _ in BOT_COMMANDS}
 COMMAND_KEYWORDS.update({"task_child", "task_children", "task_delete"})
 
-WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
-WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
+WORKER_MENU_BUTTON_TEXT = "📋 Task List"
+WORKER_CREATE_TASK_BUTTON_TEXT = "➕ Create Task"
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
-TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
+TASK_ID_USAGE_TIP = "Invalid task ID format. Use patterns like TASK_0001."
 
 
 def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
-    """Worker 端常驻键盘，提供任务列表入口。"""
+    """Return the persistent worker keyboard containing task shortcuts."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -1844,7 +1841,7 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _resolve_worker_target_chat_ids() -> List[int]:
-    """收集需要推送菜单的 chat id，优先使用状态文件记录。"""
+    """Collect chat IDs that should receive menus, preferring state file records."""
     targets: set[int] = set()
 
     def _append(value: Optional[int]) -> None:
@@ -1865,9 +1862,9 @@ def _resolve_worker_target_chat_ids() -> List[int]:
         try:
             raw_state = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            worker_log.debug("STATE_FILE 不存在，跳过菜单推送来源", extra=_session_extra(key="state_file_missing"))
+            worker_log.debug("STATE_FILE not found; skipping menu source", extra=_session_extra(key="state_file_missing"))
         except json.JSONDecodeError as exc:
-            worker_log.warning("STATE_FILE 解析失败：%s", exc, extra=_session_extra(key="state_file_invalid"))
+            worker_log.warning("STATE_FILE parse failed: %s", exc, extra=_session_extra(key="state_file_invalid"))
         else:
             if isinstance(raw_state, dict):
                 entry = raw_state.get(PROJECT_SLUG) or raw_state.get(PROJECT_NAME)
@@ -1883,9 +1880,9 @@ def _resolve_worker_target_chat_ids() -> List[int]:
     try:
         configs_raw = json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        worker_log.debug("未找到项目配置 %s，跳过 allowed_chat_id", config_path, extra=_session_extra(key="projects_missing"))
+        worker_log.debug("Project configuration %s not found; skipping allowed_chat_id", config_path, extra=_session_extra(key="projects_missing"))
     except json.JSONDecodeError as exc:
-        worker_log.warning("项目配置解析失败：%s", exc, extra=_session_extra(key="projects_invalid"))
+        worker_log.warning("Failed to parse project configuration: %s", exc, extra=_session_extra(key="projects_invalid"))
     else:
         if isinstance(configs_raw, list):
             for item in configs_raw:
@@ -1905,12 +1902,12 @@ def _resolve_worker_target_chat_ids() -> List[int]:
 
 
 def _auto_record_chat_id(chat_id: int) -> None:
-    """首次收到消息时自动将 chat_id 记录到 state 文件。
+    """Auto-record the chat_id into the state file on first contact.
 
-    仅在以下条件同时满足时写入：
-    1. STATE_FILE 环境变量已配置
-    2. state 文件存在
-    3. 当前项目在 state 中的 chat_id 为空
+    The write happens only when all conditions hold:
+    1. ``STATE_FILE`` environment variable is configured.
+    2. The state file already exists.
+    3. The current project has no ``chat_id`` entry in the state.
     """
     state_file_env = os.environ.get("STATE_FILE")
     if not state_file_env:
@@ -1919,12 +1916,12 @@ def _auto_record_chat_id(chat_id: int) -> None:
     state_path = Path(state_file_env).expanduser()
     if not state_path.exists():
         worker_log.debug(
-            "STATE_FILE 不存在，跳过自动记录 chat_id",
+            "STATE_FILE missing; skip auto-recording chat_id",
             extra={**_session_extra(), "path": str(state_path)},
         )
         return
 
-    # 使用文件锁保证并发安全
+    # Use a file lock to ensure concurrency safety
     lock_path = state_path.with_suffix(state_path.suffix + ".lock")
     import fcntl
 
@@ -1933,27 +1930,27 @@ def _auto_record_chat_id(chat_id: int) -> None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
             try:
-                # 读取当前 state
+                # Read the current state
                 raw_state = json.loads(state_path.read_text(encoding="utf-8"))
                 if not isinstance(raw_state, dict):
                     worker_log.warning(
-                        "STATE_FILE 格式异常，跳过自动记录",
+                        "STATE_FILE has unexpected format; skip auto-recording",
                         extra=_session_extra(),
                     )
                     return
 
-                # 检查当前项目的 chat_id
+                # Check the chat_id entry for the current project
                 project_key = PROJECT_SLUG or PROJECT_NAME
                 if not project_key:
                     worker_log.warning(
-                        "PROJECT_SLUG 和 PROJECT_NAME 均未设置，跳过自动记录",
+                        "Both PROJECT_SLUG and PROJECT_NAME are unset; skipping auto-record",
                         extra=_session_extra(),
                     )
                     return
 
                 project_state = raw_state.get(project_key)
                 if not isinstance(project_state, dict):
-                    # 项目不存在，创建新条目
+                    # Project entry missing; create a new one
                     raw_state[project_key] = {
                         "chat_id": chat_id,
                         "model": ACTIVE_MODEL or "codex",
@@ -1961,15 +1958,15 @@ def _auto_record_chat_id(chat_id: int) -> None:
                     }
                     need_write = True
                 elif project_state.get("chat_id") is None:
-                    # chat_id 为空，更新
+                    # chat_id missing; update it
                     project_state["chat_id"] = chat_id
                     need_write = True
                 else:
-                    # chat_id 已存在，无需更新
+                    # chat_id already present; nothing to do
                     need_write = False
 
                 if need_write:
-                    # 写入更新后的 state
+                    # Write the updated state back to disk
                     tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
                     tmp_path.write_text(
                         json.dumps(raw_state, ensure_ascii=False, indent=4),
@@ -1977,25 +1974,25 @@ def _auto_record_chat_id(chat_id: int) -> None:
                     )
                     tmp_path.replace(state_path)
                     worker_log.info(
-                        "已自动记录 chat_id=%s 到 state 文件",
+                        "Recorded chat_id=%s into state file",
                         chat_id,
                         extra={**_session_extra(), "project": project_key},
                     )
                 else:
                     worker_log.debug(
-                        "chat_id 已存在，跳过自动记录",
+                        "chat_id already present; skipping update",
                         extra={**_session_extra(), "existing_chat_id": project_state.get("chat_id")},
                     )
 
             except json.JSONDecodeError as exc:
                 worker_log.error(
-                    "STATE_FILE 解析失败，跳过自动记录：%s",
+                    "STATE_FILE parse failed; skipping auto-record: %s",
                     exc,
                     extra=_session_extra(),
                 )
             except Exception as exc:
                 worker_log.error(
-                    "自动记录 chat_id 失败：%s",
+                    "Failed to auto-record chat_id: %s",
                     exc,
                     extra={**_session_extra(), "chat": chat_id},
                 )
@@ -2003,12 +2000,12 @@ def _auto_record_chat_id(chat_id: int) -> None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     except Exception as exc:
         worker_log.error(
-            "获取文件锁失败：%s",
+            "Failed to acquire file lock: %s",
             exc,
             extra=_session_extra(),
         )
     finally:
-        # 清理锁文件
+        # Remove the lock file
         try:
             if lock_path.exists():
                 lock_path.unlink()
@@ -2017,17 +2014,17 @@ def _auto_record_chat_id(chat_id: int) -> None:
 
 
 async def _broadcast_worker_keyboard(bot: Bot) -> None:
-    """启动时主动推送菜单，确保 Telegram 键盘同步。"""
+    """Broadcast the worker keyboard at startup to keep Telegram menus in sync."""
     targets = _resolve_worker_target_chat_ids()
     if not targets:
-        worker_log.info("无可推送的聊天，跳过菜单广播", extra=_session_extra())
+        worker_log.info("No chat targets available; skipping menu broadcast", extra=_session_extra())
         return
     for chat_id in targets:
         try:
             text, inline_markup = await _build_task_list_view(status=None, page=1, limit=DEFAULT_PAGE_SIZE)
         except Exception as exc:
             worker_log.error(
-                "构建任务列表失败：%s",
+                "Failed to build task list: %s",
                 exc,
                 extra={**_session_extra(), "chat": chat_id},
             )
@@ -2060,62 +2057,62 @@ async def _broadcast_worker_keyboard(bot: Bot) -> None:
                 fallback_payload=fallback_payload,
             )
         except TelegramForbiddenError as exc:
-            worker_log.warning("推送任务列表被拒绝：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.warning("Task list push rejected: %s", exc, extra={**_session_extra(), "chat": chat_id})
         except TelegramBadRequest as exc:
-            worker_log.warning("推送任务列表失败：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.warning("Task list push failed: %s", exc, extra={**_session_extra(), "chat": chat_id})
         except (TelegramRetryAfter, TelegramNetworkError) as exc:
-            worker_log.error("推送任务列表网络异常：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.error("Task list push hit network issues: %s", exc, extra={**_session_extra(), "chat": chat_id})
             await _notify_send_failure_message(chat_id)
         except Exception as exc:
-            worker_log.error("推送任务列表异常：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.error("Unexpected error while pushing task list: %s", exc, extra={**_session_extra(), "chat": chat_id})
         else:
             worker_log.info(
-                "已推送任务列表至 chat_id=%s",
+                "Task list sent to chat_id=%s",
                 chat_id,
                 extra={**_session_extra(), "length": str(len(delivered))},
             )
 
 STATUS_LABELS = {
-    "research": "🔍 调研中",
-    "test": "🧪 测试中",
-    "done": "✅ 已完成",
+    "research": "🔍 Researching",
+    "test": "🧪 Testing",
+    "done": "Completed",
 }
 
 NOTE_LABELS = {
-    "research": "调研",
-    "test": "测试",
-    "bug": "缺陷",
-    "misc": "其他",
+    "research": "Research",
+    "test": "Test",
+    "bug": "Bug",
+    "misc": "Misc",
 }
 
 TASK_TYPE_LABELS = {
-    "requirement": "需求",
-    "defect": "缺陷",
-    "task": "优化",
-    "risk": "风险",
+    "requirement": "Requirement",
+    "defect": "Defect",
+    "task": "Task",
+    "risk": "Risk",
 }
 
 TASK_TYPE_EMOJIS = {
-    "requirement": "📌",
+    "requirement": "[req]",
     "defect": "🐞",
     "task": "🛠️",
     "risk": "⚠️",
 }
 
 HISTORY_FIELD_LABELS = {
-    "title": "标题",
-    "status": "状态",
-    "priority": "优先级",
-    "description": "描述",
-    "due_date": "截止时间",
-    "task_type": "类型",
-    "type": "类型",
-    "tags": "标签",
-    "assignee": "负责人",
-    "parent_id": "父任务",
-    "root_id": "根任务",
-    "archived": "归档状态",
-    "create": "创建任务",
+    "title": "Title",
+    "status": "Status",
+    "priority": "Priority",
+    "description": "Description",
+    "due_date": "Due Date",
+    "task_type": "Type",
+    "type": "Type",
+    "tags": "Tags",
+    "assignee": "Assignee",
+    "parent_id": "Parent Task",
+    "root_id": "Root Task",
+    "archived": "Archive State",
+    "create": "Create Task",
 }
 
 _TASK_TYPE_ALIAS: dict[str, str] = {}
@@ -2127,21 +2124,21 @@ for _code, _label in TASK_TYPE_LABELS.items():
 _TASK_TYPE_ALIAS.update(
     {
         "req": "requirement",
-        "需求": "requirement",
         "feature": "requirement",
         "story": "requirement",
+        "need": "requirement",
         "bug": "defect",
         "issue": "defect",
-        "缺陷": "defect",
-        "任务": "task",
+        "todo": "task",
+        "improvement": "task",
+        "optimization": "task",
         "risk": "risk",
-        "风险": "risk",
     }
 )
 
 _STATUS_ALIAS_MAP: dict[str, str] = {key.lower(): value for key, value in STATUS_ALIASES.items()}
 
-SKIP_TEXT = "跳过"
+SKIP_TEXT = "Skip"
 TASK_LIST_CREATE_CALLBACK = "task:list_create"
 TASK_LIST_SEARCH_CALLBACK = "task:list_search"
 TASK_LIST_SEARCH_PAGE_CALLBACK = "task:list_search_page"
@@ -2154,11 +2151,11 @@ TASK_DESC_CLEAR_CALLBACK = "task:desc_clear"
 TASK_DESC_CONFIRM_CALLBACK = "task:desc_confirm"
 TASK_DESC_RETRY_CALLBACK = "task:desc_retry"
 TASK_DESC_CANCEL_CALLBACK = "task:desc_cancel"
-TASK_DESC_CLEAR_TEXT = "🗑️ 清空描述"
-TASK_DESC_CANCEL_TEXT = "❌ 取消"
-TASK_DESC_REPROMPT_TEXT = "✏️ 重新打开输入提示"
-TASK_DESC_CONFIRM_TEXT = "✅ 确认更新"
-TASK_DESC_RETRY_TEXT = "✏️ 重新输入"
+TASK_DESC_CLEAR_TEXT = "Clear description"
+TASK_DESC_CANCEL_TEXT = "Cancel"
+TASK_DESC_REPROMPT_TEXT = "Reopen input prompt"
+TASK_DESC_CONFIRM_TEXT = "Confirm update"
+TASK_DESC_RETRY_TEXT = "Re-enter"
 
 DESCRIPTION_MAX_LENGTH = 3000
 SEARCH_KEYWORD_MIN_LENGTH = 2
@@ -2177,8 +2174,8 @@ MODEL_SUMMARY_PAYLOAD_LIMIT = 4000
 MODEL_HISTORY_MAX_ITEMS = 50
 MODEL_HISTORY_MAX_CHARS = 4096
 TASK_HISTORY_PAGE_SIZE = 6
-HISTORY_TRUNCATION_NOTICE = "⚠️ 本页部分记录因 Telegram 长度限制已截断，建议导出历史查看完整内容。"
-HISTORY_TRUNCATION_NOTICE_SHORT = "⚠️ 本页已截断"
+HISTORY_TRUNCATION_NOTICE = "⚠️ Some records on this page were truncated by Telegram limits. Export history for the complete view."
+HISTORY_TRUNCATION_NOTICE_SHORT = "⚠️ Page truncated"
 
 _NUMBER_PREFIX_RE = re.compile(r"^\d+\.\s")
 
@@ -2191,7 +2188,7 @@ def _format_numbered_label(index: int, label: str) -> str:
 
 
 def _number_inline_buttons(rows: list[list[InlineKeyboardButton]], *, start: int = 1) -> None:
-    """仅用于 FSM 交互的 inline 按钮，添加数字前缀以便键盘选择。"""
+    """Prefix FSM inline buttons with numbers for easier selection."""
     counter = start
     for row in rows:
         for button in row:
@@ -2200,7 +2197,7 @@ def _number_inline_buttons(rows: list[list[InlineKeyboardButton]], *, start: int
 
 
 def _number_reply_buttons(rows: list[list[KeyboardButton]], *, start: int = 1) -> None:
-    """仅用于 FSM 交互的 reply 按钮，添加数字前缀便于输入。"""
+    """Prefix FSM reply buttons with numbers for easier input."""
     counter = start
     for row in rows:
         for button in row:
@@ -2215,7 +2212,7 @@ def _strip_number_prefix(value: Optional[str]) -> str:
 
 
 def _normalize_choice_token(value: Optional[str]) -> str:
-    """统一处理按钮输入文本，移除序号并规范大小写。"""
+    """Normalize button input by stripping numbering and whitespace."""
 
     if value is None:
         return ""
@@ -2224,21 +2221,21 @@ def _normalize_choice_token(value: Optional[str]) -> str:
 
 
 def _is_skip_message(value: Optional[str]) -> bool:
-    """判断用户是否选择了跳过。"""
+    """Return True when the user chose to skip."""
 
     token = _normalize_choice_token(value).lower()
     return token in {SKIP_TEXT.lower(), "skip"}
 
 
 def _is_cancel_message(value: Optional[str]) -> bool:
-    """判断用户是否输入了取消指令。"""
+    """Return True when the user requested cancellation."""
 
     token = _normalize_choice_token(value)
     if not token:
         return False
     lowered = token.lower()
-    cancel_tokens = {"取消", "cancel", "quit"}
-    # 兼容含有表情的菜单按钮文本，避免用户需重复点击取消。
+    cancel_tokens = {"cancel", "quit", "exit"}
+    # Support buttons that include emojis to avoid repeated cancellation clicks.
     cancel_tokens.add(_normalize_choice_token(TASK_DESC_CANCEL_TEXT).lower())
     return lowered in cancel_tokens
 
@@ -2278,7 +2275,7 @@ def _resolve_reply_choice(
 
 
 def _status_display_order() -> tuple[str, ...]:
-    """返回状态展示顺序，保持与任务状态定义一致。"""
+    """Return the display order of statuses, matching task status definitions."""
 
     return tuple(TASK_STATUSES)
 
@@ -2286,66 +2283,37 @@ def _status_display_order() -> tuple[str, ...]:
 STATUS_DISPLAY_ORDER: tuple[str, ...] = _status_display_order()
 STATUS_FILTER_OPTIONS: tuple[Optional[str], ...] = (None, *STATUS_DISPLAY_ORDER)
 
-VIBE_PHASE_BODY = """## 需求调研问题分析阶段 - 严禁修改文件｜允许访问网络｜自定义扫描范围
-以上是任务和背景描述，你是一名专业的全栈工程师，使用尽可能多的专业 agents，产出调研结论：给出实现思路、方案优劣与决策选项；
-重要约束：
-- 响应的内容以及思考过程都始终使用简体中文回复，在 CLI 终端中用格式化后的 markdown 的格式来呈现数据，禁止使用 markdown 表格，流程图的话改用纯文本绘制，markdown 中的代码、流程等有必要的内容需要使用围栏代码块。
-- 先通读项目：厘清部署架构、系统架构、代码风格与通用组件；不确定时先提问再推进。
-- 充分分析，详细讨论清楚需求以及可能发送的边缘场景，列出需我确认的关键决策点；不明之处及时澄清。
-- 使用 Task 工具时必须标注：RESEARCH ONLY - NO FILE MODIFICATIONS。
-- 可调用所需的 tools / subAgent / MCP 等一切辅助工具调研，本地没有的时候自己上网找文档安装。
-- 涉及开发设计时，明确依赖、数据库表与字段、伪代码与影响范围，按生产级别的安全、性能、高可用等标准考虑。
-- 制定方案：列出至少两种可选的思路，比较其优缺点后推荐最佳方案。
-- 需要用户做出决策或待用户确认时，给出待决策项的纯数字编号以及 ABCD 的选项，方便用户回复你。
-- 自行整理出本次会话的 checklist ，防止在后续的任务执行中遗漏。
-- 最后列出本次使用的模型、MCP、Tools、subAgent 及 token 消耗； ultrathink"""
+VIBE_PHASE_BODY = """## Vibe Stage — File modifications forbidden | Network access allowed | Custom scan scope (trigger words: vibe, enter vibe stage)
 
-TEST_PHASE_REQUIREMENTS = """## 测试阶段（可改文件｜可联网｜自定义扫描范围）
-以上是任务和任务描述，你是一名专业全栈工程师，使用尽可能多的专业 agents，在终端一次性跑完前后端测试（与该任务相关的代码），覆盖：单元、集成契约、API/数据交互、冒烟、端到端（后端视角）、性能压力、并发正确性（可选）、安全与依赖漏洞、覆盖率统计与阈值校验；最终产出报告与待确认修复清单。IMPLEMENTATION APPROVED
+ Based on the task and background above, you are a professional full-stack engineer. Use as many specialist agents as
+ needed and produce research conclusions: outline implementation approaches, pros/cons, and decision options; then,
+ according to the user's decisions, execute those decisions or resolve the issues they encounter. Only after receiving
+ the user's explicit instruction that file modifications may begin may you enter the implementation stage, then complete
+ all tasks one by one with nothing omitted. After implementation/development, perform self-testing.
+ Important constraints:
 
-### 全局约定
-- 工具与依赖：缺失即联网安装；优先 use context7（如无则自动安装，可用 chrome-devtools-mcp）。
-- 仅在**当前仓库**内操作；遵循现有代码风格与 lint；最小化改动。
-- 统一输出：HTML/文本报告、Trace/Video/Screenshot、覆盖率阈值硬闸可配置。
-
-### 后端
-- 构建与运行：所有 Maven 命令用 `./mvnw`；启动附加参数：
-  -Dspring-boot.run.profiles=dev -Dspring-boot.run.jvmArguments="-javaagent:/Users/david/devops/opentelemetry-javaagent.jar -Dotel.service.name=main-application -Dotel.traces.exporter=none -Dotel.metrics.exporter=none -Dotel.logs.exporter=none"
-- 测试基线：若无用例，按生产标准为各层（Controller/Service/Repository）与每个 REST API 生成丰富完整的 JUnit 5 + Spring 测试与集成用例。
-- 生态与规范：若缺失则安装并配置——JUnit 5、Mockito、Testcontainers、JaCoCo、JMeter、Checkstyle。
-- 冒烟：对健康检查与关键 API 做 200/超时鉴权三类断言（健康检查为 `/health/check`），生成 JaCoCo 并按行分支阈值硬闸。
-- 性能负载：在压力场景下给出系统当前可承受的关键边界指标。
-- 并发正确性（可选）：高风险类用 JMH（微基准）与 jcstress（可见性原子性）抽样验证。
-- 变更策略：明显低风险且确定性高的问题直接修（选择器等待策略不稳 Mock/可复现小缺陷）；高风险变更列清单与建议，待确认后再改。
-
-### 前端（Playwright）
-- 目标：跨浏览器（Chromium/Firefox/WebKit）与品牌兼容；E2E/冒烟功能交互/UI 可视回归（`toHaveScreenshot`）；接口与数据交互（拦截/Mock/HAR 回放）；网络失败与重试；移动端环境模拟（iPhone/Android 视口、触摸、定位时区、慢网离线）。
-- 性能：采集 Navigation/Resource Timing；（可选）如检测到 Lighthouse 依赖则对首页关键路由跑桌面移动审计并输出 JSON/HTML 与阈值告警。
-- 执行策略（按序，压缩版）：
-  1) 安装校验 Playwright 依赖与三大浏览器二进制（仅当前项目）。
-  2) 生成校验 `playwright.config.ts`（chromium/firefox/webkit + Desktop Chrome/iPhone14/Pixel7；全局 `trace: retain-on-failure, video: retain-on-failure, screenshot: only-on-failure`）；无基线则首次运行生成快照基线（记录为“基线生成”而非失败）。
-  3) 冒烟优先：仅跑主流程用例（可按 `tests/e2e/**/smoke*.spec.ts` 约定），收集 `console.error/requestfailed`，并将任何错误计入报告。
-  4) 全量回归：按“Project”维度并行跑：三大浏览器 + 两款移动设备；UI 测试对关键页面与组件使用 `toHaveScreenshot`；对动态区域应用 mask/threshold 以减少抖动；交互与接口使用 `route()` 进行定向 Mock 与异常场景注入；必要时使用 HAR 回放；模拟慢 3G、离线、地理位置、时区、深/浅色模式、权限（通知/定位）。
-  5) 性能小节：汇总 Web Performance API 指标（如 FCP/LCP/TBT/TTFB 可得时）并输出到报告；如检测到 lighthouse 依赖，对首页/关键路由跑 Lighthouse（桌面/移动各一次），输出 JSON/HTML 报告与阈值告警。
-  6) 结果汇总（文本表）
-    | 维度 | 浏览器/设备 | 用例数 | 失败 | 重跑后 | 截图 Diff | 性能阈值告警 | 备注 |
-    |---|---|---:|---:|---:|---:|---:|---|
-  7) 自动最小化修复（仅限安全改动）
-    - 分类：用例问题/测试夹具问题/应用真实缺陷
-    - 对“明显低风险且确定性高”的问题直接修复（如选择器失效、等待策略、Mock 不稳、易复现前端异常的局部修正）；
-    - 修复后**本地自测**：新增/更新最少 10 条测试输入（正常/边界/异常）与预期，并复跑相关项目
-    - 产出：变更清单（文件/函数/影响面）、回滚命令、后续观察项
-  8) 高风险的改动记录为清单并给出修改建议等，最后所有任务执行完成后，由我确认是否需要修复
-    - 如“是否引入/更新 lighthouse、是否提高视觉阈值、是否纳入 WebKit 移动模拟”等
-
-### 输出顺序（严格执行）
-A. 背景与假设（含不确定项）  
-B. 预检结果与配置要点  
-C. 冒烟与全量汇总表 + 关键失败 TopN（含直链到 Trace）  
-D. 性能摘录（及阈值对比）  
-E. 自动修复的变更清单（含回滚说明）与自测用例×≥10  
-F. 仍需我确认的决策点  
-- 最后列出本次使用的模型、MCP、Tools、subAgent、token 消耗以及执行耗时；ultrathink"""
+ - Both response content and thinking must always be in english. In the CLI, present data as formatted Markdown; **no
+   Markdown tables**. For flowcharts, use plain text drawings. In Markdown, put code/flows and other necessary content in
+   fenced code blocks.
+ - Read the project end-to-end first: clarify deployment architecture, system architecture, code style, and common
+   components; ask before proceeding when unsure.
+ - Analyze thoroughly; discuss requirements and edge cases; list key decision points that require my confirmation;
+   clarify uncertainties promptly.
+ - When using the Task tool you **must label**: RESEARCH ONLY - NO FILE MODIFICATIONS.
+ - You may call any needed tools/sub-agents/MCPs for research; if missing locally, search the web for docs and install
+   them.
+ - For development/design, specify dependencies, database tables and fields, pseudocode, and impact scope; consider
+   production-grade security, performance, and high availability.
+ - Prepare plans: propose at least two options, compare pros/cons, and recommend the best.
+ - When a user decision/confirmation is required, provide numbered decision items with options A/B/C/D to ease reply.
+ - Before coding, run existing related tests and keep the results in memory for post-change self-tests.
+ - When coding, ensure performance, robustness, readability, and maintainability; classes, functions, and key lines *
+   *must** be commented.
+ - After coding, design and run sufficient tests based on the changes, covering normal, boundary, and exceptional cases;
+   execute at least 10 distinct inputs with expected outputs.
+ - Run all relevant unit and integration tests; if no framework support exists, manually simulate key scenarios to
+   validate functionality.
+ - Compile a checklist for this session to avoid omissions in subsequent tasks; finally verify all items are completed."""
 
 MODEL_PUSH_CONFIG: dict[str, dict[str, Any]] = {
     "research": {
@@ -2375,11 +2343,11 @@ SUMMARY_COMMAND_ALIASES: tuple[str, ...] = (
 )
 
 
-LEGACY_BUG_HISTORY_HEADER = "缺陷记录（最近 3 条）"
+LEGACY_BUG_HISTORY_HEADER = "Bug History (latest 3 entries)"
 
 
 def _strip_legacy_bug_header(text: str) -> str:
-    """移除历史模板遗留的缺陷标题，防止提示词重复。"""
+    """Remove legacy bug headers from history templates to avoid repetition."""
 
     if not text:
         return ""
@@ -2387,7 +2355,7 @@ def _strip_legacy_bug_header(text: str) -> str:
     for line in text.splitlines():
         token = line.strip()
         if token and token.startswith(LEGACY_BUG_HISTORY_HEADER):
-            # 兼容旧模板形式，如“缺陷记录（最近 3 条） -”或带冒号的写法
+        # Handle legacy formats such as "Bug History (latest 3 entries) -" or colon variants
             continue
         cleaned_lines.append(line)
     return "\n".join(cleaned_lines).strip()
@@ -2400,19 +2368,19 @@ def _build_model_push_payload(
     notes: Optional[Sequence[TaskNoteRecord]] = None,
     is_bug_report: bool = False,
 ) -> str:
-    """根据任务状态构造推送到 tmux 的指令。
+    """Construct the payload to push into tmux based on task status.
 
     Args:
-        task: 任务记录
-        supplement: 补充描述
-        history: 历史记录文本
-        notes: 任务备注列表
-        is_bug_report: 是否为缺陷报告推送，True 时会在提示词前添加缺陷前缀
+        task: Task record to push.
+        supplement: Additional description supplied by the user.
+        history: Formatted history text.
+        notes: Task note list.
+        is_bug_report: When True, prepend the bug prefix before the prompt.
     """
 
     config = MODEL_PUSH_CONFIG.get(task.status)
     if config is None:
-        raise ValueError(f"状态 {task.status!r} 未配置推送模板")
+        raise ValueError(f"Status {task.status!r} has no push template configured")
 
     body = config.get("body", "")
     include_task = bool(config.get("include_task_info"))
@@ -2424,7 +2392,7 @@ def _build_model_push_payload(
         body = ""
 
     if "{history}" in body:
-        replacement = history_block or "（暂无任务执行记录）"
+        replacement = history_block or "(No task execution history available)"
         body = body.replace("{history}", replacement).strip()
         history_block = ""
 
@@ -2440,7 +2408,7 @@ def _build_model_push_payload(
             continue
         summarized = _summarize_note_text(content)
         if note.note_type == "bug":
-            # 缺陷备注不再拼接到推送提示词中，避免与任务执行记录重复
+            # Skip bug notes to avoid duplicating task execution history in prompts
             continue
         regular_notes.append(summarized)
 
@@ -2448,7 +2416,7 @@ def _build_model_push_payload(
 
     if include_task and status in {"research", "test"}:
         phase_line = VIBE_PHASE_PROMPT
-        # 如果是缺陷报告推送，在阶段提示前添加缺陷前缀
+        # For defect pushes, prepend the bug prefix ahead of the phase prompt
         if is_bug_report:
             phase_line = f"{BUG_REPORT_PREFIX}\n{phase_line}"
         title = (task.title or "").strip() or "-"
@@ -2458,14 +2426,14 @@ def _build_model_push_payload(
 
         lines: list[str] = [
             phase_line,
-            f"任务标题：{title}",
-            f"任务编码：{task_code_plain}",
-            f"任务描述：{description}",
-            f"任务备注：{note_text}",
-            f"补充任务描述：{supplement_value}",
+            f"Task Title: {title}",
+            f"Task Code: {task_code_plain}",
+            f"Task Description: {description}",
+            f"Task Notes: {note_text}",
+            f"Supplementary Description: {supplement_value}",
             "",
         ]
-        history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
+        history_intro = "Task execution history for traceability:"
         if history_block:
             lines.append(history_intro)
             lines.extend(history_block.splitlines())
@@ -2473,27 +2441,27 @@ def _build_model_push_payload(
             lines.append(f"{history_intro} -")
         return _strip_legacy_bug_header("\n".join(lines))
     else:
-        # 非上述状态维持旧逻辑，避免影响完成等场景
+        # Preserve legacy behaviour for other statuses (e.g., completed)
         info_lines: list[str] = []
         if include_task:
             title = (task.title or "-").strip() or "-"
-            description = (task.description or "").strip() or "暂无"
+            description = (task.description or "").strip() or "None"
             supplement_value = supplement_text or "-"
             info_lines.extend(
                 [
-                    f"任务标题：{title}",
-                    f"任务编码：{task_code_plain}",
-                    f"任务描述：{description}",
-                    f"补充任务描述：{supplement_value}",
+                    f"Task Title: {title}",
+                    f"Task Code: {task_code_plain}",
+                    f"Task Description: {description}",
+                    f"Supplementary Description: {supplement_value}",
                 ]
             )
         elif supplement_text:
-            info_lines.append(f"补充任务描述：{supplement_text}")
+            info_lines.append(f"Supplementary Description: {supplement_text}")
 
         if history_block:
             if info_lines and info_lines[-1].strip():
                 info_lines.append("")
-            info_lines.append("任务执行记录：")
+            info_lines.append("Task Execution History:")
             info_lines.append(history_block)
 
         if info_lines:
@@ -2544,7 +2512,7 @@ def _normalize_task_id(value: Optional[str]) -> Optional[str]:
 
 
 def _format_task_command(task_id: str) -> str:
-    """根据当前 parse_mode 输出可点击的任务命令文本。"""
+    """Return a clickable task command string honoring the current parse_mode."""
 
     command = f"/{task_id}"
     if _IS_MARKDOWN and not _IS_MARKDOWN_V2:
@@ -2553,18 +2521,18 @@ def _format_task_command(task_id: str) -> str:
 
 
 def _wrap_text_in_code_block(text: str) -> tuple[str, str]:
-    """将推送消息包装为 Telegram 代码块，并返回渲染文本与 parse_mode。"""
+    """Wrap text in a Telegram code block and return the rendered value plus parse_mode."""
 
     if MODEL_OUTPUT_PARSE_MODE == ParseMode.HTML:
         escaped = html.escape(text, quote=False)
         return f"<pre><code>{escaped}</code></pre>", ParseMode.HTML.value
     if MODEL_OUTPUT_PARSE_MODE == ParseMode.MARKDOWN_V2:
-        # 先清理已有的 MarkdownV2 转义字符，避免重复转义导致显示反斜杠
+        # Remove existing MarkdownV2 escapes to avoid double escaping
         cleaned = _unescape_if_already_escaped(text)
-        # 在代码块中只需要转义反引号和反斜杠
+        # Only escape backticks and backslashes inside code blocks
         escaped = cleaned.replace("\\", "\\\\").replace("`", "\\`")
         return f"```\n{escaped}\n```", ParseMode.MARKDOWN_V2.value
-    # 默认退回 Telegram Markdown，保证代码块高亮可用
+    # Default to Telegram Markdown to keep code block highlighting enabled
     return f"```\n{text}\n```", ParseMode.MARKDOWN.value
 
 
@@ -2572,7 +2540,7 @@ async def _reply_task_detail_message(message: Message, task_id: str) -> None:
     try:
         detail_text, markup = await _render_task_detail(task_id)
     except ValueError:
-        await _answer_with_markdown(message, f"任务 {task_id} 不存在")
+        await _answer_with_markdown(message, f"Task {task_id} does not exist")
         return
     await _answer_with_markdown(message, detail_text, reply_markup=markup)
 
@@ -2599,10 +2567,10 @@ def _canonical_status_token(value: Optional[str], *, quiet: bool = False) -> Opt
     mapped = _STATUS_ALIAS_MAP.get(token, token)
     if mapped not in TASK_STATUSES:
         if not quiet:
-            worker_log.warning("检测到未知任务状态：%s", value)
+            worker_log.warning("Encountered unknown task status: %s", value)
         return token
     if mapped != token and not quiet:
-        worker_log.info("任务状态别名已自动转换：%s -> %s", token, mapped)
+        worker_log.info("Task status alias auto-converted: %s -> %s", token, mapped)
     return mapped
 
 
@@ -2614,7 +2582,7 @@ def _format_status(status: str) -> str:
 
 
 def _status_icon(status: Optional[str]) -> str:
-    """提取状态对应的 emoji 图标，用于紧凑展示。"""
+    """Return the emoji icon associated with a status for compact displays."""
 
     if not status:
         return ""
@@ -2627,14 +2595,14 @@ def _status_icon(status: Optional[str]) -> str:
     first_token = label.split(" ", 1)[0]
     if not first_token:
         return ""
-    # 避免把纯文字当图标
+    # Skip labels without actual emoji characters
     if first_token[0].isalnum():
         return ""
     return first_token
 
 
 def _strip_task_type_emoji(value: str) -> str:
-    """去除前缀的任务类型 emoji，保持其余文本原样。"""
+    """Remove leading task-type emoji while preserving the remaining text."""
 
     trimmed = value.strip()
     for emoji in TASK_TYPE_EMOJIS.values():
@@ -2645,7 +2613,7 @@ def _strip_task_type_emoji(value: str) -> str:
 
 def _format_task_type(task_type: Optional[str]) -> str:
     if not task_type:
-        return "⚪ 未设置"
+        return "⚪ Not Set"
     label = TASK_TYPE_LABELS.get(task_type, task_type)
     icon = TASK_TYPE_EMOJIS.get(task_type)
     if icon:
@@ -2664,7 +2632,7 @@ def _format_priority(priority: int) -> str:
 
 def _status_filter_label(value: Optional[str]) -> str:
     if value is None:
-        return "⭐ 全部"
+        return "⭐ All"
     canonical = _canonical_status_token(value)
     if canonical and canonical in STATUS_LABELS:
         return STATUS_LABELS[canonical]
@@ -2672,7 +2640,7 @@ def _status_filter_label(value: Optional[str]) -> str:
 
 
 def _build_status_filter_row(current_status: Optional[str], limit: int) -> list[list[InlineKeyboardButton]]:
-    """构造任务列表顶部的状态筛选按钮，并根据数量动态换行。"""
+    """Build the task list status filter buttons, wrapping rows dynamically."""
 
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
@@ -2702,11 +2670,11 @@ def _build_status_filter_row(current_status: Optional[str], limit: int) -> list[
 def _format_task_list_entry(task: TaskRecord) -> str:
     indent = "  " * max(task.depth, 0)
     title_raw = (task.title or "").strip()
-    # 修复：智能清理预转义文本
+    # Intelligent cleanup for pre-escaped text
     if not title_raw:
         title = "-"
     elif _IS_MARKDOWN_V2:
-        # 智能清理预转义文本（保护代码块）
+        # Protect code blocks while removing pre-escapes
         title = _unescape_if_already_escaped(title_raw)
     else:
         title = _escape_markdown_text(title_raw)
@@ -2717,14 +2685,14 @@ def _format_task_list_entry(task: TaskRecord) -> str:
 
 
 def _compose_task_button_label(task: TaskRecord, *, max_length: int = 60) -> str:
-    """生成任务列表按钮文本，将状态图标置于最左侧，保证两类图标都保留。"""
+    """Generate task list button labels with status/type icons aligned to the left."""
 
     title_raw = (task.title or "").strip()
     title = title_raw if title_raw else "-"
     type_icon = TASK_TYPE_EMOJIS.get(task.task_type) or "⚪"
     status_icon = _status_icon(task.status)
 
-    # 按“状态 → 类型”的顺序拼接前缀，让用户先看到进度状态。
+    # Prefix order: status icon first, then type icon, so users see progress first.
     prefix_parts: list[str] = []
     if status_icon:
         prefix_parts.append(status_icon)
@@ -2757,45 +2725,45 @@ def _format_task_detail(
         *,
         notes: Sequence[TaskNoteRecord],
     ) -> str:
-    # 修复：智能处理预转义文本
-    # - MarkdownV2 模式：先清理可能的预转义，再由 _prepare_model_payload() 统一处理
-    # - 其他模式：手动转义
+    # Intelligent handling of pre-escaped text:
+    # - MarkdownV2: remove pre-escapes first, then let _prepare_model_payload handle it.
+    # - Other modes: escape manually.
     title_raw = (task.title or "").strip()
     if _IS_MARKDOWN_V2:
-        # 智能清理预转义文本（保护代码块）
+        # Remove pre-escapes while guarding code blocks
         title_text = _unescape_if_already_escaped(title_raw) if title_raw else "-"
     else:
         title_text = _escape_markdown_text(title_raw) if title_raw else "-"
 
     task_id_text = _format_task_command(task.id)
     lines: list[str] = [
-        f"📝 标题：{title_text}",
-        f"🏷️ 任务编码：{task_id_text}",
-        f"⚙️ 状态：{_format_status(task.status)}",
-        f"🚦 优先级：{_format_priority(task.priority)}",
-        f"📂 类型：{_format_task_type(task.task_type)}",
+        f"📝 Title: {title_text}",
+        f"🏷️ Task ID: {task_id_text}",
+        f"⚙️ Status: {_format_status(task.status)}",
+        f"🚦 Priority: {_format_priority(task.priority)}",
+        f"📂 Type: {_format_task_type(task.task_type)}",
     ]
 
-    # 修复：描述字段智能清理预转义
-    description_raw = task.description or "暂无"
+    # Description field pre-escape handling
+    description_raw = task.description or "None"
     if _IS_MARKDOWN_V2:
-        # 智能清理预转义文本（保护代码块）
+        # Remove pre-escapes while guarding code blocks
         description_text = _unescape_if_already_escaped(description_raw)
     else:
         description_text = _escape_markdown_text(description_raw)
 
-    lines.append(f"🖊️ 描述：{description_text}")
-    lines.append(f"📅 创建时间：{_format_local_time(task.created_at)}")
-    lines.append(f"🔁 更新时间：{_format_local_time(task.updated_at)}")
+    lines.append(f"🖊️ Description: {description_text}")
+    lines.append(f"📅 Created At: {_format_local_time(task.created_at)}")
+    lines.append(f"🔁 Updated At: {_format_local_time(task.updated_at)}")
 
-    # 修复：父任务ID字段智能清理预转义
+    # Intelligent cleanup for parent task identifier
     if task.parent_id:
         if _IS_MARKDOWN_V2:
-            # 智能清理预转义文本（保护代码块）
+            # Remove pre-escapes while guarding code blocks
             parent_text = _unescape_if_already_escaped(task.parent_id)
         else:
             parent_text = _escape_markdown_text(task.parent_id)
-        lines.append(f"👪 父任务：{parent_text}")
+        lines.append(f"👪 Parent Task: {parent_text}")
 
     return "\n".join(lines)
 
@@ -2806,11 +2774,11 @@ def _parse_history_payload(payload_raw: Optional[str]) -> dict[str, Any]:
     try:
         data = json.loads(payload_raw)
     except json.JSONDecodeError:
-        worker_log.warning("历史 payload 解析失败：%s", payload_raw, extra=_session_extra())
+        worker_log.warning("Failed to parse history payload: %s", payload_raw, extra=_session_extra())
         return {}
     if isinstance(data, dict):
         return data
-    worker_log.warning("历史 payload 类型异常：%s", type(data), extra=_session_extra())
+    worker_log.warning("History payload has unexpected type: %s", type(data), extra=_session_extra())
     return {}
 
 
@@ -2826,16 +2794,16 @@ def _trim_history_value(value: Optional[str], limit: int = HISTORY_DISPLAY_VALUE
 
 
 def _history_field_label(field: Optional[str]) -> str:
-    """返回历史字段的中文标签。"""
+    """Return the human-readable label for a history field."""
 
     token = (field or "").strip().lower()
     if not token:
-        return "字段"
+        return "Field"
     return HISTORY_FIELD_LABELS.get(token, token)
 
 
 def _format_history_value(field: Optional[str], value: Optional[str]) -> str:
-    """将字段值转为更易读的文本。"""
+    """Convert a history field value into a readable string."""
 
     text = _trim_history_value(value)
     if text == "-":
@@ -2853,14 +2821,14 @@ def _format_history_value(field: Optional[str], value: Optional[str]) -> str:
     if token == "archived":
         lowered = text.lower()
         if lowered in {"true", "1", "yes"}:
-            return "已归档"
+            return "Archived"
         if lowered in {"false", "0", "no"}:
-            return "未归档"
+            return "Not Archived"
     return text
 
 
 def _format_history_timestamp(value: Optional[str]) -> str:
-    """将历史时间压缩为“月-日 小时:分钟”格式，减少自动换行。"""
+    """Render history timestamps as "MM-DD HH:MM" to minimise wrapping."""
 
     if not value:
         return "-"
@@ -2877,36 +2845,36 @@ def _format_history_timestamp(value: Optional[str]) -> str:
 
 
 def _format_history_summary(item: TaskHistoryRecord) -> str:
-    """生成首行摘要，突出按钮语义。"""
+    """Generate the headline summary emphasising button semantics."""
 
     event_type = (item.event_type or HISTORY_EVENT_FIELD_CHANGE).strip() or HISTORY_EVENT_FIELD_CHANGE
     payload = _parse_history_payload(item.payload)
     if event_type == HISTORY_EVENT_FIELD_CHANGE:
         field = (item.field or "").strip().lower()
         if field == "create":
-            return "创建任务"
-        return f"更新{_history_field_label(field)}"
+            return "Create Task"
+        return f"Update {_history_field_label(field)}"
     if event_type == HISTORY_EVENT_TASK_ACTION:
         action = payload.get("action") if isinstance(payload, dict) else None
         if action == "add_note":
             note_type = payload.get("note_type", "misc") if isinstance(payload, dict) else "misc"
             if note_type and note_type != "misc":
-                return f"添加备注（{_format_note_type(note_type)}）"
-            return "添加备注"
+                return f"Add Note ({_format_note_type(note_type)})"
+            return "Add Note"
         if action == "push_model":
-            return "推送到模型"
+            return "Push to Model"
         if action == "bug_report":
-            return "报告缺陷"
+            return "Report Bug"
         if action == "summary_request":
-            return "生成模型摘要"
+            return "Generate Model Summary"
         if action == "model_session":
-            return "记录模型会话"
-        label = action or (item.field or "任务动作")
-        return f"执行操作：{label}"
+            return "Record Model Session"
+        label = action or (item.field or "Task Action")
+        return f"Perform Action: {label}"
     if event_type == HISTORY_EVENT_MODEL_REPLY:
-        return "模型回复"
+        return "Model Reply"
     if event_type == HISTORY_EVENT_MODEL_SUMMARY:
-        return "模型摘要"
+        return "Model Summary"
     fallback = item.field or event_type
     return _history_field_label(fallback)
 
@@ -2919,12 +2887,12 @@ def _format_history_description(item: TaskHistoryRecord) -> str:
         label = _history_field_label(field)
         if field == "create":
             title_text = _format_history_value("title", item.new_value)
-            return f"标题：\"{title_text}\"" if title_text != "-" else "标题：-"
+            return f"Title: \"{title_text}\"" if title_text != "-" else "Title: -"
         old_text = _format_history_value(field, item.old_value)
         new_text = _format_history_value(field, item.new_value)
         if old_text == "-" and new_text != "-":
-            return f"{label}：{new_text}"
-        return f"{label}：{old_text} -> {new_text}"
+            return f"{label}: {new_text}"
+        return f"{label}: {old_text} -> {new_text}"
     if event_type == HISTORY_EVENT_TASK_ACTION:
         action = payload.get("action")
         if action == "add_note":
@@ -2932,70 +2900,70 @@ def _format_history_description(item: TaskHistoryRecord) -> str:
             content_text = _trim_history_value(item.new_value)
             lines: list[str] = []
             if note_type and note_type != "misc":
-                lines.append(f"类型：{_format_note_type(note_type)}")
-            lines.append(f"内容：{content_text}")
+                lines.append(f"Type: {_format_note_type(note_type)}")
+            lines.append(f"Content: {content_text}")
             return "\n".join(lines)
         if action == "push_model":
             details: list[str] = []
             supplement_text: Optional[str] = None
             result = payload.get("result") or "success"
-            details.append(f"结果：{result}")
+            details.append(f"Result: {result}")
             model_name = payload.get("model")
             if model_name:
-                details.append(f"模型：{model_name}")
+                details.append(f"Model: {model_name}")
             history_items = payload.get("history_items")
             if isinstance(history_items, int) and history_items > 0:
-                details.append(f"包含事件：{history_items}条")
+                details.append(f"Events Included: {history_items}")
             supplement_raw = payload.get("supplement")
             if supplement_raw is None and payload.get("has_supplement"):
                 supplement_raw = item.new_value
             if supplement_raw is not None:
                 supplement_text = _trim_history_value(str(supplement_raw))
-            detail_text = "；".join(details) if details else "已触发"
+            detail_text = "; ".join(details) if details else "Triggered"
             if supplement_text and supplement_text != "-":
-                return f"{detail_text}\n补充描述：{supplement_text}"
+                return f"{detail_text}\nSupplementary Description: {supplement_text}"
             if payload.get("has_supplement") and (item.new_value or "").strip():
                 supplement_fallback = _trim_history_value(item.new_value)
                 if supplement_fallback != "-":
-                    return f"{detail_text}\n补充描述：{supplement_fallback}"
+                    return f"{detail_text}\nSupplementary Description: {supplement_fallback}"
             return detail_text
         if action == "bug_report":
             has_logs = bool(payload.get("has_logs"))
             has_repro = bool(payload.get("has_reproduction"))
             note_preview = _trim_history_value(item.new_value)
-            details = ["缺陷描述：" + (note_preview or "-")]
-            details.append(f"包含复现：{'是' if has_repro else '否'}")
-            details.append(f"包含日志：{'是' if has_logs else '否'}")
+            details = ["Bug Description: " + (note_preview or "-")]
+            details.append(f"Contains Reproduction: {'Yes' if has_repro else 'No'}")
+            details.append(f"Contains Logs: {'Yes' if has_logs else 'No'}")
             return "\n".join(details)
         if action == "summary_request":
             request_id = payload.get("request_id") or (item.new_value or "-")
             model_name = payload.get("model")
-            lines = [f"摘要请求 ID：{request_id}"]
+            lines = [f"Summary Request ID: {request_id}"]
             if model_name:
-                lines.append(f"目标模型：{model_name}")
+                lines.append(f"Target Model: {model_name}")
             return "\n".join(lines)
         if action == "model_session":
             session = payload.get("session")
-            return f"模型会话：{session or '-'}"
-        label = action or (item.field or "动作")
-        return f"{label}：{_trim_history_value(item.new_value)}"
+            return f"Model Session: {session or '-'}"
+        label = action or (item.field or "Action")
+        return f"{label}: {_trim_history_value(item.new_value)}"
     if event_type == HISTORY_EVENT_MODEL_REPLY:
         model_name = payload.get("model") or payload.get("source") or ""
         content = payload.get("content") or item.new_value
         text = _trim_history_value(content, limit=HISTORY_MODEL_REPLY_LIMIT)
-        prefix = f"{model_name} 回复" if model_name else "模型回复"
-        return f"{prefix}：{text}"
+        prefix = f"{model_name} Reply" if model_name else "Model Reply"
+        return f"{prefix}: {text}"
     if event_type == HISTORY_EVENT_MODEL_SUMMARY:
         payload_content = payload.get("content") if isinstance(payload, dict) else None
         content = payload_content or item.new_value
         text = _trim_history_value(content, limit=HISTORY_MODEL_SUMMARY_LIMIT)
-        return f"摘要内容：{text}"
+        return f"Summary: {text}"
     fallback_field = item.field or event_type
-    return f"{fallback_field}：{_trim_history_value(item.new_value)}"
+    return f"{fallback_field}: {_trim_history_value(item.new_value)}"
 
 
 def _format_history_line(item: TaskHistoryRecord) -> str:
-    """以 Markdown 列表形式构建历史文本，首行展示摘要，后续为缩进详情。"""
+    """Render the history entry as Markdown with summary and indented details."""
 
     timestamp = _format_history_timestamp(item.created_at)
     summary = _format_history_summary(item)
@@ -3005,12 +2973,11 @@ def _format_history_line(item: TaskHistoryRecord) -> str:
         for line in description.splitlines()
         if line.strip()
     ]
-    # Markdown 列表使用"- "起始，后续详情以缩进列表呈现，便于聊天端渲染。
-    # MarkdownV2 使用单星号 * 表示加粗
-    formatted = [f"- *{summary}* · {timestamp}"]
+    # Markdown lists start with "- " and indent detail lines; MarkdownV2 uses * for bold
+    formatted = [f"- *{summary}* {timestamp}"]
     for detail in detail_lines:
         formatted.append(f"  - {detail}")
-    formatted.append("")  # 追加空行分隔历史记录
+    formatted.append("")  # Add a blank line to separate history entries
     return "\n".join(formatted)
 
 
@@ -3054,7 +3021,7 @@ async def _log_task_action(
     payload: Optional[Dict[str, Any]] = None,
     created_at: Optional[str] = None,
 ) -> None:
-    """封装任务事件写入，出现异常时记录日志避免打断主流程。"""
+    """Encapsulate task event writing and record logs when exceptions occur to avoid interrupting the main process."""
 
     data_payload: Optional[Dict[str, Any]]
     if payload is None:
@@ -3074,20 +3041,20 @@ async def _log_task_action(
         )
     except ValueError as exc:
         worker_log.warning(
-            "任务事件写入失败：%s",
+            "Task event writing failed: %s",
             exc,
             extra={"task_id": task_id, **_session_extra()},
         )
 
 
 async def _auto_push_after_bug_report(task: TaskRecord, *, message: Message, actor: Optional[str]) -> None:
-    """缺陷上报完成后尝试自动推送模型，保持与手动推送一致的提示格式。"""
+    """After the defect report is completed, try to automatically push the model and maintain the same prompt format as manual push."""
 
     chat_id = message.chat.id
     if task.status not in MODEL_PUSH_ELIGIBLE_STATUSES:
         await _reply_to_chat(
             chat_id,
-            "缺陷已记录，当前状态暂不支持自动推送到模型，如需同步请调整任务状态后手动推送。",
+            "The defect has been recorded. The current status does not support automatic push to the model. If synchronization is required, please adjust the task status and push manually.",
             reply_to=message,
             reply_markup=_build_worker_main_keyboard(),
         )
@@ -3103,13 +3070,13 @@ async def _auto_push_after_bug_report(task: TaskRecord, *, message: Message, act
         )
     except ValueError as exc:
         worker_log.error(
-            "自动推送到模型失败：模板缺失",
+            "Automatic push to model failed: template missing",
             exc_info=exc,
             extra={"task_id": task.id, "status": task.status},
         )
         await _reply_to_chat(
             chat_id,
-            "缺陷已记录，但推送模板缺失，请稍后手动重试推送到模型。",
+            "The defect has been recorded, but the push template is missing. Please manually try pushing to the model again later.",
             reply_to=message,
             reply_markup=_build_worker_main_keyboard(),
         )
@@ -3117,7 +3084,7 @@ async def _auto_push_after_bug_report(task: TaskRecord, *, message: Message, act
     if not success:
         await _reply_to_chat(
             chat_id,
-            "缺陷已记录，模型当前未就绪，请稍后手动重新推送。",
+            "The defect has been logged and the model is currently not ready. Please push it again manually later.",
             reply_to=message,
             reply_markup=_build_worker_main_keyboard(),
         )
@@ -3125,7 +3092,7 @@ async def _auto_push_after_bug_report(task: TaskRecord, *, message: Message, act
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
     await _reply_to_chat(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        f"Pushed to model:\n{preview_block}",
         reply_to=message,
         parse_mode=preview_parse_mode,
         reply_markup=_build_worker_main_keyboard(),
@@ -3140,7 +3107,7 @@ def _build_status_buttons(task_id: str, current_status: str) -> list[list[Inline
     for status in STATUS_DISPLAY_ORDER:
         text = _format_status(status)
         if status == current_status:
-            text = f"{text} (当前)"
+            text = f"{text} (current)"
         row.append(
             InlineKeyboardButton(
                 text=text,
@@ -3161,11 +3128,11 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
     keyboard.append(
         [
             InlineKeyboardButton(
-                text="✏️ 编辑字段",
+                text="✏️ Edit field",
                 callback_data=f"task:edit:{task.id}",
             ),
             InlineKeyboardButton(
-                text="🗂️ 归档任务" if not task.archived else "♻️ 恢复任务",
+                text="🗂️ Archive tasks" if not task.archived else "♻️ recovery task",
                 callback_data=f"task:toggle_archive:{task.id}",
             ),
         ]
@@ -3173,11 +3140,11 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
     keyboard.append(
         [
             InlineKeyboardButton(
-                text="🚨 报告缺陷",
+                text="🚨 Report a defect",
                 callback_data=f"task:bug_report:{task.id}",
             ),
             InlineKeyboardButton(
-                text="🕘 查看历史",
+                text="🕘 View history",
                 callback_data=f"task:history:{task.id}",
             ),
         ]
@@ -3186,7 +3153,7 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    text="🚀 推送到模型",
+                    text="🚀 push to model",
                     callback_data=f"task:push_model:{task.id}",
                 )
             ]
@@ -3194,7 +3161,7 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
     keyboard.append(
         [
             InlineKeyboardButton(
-                text="⬅️ 返回任务列表",
+                text="⬅️ Return to task list",
                 callback_data=TASK_DETAIL_BACK_CALLBACK,
             )
         ]
@@ -3203,7 +3170,7 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
 
 
 def _build_task_desc_confirm_keyboard() -> ReplyKeyboardMarkup:
-    """任务描述确认阶段的菜单按钮。"""
+    """Menu button for task description confirmation phase."""
 
     rows = [
         [KeyboardButton(text=TASK_DESC_CONFIRM_TEXT)],
@@ -3214,7 +3181,7 @@ def _build_task_desc_confirm_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _build_task_desc_input_keyboard() -> ReplyKeyboardMarkup:
-    """任务描述输入阶段的菜单按钮。"""
+    """Menu button for the task description input stage."""
 
     rows = [
         [KeyboardButton(text=TASK_DESC_CLEAR_TEXT), KeyboardButton(text=TASK_DESC_REPROMPT_TEXT)],
@@ -3225,7 +3192,7 @@ def _build_task_desc_input_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _build_task_desc_cancel_keyboard() -> ReplyKeyboardMarkup:
-    """仅保留取消操作的菜单，用于提示场景。"""
+    """Return the keyboard used when only the cancel option should be shown."""
 
     rows = [[KeyboardButton(text=TASK_DESC_CANCEL_TEXT)]]
     _number_reply_buttons(rows)
@@ -3233,14 +3200,14 @@ def _build_task_desc_cancel_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _build_task_desc_confirm_text(preview_segment: str) -> str:
-    """生成任务描述确认阶段的提示文案。"""
+    """Return the confirmation prompt for the task description wizard."""
 
     return (
-        "请确认新的任务描述：\n"
+        "Please confirm the updated task description:\n"
         f"{preview_segment}\n\n"
-        "1. 点击“✅ 确认更新”立即保存\n"
-        "2. 点击“✏️ 重新输入”重新填写描述\n"
-        "3. 点击“❌ 取消”终止本次编辑"
+        "1. Tap Confirm Update to save now.\n"
+        "2. Tap Re-enter to revise the description.\n"
+        "3. Tap Cancel to abort this edit."
     )
 
 
@@ -3249,15 +3216,15 @@ async def _prompt_task_description_input(
     *,
     current_description: str,
 ) -> None:
-    """向用户展示当前描述，提供取消按钮及后续操作提示。"""
+    """Show the existing description and prompt the user for the next action."""
 
     if target is None:
-        # Telegram 已删除原消息时直接忽略，避免流程中断。
+        # Telegram If the original message has been deleted, simply ignore it to avoid interruption of the process.
         return
     preview = (current_description or "").strip()
-    preview_segment = preview or "（当前描述为空，确认后将保存为空）"
+    preview_segment = preview or "(The current description is empty; saving will keep it blank.)"
     await target.answer(
-        "当前描述如下，可复制后直接编辑，菜单中的选项可快速完成清空或取消操作。",
+        "The current description is shown below. You can edit it directly, and the menu offers quick clear and cancel actions.",
         reply_markup=_build_task_desc_input_keyboard(),
     )
     preview_block, preview_parse_mode = _wrap_text_in_code_block(preview_segment)
@@ -3269,7 +3236,7 @@ async def _prompt_task_description_input(
     except TelegramBadRequest:
         await target.answer(preview_segment)
     await target.answer(
-        "请直接发送新的任务描述，或通过菜单按钮执行快捷操作。",
+        "Send the new task description or choose an action from the menu.",
     )
 
 
@@ -3280,7 +3247,7 @@ async def _begin_task_desc_edit_flow(
     actor: str,
     origin_message: Optional[Message],
 ) -> None:
-    """统一初始化任务描述编辑 FSM，兼容回调与命令入口。"""
+    """Unified initialization task description editing FSM, compatible with callback and command entry."""
 
     if origin_message is None:
         return
@@ -3342,7 +3309,7 @@ async def _answer_with_markdown(
         )
     except TelegramBadRequest as exc:
         worker_log.warning(
-            "发送消息失败：%s",
+            "Failed to send message: %s",
             exc,
             extra={"chat": getattr(message.chat, "id", None)},
         )
@@ -3414,7 +3381,7 @@ async def _try_edit_message(
         return True
     except TelegramBadRequest as exc:
         worker_log.info(
-            "编辑任务列表消息失败，将改用新消息展示",
+            "Failed to edit task list message, new message will be displayed instead",
             extra={"reason": _extract_bad_request_message(exc)},
         )
     return False
@@ -3439,7 +3406,7 @@ def _build_task_type_keyboard() -> ReplyKeyboardMarkup:
             current_row = []
     if current_row:
         rows.append(current_row)
-    rows.append([KeyboardButton(text="取消")])
+    rows.append([KeyboardButton(text="Cancel")])
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
@@ -3447,7 +3414,7 @@ def _build_task_type_keyboard() -> ReplyKeyboardMarkup:
 def _build_description_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=SKIP_TEXT)],
-        [KeyboardButton(text="取消")],
+        [KeyboardButton(text="Cancel")],
     ]
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
@@ -3455,26 +3422,26 @@ def _build_description_keyboard() -> ReplyKeyboardMarkup:
 
 def _build_confirm_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="✅ 确认创建")],
-        [KeyboardButton(text="❌ 取消")],
+        [KeyboardButton(text="Confirm creation")],
+        [KeyboardButton(text="Cancel")],
     ]
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 def _build_bug_confirm_keyboard() -> ReplyKeyboardMarkup:
-    """缺陷提交流程确认键盘。"""
+    """Defect submission process confirmation keyboard."""
 
     rows = [
-        [KeyboardButton(text="✅ 确认提交")],
-        [KeyboardButton(text="❌ 取消")],
+        [KeyboardButton(text="Confirm submission")],
+        [KeyboardButton(text="Cancel")],
     ]
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 def _collect_message_payload(message: Message) -> str:
-    """提取消息中的文字与附件信息，方便写入缺陷记录。"""
+    """Extract the text character and attachment information in the Cancel message to facilitate writing the defect record."""
 
     parts: list[str] = []
     text = _normalize_choice_token(message.text or message.caption)
@@ -3482,55 +3449,57 @@ def _collect_message_payload(message: Message) -> str:
         parts.append(text)
     if message.photo:
         file_id = message.photo[-1].file_id
-        parts.append(f"[图片:{file_id}]")
+        parts.append(f"[picture:{file_id}]")
     if message.document:
         doc = message.document
         name = doc.file_name or doc.file_id
-        parts.append(f"[文件:{name}]")
+        parts.append(f"[document:{name}]")
     if message.voice:
-        parts.append(f"[语音:{message.voice.file_id}]")
+        parts.append(f"[voice:{message.voice.file_id}]")
     if message.video:
-        parts.append(f"[视频:{message.video.file_id}]")
+        parts.append(f"[video:{message.video.file_id}]")
     return "\n".join(parts).strip()
 
 
 def _summarize_note_text(value: str) -> str:
-    """压缩备注内容，维持主要信息并控制长度。"""
+    """Compress note content, maintain main information and control length."""
 
     cleaned = normalize_newlines(value or "").strip()
     return cleaned.replace("\n", " / ")
 
 
 def _build_bug_report_intro(task: TaskRecord) -> str:
-    """生成缺陷报告开场提示。"""
+    """Generate defect report opening prompts."""
 
-    # 直接拼接命令文本，确保提示语中不出现 Markdown 转义后的反斜杠。
+    # Directly splice the command text to ensure that Markdown-escaped backslashes do not appear in the prompt.
     task_code = f"/{task.id}" if task.id else "-"
     title = task.title or "-"
     return (
-        f"正在为任务 {task_code}（{title}）记录缺陷。\n"
-        "请先描述缺陷现象（必填），例如发生了什么、期待的行为是什么。"
+        f"Working on task {task_code} ({title}) to document defects.\n"
+        "First describe the observed defect (required), including what happened and what you expected instead."
     )
 
 
 def _build_bug_repro_prompt() -> str:
-    """生成复现步骤提示。"""
+    """Generate tips for reproducibility steps."""
 
-    return (
-        "若有复现步骤，请按顺序列出，例如：\n"
-        "1. 打开页面...\n"
-        "2. 操作...\n"
-        "如暂无可发送“跳过”，发送“取消”随时结束流程。"
-    )
+    lines = [
+        "If there are steps to reproduce, list them in order, for example:",
+        "1. Open the relevant page...",
+        "2. Perform the necessary action...",
+        'If you have no steps to add, send "Skip". Send "Cancel" at any time to exit the process.',
+    ]
+    return "\n".join(lines)
 
 
 def _build_bug_log_prompt() -> str:
-    """生成日志信息提示。"""
+    """Generate log information prompts."""
 
-    return (
-        "请提供错误日志、截图或相关附件。\n"
-        "若无额外信息，可发送“跳过”，发送“取消”结束流程。"
-    )
+    lines = [
+        "Please provide error logs, screenshots, or relevant attachments.",
+        'If you have nothing to attach, send "Skip" or send "Cancel" to exit the process.',
+    ]
+    return "\n".join(lines)
 
 
 def _build_bug_preview_text(
@@ -3541,16 +3510,16 @@ def _build_bug_preview_text(
     logs: str,
     reporter: str,
 ) -> str:
-    """构建缺陷预览文本，便于用户确认。"""
+    """Build defect preview text to facilitate user confirmation."""
 
-    # 预览信息面向纯文本消息，直接使用任务命令避免额外的反斜杠。
+    # Preview information is for plain text messages, use the task command directly to avoid extra backslashes.
     task_code = f"/{task.id}" if task.id else "-"
     parts = [
-        f"任务编码：{task_code}",
-        f"缺陷描述：{description or '-'}",
-        f"复现步骤：{reproduction or '-'}",
-        f"日志信息：{logs or '-'}",
-        f"报告人：{reporter}",
+        f"Task code: {task_code}",
+        f"Defect description: {description or '-'}",
+        f"Reproduction steps: {reproduction or '-'}",
+        f"Log information: {logs or '-'}",
+        f"Reporter: {reporter}",
     ]
     return "\n".join(parts)
 
@@ -3562,57 +3531,61 @@ def _build_summary_prompt(
     history_text: str,
     notes: Sequence[TaskNoteRecord],
 ) -> str:
-    """构造模型摘要提示词，要求携带请求标识。"""
+    """Construct the model summary prompt word, which is required to carry the request identifier."""
 
-    # 摘要提示词是发送给模型的，使用纯文本格式，不需要 Markdown 转义
+    # The summary prompt words are sent to the model in plain text format and do not require Markdown escaping.
     task_code = f"/{task.id}" if task.id else "-"
     title = task.title or "-"
     status_label = STATUS_LABELS.get(task.status, task.status)
     note_lines: list[str] = []
     if notes:
-        note_lines.append("备注汇总：")
+        note_lines.append("Summary of remarks:")
         for note in notes[-5:]:
-            label = NOTE_LABELS.get(note.note_type or "", note.note_type or "备注")
+            label = NOTE_LABELS.get(note.note_type or "", note.note_type or "Remark")
             content = _summarize_note_text(note.content or "")
             timestamp = _format_local_time(note.created_at)
             note_lines.append(f"- [{label}] {timestamp} — {content or '-'}")
     else:
-        note_lines.append("备注汇总：-")
-    history_lines = ["历史记录："]
+        note_lines.append("Summary of remarks:")
+    history_lines = ["History:"]
     if history_text.strip():
         history_lines.extend(history_text.splitlines())
     else:
         history_lines.append("-")
     instructions = [
-        "进入摘要阶段...",
-        f"任务编码：{task_code}",
-        f"SUMMARY_REQUEST_ID::{request_id}，模型必须原样回传。",
+        "Entering the summary stage...",
+        f"Task code: {task_code}",
+        f"SUMMARY_REQUEST_ID::{request_id}; keep this identifier unchanged.",
         "",
-        f"任务标题：{title}",
-        f"任务阶段：{status_label}",
-        f"优先级：{task.priority}",
+        f"Task title: {title}",
+        f"Task stage: {status_label}",
+        f"Priority: {task.priority}",
         "",
-        f"请基于以下信息为任务 {task_code} 生成处理摘要。",
-        "输出要求：",
-        "- 第一行必须原样包含 SUMMARY_REQUEST_ID::{request_id}。",
-        "- 汇总任务目标、近期动作、当前状态与待办事项。",
-        "- 采用项目同事可直接阅读的简洁段落或列表格式。",
-        "- 若存在未解决缺陷或测试问题请明确指出。",
+        f"Please use the details below for task {task_code} to prepare the processing summary.",
+        "Output requirements:",
+        "- The first line must contain SUMMARY_REQUEST_ID::{request_id} as is.",
+        "- Summarize the task goals, recent actions, current state, and pending items.",
+        "- Use a concise paragraph or list format that teammates can read directly.",
+        "- Call out unresolved defects or testing issues explicitly.",
         "",
     ]
     instructions.extend(note_lines)
     instructions.append("")
     instructions.extend(history_lines)
     instructions.append("")
-    instructions.append("请在输出末尾补充下一步建议。")
+    instructions.append("Please add next step suggestions at the end of the output.")
     return "\n".join(instructions)
 
 
 def _build_push_supplement_prompt() -> str:
-    return (
-        "请输入补充任务描述，建议说明任务背景与期望结果。\n"
-        "若暂时没有可点击“跳过”按钮或直接发送空消息，发送“取消”可终止。"
-    )
+    lines = [
+        "Please enter a supplementary task description. Explain the task background and the expected result.",
+        'If you have nothing to add, tap "Skip" or send an empty message. Send "Cancel" to end the process.',
+    ]
+    return "\n".join(lines)
+
+
+
 
 
 async def _prompt_model_supplement_input(message: Message) -> None:
@@ -3623,10 +3596,14 @@ async def _prompt_model_supplement_input(message: Message) -> None:
 
 
 def _build_task_search_prompt() -> str:
-    return (
-        "请输入任务搜索关键词（至少 2 个字符），支持标题和描述模糊匹配。\n"
-        "发送“跳过”或“取消”可返回任务列表。"
-    )
+    lines = [
+        "Please enter the task search keyword (at least 2 characters). Fuzzy matching of title and description is supported.",
+        'Send "Skip" or send "Cancel" to return to the task list.',
+    ]
+    return "\n".join(lines)
+
+
+
 
 
 async def _prompt_task_search_keyword(message: Message) -> None:
@@ -3638,10 +3615,10 @@ async def _prompt_task_search_keyword(message: Message) -> None:
 
 def _build_edit_field_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="标题"), KeyboardButton(text="优先级")],
-        [KeyboardButton(text="类型"), KeyboardButton(text="描述")],
-        [KeyboardButton(text="状态")],
-        [KeyboardButton(text="取消")],
+        [KeyboardButton(text="title"), KeyboardButton(text="priority")],
+        [KeyboardButton(text="type"), KeyboardButton(text="describe")],
+        [KeyboardButton(text="state")],
+        [KeyboardButton(text="Cancel")],
     ]
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
@@ -3654,7 +3631,7 @@ async def _load_task_context(
 ) -> tuple[TaskRecord, Sequence[TaskNoteRecord], Sequence[TaskHistoryRecord]]:
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        raise ValueError("任务不存在")
+        raise ValueError("Task does not exist")
     notes = await TASK_SERVICE.list_notes(task_id)
     history: Sequence[TaskHistoryRecord]
     if include_history:
@@ -3672,7 +3649,7 @@ async def _render_task_detail(task_id: str) -> tuple[str, InlineKeyboardMarkup]:
 
 @dataclass(slots=True)
 class _HistoryViewPage:
-    """历史分页渲染所需的文本切片。"""
+    """Text slices required for history pagination rendering."""
 
     lines: list[str]
     notice: str
@@ -3680,14 +3657,14 @@ class _HistoryViewPage:
 
 
 def _build_truncated_history_entry(item: TaskHistoryRecord) -> str:
-    """生成单条历史的截断提示文本，保留摘要时间信息。"""
+    """Generate truncated prompt text for a single piece of history, retaining summary time information."""
 
     timestamp = _format_history_timestamp(item.created_at)
     summary = _format_history_summary(item)
     return "\n".join(
         [
-            f"- *{summary}* · {timestamp}",
-            "  - ⚠️ 该记录内容较长，仅展示摘要概要。",
+            f"- *{summary}* {timestamp}",
+            "  - ⚠️ This record is long and only a summary is shown.",
         ]
     )
 
@@ -3698,20 +3675,20 @@ def _select_truncation_variant(
     notice: str,
     body_limit: int,
 ) -> tuple[str, str]:
-    """在长度限制内挑选截断文本与提示。"""
+    """Choose to truncate text and prompts within length limits."""
 
     variants = [
         (entry_text, notice),
-        ("- ⚠️ 历史记录内容过长，已简化展示。", notice),
-        ("- ⚠️ 历史记录内容过长，已简化展示。", HISTORY_TRUNCATION_NOTICE_SHORT),
-        ("- ⚠️ 已截断", HISTORY_TRUNCATION_NOTICE_SHORT),
+        ("- ⚠️ The history record is too long and has been simplified for display.", notice),
+        ("- ⚠️ The history record is too long and has been simplified for display.", HISTORY_TRUNCATION_NOTICE_SHORT),
+        ("- ⚠️ Truncated", HISTORY_TRUNCATION_NOTICE_SHORT),
     ]
     for candidate_text, candidate_notice in variants:
         combined = "\n\n".join([candidate_text, candidate_notice])
         if len(_prepare_model_payload(combined)) <= body_limit:
             return candidate_text, candidate_notice
-    # 最差情况下仅返回极短提示，避免再次触发超长错误。
-    fallback_text = "- ⚠️ 历史记录已截断，详细内容请导出查看。"
+    # In the worst case, only a very short prompt is returned to avoid triggering a long error again.
+    fallback_text = "- ⚠️ The history record is Truncated, please export and view the detailed content."
     return fallback_text, HISTORY_TRUNCATION_NOTICE_SHORT
 
 
@@ -3721,14 +3698,14 @@ def _build_task_history_view(
     *,
     page: int,
 ) -> tuple[str, InlineKeyboardMarkup, int, int]:
-    """根据任务历史构造分页视图内容与内联按钮。"""
+    """Construct paginated view content and inline buttons based on task history."""
 
     limited = list(history[-MODEL_HISTORY_MAX_ITEMS:])
     total_items = len(limited)
     if total_items == 0:
-        raise ValueError("暂无事件记录")
+        raise ValueError("No event record yet")
 
-    # 历史记录会被包裹在代码块中显示，使用纯文本格式，不需要 Markdown 转义
+    # History records will be displayed wrapped in code blocks, using plain text format without Markdown escaping.
     title_text = normalize_newlines(task.title or "").strip() or "-"
     title_display = title_text
 
@@ -3736,13 +3713,13 @@ def _build_task_history_view(
     placeholder_page = "9" * digit_width
     header_placeholder = "\n".join(
         [
-            f"任务 {task.id} 事件历史（最近 {total_items} 条）",
-            f"标题：{title_display}",
-            f"页码：{placeholder_page} / {placeholder_page}",
+            f"Task {task.id} event history (latest {total_items} entries)",
+            f"Title: {title_display}",
+            f"Page: {placeholder_page} / {placeholder_page}",
         ]
     )
     header_reserved = len(_prepare_model_payload(header_placeholder))
-    # 保留额外两个换行为正文与抬头的分隔，确保总长度不超 4096。
+    # Reserve two additional breaks to separate the main text and header to ensure that the total length does not exceed 4096.
     body_limit = max(1, TELEGRAM_MESSAGE_LIMIT - header_reserved - 2)
 
     page_size = max(1, TASK_HISTORY_PAGE_SIZE)
@@ -3762,7 +3739,7 @@ def _build_task_history_view(
                 continue
             break
         if not current_lines:
-            # 单条记录即超出限制，需降级展示并追加截断提示。
+            # A single record exceeds the limit and needs to be downgraded for display and a truncation prompt added.
             entry = limited[index]
             entry_text = _build_truncated_history_entry(entry)
             truncated_text, notice_text = _select_truncation_variant(
@@ -3781,7 +3758,7 @@ def _build_task_history_view(
     body_segments = list(selected.lines)
     notice_text = selected.notice
     if selected.truncated and not notice_text:
-        # 未能放入默认提示时至少保留简短信息。
+        # When failing to put in a default prompt, keep at least a brief message.
         notice_text = HISTORY_TRUNCATION_NOTICE_SHORT
     if notice_text:
         body_segments.append(notice_text)
@@ -3789,25 +3766,25 @@ def _build_task_history_view(
 
     header_text = "\n".join(
         [
-            f"任务 {task.id} 事件历史（最近 {total_items} 条）",
-            f"标题：{title_display}",
-            f"页码：{normalized_page} / {total_pages}",
+            f"Task {task.id} event history (latest {total_items} entries)",
+            f"Title: {title_display}",
+            f"Page: {normalized_page} / {total_pages}",
         ]
     )
     text = f"{header_text}\n\n{body_text}" if body_text else header_text
     prepared = _prepare_model_payload(text)
     if len(prepared) > TELEGRAM_MESSAGE_LIMIT:
         worker_log.warning(
-            "历史视图仍超过 Telegram 限制，使用安全提示内容",
+            "History view still exceeds Telegram limit, use safety tips",
             extra={"task_id": task.id, "page": str(normalized_page), "length": str(len(prepared))},
         )
         text = "\n".join(
             [
-                f"任务 {task.id} 事件历史（最近 {total_items} 条）",
-                f"标题：{title_display}",
-                f"页码：{normalized_page} / {total_pages}",
+                f"Task {task.id} event history (latest {total_items} entries)",
+                f"Title: {title_display}",
+                f"Page: {normalized_page} / {total_pages}",
                 "",
-                "⚠️ 历史记录内容超出 Telegram 长度限制，请导出或筛选后重试。",
+                "⚠️ The history content exceeds Telegram's length limit. Please export or filter and try again.",
             ]
         )
 
@@ -3815,14 +3792,14 @@ def _build_task_history_view(
     if normalized_page > 1:
         nav_row.append(
             InlineKeyboardButton(
-                text="⬅️ 上一页",
+                text="⬅️ Previous page",
                 callback_data=f"{TASK_HISTORY_PAGE_CALLBACK}:{task.id}:{normalized_page - 1}",
             )
         )
     if normalized_page < total_pages:
         nav_row.append(
             InlineKeyboardButton(
-                text="下一页 ➡️",
+                text="Next page ➡️",
                 callback_data=f"{TASK_HISTORY_PAGE_CALLBACK}:{task.id}:{normalized_page + 1}",
             )
         )
@@ -3833,7 +3810,7 @@ def _build_task_history_view(
     keyboard_rows.append(
         [
             InlineKeyboardButton(
-                text="⬅️ 返回任务详情",
+                text="⬅️ Return to Task details",
                 callback_data=f"{TASK_HISTORY_BACK_CALLBACK}:{task.id}",
             )
         ]
@@ -3846,12 +3823,12 @@ async def _render_task_history(
     task_id: str,
     page: int,
 ) -> tuple[str, InlineKeyboardMarkup, int, int]:
-    """渲染指定任务的历史视图，返回内容、按钮及页码信息。"""
+    """Render the history view of the specified Task and return content, button and page code information."""
 
     task, _notes, history_records = await _load_task_context(task_id, include_history=True)
     trimmed = list(history_records[-MODEL_HISTORY_MAX_ITEMS:])
     if not trimmed:
-        raise ValueError("暂无事件记录")
+        raise ValueError("No event record yet")
     return _build_task_history_view(task, trimmed, page=page)
 
 
@@ -3902,7 +3879,7 @@ def postprocess_tmux_output(raw: str) -> str:
 
 
 def _session_id_from_path(path: Optional[Path]) -> str:
-    """将会话路径转换为日志使用的标识。"""
+    """Convert the session path to an ID used by the log."""
     if path is None:
         return "-"
     stem = path.stem
@@ -3924,11 +3901,11 @@ def _initialize_known_rollouts() -> None:
 
 
 def tmux_capture_since(log_path: Path | str, start_pos: int, idle: float = 2.0, timeout: float = 120.0) -> str:
-    # 从日志文件偏移量开始读取，直到连续 idle 秒无新增或超时
+    # Start reading from the log document offset until there is no new addition or timeout in the continuous idle Second
     start = time.time()
     p = resolve_path(log_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    # 等待日志文件出现
+    # Wait for the log document to appear
     for _ in range(50):
         if p.exists(): break
         time.sleep(0.1)
@@ -3962,15 +3939,15 @@ CHAT_DELIVERED_HASHES: Dict[int, Dict[str, set[str]]] = {}
 CHAT_DELIVERED_OFFSETS: Dict[int, Dict[str, set[int]]] = {}
 CHAT_REPLY_COUNT: Dict[int, Dict[str, int]] = {}
 CHAT_COMPACT_STATE: Dict[int, Dict[str, Dict[str, Any]]] = {}
-# 长轮询状态：用于延迟轮询机制
+# Long polling state: used for delayed polling mechanism
 CHAT_LONG_POLL_STATE: Dict[int, Dict[str, Any]] = {}
-CHAT_LONG_POLL_LOCK: Optional[asyncio.Lock] = None  # 在事件循环启动后初始化
+CHAT_LONG_POLL_LOCK: Optional[asyncio.Lock] = None  # Initialized after event loop starts
 SUMMARY_REQUEST_TIMEOUT_SECONDS = 300.0
 
 
 @dataclass(slots=True)
 class PendingSummary:
-    """记录待落库的模型摘要请求。"""
+    """Record the model summary request to be dropped into the database."""
 
     task_id: str
     request_id: str
@@ -3983,13 +3960,13 @@ class PendingSummary:
 
 PENDING_SUMMARIES: Dict[str, PendingSummary] = {}
 
-# --- 任务视图上下文缓存 ---
+# --- TaskView context cache ---
 TaskViewKind = Literal["list", "search", "detail", "history"]
 
 
 @dataclass
 class TaskViewState:
-    """缓存任务视图的渲染参数，支持消息编辑式导航。"""
+    """Cache the rendering parameters of the Task view and support message editing navigation."""
 
     kind: TaskViewKind
     data: Dict[str, Any]
@@ -3999,20 +3976,20 @@ TASK_VIEW_STACK: Dict[int, Dict[int, List[TaskViewState]]] = {}
 
 
 def _task_view_stack(chat_id: int) -> Dict[int, List[TaskViewState]]:
-    """获取指定聊天的视图栈映射。"""
+    """Get the view stack mapping of the specified chat."""
 
     return TASK_VIEW_STACK.setdefault(chat_id, {})
 
 
 def _push_task_view(chat_id: int, message_id: int, state: TaskViewState) -> None:
-    """压入新的视图状态，用于进入详情等场景。"""
+    """Push in a new view state, which is used to enter details and other scenes."""
 
     stack = _task_view_stack(chat_id).setdefault(message_id, [])
     stack.append(state)
 
 
 def _replace_task_view(chat_id: int, message_id: int, state: TaskViewState) -> None:
-    """替换栈顶视图，常见于列表分页或刷新操作。"""
+    """Replace the top view of the stack, commonly used in list sub-page or refresh operations."""
 
     stack = _task_view_stack(chat_id).setdefault(message_id, [])
     if stack:
@@ -4022,7 +3999,7 @@ def _replace_task_view(chat_id: int, message_id: int, state: TaskViewState) -> N
 
 
 def _peek_task_view(chat_id: int, message_id: int) -> Optional[TaskViewState]:
-    """查看当前栈顶视图。"""
+    """View the top view of the current stack."""
 
     stack = TASK_VIEW_STACK.get(chat_id, {}).get(message_id)
     if not stack:
@@ -4031,7 +4008,7 @@ def _peek_task_view(chat_id: int, message_id: int) -> Optional[TaskViewState]:
 
 
 def _pop_task_view(chat_id: int, message_id: int) -> Optional[TaskViewState]:
-    """弹出栈顶视图，必要时清理空栈。"""
+    """Pop up the top view of the stack and clear the empty stack if necessary."""
 
     chat_views = TASK_VIEW_STACK.get(chat_id)
     if not chat_views:
@@ -4048,7 +4025,7 @@ def _pop_task_view(chat_id: int, message_id: int) -> Optional[TaskViewState]:
 
 
 def _clear_task_view(chat_id: int, message_id: Optional[int] = None) -> None:
-    """清理缓存，防止内存泄漏或上下文污染。"""
+    """Clean cache to prevent memory leaks or context pollution."""
 
     if message_id is None:
         TASK_VIEW_STACK.pop(chat_id, None)
@@ -4062,7 +4039,7 @@ def _clear_task_view(chat_id: int, message_id: Optional[int] = None) -> None:
 
 
 def _init_task_view_context(message: Optional[Message], state: TaskViewState) -> None:
-    """初始化指定消息的视图栈（新发送的列表或搜索视图）。"""
+    """Initializes the view stack (newly sent list or search view) for the specified message."""
 
     if message is None:
         return
@@ -4076,7 +4053,7 @@ def _init_task_view_context(message: Optional[Message], state: TaskViewState) ->
 
 
 def _set_task_view_context(message: Optional[Message], state: TaskViewState) -> None:
-    """更新现有消息的栈顶视图，保持已有历史。"""
+    """Update the stack top view of existing messages, keeping the existing history."""
 
     if message is None:
         return
@@ -4087,7 +4064,7 @@ def _set_task_view_context(message: Optional[Message], state: TaskViewState) -> 
 
 
 def _push_detail_view(message: Optional[Message], task_id: str) -> None:
-    """在视图栈中压入详情视图，便于回退。"""
+    """Push the detail view into the view stack for easy rollback."""
 
     if message is None:
         return
@@ -4102,7 +4079,7 @@ def _push_detail_view(message: Optional[Message], task_id: str) -> None:
 
 
 def _pop_detail_view(message: Optional[Message]) -> Optional[TaskViewState]:
-    """弹出详情视图，返回移除的状态。"""
+    """The details view pops up and the removed state is returned."""
 
     if message is None:
         return None
@@ -4111,14 +4088,14 @@ def _pop_detail_view(message: Optional[Message]) -> Optional[TaskViewState]:
         return None
     state = _pop_task_view(chat.id, message.message_id)
     if state and state.kind != "detail":
-        # 栈顶不是详情，说明上下文异常，放回以免破坏结构。
+        # The top of the stack is not a detail, indicating that the context is abnormal and should be put back to avoid damaging the structure.
         _push_task_view(chat.id, message.message_id, state)
         return None
     return state
 
 
 async def _render_task_view_from_state(state: TaskViewState) -> tuple[str, InlineKeyboardMarkup]:
-    """根据视图状态重新渲染对应的任务界面。"""
+    """Re-render the corresponding Task interface based on the view state."""
 
     if state.kind == "list":
         status = state.data.get("status")
@@ -4141,20 +4118,20 @@ async def _render_task_view_from_state(state: TaskViewState) -> tuple[str, Inlin
     if state.kind == "detail":
         task_id = state.data.get("task_id")
         if not task_id:
-            raise ValueError("任务详情缺少 task_id")
+            raise ValueError("TaskDetails missing task_id")
         return await _render_task_detail(task_id)
     if state.kind == "history":
         task_id = state.data.get("task_id")
         if not task_id:
-            raise ValueError("任务历史缺少 task_id")
+            raise ValueError("TaskHistory is missing tasks_id")
         page = int(state.data.get("page", 1) or 1)
         text, markup, _, _ = await _render_task_history(task_id, page)
         return text, markup
-    raise ValueError(f"未知的任务视图类型：{state.kind}")
+    raise ValueError(f"Unknown task view type: {state.kind}")
 
 
 def _make_list_view_state(*, status: Optional[str], page: int, limit: int) -> TaskViewState:
-    """构造列表视图的上下文。"""
+    """Constructs the context of the list view."""
 
     return TaskViewState(
         kind="list",
@@ -4174,7 +4151,7 @@ def _make_search_view_state(
     origin_status: Optional[str],
     origin_page: int,
 ) -> TaskViewState:
-    """构造搜索视图的上下文。"""
+    """Constructs the context of the search view."""
 
     return TaskViewState(
         kind="search",
@@ -4189,7 +4166,7 @@ def _make_search_view_state(
 
 
 def _make_history_view_state(*, task_id: str, page: int) -> TaskViewState:
-    """构造历史视图的上下文。"""
+    """Construct the context of the history view."""
 
     return TaskViewState(
         kind="history",
@@ -4230,7 +4207,7 @@ def _reset_delivered_hashes(chat_id: int, session_key: Optional[str] = None) -> 
         removed = CHAT_DELIVERED_HASHES.pop(chat_id, None)
         if removed:
             worker_log.info(
-                "清空聊天的已发送消息哈希",
+                "Clear a chat's sent message hash",
                 extra={"chat": chat_id},
             )
         return
@@ -4240,7 +4217,7 @@ def _reset_delivered_hashes(chat_id: int, session_key: Optional[str] = None) -> 
     if session_key in sessions:
         sessions.pop(session_key, None)
         worker_log.info(
-            "清空会话的已发送消息哈希",
+            "Clear the session's sent message hash",
             extra={
                 "chat": chat_id,
                 **_session_extra(key=session_key),
@@ -4255,7 +4232,7 @@ def _get_delivered_hashes(chat_id: int, session_key: str) -> set[str]:
 
 
 def _reset_compact_tracking(chat_id: int, session_key: Optional[str] = None) -> None:
-    """清理自动压缩相关状态，避免历史计数影响后续判断。"""
+    """Clean up and automatically compress related states to avoid historical counting from affecting subsequent judgments."""
 
     if session_key is None:
         CHAT_REPLY_COUNT.pop(chat_id, None)
@@ -4282,7 +4259,7 @@ def _increment_reply_count(chat_id: int, session_key: str) -> int:
 
 
 def _cleanup_expired_summaries() -> None:
-    """移除超时未完成的摘要请求。"""
+    """Remove unfinished digest requests that have timed out."""
 
     if not PENDING_SUMMARIES:
         return
@@ -4295,13 +4272,13 @@ def _cleanup_expired_summaries() -> None:
     for key in expired:
         PENDING_SUMMARIES.pop(key, None)
         worker_log.info(
-            "摘要请求超时已清理",
+            "Digest request timeout cleared",
             extra={"session": key},
         )
 
 
 def _extract_task_ids_from_text(text: str) -> list[str]:
-    """从模型文本中提取标准任务编号。"""
+    """Extract standard Task numbers from model text."""
 
     if not text:
         return []
@@ -4321,7 +4298,7 @@ async def _log_model_reply_event(
     session_path: Path,
     event_offset: int,
 ) -> None:
-    """将模型回复写入任务历史。"""
+    """Write model responses to Task history."""
 
     trimmed = _trim_history_value(content, limit=HISTORY_DISPLAY_VALUE_LIMIT)
     payload = {
@@ -4341,7 +4318,7 @@ async def _log_model_reply_event(
         )
     except ValueError:
         worker_log.warning(
-            "模型回复写入失败：任务不存在",
+            "The model reply writes fail: Task does not exist",
             extra={"task_id": task_id, **_session_extra(path=session_path)},
         )
 
@@ -4353,7 +4330,7 @@ async def _maybe_finalize_summary(
     event_offset: int,
     session_path: Path,
 ) -> None:
-    """检测并记录模型返回的摘要。"""
+    """Detect and log the summary returned by the model."""
 
     pending = PENDING_SUMMARIES.get(session_key)
     if not pending:
@@ -4389,7 +4366,7 @@ async def _maybe_finalize_summary(
         )
     except ValueError:
         worker_log.warning(
-            "摘要写入失败：任务不存在",
+            "Summary writing fails: Task does not exist",
             extra={"task_id": pending.task_id, **_session_extra(path=session_path)},
         )
     finally:
@@ -4404,7 +4381,7 @@ async def _handle_model_response(
     event_offset: int,
     content: str,
 ) -> None:
-    """统一持久化模型输出，并处理摘要落库。"""
+    """Unify the persistence model output and process the summary dropout."""
 
     _cleanup_expired_summaries()
     await _maybe_finalize_summary(
@@ -4413,7 +4390,7 @@ async def _handle_model_response(
         event_offset=event_offset,
         session_path=session_path,
     )
-    # 仅在摘要请求落库时记录历史，普通模型回复不再写入 task_history。
+    # History is recorded only when the summary request is discarded; regular model replies are no longer written to task_history.
     return
 
 
@@ -4450,7 +4427,7 @@ def _clear_compact_pending(chat_id: int, session_key: str) -> float:
 
 
 async def _send_plain_notice(chat_id: int, text: str) -> None:
-    """向用户发送无需 Markdown 格式的提示信息。"""
+    """Send prompt messages to users without requiring Markdown format."""
 
     bot = current_bot()
 
@@ -4461,7 +4438,7 @@ async def _send_plain_notice(chat_id: int, text: str) -> None:
 
 
 async def _maybe_trigger_auto_compact(chat_id: int, session_key: str, count: int) -> None:
-    """达到阈值后自动执行 /compact，同时向用户提示。"""
+    """Trigger /compact automatically once the reply threshold is reached and notify the user."""
 
     if AUTO_COMPACT_THRESHOLD <= 0:
         return
@@ -4471,7 +4448,7 @@ async def _maybe_trigger_auto_compact(chat_id: int, session_key: str, count: int
         return
 
     notice = (
-        f"模型已连续回复 {count} 条，准备自动执行 /compact，请稍候。"
+        f"The model has responded {count} times in a row. Ready to automate /compact; please wait."
     )
     await _send_plain_notice(chat_id, notice)
 
@@ -4479,14 +4456,14 @@ async def _maybe_trigger_auto_compact(chat_id: int, session_key: str, count: int
         tmux_send_line(TMUX_SESSION, "/compact")
     except subprocess.CalledProcessError as exc:
         worker_log.error(
-            "自动触发 /compact 失败: %s",
+            "Automatic /compact trigger failed: %s",
             exc,
             extra={
                 "chat": chat_id,
                 **_session_extra(key=session_key),
             },
         )
-        failure_text = f"自动执行 /compact 失败：{exc}"
+        failure_text = f"Automatic /compact execution failed: {exc}"
         await _send_plain_notice(chat_id, failure_text)
         fallback = max(AUTO_COMPACT_THRESHOLD - 1, 0)
         _set_reply_count(chat_id, session_key, fallback)
@@ -4496,7 +4473,7 @@ async def _maybe_trigger_auto_compact(chat_id: int, session_key: str, count: int
     _mark_compact_pending(chat_id, session_key)
 
     worker_log.info(
-        "已自动发送 /compact",
+        "Sent automatically /compact",
         extra={
             "chat": chat_id,
             **_session_extra(key=session_key),
@@ -4504,21 +4481,21 @@ async def _maybe_trigger_auto_compact(chat_id: int, session_key: str, count: int
         },
     )
 
-    await _send_plain_notice(chat_id, "已向模型发送 /compact，等待整理结果。")
+    await _send_plain_notice(chat_id, "Waiting for sorting results. /compact has been sent to the model.")
 
 
 async def _post_delivery_compact_checks(chat_id: int, session_key: str) -> None:
-    """在模型消息发送成功后执行计数和自动压缩检查。"""
+    """Perform counting and automatic compression checks after model messages are sent successfully."""
 
     if _is_compact_pending(chat_id, session_key):
         started = _clear_compact_pending(chat_id, session_key)
         elapsed = 0.0
         if started > 0:
             elapsed = max(time.monotonic() - started, 0.0)
-        duration_hint = f"，耗时约 {elapsed:.1f} 秒" if elapsed > 0 else ""
+        duration_hint = f" (elapsed time ~{elapsed:.1f}s)" if elapsed > 0 else ""
         await _send_plain_notice(
             chat_id,
-            f"自动执行 /compact 已完成{duration_hint}。",
+            f"Automatic /compact execution Completed{duration_hint}.",
         )
         _set_reply_count(chat_id, session_key, 0)
 
@@ -4528,12 +4505,13 @@ async def _post_delivery_compact_checks(chat_id: int, session_key: str) -> None:
     new_count = _increment_reply_count(chat_id, session_key)
     await _maybe_trigger_auto_compact(chat_id, session_key, new_count)
 
+
 def _reset_delivered_offsets(chat_id: int, session_key: Optional[str] = None) -> None:
     if session_key is None:
         removed = CHAT_DELIVERED_OFFSETS.pop(chat_id, None)
         if removed:
             worker_log.info(
-                "清空聊天的已处理事件偏移",
+                "Clear the chat's processed event offset",
                 extra={"chat": chat_id},
             )
         _reset_compact_tracking(chat_id)
@@ -4544,7 +4522,7 @@ def _reset_delivered_offsets(chat_id: int, session_key: Optional[str] = None) ->
     if session_key in sessions:
         sessions.pop(session_key, None)
         worker_log.info(
-            "清空会话的已处理事件偏移",
+            "Clear the session's processed event offset",
             extra={
                 "chat": chat_id,
                 **_session_extra(key=session_key),
@@ -4565,12 +4543,12 @@ async def _deliver_pending_messages(
     *,
     add_completion_header: bool = True
 ) -> bool:
-    """发送待处理的模型消息。
+    """Send pending model messages.
 
     Args:
-        chat_id: Telegram 聊天 ID
-        session_path: 会话文件路径
-        add_completion_header: 是否添加"✅模型执行完成"前缀（快速轮询阶段为 True，延迟轮询为 False）
+        chat_id: Telegram Chat ID
+        session_path: Session document path
+        add_completion_header: Whether to add an explicit completion header (True for fast polling phase, False for delayed polling)
     """
     session_key = str(session_path)
     previous_offset = SESSION_OFFSETS.get(session_key, 0)
@@ -4586,7 +4564,7 @@ async def _deliver_pending_messages(
         return False
 
     worker_log.info(
-        "检测到待发送的模型事件",
+        "Detected model event to be sent",
         extra={
             **_session_extra(path=session_path),
             "chat": chat_id,
@@ -4601,7 +4579,7 @@ async def _deliver_pending_messages(
         text_to_send = (deliverable.text or "").rstrip("\n")
         if event_offset in delivered_offsets:
             worker_log.info(
-                "跳过已处理的模型事件",
+                "Skip handled model events",
                 extra={
                     **_session_extra(path=session_path),
                     "chat": chat_id,
@@ -4621,7 +4599,7 @@ async def _deliver_pending_messages(
                 if deliverable.metadata and "plan_completed" in deliverable.metadata:
                     plan_completed = bool(deliverable.metadata.get("plan_completed"))
                 worker_log.info(
-                    "更新计划进度",
+                    "Update plan progress",
                     extra={
                         **_session_extra(path=session_path),
                         "chat": chat_id,
@@ -4634,7 +4612,7 @@ async def _deliver_pending_messages(
                     text_to_send,
                     plan_completed=plan_completed,
                 )
-                # 计划事件可能在同一批次后继续跟随模型输出，这里刷新本地状态避免误判
+                # The planned event may exist in the same batch and continue to follow the model output. The local state is refreshed here to avoid misjudgment.
                 plan_active = ENABLE_PLAN_PROGRESS and (chat_id in CHAT_PLAN_TEXT)
                 plan_completed_flag = bool(CHAT_PLAN_COMPLETION.get(chat_id))
             delivered_offsets.add(event_offset)
@@ -4646,13 +4624,13 @@ async def _deliver_pending_messages(
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset
             continue
-        # 根据轮询阶段决定是否添加完成前缀
+        # Determine the Where to add completion prefix based on the polling phase
         formatted_text = _prepend_completion_header(text_to_send) if add_completion_header else text_to_send
         payload_for_hash = _prepare_model_payload(formatted_text)
         initial_hash = hashlib.sha256(payload_for_hash.encode("utf-8", errors="ignore")).hexdigest()
         if initial_hash in delivered_hashes:
             worker_log.info(
-                "跳过重复的模型输出",
+                "Skip duplicate model output",
                 extra={
                     **_session_extra(path=session_path),
                     "chat": chat_id,
@@ -4664,7 +4642,7 @@ async def _deliver_pending_messages(
             SESSION_OFFSETS[session_key] = event_offset
             continue
         worker_log.info(
-            "准备发送模型输出",
+            "Prepare to send model output",
             extra={
                 **_session_extra(path=session_path),
                 "chat": chat_id,
@@ -4678,7 +4656,7 @@ async def _deliver_pending_messages(
             SESSION_OFFSETS[session_key] = previous_offset
             _clear_last_message(chat_id, session_key)
             worker_log.error(
-                "发送消息失败（请求无效）: %s",
+                "Send message fail (request is invalid): %s",
                 exc,
                 extra={
                     **_session_extra(path=session_path),
@@ -4692,7 +4670,7 @@ async def _deliver_pending_messages(
             SESSION_OFFSETS[session_key] = last_committed_offset
             _clear_last_message(chat_id, session_key)
             worker_log.warning(
-                "发送消息失败，将重试: %s",
+                "Send message fails and will try again: %s",
                 exc,
                 extra={
                     **_session_extra(path=session_path),
@@ -4715,7 +4693,7 @@ async def _deliver_pending_messages(
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset
             worker_log.info(
-                "模型输出发送成功",
+                "Model output sent successfully",
                 extra={
                     **_session_extra(path=session_path),
                     "chat": chat_id,
@@ -4748,7 +4726,7 @@ async def _deliver_pending_messages(
 
     if not delivered_response:
         worker_log.info(
-            "本轮未发现可发送的模型输出",
+            "No sendable model output found in this round",
             extra={
                 **_session_extra(path=session_path),
                 "chat": chat_id,
@@ -4758,11 +4736,11 @@ async def _deliver_pending_messages(
         SESSION_OFFSETS[session_key] = max(last_committed_offset, new_offset)
 
     if delivered_response:
-        # 实际发送了消息，返回 True 表示本次调用成功发送
-        # 这样可以确保延迟轮询机制被正确触发
+        # The message is actually sent, and returning True indicates that this call was sent successfully.
+        # This ensures that the deferred polling mechanism is triggered correctly
         if ENABLE_PLAN_PROGRESS and plan_active:
             worker_log.info(
-                "模型输出已发送，但计划仍在更新",
+                "Model output has been sent, but plans are still being updated",
                 extra={
                     **_session_extra(path=session_path),
                     "chat": chat_id,
@@ -4771,7 +4749,7 @@ async def _deliver_pending_messages(
             return False
         else:
             worker_log.info(
-                "模型输出已发送且计划完成",
+                "Model output sent and scheduled completed",
                 extra={
                     **_session_extra(path=session_path),
                     "chat": chat_id,
@@ -4781,7 +4759,7 @@ async def _deliver_pending_messages(
 
     if ENABLE_PLAN_PROGRESS and not plan_active and final_response_sent:
         worker_log.info(
-            "已存在历史响应，计划关闭后确认完成",
+            "Historical responses already exist and are confirmed to be completed after the plan is closed.",
             extra={
                 **_session_extra(path=session_path),
                 "chat": chat_id,
@@ -4793,7 +4771,7 @@ async def _deliver_pending_messages(
 
 
 async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
-    """确保指定聊天已绑定 Codex 会话并启动监听。"""
+    """Make sure the specified chat is bound to the Codex session and starts listening."""
 
     pointer_path: Optional[Path] = None
     if CODEX_SESSION_FILE_PATH:
@@ -4807,7 +4785,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
             session_path = candidate
         else:
             worker_log.warning(
-                "[session-map] chat=%s 记录的会话文件不存在，准备重新定位",
+                "[session-map] chat=%s The recorded session document does not exist and is ready to be relocated.",
                 chat_id,
                 extra={"session": previous_key},
             )
@@ -4871,7 +4849,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
 
     if session_path is None:
         worker_log.warning(
-            "[session-map] chat=%s 无法确定 Codex 会话",
+            "[session-map] chat=%s Unable to determine Codex session",
             chat_id,
         )
         return None
@@ -4905,14 +4883,14 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
         delivered = await _deliver_pending_messages(chat_id, session_path)
         if delivered:
             worker_log.info(
-                "[session-map] chat=%s 已即时发送 pending 输出",
+                "[session-map] chat=%s Pending output has been sent immediately",
                 chat_id,
                 extra=_session_extra(path=session_path),
             )
             return session_path
     except Exception as exc:  # noqa: BLE001
         worker_log.warning(
-            "推送后检查 Codex 事件失败: %s",
+            "Check Codex event fail after push: %s",
             exc,
             extra={"chat": chat_id, **_session_extra(path=session_path)},
         )
@@ -4923,7 +4901,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
     if watcher is not None and watcher.done():
         CHAT_WATCHERS.pop(chat_id, None)
 
-    # 中断旧的延迟轮询（如果存在）
+    # Interrupt old deferred polling if present
     await _interrupt_long_poll(chat_id)
 
     CHAT_WATCHERS[chat_id] = asyncio.create_task(
@@ -4943,7 +4921,7 @@ async def _update_plan_progress(chat_id: int, plan_text: str, *, plan_completed:
     CHAT_PLAN_COMPLETION[chat_id] = plan_completed
     if CHAT_PLAN_TEXT.get(chat_id) == plan_text:
         worker_log.debug(
-            "计划进度内容未变化，跳过更新",
+            "The content of the plan progress has not changed and the update will be skipped.",
             extra={"chat": chat_id},
         )
         return True
@@ -4991,14 +4969,14 @@ async def _update_plan_progress(chat_id: int, plan_text: str, *, plan_completed:
             )
         except TelegramBadRequest as exc:
             worker_log.warning(
-                "计划进度发送失败，将停止更新: %s",
+                "The plan progress will fail and updates will be stopped.: %s",
                 exc,
                 extra={"chat": chat_id},
             )
             return False
         except (TelegramNetworkError, TelegramRetryAfter) as exc:
             worker_log.warning(
-                "计划进度发送遇到网络异常: %s",
+                "Plan progress sending encountered network exception: %s",
                 exc,
                 extra={"chat": chat_id},
             )
@@ -5010,7 +4988,7 @@ async def _update_plan_progress(chat_id: int, plan_text: str, *, plan_completed:
         message_id = sent_message.message_id
         CHAT_PLAN_MESSAGES[chat_id] = message_id
         worker_log.info(
-            "计划进度消息已发送",
+            "Plan progress message sent",
             extra={
                 "chat": chat_id,
                 "message_id": message_id,
@@ -5052,20 +5030,20 @@ async def _update_plan_progress(chat_id: int, plan_text: str, *, plan_completed:
             CHAT_PLAN_TEXT.pop(chat_id, None)
             removed_id = CHAT_PLAN_MESSAGES.pop(chat_id, None)
             worker_log.warning(
-                "计划进度编辑失败，将停止更新: %s",
+                "Planned progress editing fails and updates will be stopped.: %s",
                 exc,
                 extra={"chat": chat_id, "message_id": removed_id},
             )
             return False
         except (TelegramNetworkError, TelegramRetryAfter) as exc:
             worker_log.warning(
-                "计划进度编辑遇到网络异常: %s",
+                "Plan progress editor encountered network exception: %s",
                 exc,
                 extra={"chat": chat_id, "message_id": message_id},
             )
             return False
         worker_log.info(
-            "计划进度消息已编辑",
+            "Program progress message edited",
             extra={
                 "chat": chat_id,
                 "message_id": message_id,
@@ -5087,19 +5065,19 @@ async def _finalize_plan_progress(chat_id: int) -> None:
 
 async def _interrupt_long_poll(chat_id: int) -> None:
     """
-    中断指定 chat 的延迟轮询。
+    Interrupts delayed polling for the specified chat.
 
-    当用户发送新消息时调用，确保旧的延迟轮询被终止，
-    为新的监听任务让路。
+    Called when the user sends a new message, ensuring that the old deferred polling is terminated,
+    Make way for the new listening task.
 
-    线程安全：使用 asyncio.Lock 保护状态访问。
+    Thread safety: use asyncio.Lock Protect state access.
     """
     if CHAT_LONG_POLL_LOCK is None:
         state = CHAT_LONG_POLL_STATE.get(chat_id)
         if state is not None:
             state["interrupted"] = True
             worker_log.info(
-                "标记延迟轮询为待中断",
+                "Mark deferred polling as pending",
                 extra={"chat": chat_id},
             )
         return
@@ -5109,7 +5087,7 @@ async def _interrupt_long_poll(chat_id: int) -> None:
         if state is not None:
             state["interrupted"] = True
             worker_log.info(
-                "标记延迟轮询为待中断",
+                "Mark deferred polling as pending",
                 extra={"chat": chat_id},
             )
 
@@ -5117,31 +5095,31 @@ async def _interrupt_long_poll(chat_id: int) -> None:
 async def _watch_and_notify(chat_id: int, session_path: Path,
                             max_wait: float, interval: float):
     """
-    监听会话文件并发送消息。
+    Listen to the session document and forward messages to the user.
 
-    两阶段轮询机制：
-    - 阶段1（快速轮询）：interval 间隔（通常 0.3 秒），直到首次发送成功
-    - 阶段2（延迟轮询）：3 秒间隔，最多 600 次（持续 30 分钟），捕获长时间任务的后续输出
+    Two-stage polling strategy:
+    - Phase 1 (fast polling): check every 0.3 seconds until the first delivery succeeds.
+    - Phase 2 (slow polling): check every 3 seconds (up to 600 attempts, about 30 minutes) to capture long-running output.
 
-    异常安全：使用 try...finally 确保状态清理。
-    中断机制：收到新 Telegram 消息时会设置 interrupted 标志，轮询自动停止。
+    Reliability: a try/finally block guarantees cleanup even when errors occur.
+    Interrupt behaviour: when a new Telegram message arrives, the interrupted flag stops further polling.
     """
     start = time.monotonic()
     first_delivery_done = False
-    current_interval = interval  # 初始为快速轮询间隔（0.3 秒）
+    current_interval = interval  # Initially the fast polling interval (0.3 Second)
     long_poll_rounds = 0
-    long_poll_max_rounds = 600  # 30 分钟 / 3 秒 = 600 次
-    long_poll_interval = 3.0  # 3 秒
+    long_poll_max_rounds = 600  # 30 minute / 3 Second = 600 times
+    long_poll_interval = 3.0  # 3 Second
 
     try:
         while True:
-            # 检查是否被新消息中断（使用锁保护）
+            # Check if interrupted by new message (protected with lock)
             if CHAT_LONG_POLL_LOCK is not None:
                 async with CHAT_LONG_POLL_LOCK:
                     state = CHAT_LONG_POLL_STATE.get(chat_id)
                     if state is not None and state.get("interrupted", False):
                         worker_log.info(
-                            "延迟轮询被新消息中断",
+                            "Delayed polling interrupted by new messages",
                             extra={
                                 **_session_extra(path=session_path),
                                 "chat": chat_id,
@@ -5152,10 +5130,10 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
 
             await asyncio.sleep(current_interval)
 
-            # 检查超时（仅在快速轮询阶段）
+            # Check timeout (only during fast polling phase)
             if not first_delivery_done and max_wait > 0 and time.monotonic() - start > max_wait:
                 worker_log.warning(
-                    "[session-map] chat=%s 长时间未获取到 Codex 输出，停止轮询",
+                    "[session-map] chat=%s Codex output has not been obtained for a long time, so polling is stopped.",
                     chat_id,
                     extra=_session_extra(path=session_path),
                 )
@@ -5165,7 +5143,7 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                 continue
 
             try:
-                # 快速轮询阶段添加前缀，延迟轮询阶段不添加
+                # The prefix is added during the fast polling phase and not added during the delayed polling phase.
                 delivered = await _deliver_pending_messages(
                     chat_id,
                     session_path,
@@ -5173,7 +5151,7 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                 )
             except Exception as exc:
                 worker_log.error(
-                    "消息发送时发生未预期异常",
+                    "An unexpected exception occurred while sending the message",
                     exc_info=exc,
                     extra={
                         **_session_extra(path=session_path),
@@ -5182,7 +5160,7 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                 )
                 delivered = False
 
-            # 首次发送成功，切换到延迟轮询模式
+            # The first transmission is successful and switches to delayed polling mode.
             if delivered and not first_delivery_done:
                 first_delivery_done = True
                 current_interval = long_poll_interval
@@ -5202,7 +5180,7 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                         "interrupted": False,
                     }
                 worker_log.info(
-                    "首次发送成功，启动延迟轮询模式",
+                    "The first transmission is successful and delayed polling mode is started.",
                     extra={
                         **_session_extra(path=session_path),
                         "chat": chat_id,
@@ -5212,10 +5190,10 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                 )
                 continue
 
-            # 延迟轮询阶段
+            # Delayed polling phase
             if first_delivery_done:
                 if delivered:
-                    # 又收到新消息，重置轮询计数
+                    # New message received, reset polling count
                     long_poll_rounds = 0
                     if CHAT_LONG_POLL_LOCK is not None:
                         async with CHAT_LONG_POLL_LOCK:
@@ -5227,14 +5205,14 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                         if state is not None:
                             state["round"] = 0
                     worker_log.info(
-                        "延迟轮询中收到新消息，重置计数",
+                        "New message received in delayed polling, reset count",
                         extra={
                             **_session_extra(path=session_path),
                             "chat": chat_id,
                         },
                     )
                 else:
-                    # 无新消息，增加轮询计数
+                    # No new messages, increase polling count
                     long_poll_rounds += 1
                     if CHAT_LONG_POLL_LOCK is not None:
                         async with CHAT_LONG_POLL_LOCK:
@@ -5248,7 +5226,7 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
 
                     if long_poll_rounds >= long_poll_max_rounds:
                         worker_log.info(
-                            "延迟轮询达到最大次数，停止监听",
+                            "Delayed polling reaches the maximum number of times and stops listening.",
                             extra={
                                 **_session_extra(path=session_path),
                                 "chat": chat_id,
@@ -5258,7 +5236,7 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                         return
 
                     worker_log.debug(
-                        "延迟轮询中无新消息",
+                        "No new messages in delayed polling",
                         extra={
                             **_session_extra(path=session_path),
                             "chat": chat_id,
@@ -5267,25 +5245,25 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
                     )
                 continue
 
-            # 快速轮询阶段：如果已发送消息，退出
+            # Fast polling phase: if message has been sent, exit
             if delivered:
                 return
 
     finally:
-        # 确保无论如何都清理延迟轮询状态
+        # Make sure to clean up the deferred polling state anyway
         if CHAT_LONG_POLL_LOCK is not None:
             async with CHAT_LONG_POLL_LOCK:
                 if chat_id in CHAT_LONG_POLL_STATE:
                     CHAT_LONG_POLL_STATE.pop(chat_id, None)
                     worker_log.debug(
-                        "监听任务退出，已清理延迟轮询状态",
+                        "The listening task exits and the delayed polling state has been cleared",
                         extra={"chat": chat_id},
                     )
         else:
             if chat_id in CHAT_LONG_POLL_STATE:
                 CHAT_LONG_POLL_STATE.pop(chat_id, None)
                 worker_log.debug(
-                    "监听任务退出，已清理延迟轮询状态",
+                    "The listening task exits and the delayed polling state has been cleared",
                     extra={"chat": chat_id},
                 )
 
@@ -5318,16 +5296,15 @@ def _read_session_meta_cwd(path: Path) -> Optional[str]:
 
 
 def _find_latest_claudecode_rollout(pointer: Path) -> Optional[Path]:
-    """ClaudeCode 专用：在缺少 cwd 元数据时按更新时间选择最新会话文件。
+    """ClaudeCode-specific helper: pick the latest session document when CWD metadata is missing.
 
-    注意：会排除 agent-*.jsonl 文件，因为这些是 agent 的 sidechain 会话，
-    所有消息都标记为 isSidechain=true，会被忽略不处理。
+    Note: agent-*.jsonl files represent sidechain sessions (isSidechain=true) and must be ignored.
     """
 
     pointer_target = _read_pointer_path(pointer)
     candidates: List[Path] = []
     if pointer_target is not None:
-        # 如果 pointer 指向 agent 文件，跳过
+        # If pointer points to agent document, skip
         if not pointer_target.name.startswith("agent-"):
             candidates.append(pointer_target)
 
@@ -5354,7 +5331,7 @@ def _find_latest_claudecode_rollout(pointer: Path) -> Optional[Path]:
             continue
         for rollout in real_root.glob(pattern):
             if rollout.is_file():
-                # 排除 agent-*.jsonl 文件
+                # exclude agent-*.jsonl document
                 if not rollout.name.startswith("agent-"):
                     candidates.append(rollout)
 
@@ -5378,15 +5355,15 @@ def _find_latest_claudecode_rollout(pointer: Path) -> Optional[Path]:
             latest_mtime = mtime
             latest_path = Path(real_rollout)
 
-    # 记录找到的会话文件
+    # Log the session document found
     if latest_path:
         worker_log.info(
-            "ClaudeCode 找到最新会话文件（已排除 agent-* 文件）",
+            "ClaudeCode Find the latest session document (exclude agent-* document)",
             extra={"session_file": str(latest_path), "mtime": latest_mtime}
         )
     else:
         worker_log.warning(
-            "ClaudeCode 未找到有效的会话文件（已排除 agent-* 文件）",
+            "ClaudeCode No valid session document found (exclude agent-* document)",
             extra={"search_roots": [str(r) for r in search_roots]}
         )
 
@@ -5394,7 +5371,7 @@ def _find_latest_claudecode_rollout(pointer: Path) -> Optional[Path]:
 
 
 def _find_latest_rollout_for_cwd(pointer: Path, target_cwd: Optional[str]) -> Optional[Path]:
-    """依据目标 CWD 在候选目录中寻找最新会话文件。"""
+    """Find the latest session document in the target CWD exist candidate directory."""
 
     roots: List[Path] = []
     for candidate in (CODEX_SESSIONS_ROOT, MODEL_SESSION_ROOT):
@@ -5506,7 +5483,7 @@ def _format_plan_update(arguments: Any, *, event_timestamp: Optional[str]) -> Op
     if not steps:
         return None
 
-    header = "当前任务执行计划："
+    header = "currentTaskExecution plan:"
     body_parts = [header]
     if lines:
         body_parts.extend(lines)
@@ -5526,7 +5503,7 @@ def _format_plan_update(arguments: Any, *, event_timestamp: Optional[str]) -> Op
         except ValueError:
             formatted_ts = None
         suffix = formatted_ts or event_timestamp
-        text = f"{text}\n\n状态更新中，最后更新时间：{suffix}"
+        text = f"{text}\n\nState updating; last updated: {suffix}"
     return text, all_completed
 
 
@@ -5593,7 +5570,7 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
 def _extract_claudecode_payload(
     data: dict, *, event_timestamp: Optional[str]
 ) -> Optional[Tuple[str, str, Optional[Dict[str, Any]]]]:
-    # Claude Code 在启动时会输出 isSidechain=true 的欢迎语，此类事件直接忽略
+    # Claude Code isSidechain will be output at startup=true Welcome message, such events are simply ignored
     sidechain_flag = data.get("isSidechain")
     if isinstance(sidechain_flag, bool) and sidechain_flag:
         return None
@@ -5688,22 +5665,22 @@ def _read_session_events(path: Path) -> Tuple[int, List[SessionDeliverable]]:
     return new_offset, events
 
 
-# --- 处理器 ---
+# --- Processor ---
 
 @router.message(Command("help"))
 async def on_help_command(message: Message) -> None:
     text = (
-        "*指令总览*\n"
-        "- /help — 查看全部命令\n"
-        "- /tasks — 任务管理命令清单\n"
-        "- /task_new — 创建任务（交互式或附带参数）\n"
-        "- /task_list — 查看任务列表，支持 status/limit/offset\n"
-        "- /task_show — 查看某个任务详情\n"
-        "- /task_update — 快速更新任务字段\n"
-        "- /task_note — 添加任务备注\n"
-        "- /task_delete — 归档或恢复任务\n"
-        "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
-        "提示：大部分操作都提供按钮和多轮对话引导，无需记忆复杂参数。"
+        "*Command overview*\n"
+        "- /help — Show this help list\n"
+        "- /tasks — List task-management shortcuts\n"
+        "- /task_new — Create a task (interactive or parameterised)\n"
+        "- /task_list — List tasks (supports status/limit/offset)\n"
+        "- /task_show — Display task details\n"
+        "- /task_update — Quickly update task fields\n"
+        "- /task_note — Add a task note\n"
+        "- /task_delete — Archive or restore a task\n"
+        "- Sub-tasks are retired; use /task_new to create standalone tasks.\n\n"
+        "Tip: Most operations offer buttons and guided dialogues, so you rarely need to remember the parameters."
     )
     await _answer_with_markdown(message, text)
 
@@ -5711,15 +5688,15 @@ async def on_help_command(message: Message) -> None:
 @router.message(Command("tasks"))
 async def on_tasks_help(message: Message) -> None:
     text = (
-        "*任务管理命令*\n"
-        "- /task_new 标题 | type=需求 — 创建任务\n"
-        "- /task_list [status=test] [limit=10] [offset=0] — 列出任务\n"
-        "- /task_show TASK_0001 — 查看详情\n"
-        "- /task_update TASK_0001 status=test | priority=2 | type=缺陷 — 更新字段\n"
-        "- /task_note TASK_0001 备注内容 | type=research — 添加备注\n"
-        "- /task_delete TASK_0001 — 归档任务（再次执行可恢复）\n"
-        "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
-        "建议：使用 `/task_new`、`/task_show` 等命令触发后按按钮完成后续步骤。"
+        "*Task management commands*\n"
+        "- /task_new title | type=need — Create a task\n"
+        "- /task_list [status=test] [limit=10] [offset=0] — List tasks\n"
+        "- /task_show TASK_0001 — View task details\n"
+        "- /task_update TASK_0001 status=test | priority=2 | type=defect — Update fields\n"
+        "- /task_note TASK_0001 Note content | type=research — Add a task note\n"
+        "- /task_delete TASK_0001 — Archive a task (run again to restore)\n"
+        "- Sub-tasks are retired; use /task_new for new items.\n\n"
+        "Recommendation: after `/task_new` or `/task_show`, use the inline buttons to continue."
     )
     await _answer_with_markdown(message, text)
 
@@ -5790,13 +5767,13 @@ async def _build_task_list_view(
     display_pages = total_pages or 1
     current_page_display = min(page, display_pages)
     lines = [
-        "*任务列表*",
-        f"筛选状态：{_format_status(status) if status else '全部'}",
+        "*Tasklist*",
+        f"Filter state: {_format_status(status) if status else 'all'}",
     ]
     if not tasks:
-        lines.append("当前没有匹配的任务，可使用上方状态按钮切换。")
+        lines.append("currentIf there is no matching Task, you can use the state button above to switch.")
     lines.append(
-        f"分页信息：页码 {current_page_display}/{display_pages} · 每页 {limit} 条 · 总数 {total}"
+        f"Paging info: page {current_page_display}/{display_pages}, {limit} items per page, total {total}"
     )
     text = "\n".join(lines)
 
@@ -5818,14 +5795,14 @@ async def _build_task_list_view(
     if page > 1:
         nav_row.append(
             InlineKeyboardButton(
-                text="⬅️ 上一页",
+                text="⬅️ Previous page",
                 callback_data=f"task:list_page:{status_token}:{page-1}:{limit}",
             )
         )
     if total_pages and page < total_pages:
         nav_row.append(
             InlineKeyboardButton(
-                text="下一页 ➡️",
+                text="Next page ➡️",
                 callback_data=f"task:list_page:{status_token}:{page+1}:{limit}",
             )
         )
@@ -5835,11 +5812,11 @@ async def _build_task_list_view(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔍 搜索任务",
+                text="🔍 Search Task",
                 callback_data=f"{TASK_LIST_SEARCH_CALLBACK}:{status_token}:{page}:{limit}",
             ),
             InlineKeyboardButton(
-                text="➕ 创建任务",
+                text="➕ Create Task",
                 callback_data=TASK_LIST_CREATE_CALLBACK,
             ),
         ]
@@ -5867,19 +5844,19 @@ async def _build_task_search_view(
     sanitized_keyword = keyword.replace("\n", " ").strip()
     if not sanitized_keyword:
         sanitized_keyword = "-"
-    # 修复：避免双重转义
+    # Fix: avoid double escaping
     if _IS_MARKDOWN_V2:
         escaped_keyword = sanitized_keyword
     else:
         escaped_keyword = _escape_markdown_text(sanitized_keyword)
     lines = [
-        "*任务搜索结果*",
-        f"搜索关键词：{escaped_keyword}",
-        "搜索范围：标题、描述",
-        f"分页信息：页码 {current_page_display}/{display_pages} · 每页 {limit} 条 · 总数 {total}",
+        "*TaskSearch results*",
+        f"Search keywords: {escaped_keyword}",
+        "Search scope: title, describe",
+        f"Paging info: page {current_page_display}/{display_pages}, {limit} items per page, total {total}",
     ]
     if not tasks:
-        lines.append("未找到匹配的任务，请调整关键词或重新搜索。")
+        lines.append("No matching Task found, please adjust the keywords or search again.")
 
     rows: list[list[InlineKeyboardButton]] = []
     for task in tasks:
@@ -5900,7 +5877,7 @@ async def _build_task_search_view(
     if page > 1:
         nav_row.append(
             InlineKeyboardButton(
-                text="⬅️ 上一页",
+                text="⬅️ Previous page",
                 callback_data=(
                     f"{TASK_LIST_SEARCH_PAGE_CALLBACK}:{encoded_keyword}:"
                     f"{origin_status_token}:{origin_page}:{page-1}:{limit}"
@@ -5910,7 +5887,7 @@ async def _build_task_search_view(
     if total_pages and page < total_pages:
         nav_row.append(
             InlineKeyboardButton(
-                text="下一页 ➡️",
+                text="Next page ➡️",
                 callback_data=(
                     f"{TASK_LIST_SEARCH_PAGE_CALLBACK}:{encoded_keyword}:"
                     f"{origin_status_token}:{origin_page}:{page+1}:{limit}"
@@ -5923,11 +5900,11 @@ async def _build_task_search_view(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔁 重新搜索",
+                text="🔁 Search again",
                 callback_data=f"{TASK_LIST_SEARCH_CALLBACK}:{origin_status_token}:{origin_page}:{limit}",
             ),
             InlineKeyboardButton(
-                text="📋 返回列表",
+                text="📋 Return to list",
                 callback_data=f"{TASK_LIST_RETURN_CALLBACK}:{origin_status_token}:{origin_page}:{limit}",
             ),
         ]
@@ -5974,9 +5951,9 @@ async def on_task_list_button(message: Message) -> None:
 
 
 async def _dispatch_task_new_command(source_message: Message, actor: Optional[User]) -> None:
-    """模拟用户输入 /task_new，让现有命令逻辑复用。"""
+    """Simulate a /task_new message so the existing command logic can be reused."""
     if actor is None:
-        raise ValueError("缺少有效的任务创建用户信息")
+        raise ValueError("Valid task creation user information is missing")
     bot_instance = current_bot()
     command_text = "/task_new"
     try:
@@ -6009,25 +5986,25 @@ async def on_task_create_button(message: Message, state: FSMContext) -> None:
     try:
         await _dispatch_task_new_command(message, message.from_user)
     except ValueError:
-        await message.answer("无法发起任务创建，请重试或使用 /task_new 命令。")
+        await message.answer("Unable to initiate Task creation, please try again or use /task_new Order.")
 
 
 @router.callback_query(F.data.startswith("task:list_page:"))
 async def on_task_list_page(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 5:
-        await callback.answer("回调数据异常", show_alert=True)
+        await callback.answer("Callback data exception", show_alert=True)
         return
     _, _, status_token, page_raw, limit_raw = parts
     if callback.message is None:
-        await callback.answer("无法定位原始消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     status = None if status_token == "-" else _normalize_status(status_token)
     try:
         page = int(page_raw)
         limit = int(limit_raw)
     except ValueError:
-        await callback.answer("分页参数错误", show_alert=True)
+        await callback.answer("Paging parameter error", show_alert=True)
         return
     page = max(page, 1)
     limit = max(1, min(limit, 50))
@@ -6050,7 +6027,7 @@ async def on_task_list_page(callback: CallbackQuery) -> None:
 async def on_task_list_search(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 5:
-        await callback.answer("回调数据异常", show_alert=True)
+        await callback.answer("Callback data exception", show_alert=True)
         return
     _, _, status_token, page_raw, limit_raw = parts
     status = None if status_token == "-" else _normalize_status(status_token)
@@ -6058,7 +6035,7 @@ async def on_task_list_search(callback: CallbackQuery, state: FSMContext) -> Non
         page = max(int(page_raw), 1)
         limit = max(1, min(int(limit_raw), 50))
     except ValueError:
-        await callback.answer("参数错误", show_alert=True)
+        await callback.answer("Parameter error", show_alert=True)
         return
     await state.clear()
     await state.update_data(
@@ -6069,7 +6046,7 @@ async def on_task_list_search(callback: CallbackQuery, state: FSMContext) -> Non
         origin_message=callback.message,
     )
     await state.set_state(TaskListSearchStates.waiting_keyword)
-    await callback.answer("请输入搜索关键词")
+    await callback.answer("Please enter search keywords")
     if callback.message:
         await _prompt_task_search_keyword(callback.message)
 
@@ -6078,11 +6055,11 @@ async def on_task_list_search(callback: CallbackQuery, state: FSMContext) -> Non
 async def on_task_list_search_page(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 7:
-        await callback.answer("回调数据异常", show_alert=True)
+        await callback.answer("Callback data exception", show_alert=True)
         return
     _, _, encoded_keyword, origin_status_token, origin_page_raw, target_page_raw, limit_raw = parts
     if callback.message is None:
-        await callback.answer("无法定位原始消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     keyword = unquote(encoded_keyword)
     origin_status = None if origin_status_token == "-" else _normalize_status(origin_status_token)
@@ -6091,7 +6068,7 @@ async def on_task_list_search_page(callback: CallbackQuery) -> None:
         page = max(int(target_page_raw), 1)
         limit = max(1, min(int(limit_raw), 50))
     except ValueError:
-        await callback.answer("参数错误", show_alert=True)
+        await callback.answer("Parameter error", show_alert=True)
         return
     text, markup = await _build_task_search_view(
         keyword,
@@ -6124,18 +6101,18 @@ async def on_task_list_search_page(callback: CallbackQuery) -> None:
 async def on_task_list_return(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 5:
-        await callback.answer("回调数据异常", show_alert=True)
+        await callback.answer("Callback data exception", show_alert=True)
         return
     _, _, status_token, page_raw, limit_raw = parts
     if callback.message is None:
-        await callback.answer("无法定位原始消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     status = None if status_token == "-" else _normalize_status(status_token)
     try:
         page = max(int(page_raw), 1)
         limit = max(1, min(int(limit_raw), 50))
     except ValueError:
-        await callback.answer("参数错误", show_alert=True)
+        await callback.answer("Parameter error", show_alert=True)
         return
     await state.clear()
     text, markup = await _build_task_list_view(status=status, page=page, limit=limit)
@@ -6150,7 +6127,7 @@ async def on_task_list_return(callback: CallbackQuery, state: FSMContext) -> Non
         sent = await _answer_with_markdown(origin or callback.message, text, reply_markup=markup)
         if sent is not None:
             _init_task_view_context(sent, view_state)
-    await callback.answer("已返回任务列表")
+    await callback.answer("Returned to task list")
 
 
 @router.callback_query(F.data == TASK_LIST_CREATE_CALLBACK)
@@ -6158,7 +6135,7 @@ async def on_task_list_create(callback: CallbackQuery) -> None:
     message = callback.message
     user = callback.from_user
     if message is None or user is None:
-        await callback.answer("无法定位会话", show_alert=True)
+        await callback.answer("Unable to locate session", show_alert=True)
         return
     await callback.answer()
     await _dispatch_task_new_command(message, user)
@@ -6168,7 +6145,7 @@ async def on_task_list_create(callback: CallbackQuery) -> None:
 async def on_task_list_search_keyword(message: Message, state: FSMContext) -> None:
     raw_text = message.text or ""
     trimmed = raw_text.strip()
-    options = [SKIP_TEXT, "取消"]
+    options = [SKIP_TEXT, "Cancel"]
     resolved = _resolve_reply_choice(raw_text, options=options)
     data = await state.get_data()
     origin_status = data.get("origin_status")
@@ -6190,21 +6167,21 @@ async def on_task_list_search_keyword(message: Message, state: FSMContext) -> No
         if sent is not None:
             _init_task_view_context(sent, list_state)
 
-    if resolved == "取消" or resolved == SKIP_TEXT or not trimmed:
+    if resolved == "Cancel" or resolved == SKIP_TEXT or not trimmed:
         await state.clear()
         await _restore_list()
-        await message.answer("已返回任务列表。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Returned to task list.", reply_markup=_build_worker_main_keyboard())
         return
 
     if len(trimmed) < SEARCH_KEYWORD_MIN_LENGTH:
         await message.answer(
-            f"关键词长度至少 {SEARCH_KEYWORD_MIN_LENGTH} 个字符，请重新输入：",
+            f"Keyword length must be at least {SEARCH_KEYWORD_MIN_LENGTH} characters, please re-enter:",
             reply_markup=_build_description_keyboard(),
         )
         return
     if len(trimmed) > SEARCH_KEYWORD_MAX_LENGTH:
         await message.answer(
-            f"关键词长度不可超过 {SEARCH_KEYWORD_MAX_LENGTH} 个字符，请重新输入：",
+            f"Keyword length cannot exceed {SEARCH_KEYWORD_MAX_LENGTH} characters, please re-enter:",
             reply_markup=_build_description_keyboard(),
         )
         return
@@ -6233,14 +6210,14 @@ async def on_task_list_search_keyword(message: Message, state: FSMContext) -> No
         sent = await _answer_with_markdown(message, search_text, reply_markup=search_markup)
         if sent is not None:
             _init_task_view_context(sent, search_state)
-    await message.answer("搜索完成，已展示结果。", reply_markup=_build_worker_main_keyboard())
+    await message.answer("The search is complete and the results have been displayed.", reply_markup=_build_worker_main_keyboard())
 
 
 @router.message(Command("task_show"))
 async def on_task_show(message: Message) -> None:
     args = _extract_command_args(message.text)
     if not args:
-        await _answer_with_markdown(message, "用法：/task_show TASK_0001")
+        await _answer_with_markdown(message, "usage: /task_show TASK_0001")
         return
     task_id = _normalize_task_id(args)
     if not task_id:
@@ -6251,7 +6228,7 @@ async def on_task_show(message: Message) -> None:
 
 @router.message(F.text.regexp(r"^/TASK_[A-Z0-9_]+(?:@[\w_]+)?(?:\s|$)"))
 async def on_task_quick_command(message: Message) -> None:
-    """处理直接使用 /TASK_XXXX 调用的快捷查询命令。"""
+    """Handle direct use /TASK_XXXX Quick query Order called."""
     raw_text = (message.text or "").strip()
     if not raw_text:
         await _answer_with_markdown(message, TASK_ID_USAGE_TIP)
@@ -6268,7 +6245,7 @@ async def on_task_quick_command(message: Message) -> None:
 async def on_task_children(message: Message) -> None:
     await _answer_with_markdown(
         message,
-        "子任务功能已下线，历史子任务已自动归档。请使用 /task_new 创建独立任务以拆分工作。",
+        "The sub-task function has been offline, and historical sub-tasks have been automatically archived. Please use /task_new Create independent tasks to split work.",
     )
 
 
@@ -6279,17 +6256,23 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
         title, extra = parse_structured_text(args)
         title = title.strip()
         if not title:
-            await _answer_with_markdown(message, "请提供任务标题，例如：/task_new 修复登录 | type=需求")
+            await _answer_with_markdown(
+                message,
+                "Please provide a task title, for example: /task_new Fix login | type=need",
+            )
             return
         if "priority" in extra:
-            await _answer_with_markdown(message, "priority 参数已取消，请直接使用 /task_new 标题 | type=需求")
+            await _answer_with_markdown(
+                message,
+                "The `priority` parameter is no longer supported. Use `/task_new title | type=need` instead.",
+            )
             return
         status = _normalize_status(extra.get("status")) or TASK_STATUSES[0]
         task_type = _normalize_task_type(extra.get("type"))
         if task_type is None:
             await _answer_with_markdown(
                 message,
-                "任务类型缺失或无效，请使用 type=需求/缺陷/优化/风险",
+                "Task type is missing or invalid. Use type=need/defect/optimization/risk.",
             )
             return
         description = extra.get("description")
@@ -6305,7 +6288,7 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
             actor=actor,
         )
         detail_text, markup = await _render_task_detail(task.id)
-        await _answer_with_markdown(message, f"任务已创建：\n{detail_text}", reply_markup=markup)
+        await _answer_with_markdown(message, f"Task created:\n{detail_text}", reply_markup=markup)
         return
 
     await state.clear()
@@ -6314,19 +6297,19 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
         priority=DEFAULT_PRIORITY,
     )
     await state.set_state(TaskCreateStates.waiting_title)
-    await message.answer("请输入任务标题：")
+    await message.answer("Please enter the task title:")
 
 
 @router.message(TaskCreateStates.waiting_title)
 async def on_task_create_title(message: Message, state: FSMContext) -> None:
     title = (message.text or "").strip()
     if not title:
-        await message.answer("标题不能为空，请重新输入：")
+        await message.answer("The title cannot be empty. Please try again:")
         return
     await state.update_data(title=title)
     await state.set_state(TaskCreateStates.waiting_type)
     await message.answer(
-        "请选择任务类型（需求 / 缺陷 / 优化 / 风险）：",
+        "Please select a task type (need / defect / optimization / risk):",
         reply_markup=_build_task_type_keyboard(),
     )
 
@@ -6334,17 +6317,17 @@ async def on_task_create_title(message: Message, state: FSMContext) -> None:
 @router.message(TaskCreateStates.waiting_type)
 async def on_task_create_type(message: Message, state: FSMContext) -> None:
     options = [_format_task_type(task_type) for task_type in TASK_TYPES]
-    options.append("取消")
+    options.append("Cancel")
     resolved = _resolve_reply_choice(message.text, options=options)
     candidate = resolved or (message.text or "").strip()
-    if resolved == "取消" or candidate == "取消":
+    if resolved == "Cancel" or candidate == "Cancel":
         await state.clear()
-        await message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task creation cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     task_type = _normalize_task_type(candidate)
     if task_type is None:
         await message.answer(
-            "任务类型无效，请从键盘选择或输入需求/缺陷/优化/风险：",
+            "Invalid task type. Use the keyboard or enter need/defect/optimization/risk:",
             reply_markup=_build_task_type_keyboard(),
         )
         return
@@ -6352,8 +6335,8 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
     await state.set_state(TaskCreateStates.waiting_description)
     await message.answer(
         (
-            "请输入任务描述，建议说明业务背景与预期结果。\n"
-            "若暂时没有可点击“跳过”按钮或直接发送空消息，发送“取消”可终止。"
+            "Please enter the task description. Describe the business background and the expected result.\n"
+            'If you have nothing to add, tap "Skip" or send an empty message. Send "Cancel" to terminate.'
         ),
         reply_markup=_build_description_keyboard(),
     )
@@ -6363,15 +6346,15 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
 async def on_task_create_description(message: Message, state: FSMContext) -> None:
     raw_text = message.text or ""
     trimmed = raw_text.strip()
-    options = [SKIP_TEXT, "取消"]
+    options = [SKIP_TEXT, "Cancel"]
     resolved = _resolve_reply_choice(raw_text, options=options)
-    if resolved == "取消":
+    if resolved == "Cancel":
         await state.clear()
-        await message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task creation cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     if trimmed and resolved != SKIP_TEXT and len(trimmed) > DESCRIPTION_MAX_LENGTH:
         await message.answer(
-            f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
+            f"The task description cannot exceed {DESCRIPTION_MAX_LENGTH} characters. Please try again:",
             reply_markup=_build_description_keyboard(),
         )
         return
@@ -6383,34 +6366,34 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
     data = await state.get_data()
     task_type_code = data.get("task_type")
     summary_lines = [
-        "请确认任务信息：",
-        f"标题：{data.get('title')}",
-        f"类型：{_format_task_type(task_type_code)}",
+        "Please confirm the task information:",
+        f"Title: {data.get('title')}",
+        f"Type: {_format_task_type(task_type_code)}",
     ]
     priority_text = _format_priority(int(data.get("priority", DEFAULT_PRIORITY)))
-    summary_lines.append(f"优先级：{priority_text}（默认）")
+    summary_lines.append(f"Priority: {priority_text} (default)")
     if description:
-        summary_lines.append("描述：")
+        summary_lines.append("Description:")
         summary_lines.append(description)
     else:
-        summary_lines.append("描述：暂无（可稍后通过 /task_desc 补充）")
+        summary_lines.append("Description: None yet (add details later via /task_desc).")
     await message.answer("\n".join(summary_lines), reply_markup=_build_worker_main_keyboard())
-    await message.answer("是否创建该任务？", reply_markup=_build_confirm_keyboard())
+    await message.answer("Do you want to create this task?", reply_markup=_build_confirm_keyboard())
 
 
 @router.message(TaskCreateStates.waiting_confirm)
 async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
-    options = ["✅ 确认创建", "❌ 取消"]
+    options = ["Confirm creation", "Cancel"]
     resolved = _resolve_reply_choice(message.text, options=options)
     stripped = _strip_number_prefix((message.text or "").strip()).lower()
-    if resolved == options[1] or stripped in {"取消"}:
+    if resolved == options[1] or stripped in {"cancel"}:
         await state.clear()
-        await message.answer("已取消创建任务。", reply_markup=ReplyKeyboardRemove())
-        await message.answer("已返回主菜单。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task creation cancelled.", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Returned to main menu.", reply_markup=_build_worker_main_keyboard())
         return
-    if resolved != options[0] and stripped not in {"确认", "确认创建"}:
+    if resolved != options[0] and stripped not in {"confirm", "Confirm creation"}:
         await message.answer(
-            "请选择“确认创建”或“取消”，可直接输入编号或点击键盘按钮：",
+            "Please select \"Confirm creation\" or \"Cancel\". Enter the number directly or tap the keyboard button:",
             reply_markup=_build_confirm_keyboard(),
         )
         return
@@ -6419,10 +6402,10 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
     if not title:
         await state.clear()
         await message.answer(
-            "创建数据缺失，请重新执行 /task_new。",
+            "Creation data missing. Please run /task_new again.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        await message.answer("会话已返回主菜单。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("SessionReturned to main menu.", reply_markup=_build_worker_main_keyboard())
         return
     priority_raw = data.get("priority")
     if not isinstance(priority_raw, int):
@@ -6433,10 +6416,10 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
     if task_type is None:
         await state.clear()
         await message.answer(
-            "任务类型缺失，请重新执行 /task_new。",
+            "Task type missing. Please run /task_new again.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        await message.answer("会话已返回主菜单。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("SessionReturned to main menu.", reply_markup=_build_worker_main_keyboard())
         return
     actor = data.get("actor") or _actor_from_message(message)
     task = await TASK_SERVICE.create_root_task(
@@ -6451,8 +6434,8 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
     detail_text, markup = await _render_task_detail(task.id)
-    await message.answer("任务已创建。", reply_markup=_build_worker_main_keyboard())
-    await _answer_with_markdown(message, f"任务已创建：\n{detail_text}", reply_markup=markup)
+    await message.answer("Task created.", reply_markup=_build_worker_main_keyboard())
+    await _answer_with_markdown(message, f"Task created:\n{detail_text}", reply_markup=markup)
 
 
 @router.message(Command("task_child"))
@@ -6460,7 +6443,7 @@ async def on_task_child(message: Message, state: FSMContext) -> None:
     await state.clear()
     await _answer_with_markdown(
         message,
-        "子任务功能已下线，历史子任务已自动归档。请使用 /task_new 创建新的任务。",
+        "The sub-task function has been offline, and historical sub-tasks have been automatically archived. Please use /task_new Create new Task.",
     )
 
 
@@ -6475,23 +6458,23 @@ async def on_task_child(message: Message, state: FSMContext) -> None:
     )
 )
 async def on_outdated_confirm_callback(callback: CallbackQuery) -> None:
-    await callback.answer("子任务功能已下线，相关按钮已失效，请使用 /task_new 创建任务。", show_alert=True)
+    await callback.answer("Sub-task support has been removed and related buttons have expired. Please use /task_new to create a task.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("task:desc_edit:"))
 async def on_task_desc_edit(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     origin_message = callback.message
     if origin_message is None:
-        await callback.answer("消息已不存在，请重新开始编辑。", show_alert=True)
+        await callback.answer("The message no longer exists, please start editing again.", show_alert=True)
         return
     await callback.answer()
     await _begin_task_desc_edit_flow(
@@ -6504,19 +6487,19 @@ async def on_task_desc_edit(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(TaskDescriptionStates.waiting_content)
 async def on_task_desc_input(message: Message, state: FSMContext) -> None:
-    """处理任务描述输入阶段的文本或菜单指令。"""
+    """Handle text or menu input while the user edits the task description."""
 
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
-        await message.answer("会话已失效，请重新操作。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("The session has expired, please operate again.", reply_markup=_build_worker_main_keyboard())
         return
 
     token = _normalize_choice_token(message.text or "")
     if _is_cancel_message(token):
         await state.clear()
-        await message.answer("已取消编辑任务描述。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task description editing cancelled.", reply_markup=_build_worker_main_keyboard())
         return
 
     if token == _normalize_choice_token(TASK_DESC_CLEAR_TEXT):
@@ -6527,7 +6510,7 @@ async def on_task_desc_input(message: Message, state: FSMContext) -> None:
         await state.set_state(TaskDescriptionStates.waiting_confirm)
         await _answer_with_markdown(
             message,
-            _build_task_desc_confirm_text("（新描述为空，将清空任务描述）"),
+            _build_task_desc_confirm_text("(The new description is empty; the task description will be cleared.)"),
             reply_markup=_build_task_desc_confirm_keyboard(),
         )
         return
@@ -6542,7 +6525,7 @@ async def on_task_desc_input(message: Message, state: FSMContext) -> None:
     trimmed = (message.text or "").strip()
     if len(trimmed) > DESCRIPTION_MAX_LENGTH:
         await message.answer(
-            f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
+            f"The task description cannot exceed {DESCRIPTION_MAX_LENGTH} characters. Please try again:",
             reply_markup=_build_task_desc_input_keyboard(),
         )
         await _prompt_task_description_input(
@@ -6551,7 +6534,7 @@ async def on_task_desc_input(message: Message, state: FSMContext) -> None:
         )
         return
 
-    preview_segment = trimmed if trimmed else "（新描述为空，将清空任务描述）"
+    preview_segment = trimmed if trimmed else "(The new description is empty; the task description will be cleared.)"
     await state.update_data(
         new_description=trimmed,
         actor=_actor_from_message(message),
@@ -6566,51 +6549,57 @@ async def on_task_desc_input(message: Message, state: FSMContext) -> None:
 
 @router.message(TaskDescriptionStates.waiting_confirm)
 async def on_task_desc_confirm_stage_text(message: Message, state: FSMContext) -> None:
-    """处理任务描述确认阶段的菜单指令。支持按钮点击、数字编号和直接文本输入。"""
+    """Handle the confirmation stage for task description edits (buttons or free text)."""
 
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
-        await message.answer("会话已失效，请重新操作。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("The session has expired, please operate again.", reply_markup=_build_worker_main_keyboard())
         return
 
-    # 使用 _resolve_reply_choice() 智能解析用户输入，支持数字编号、按钮文本和直接文本
+    # Use _resolve_reply_choice() to parse user input (numbers, button labels, or free text).
     options = [TASK_DESC_CONFIRM_TEXT, TASK_DESC_RETRY_TEXT, TASK_DESC_CANCEL_TEXT]
     resolved = _resolve_reply_choice(message.text, options=options)
     stripped = _strip_number_prefix((message.text or "").strip()).lower()
 
-    # 处理取消操作
-    if resolved == options[2] or _is_cancel_message(resolved) or stripped in {"取消"}:
+    # Handle cancel requests.
+    if resolved == options[2] or _is_cancel_message(resolved) or stripped in {"cancel"}:
         await state.clear()
-        await message.answer("已取消编辑任务描述。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task description editing cancelled.", reply_markup=_build_worker_main_keyboard())
         return
 
-    # 处理重新输入操作
-    if resolved == options[1] or stripped in {"重新输入"}:
+    # Handle re-entry of descriptions.
+    if resolved == options[1] or stripped in {"re-enter", "reenter"}:
         task = await TASK_SERVICE.get_task(task_id)
         if task is None:
             await state.clear()
-            await message.answer("任务不存在，已结束编辑流程。", reply_markup=_build_worker_main_keyboard())
+            await message.answer("Task not found. The editing process has ended.", reply_markup=_build_worker_main_keyboard())
             return
         await state.update_data(
             new_description=None,
             current_description=task.description or "",
         )
         await state.set_state(TaskDescriptionStates.waiting_content)
-        await message.answer("已回到描述输入阶段，请重新输入新的任务描述。", reply_markup=_build_task_desc_input_keyboard())
+        await message.answer(
+            "Returned to the description input stage. Please enter a new task description.",
+            reply_markup=_build_task_desc_input_keyboard(),
+        )
         await _prompt_task_description_input(
             message,
             current_description=task.description or "",
         )
         return
 
-    # 处理确认更新操作
-    if resolved == options[0] or stripped in {"确认", "确认更新"}:
+    # Process confirmed updates.
+    if resolved == options[0] or stripped in {"confirm", "confirmrenew"}:
         new_description = data.get("new_description")
         if new_description is None:
             await state.set_state(TaskDescriptionStates.waiting_content)
-            await message.answer("描述内容已失效，请重新输入。", reply_markup=_build_task_desc_input_keyboard())
+            await message.answer(
+                "The draft description has expired. Please enter it again:",
+                reply_markup=_build_task_desc_input_keyboard(),
+            )
             await _prompt_task_description_input(
                 message,
                 current_description=data.get("current_description", ""),
@@ -6628,27 +6617,30 @@ async def on_task_desc_confirm_stage_text(message: Message, state: FSMContext) -
             await message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
             return
         await state.clear()
-        await message.answer("任务描述已更新，正在刷新任务详情……", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task description updated. Refreshing task details…", reply_markup=_build_worker_main_keyboard())
         detail_text, markup = await _render_task_detail(updated.id)
         await _answer_with_markdown(
             message,
-            f"任务描述已更新：\n{detail_text}",
+            f"Task description updated:\n{detail_text}",
             reply_markup=markup,
         )
         return
 
-    # 无效输入，提示用户
+    # Invalid input, prompt user
     await message.answer(
-        "当前处于确认阶段，请选择确认、重新输入或取消，可直接输入编号或点击键盘按钮：",
+        "Currently in the confirmation stage. Choose Confirm, Re-enter, or Cancel by entering the number or pressing a keyboard button:",
         reply_markup=_build_task_desc_confirm_keyboard(),
     )
 
 
 @router.callback_query(F.data.startswith("task:desc_"))
 async def on_task_desc_legacy_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    """兼容旧版内联按钮，提示用户改用菜单按钮。"""
+    """Compatible with legacy inline buttons, prompting users to use menu buttons instead."""
 
-    await callback.answer("任务描述编辑的按钮已移动到菜单栏，请使用菜单操作。", show_alert=True)
+    await callback.answer(
+        "Task description editing is now available from the menu. Please use the menu options.",
+        show_alert=True,
+    )
     current_state = await state.get_state()
     data = await state.get_data()
     if callback.message is None:
@@ -6660,7 +6652,7 @@ async def on_task_desc_legacy_callback(callback: CallbackQuery, state: FSMContex
         )
         return
     if current_state == TaskDescriptionStates.waiting_confirm.state:
-        preview_segment = data.get("new_description") or "（新描述为空，将清空任务描述）"
+        preview_segment = data.get("new_description") or "(The new description is empty; the task description will be cleared.)"
         await _answer_with_markdown(
             callback.message,
             _build_task_desc_confirm_text(preview_segment),
@@ -6672,15 +6664,15 @@ async def on_task_desc_legacy_callback(callback: CallbackQuery, state: FSMContex
 async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     if task.status not in MODEL_PUSH_ELIGIBLE_STATUSES:
-        await callback.answer("当前状态暂不支持推送到模型", show_alert=True)
+        await callback.answer("The current status does not support pushing to the model yet.", show_alert=True)
         return
     actor = _actor_from_callback(callback)
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
@@ -6693,7 +6685,7 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
             actor=actor,
         )
         await state.set_state(TaskPushStates.waiting_supplement)
-        await callback.answer("请补充任务描述，或点击跳过/取消")
+        await callback.answer("Please add a task description, or choose Skip/Cancel.")
         if callback.message:
             await _prompt_model_supplement_input(callback.message)
         return
@@ -6708,20 +6700,20 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
         )
     except ValueError as exc:
         worker_log.error(
-            "推送模板缺失：%s",
+            "Missing push template: %s",
             exc,
             extra={"task_id": task_id, "status": task.status},
         )
-        await callback.answer("推送失败：缺少模板配置", show_alert=True)
+        await callback.answer("Push fail: Missing template configuration", show_alert=True)
         return
     if not success:
-        await callback.answer("推送失败：模型未就绪", show_alert=True)
+        await callback.answer("Push fail: model is not ready", show_alert=True)
         return
-    await callback.answer("已推送到模型")
+    await callback.answer("has been pushed to model")
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
     await _reply_to_chat(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        f"Pushed to model:\n{preview_block}",
         reply_to=callback.message,
         parse_mode=preview_parse_mode,
     )
@@ -6733,7 +6725,7 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
 async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     data = await state.get_data()
@@ -6743,7 +6735,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     actor = _actor_from_callback(callback)
     chat_id = data.get("chat_id") or (callback.message.chat.id if callback.message else callback.from_user.id)
@@ -6759,21 +6751,21 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
     except ValueError as exc:
         await state.clear()
         worker_log.error(
-            "推送模板缺失：%s",
+            "Missing push template: %s",
             exc,
             extra={"task_id": task_id, "status": task.status},
         )
-        await callback.answer("推送失败：缺少模板配置", show_alert=True)
+        await callback.answer("Push fail: Missing template configuration", show_alert=True)
         return
     await state.clear()
     if not success:
-        await callback.answer("推送失败：模型未就绪", show_alert=True)
+        await callback.answer("Push fail: model is not ready", show_alert=True)
         return
-    await callback.answer("已推送到模型")
+    await callback.answer("has been pushed to model")
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
     await _reply_to_chat(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        f"Pushed to model:\n{preview_block}",
         reply_to=origin_message,
         parse_mode=preview_parse_mode,
     )
@@ -6785,13 +6777,13 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
 async def on_task_push_model_fill(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     actor = _actor_from_callback(callback)
     await state.update_data(
@@ -6810,28 +6802,28 @@ async def on_task_push_model_fill(callback: CallbackQuery, state: FSMContext) ->
 async def on_task_push_model_supplement(message: Message, state: FSMContext) -> None:
     raw_text = message.text or ""
     trimmed = raw_text.strip()
-    options = [SKIP_TEXT, "取消"]
+    options = [SKIP_TEXT, "Cancel"]
     resolved = _resolve_reply_choice(raw_text, options=options)
-    if resolved == "取消" or trimmed == "取消":
+    if resolved == "Cancel" or trimmed == "Cancel":
         await state.clear()
-        await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Push to the model cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
-        await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("The push session has expired, please click the button again.", reply_markup=_build_worker_main_keyboard())
         return
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
-        await message.answer("任务不存在，已取消推送。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task not found. Push cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     supplement: Optional[str] = None
     if trimmed and resolved != SKIP_TEXT:
         if len(trimmed) > DESCRIPTION_MAX_LENGTH:
             await message.answer(
-                f"补充任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
+                f"Supplementary task description cannot exceed {DESCRIPTION_MAX_LENGTH} characters. Please re-enter:",
                 reply_markup=_build_description_keyboard(),
             )
             return
@@ -6850,20 +6842,20 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     except ValueError as exc:
         await state.clear()
         worker_log.error(
-            "推送模板缺失：%s",
+            "Missing push template: %s",
             exc,
             extra={"task_id": task_id, "status": task.status if task else None},
         )
-        await message.answer("推送失败：缺少模板配置。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Push failed: missing template configuration.", reply_markup=_build_worker_main_keyboard())
         return
     await state.clear()
     if not success:
-        await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Push failed: model is not ready. Please retry shortly.", reply_markup=_build_worker_main_keyboard())
         return
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
     await _reply_to_chat(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        f"Pushed to model:\n{preview_block}",
         reply_to=origin_message,
         parse_mode=preview_parse_mode,
         reply_markup=_build_worker_main_keyboard(),
@@ -6876,12 +6868,12 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
 async def on_task_history(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     message = callback.message
     if message is None:
-        await callback.answer("无法定位原消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     try:
         text, markup, page, total_pages = await _render_task_history(task_id, page=0)
@@ -6898,16 +6890,16 @@ async def on_task_history(callback: CallbackQuery) -> None:
         )
     except TelegramBadRequest as exc:
         worker_log.warning(
-            "任务事件历史发送失败：%s",
+            "TaskEvent history sending failed: %s",
             exc,
             extra={"task_id": task_id},
         )
-        await callback.answer("历史记录发送失败", show_alert=True)
+        await callback.answer("History send fail", show_alert=True)
         return
     _init_task_view_context(sent, history_state)
-    await callback.answer("已展示历史记录")
+    await callback.answer("Displayed history")
     worker_log.info(
-        "任务事件历史已通过代码块消息展示",
+        "TaskEvent history is displayed via code block messages",
         extra={
             "task_id": task_id,
             "page": str(page),
@@ -6920,17 +6912,17 @@ async def on_task_history(callback: CallbackQuery) -> None:
 async def on_task_history_page(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 4:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id, page_raw = parts
     try:
         requested_page = int(page_raw)
     except ValueError:
-        await callback.answer("页码无效", show_alert=True)
+        await callback.answer("Invalid page number", show_alert=True)
         return
     message = callback.message
     if message is None:
-        await callback.answer("无法定位原消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     try:
         text, markup, page, total_pages = await _render_task_history(task_id, requested_page)
@@ -6947,34 +6939,34 @@ async def on_task_history_page(callback: CallbackQuery) -> None:
         )
     except TelegramBadRequest as exc:
         worker_log.info(
-            "历史分页发送失败：%s",
+            "History page sending failure: %s",
             exc,
             extra={"task_id": task_id, "page": requested_page},
         )
-        await callback.answer("切换失败，请稍后重试", show_alert=True)
+        await callback.answer("Switch to fail, please try again later", show_alert=True)
         return
     chat = getattr(message, "chat", None)
     if chat is not None:
         _clear_task_view(chat.id, message.message_id)
     _init_task_view_context(sent, history_state)
-    await callback.answer(f"已展示第 {page}/{total_pages} 页")
+    await callback.answer(f"Shown {page}/{total_pages} Page")
 
 
 @router.callback_query(F.data.startswith(f"{TASK_HISTORY_BACK_CALLBACK}:"))
 async def on_task_history_back(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     message = callback.message
     if message is None:
-        await callback.answer("无法定位原消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     try:
         text, markup = await _render_task_detail(task_id)
     except ValueError:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     detail_state = TaskViewState(kind="detail", data={"task_id": task_id})
     chat = getattr(message, "chat", None)
@@ -6983,13 +6975,13 @@ async def on_task_history_back(callback: CallbackQuery) -> None:
     sent = await _answer_with_markdown(message, text, reply_markup=markup)
     if sent is not None:
         _init_task_view_context(sent, detail_state)
-        await callback.answer("已返回任务详情")
+        await callback.answer("Returned to task details")
         return
-    await callback.answer("返回失败，请稍后重试", show_alert=True)
+    await callback.answer("Returns fail, please try again later", show_alert=True)
 
 
 class TaskSummaryRequestError(Exception):
-    """生成摘要流程中的业务异常。"""
+    """Business exceptions in the summary generation process."""
 
 
 async def _request_task_summary(
@@ -6999,7 +6991,7 @@ async def _request_task_summary(
     chat_id: int,
     reply_to: Optional[Message],
 ) -> tuple[str, bool]:
-    """触发摘要请求，必要时自动调整任务状态。"""
+    """Request a summary from the model, updating the task status when required."""
 
     status_changed = False
     current_task = task
@@ -7011,7 +7003,7 @@ async def _request_task_summary(
                 status="test",
             )
         except ValueError as exc:
-            raise TaskSummaryRequestError(f"任务状态更新失败：{exc}") from exc
+            raise TaskSummaryRequestError(f"Failed to update task status: {exc}") from exc
         else:
             current_task = updated
             status_changed = True
@@ -7033,7 +7025,7 @@ async def _request_task_summary(
         ack_immediately=False,
     )
     if not success:
-        raise TaskSummaryRequestError("模型未就绪，摘要生成失败")
+        raise TaskSummaryRequestError("The model is not ready and summary generation fails.")
 
     actor_label = actor
     if session_path is not None:
@@ -7074,7 +7066,10 @@ async def on_task_note(message: Message, state: FSMContext) -> None:
         parts = body.split(" ", 1)
         task_id = parts[0].strip() if parts and parts[0].strip() else extra.get("id")
         if not task_id:
-            await _answer_with_markdown(message, "请提供任务 ID，例如：/task_note TASK_0001 内容")
+            await _answer_with_markdown(
+                message,
+                "Please provide a task ID (example: /task_note TASK_0001 content).",
+            )
             return
         normalized_task_id = _normalize_task_id(task_id)
         if not normalized_task_id:
@@ -7082,7 +7077,7 @@ async def on_task_note(message: Message, state: FSMContext) -> None:
             return
         content = parts[1].strip() if len(parts) > 1 else extra.get("content", "").strip()
         if not content:
-            await _answer_with_markdown(message, "备注内容不能为空")
+            await _answer_with_markdown(message, "The remark content cannot be empty.")
             return
         note_type_raw = extra.get("type", "").strip().lower()
         note_type = note_type_raw if note_type_raw in NOTE_TYPES else "misc"
@@ -7093,19 +7088,19 @@ async def on_task_note(message: Message, state: FSMContext) -> None:
             actor=_actor_from_message(message),
         )
         detail_text, markup = await _render_task_detail(normalized_task_id)
-        await _answer_with_markdown(message, f"备注已添加：\n{detail_text}", reply_markup=markup)
+        await _answer_with_markdown(message, f"Remark added:\n{detail_text}", reply_markup=markup)
         return
 
     await state.clear()
     await state.set_state(TaskNoteStates.waiting_task_id)
-    await message.answer("请输入任务 ID：")
+    await message.answer("Please enter the task ID:")
 
 
 @router.message(TaskNoteStates.waiting_task_id)
 async def on_note_task_id(message: Message, state: FSMContext) -> None:
     task_id_raw = (message.text or "").strip()
     if not task_id_raw:
-        await message.answer("任务 ID 不能为空，请重新输入：")
+        await message.answer("The task ID cannot be empty. Please try again:")
         return
     task_id = _normalize_task_id(task_id_raw)
     if not task_id:
@@ -7113,24 +7108,24 @@ async def on_note_task_id(message: Message, state: FSMContext) -> None:
         return
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        await message.answer("任务不存在，请重新输入有效的 ID：")
+        await message.answer("Task not found. Please enter a valid ID:")
         return
     await state.update_data(task_id=task_id)
     await state.set_state(TaskNoteStates.waiting_content)
-    await message.answer("请输入备注内容：")
+    await message.answer("Please enter the remark content:")
 
 
 @router.message(TaskNoteStates.waiting_content)
 async def on_note_content(message: Message, state: FSMContext) -> None:
     content = (message.text or "").strip()
     if not content:
-        await message.answer("备注内容不能为空，请重新输入：")
+        await message.answer("The remark content cannot be empty. Please try again:")
         return
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
-        await message.answer("数据缺失，备注添加失败，请重新执行 /task_note")
+        await message.answer("Missing context. Please run /task_note again.")
         return
     await TASK_SERVICE.add_note(
         task_id,
@@ -7140,7 +7135,7 @@ async def on_note_content(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
     detail_text, markup = await _render_task_detail(task_id)
-    await _answer_with_markdown(message, f"备注已添加：\n{detail_text}", reply_markup=markup)
+    await _answer_with_markdown(message, f"Remark added:\n{detail_text}", reply_markup=markup)
 
 
 @router.message(Command("task_update"))
@@ -7149,14 +7144,14 @@ async def on_task_update(message: Message) -> None:
     if not args:
         await _answer_with_markdown(
             message,
-            "用法：/task_update TASK_0001 status=test | priority=2 | description=调研内容",
+            "usage: /task_update TASK_0001 status=test | priority=2 | description=Research content",
         )
         return
     body, extra = parse_structured_text(args)
     parts = body.split(" ", 1)
     task_id = parts[0].strip() if parts and parts[0].strip() else extra.get("id")
     if not task_id:
-        await _answer_with_markdown(message, "请提供任务 ID")
+        await _answer_with_markdown(message, "Please provide a task ID.")
         return
     normalized_task_id = _normalize_task_id(task_id)
     if not normalized_task_id:
@@ -7171,14 +7166,14 @@ async def on_task_update(message: Message) -> None:
         try:
             priority = int(extra["priority"])
         except ValueError:
-            await _answer_with_markdown(message, "优先级需要为数字 1-5")
+            await _answer_with_markdown(message, "Priority must be a number between 1 and 5.")
             return
         priority = max(1, min(priority, 5))
     description = extra.get("description")
     if description is not None and len(description) > DESCRIPTION_MAX_LENGTH:
         await _answer_with_markdown(
             message,
-            f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字",
+            f"The task description cannot exceed {DESCRIPTION_MAX_LENGTH} characters.",
         )
         return
     task_type = None
@@ -7187,7 +7182,7 @@ async def on_task_update(message: Message) -> None:
         if task_type is None:
             await _answer_with_markdown(
                 message,
-                "任务类型无效，请填写 type=需求/缺陷/优化/风险",
+                "Invalid task type; use type=need/defect/optimization/risk.",
             )
             return
     updates = {
@@ -7198,7 +7193,7 @@ async def on_task_update(message: Message) -> None:
         "description": description,
     }
     if all(value is None for value in updates.values()):
-        await _answer_with_markdown(message, "请提供需要更新的字段，例如 status=test")
+        await _answer_with_markdown(message, "Please provide the field and value to update, e.g., status=test")
         return
     actor = _actor_from_message(message)
     try:
@@ -7215,14 +7210,14 @@ async def on_task_update(message: Message) -> None:
         await _answer_with_markdown(message, str(exc))
         return
     detail_text, markup = await _render_task_detail(updated.id)
-    await _answer_with_markdown(message, f"任务已更新：\n{detail_text}", reply_markup=markup)
+    await _answer_with_markdown(message, f"Task updated:\n{detail_text}", reply_markup=markup)
 
 
 @router.message(Command("task_delete"))
 async def on_task_delete(message: Message) -> None:
     args = _extract_command_args(message.text)
     if not args:
-        await _answer_with_markdown(message, "用法：/task_delete TASK_0001 [restore=yes]")
+        await _answer_with_markdown(message, "usage: /task_delete TASK_0001 [restore=yes]")
         return
     parts = args.split()
     task_id_raw = parts[0].strip()
@@ -7241,21 +7236,21 @@ async def on_task_delete(message: Message) -> None:
     except ValueError as exc:
         await _answer_with_markdown(message, str(exc))
         return
-    action = "已恢复" if restore else "已归档"
+    action = "Restored" if restore else "Archived"
     detail_text, markup = await _render_task_detail(updated.id)
-    await _answer_with_markdown(message, f"任务{action}：\n{detail_text}", reply_markup=markup)
+    await _answer_with_markdown(message, f"Task {action}:\n{detail_text}", reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("task:status:"))
 async def on_status_callback(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 4:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id, status_value = parts
     status = _normalize_status(status_value)
     if status is None:
-        await callback.answer("无效的状态", show_alert=True)
+        await callback.answer("Invalid state", show_alert=True)
         return
     try:
         updated = await TASK_SERVICE.update_task(
@@ -7269,33 +7264,33 @@ async def on_status_callback(callback: CallbackQuery) -> None:
     detail_text, markup = await _render_task_detail(updated.id)
     message = callback.message
     if message is None:
-        await callback.answer("无法定位原消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     detail_state = TaskViewState(kind="detail", data={"task_id": updated.id})
     if await _try_edit_message(message, detail_text, reply_markup=markup):
         _set_task_view_context(message, detail_state)
-        await callback.answer("状态已更新")
+        await callback.answer("Status updated")
         return
     sent = await _answer_with_markdown(message, detail_text, reply_markup=markup)
     if sent is not None:
         _init_task_view_context(sent, detail_state)
-        await callback.answer("状态已更新")
+        await callback.answer("Status updated")
         return
-    await callback.answer("状态更新但消息刷新失败", show_alert=True)
+    await callback.answer("Status updated but message refresh failed", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("task:summary:"))
 async def on_task_summary_request(callback: CallbackQuery) -> None:
-    """请求模型生成任务摘要。"""
+    """Request the model to generate a Task summary."""
 
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
     actor = _actor_from_callback(callback)
@@ -7309,11 +7304,11 @@ async def on_task_summary_request(callback: CallbackQuery) -> None:
     except TaskSummaryRequestError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
-    await callback.answer("已请求模型生成摘要")
+    await callback.answer("Model generation summary requested")
     if callback.message:
-        lines = ["已向模型发送摘要请求，请等待回复。"]
+        lines = ["Sent to modelSummary request, please await response."]
         if status_changed:
-            lines.append("任务状态已自动更新为“测试”。")
+            lines.append("Task status automatically adjusted to 'test'.")
         await callback.message.answer(
             "\n".join(lines),
             reply_markup=_build_worker_main_keyboard(),
@@ -7325,11 +7320,11 @@ async def on_task_summary_request(callback: CallbackQuery) -> None:
     | F.text.lower().startswith("/tasksummaryrequest")
 )
 async def on_task_summary_command(message: Message) -> None:
-    """命令式触发任务摘要生成。"""
+    """Imperative triggering of Task summary generation."""
 
     raw_text = (message.text or "").strip()
     if not raw_text:
-        await message.answer("请提供任务 ID，例如：/task_summary_request_TASK_0001")
+        await message.answer("Please provide a task ID, for example: /task_summary_request_TASK_0001")
         return
     token = raw_text.split()[0]
     command_part, _, _bot = token.partition("@")
@@ -7339,11 +7334,11 @@ async def on_task_summary_command(message: Message) -> None:
         None,
     )
     if prefix is None:
-        await message.answer("请提供任务 ID，例如：/task_summary_request_TASK_0001")
+        await message.answer("Please provide a task ID, for example: /task_summary_request_TASK_0001")
         return
     task_segment = command_part[len(prefix) :].strip()
     if not task_segment:
-        await message.answer("请提供任务 ID，例如：/task_summary_request_TASK_0001")
+        await message.answer("Please provide a task ID, for example: /task_summary_request_TASK_0001")
         return
     normalized_task_id = _normalize_task_id(task_segment)
     if not normalized_task_id:
@@ -7351,7 +7346,7 @@ async def on_task_summary_command(message: Message) -> None:
         return
     task = await TASK_SERVICE.get_task(normalized_task_id)
     if task is None:
-        await message.answer("任务不存在", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task does not exist", reply_markup=_build_worker_main_keyboard())
         return
     actor = _actor_from_message(message)
     chat_id = message.chat.id
@@ -7365,24 +7360,24 @@ async def on_task_summary_command(message: Message) -> None:
     except TaskSummaryRequestError as exc:
         await message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
         return
-    lines = ["已向模型发送摘要请求，请等待回复。"]
+    lines = ["Sent to modelSummary request, please await response."]
     if status_changed:
-        lines.append("任务状态已自动更新为“测试”。")
+        lines.append("Task status automatically adjusted to 'test'.")
     await message.answer("\n".join(lines), reply_markup=_build_worker_main_keyboard())
 
 
 @router.callback_query(F.data.startswith("task:bug_report:"))
 async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None:
-    """进入缺陷上报流程。"""
+    """Enter the defect reporting process."""
 
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     await state.clear()
     reporter = _actor_from_callback(callback)
@@ -7394,7 +7389,7 @@ async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None
         logs="",
     )
     await state.set_state(TaskBugReportStates.waiting_description)
-    await callback.answer("请描述缺陷")
+    await callback.answer("please describeefect")
     if callback.message:
         await callback.message.answer(
             _build_bug_report_intro(task),
@@ -7404,16 +7399,16 @@ async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.message(TaskBugReportStates.waiting_description)
 async def on_task_bug_description(message: Message, state: FSMContext) -> None:
-    """处理缺陷描述输入。"""
+    """Handle defectdescribe input."""
 
     if _is_cancel_message(message.text):
         await state.clear()
-        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Bug report cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     content = _collect_message_payload(message)
     if not content:
         await message.answer(
-            "缺陷描述不能为空，请重新输入：",
+            "defectdescribeCannot be empty, please Re-enter:",
             reply_markup=_build_description_keyboard(),
         )
         return
@@ -7427,16 +7422,16 @@ async def on_task_bug_description(message: Message, state: FSMContext) -> None:
 
 @router.message(TaskBugReportStates.waiting_reproduction)
 async def on_task_bug_reproduction(message: Message, state: FSMContext) -> None:
-    """处理复现步骤输入。"""
+    """Handle replication step input."""
 
     if _is_cancel_message(message.text):
         await state.clear()
-        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Bug report cancelled.", reply_markup=_build_worker_main_keyboard())
         return
-    options = [SKIP_TEXT, "取消"]
+    options = [SKIP_TEXT, "Cancel"]
     resolved = _resolve_reply_choice(message.text or "", options=options)
     reproduction = ""
-    if resolved not in {SKIP_TEXT, "取消"}:
+    if resolved not in {SKIP_TEXT, "Cancel"}:
         reproduction = _collect_message_payload(message)
     await state.update_data(reproduction=reproduction)
     await state.set_state(TaskBugReportStates.waiting_logs)
@@ -7445,27 +7440,27 @@ async def on_task_bug_reproduction(message: Message, state: FSMContext) -> None:
 
 @router.message(TaskBugReportStates.waiting_logs)
 async def on_task_bug_logs(message: Message, state: FSMContext) -> None:
-    """处理日志信息输入。"""
+    """Process log information input."""
 
     if _is_cancel_message(message.text):
         await state.clear()
-        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Bug report cancelled.", reply_markup=_build_worker_main_keyboard())
         return
-    options = [SKIP_TEXT, "取消"]
+    options = [SKIP_TEXT, "Cancel"]
     resolved = _resolve_reply_choice(message.text or "", options=options)
     logs = ""
-    if resolved not in {SKIP_TEXT, "取消"}:
+    if resolved not in {SKIP_TEXT, "Cancel"}:
         logs = _collect_message_payload(message)
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
-        await message.answer("任务信息缺失，流程已终止。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task information is missing; the process has been cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
-        await message.answer("任务不存在，已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task does not exist; the bug report has been cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     description = data.get("description", "")
     reproduction = data.get("reproduction", "")
@@ -7480,37 +7475,40 @@ async def on_task_bug_logs(message: Message, state: FSMContext) -> None:
     )
     await state.set_state(TaskBugReportStates.waiting_confirm)
     await message.answer(
-        f"请确认以下缺陷信息：\n{preview}",
+        f"Please confirm the following defect information:\n{preview}",
         reply_markup=_build_bug_confirm_keyboard(),
     )
 
 
 @router.message(TaskBugReportStates.waiting_confirm)
 async def on_task_bug_confirm(message: Message, state: FSMContext) -> None:
-    """确认并写入缺陷记录。"""
+    """Confirm the bug report and persist it."""
 
     if _is_cancel_message(message.text):
         await state.clear()
-        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Bug report cancelled.", reply_markup=_build_worker_main_keyboard())
         return
-    resolved = _resolve_reply_choice(message.text or "", options=["✅ 确认提交", "❌ 取消"])
-    if resolved == "❌ 取消":
+    resolved = _resolve_reply_choice(message.text or "", options=["Confirm submission", "Cancel"])
+    if resolved == "Cancel":
         await state.clear()
-        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Bug report cancelled.", reply_markup=_build_worker_main_keyboard())
         return
-    if resolved not in {"✅ 确认提交"}:
-        await message.answer("请回复“✅ 确认提交”或输入“取消”。", reply_markup=_build_bug_confirm_keyboard())
+    if resolved not in {"Confirm submission"}:
+        await message.answer(
+            "Please reply with \"Confirm submission\" or type \"Cancel\".",
+            reply_markup=_build_bug_confirm_keyboard(),
+        )
         return
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
-        await message.answer("任务信息缺失，流程已终止。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task information is missing; the process has been cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
-        await message.answer("任务不存在，已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task does not exist; the bug report has been cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     description = data.get("description", "")
     reproduction = data.get("reproduction", "")
@@ -7541,33 +7539,33 @@ async def on_task_bug_confirm(message: Message, state: FSMContext) -> None:
 async def on_add_note_callback(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     await state.clear()
     await state.update_data(task_id=task_id)
     await state.set_state(TaskNoteStates.waiting_content)
-    await callback.answer("请输入备注内容")
-    await callback.message.answer("请输入备注内容：")
+    await callback.answer("Please enter the remark content.")
+    await callback.message.answer("Please enter the remark content:")
 
 
 @router.callback_query(F.data.startswith("task:add_child:"))
 async def on_add_child_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await callback.answer("子任务功能已下线", show_alert=True)
+    await callback.answer("The sub-task feature has been retired.", show_alert=True)
     if callback.message:
         await callback.message.answer(
-            "子任务功能已下线，历史子任务已自动归档。请使用 /task_new 创建新的任务。",
+            "The sub-task feature has been retired and historical items archived automatically. Use /task_new to create a new task.",
             reply_markup=_build_worker_main_keyboard(),
         )
 
 
 @router.callback_query(F.data.startswith("task:list_children:"))
 async def on_list_children_callback(callback: CallbackQuery) -> None:
-    await callback.answer("子任务功能已下线", show_alert=True)
+    await callback.answer("The sub-task function has been offline", show_alert=True)
     if callback.message:
         await callback.message.answer(
-            "子任务功能已下线，历史子任务已自动归档。请使用 /task_new 创建新的任务。",
+            "The sub-task function has been offline, and historical sub-tasks have been automatically archived. Please use /task_new Create new Task.",
             reply_markup=_build_worker_main_keyboard(),
         )
 
@@ -7576,17 +7574,17 @@ async def on_list_children_callback(callback: CallbackQuery) -> None:
 async def on_task_detail_callback(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     message = callback.message
     if message is None:
-        await callback.answer("无法定位原消息", show_alert=True)
+        await callback.answer("Unable to locate the original message.", show_alert=True)
         return
     try:
         detail_text, markup = await _render_task_detail(task_id)
     except ValueError:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist.", show_alert=True)
         return
     await callback.answer()
     detail_state = TaskViewState(kind="detail", data={"task_id": task_id})
@@ -7597,9 +7595,9 @@ async def on_task_detail_callback(callback: CallbackQuery) -> None:
         if sent is not None:
             _init_task_view_context(sent, detail_state)
         else:
-            # 修复：消息发送失败时给用户反馈
+            # Fix: Give user feedback when sending a message fails
             await message.answer(
-                f"⚠️ 任务详情显示失败，可能包含特殊字符。\n任务ID: {task_id}\n请联系管理员检查任务内容。"
+                f"⚠️ Failed to display task details—there may be unsupported characters.\nTask ID: {task_id}\nPlease contact the administrator to inspect the task data."
             )
         return
     if await _try_edit_message(message, detail_text, reply_markup=markup):
@@ -7609,19 +7607,19 @@ async def on_task_detail_callback(callback: CallbackQuery) -> None:
     if sent is not None:
         _init_task_view_context(sent, detail_state)
     else:
-        # 修复：消息发送失败时给用户反馈
+        # Fix: Give user feedback when sending a message fails
         await message.answer(
-            f"⚠️ 任务详情显示失败，可能包含特殊字符。\n任务ID: {task_id}\n请联系管理员检查任务内容。"
+            f"⚠️ Failed to display task details—there may be unsupported characters.\nTask ID: {task_id}\nPlease contact the administrator to inspect the task data."
         )
 
 
 async def _fallback_task_detail_back(callback: CallbackQuery) -> None:
-    """当视图栈缺失时，回退到旧的 /task_list 触发方式。"""
+    """Fallback to the legacy /task_list trigger when the view stack is missing."""
 
     message = callback.message
     user = callback.from_user
     if message is None or user is None:
-        await callback.answer("无法定位会话", show_alert=True)
+        await callback.answer("Unable to locate the session.", show_alert=True)
         return
     await callback.answer()
     bot = current_bot()
@@ -7654,7 +7652,7 @@ async def _fallback_task_detail_back(callback: CallbackQuery) -> None:
 async def on_task_detail_back(callback: CallbackQuery) -> None:
     message = callback.message
     if message is None:
-        await callback.answer("无法定位会话", show_alert=True)
+        await callback.answer("Unable to locate session", show_alert=True)
         return
     popped = _pop_detail_view(message)
     if popped is None:
@@ -7670,23 +7668,23 @@ async def on_task_detail_back(callback: CallbackQuery) -> None:
         return
     try:
         text, markup = await _render_task_view_from_state(prev_state)
-    except Exception as exc:  # pragma: no cover - 极端情况下进入兜底
+    except Exception as exc:  # pragma: no cover - Going into hiding under extreme circumstances
         worker_log.warning(
-            "恢复任务视图失败：%s",
+            "Recovering task view failed: %s",
             exc,
             extra={"chat": message.chat.id, "message": message.message_id},
         )
         await _fallback_task_detail_back(callback)
         return
     if await _try_edit_message(message, text, reply_markup=markup):
-        await callback.answer("已返回任务列表")
+        await callback.answer("Returned to task list.")
         return
     _clear_task_view(chat.id, message.message_id)
     sent = await _answer_with_markdown(message, text, reply_markup=markup)
     if sent is not None:
         cloned_state = TaskViewState(kind=prev_state.kind, data=dict(prev_state.data))
         _init_task_view_context(sent, cloned_state)
-        await callback.answer("已返回任务列表")
+        await callback.answer("Returned to task list.")
         return
     await _fallback_task_detail_back(callback)
 
@@ -7695,12 +7693,12 @@ async def on_task_detail_back(callback: CallbackQuery) -> None:
 async def on_toggle_archive(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist.", show_alert=True)
         return
     updated = await TASK_SERVICE.update_task(
         task_id,
@@ -7710,102 +7708,102 @@ async def on_toggle_archive(callback: CallbackQuery) -> None:
     detail_text, markup = await _render_task_detail(updated.id)
     message = callback.message
     if message is None:
-        await callback.answer("无法定位原消息", show_alert=True)
+        await callback.answer("Unable to locate the original message.", show_alert=True)
         return
     detail_state = TaskViewState(kind="detail", data={"task_id": updated.id})
     if await _try_edit_message(message, detail_text, reply_markup=markup):
         _set_task_view_context(message, detail_state)
-        await callback.answer("已切换任务状态")
+        await callback.answer("Task status switched.")
         return
     sent = await _answer_with_markdown(message, detail_text, reply_markup=markup)
     if sent is not None:
         _init_task_view_context(sent, detail_state)
-        await callback.answer("已切换任务状态")
+        await callback.answer("Task status switched.")
         return
-    await callback.answer("状态已切换但消息刷新失败", show_alert=True)
+    await callback.answer("Status switched but refreshing the message failed.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("task:refresh:"))
 async def on_refresh_callback(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     message = callback.message
     if message is None:
-        await callback.answer("无法定位原消息", show_alert=True)
+        await callback.answer("Unable to locate original message", show_alert=True)
         return
     try:
         detail_text, markup = await _render_task_detail(task_id)
     except ValueError:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     detail_state = TaskViewState(kind="detail", data={"task_id": task_id})
     if await _try_edit_message(message, detail_text, reply_markup=markup):
         _set_task_view_context(message, detail_state)
-        await callback.answer("已刷新")
+        await callback.answer("Refreshed")
         return
     sent = await _answer_with_markdown(message, detail_text, reply_markup=markup)
     if sent is not None:
         _init_task_view_context(sent, detail_state)
-        await callback.answer("已刷新")
+        await callback.answer("Refreshed")
         return
-    await callback.answer("刷新失败", show_alert=True)
+    await callback.answer("refreshfail", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("task:edit:"))
 async def on_edit_callback(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("回调参数错误", show_alert=True)
+        await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
-        await callback.answer("任务不存在", show_alert=True)
+        await callback.answer("Task does not exist", show_alert=True)
         return
     await state.clear()
     await state.update_data(task_id=task_id, actor=_actor_from_message(callback.message))
     await state.set_state(TaskEditStates.waiting_field_choice)
-    await callback.answer("请选择需要编辑的字段")
-    await callback.message.answer("请选择需要修改的字段：", reply_markup=_build_edit_field_keyboard())
+    await callback.answer("Please select the Character segment to be edited")
+    await callback.message.answer("Please select the Character segment that needs to be modified:", reply_markup=_build_edit_field_keyboard())
 
 
 @router.message(TaskEditStates.waiting_field_choice)
 async def on_edit_field_choice(message: Message, state: FSMContext) -> None:
-    options = ["标题", "优先级", "类型", "描述", "状态", "取消"]
+    options = ["title", "priority", "type", "describe", "state", "Cancel"]
     resolved = _resolve_reply_choice(message.text, options=options)
     choice = resolved or (message.text or "").strip()
     mapping = {
-        "标题": "title",
-        "优先级": "priority",
-        "类型": "task_type",
-        "描述": "description",
+        "title": "title",
+        "priority": "priority",
+        "type": "task_type",
+        "describe": "description",
     }
-    if choice == "取消":
+    if choice == "Cancel":
         await state.clear()
-        await message.answer("已取消编辑", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Edited by Cancel", reply_markup=_build_worker_main_keyboard())
         return
     field = mapping.get(choice)
-    if choice == "状态":
+    if choice == "state":
         await state.clear()
-        await message.answer("请使用任务详情中的状态按钮进行切换。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Please use the state button in the useTask details to switch.", reply_markup=_build_worker_main_keyboard())
         return
     if field is None:
-        await message.answer("暂不支持该字段，请重新选择：", reply_markup=_build_edit_field_keyboard())
+        await message.answer("This Character segment is not supported yet, please select again:", reply_markup=_build_edit_field_keyboard())
         return
     if field == "description":
         data = await state.get_data()
         task_id = data.get("task_id")
         if not task_id:
             await state.clear()
-            await message.answer("任务信息缺失，已取消编辑。", reply_markup=_build_worker_main_keyboard())
+            await message.answer("Task information missing. Update cancelled.", reply_markup=_build_worker_main_keyboard())
             return
         task = await TASK_SERVICE.get_task(task_id)
         if task is None:
             await state.clear()
-            await message.answer("任务不存在，已取消编辑。", reply_markup=_build_worker_main_keyboard())
+            await message.answer("Task not found. Update cancelled.", reply_markup=_build_worker_main_keyboard())
             return
         actor = data.get("actor") or _actor_from_message(message)
         await _begin_task_desc_edit_flow(
@@ -7818,14 +7816,14 @@ async def on_edit_field_choice(message: Message, state: FSMContext) -> None:
     await state.update_data(field=field)
     await state.set_state(TaskEditStates.waiting_new_value)
     if field == "priority":
-        await message.answer("请输入新的优先级（1-5）：", reply_markup=_build_priority_keyboard())
+        await message.answer("Please enter a new priority (1-5):", reply_markup=_build_priority_keyboard())
     elif field == "task_type":
         await message.answer(
-            "请选择新的任务类型（需求 / 缺陷 / 优化 / 风险）：",
+            "Please select a new task type (need / defect / optimization / risk):",
             reply_markup=_build_task_type_keyboard(),
         )
     else:
-        await message.answer("请输入新的值：", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Please enter the new value:", reply_markup=_build_worker_main_keyboard())
 
 
 @router.message(TaskEditStates.waiting_new_value)
@@ -7835,22 +7833,22 @@ async def on_edit_new_value(message: Message, state: FSMContext) -> None:
     field = data.get("field")
     if not task_id or not field:
         await state.clear()
-        await message.answer("数据缺失，已取消编辑。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Input data missing. Update cancelled.", reply_markup=_build_worker_main_keyboard())
         return
     raw_text = message.text or ""
     text = raw_text.strip()
     resolved_task_type: Optional[str] = None
     if field == "task_type":
         task_type_options = [_format_task_type(task_type) for task_type in TASK_TYPES]
-        task_type_options.append("取消")
+        task_type_options.append("Cancel")
         resolved_task_type = _resolve_reply_choice(raw_text, options=task_type_options)
-        if resolved_task_type == "取消":
+        if resolved_task_type == "Cancel":
             await state.clear()
-            await message.answer("已取消编辑", reply_markup=_build_worker_main_keyboard())
+            await message.answer("Edit cancelled.", reply_markup=_build_worker_main_keyboard())
             return
-    elif text == "取消":
+    elif text == "Cancel":
         await state.clear()
-        await message.answer("已取消编辑", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Edit cancelled.", reply_markup=_build_worker_main_keyboard())
         return
 
     update_kwargs: dict[str, Any] = {}
@@ -7859,20 +7857,26 @@ async def on_edit_new_value(message: Message, state: FSMContext) -> None:
         priority_options.append(SKIP_TEXT)
         resolved_priority = _resolve_reply_choice(raw_text, options=priority_options)
         if resolved_priority == SKIP_TEXT:
-            await message.answer("优先级请输入 1-5 的数字：", reply_markup=_build_priority_keyboard())
+            await message.answer(
+                "Priority must be a number from 1 to 5. Please try again:",
+                reply_markup=_build_priority_keyboard(),
+            )
             return
         candidate = resolved_priority or text
         try:
             value = int(candidate)
         except ValueError:
-            await message.answer("优先级请输入 1-5 的数字：", reply_markup=_build_priority_keyboard())
+            await message.answer(
+                "Priority must be a number from 1 to 5. Please try again:",
+                reply_markup=_build_priority_keyboard(),
+            )
             return
         value = max(1, min(value, 5))
         update_kwargs["priority"] = value
     elif field == "description":
         if len(text) > DESCRIPTION_MAX_LENGTH:
             await message.answer(
-                f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
+                f"The task description cannot exceed {DESCRIPTION_MAX_LENGTH} characters. Please try again:",
                 reply_markup=_build_worker_main_keyboard(),
             )
             return
@@ -7882,14 +7886,17 @@ async def on_edit_new_value(message: Message, state: FSMContext) -> None:
         task_type = _normalize_task_type(candidate)
         if task_type is None:
             await message.answer(
-                "任务类型无效，请重新输入需求/缺陷/优化/风险：",
+                "Invalid task type. Enter need/defect/optimization/risk or use the keyboard:",
                 reply_markup=_build_task_type_keyboard(),
             )
             return
         update_kwargs["task_type"] = task_type
     else:
         if not text:
-            await message.answer("标题不能为空，请重新输入：", reply_markup=_build_worker_main_keyboard())
+            await message.answer(
+                "The title cannot be empty. Please enter a non-empty value:",
+                reply_markup=_build_worker_main_keyboard(),
+            )
             return
         update_kwargs["title"] = text
     await state.clear()
@@ -7906,14 +7913,14 @@ async def on_edit_new_value(message: Message, state: FSMContext) -> None:
         await message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
         return
     detail_text, markup = await _render_task_detail(updated.id)
-    await _answer_with_markdown(message, f"任务已更新：\n{detail_text}", reply_markup=markup)
+    await _answer_with_markdown(message, f"Task updated:\n{detail_text}", reply_markup=markup)
 
 
 @router.message(
     F.photo | F.document | F.video | F.audio | F.voice | F.animation | F.video_note
 )
 async def on_media_message(message: Message) -> None:
-    """处理带附件的普通消息，将附件下载并拼接提示词。"""
+    """Process ordinary messages with attachments, download the attachments and splice prompt words."""
 
     _auto_record_chat_id(message.chat.id)
     text_part = (message.caption or message.text or "").strip()
@@ -7925,7 +7932,7 @@ async def on_media_message(message: Message) -> None:
     attachment_dir = _attachment_dir_for_message(message)
     attachments = await _collect_saved_attachments(message, attachment_dir)
     if not attachments and not text_part:
-        await message.answer("未检测到可处理的附件或文字内容。")
+        await message.answer("No processable attachment or text Charactercontent was detected.")
         return
     prompt = _build_prompt_with_attachments(text_part, attachments)
     await _handle_prompt_dispatch(message, prompt)
@@ -7933,30 +7940,30 @@ async def on_media_message(message: Message) -> None:
 
 @router.message(CommandStart())
 async def on_start(m: Message):
-    # 首次收到消息时自动记录 chat_id 到 state 文件
+    # Automatically record chat when first received message_id to state document
     _auto_record_chat_id(m.chat.id)
 
     await m.answer(
         (
             f"Hello, {m.from_user.full_name}！\n"
-            "直接发送问题就能与模型对话，\n"
-            "或使用任务功能来组织需求与执行记录。\n\n"
-            "主菜单已准备好，祝你使用愉快！"
+            "Just send a question to talk to the model,\n"
+            "Or useTask function to organize need and execution records. \n\n"
+            "The main menu is ready, I wish you a happy use!"
         ),
         reply_markup=_build_worker_main_keyboard(),
     )
-    worker_log.info("收到 /start，chat_id=%s", m.chat.id, extra=_session_extra())
+    worker_log.info("Received /start, chat_id=%s", m.chat.id, extra=_session_extra())
     if ENV_ISSUES:
         await m.answer(_format_env_issue_message())
 
 @router.message(F.text)
 async def on_text(m: Message):
-    # 首次收到消息时自动记录 chat_id 到 state 文件
+    # Automatically record chat when first received message_id to state document
     _auto_record_chat_id(m.chat.id)
 
     prompt = (m.text or "").strip()
     if not prompt:
-        return await m.answer("请输入非空提示词")
+        return await m.answer("Please enter a non-empty prompt word")
     task_id_candidate = _normalize_task_id(prompt)
     if task_id_candidate:
         await _reply_task_detail_message(m, task_id_candidate)
@@ -7967,7 +7974,7 @@ async def on_text(m: Message):
 
 
 async def ensure_telegram_connectivity(bot: Bot, timeout: float = 30.0):
-    """启动前校验 Telegram 连通性，便于快速定位代理/网络问题"""
+    """Verify Telegram connectivity before starting to facilitate quick location of agents/network problems"""
     try:
         if hasattr(asyncio, "timeout"):
             async with asyncio.timeout(timeout):
@@ -7975,14 +7982,14 @@ async def ensure_telegram_connectivity(bot: Bot, timeout: float = 30.0):
         else:
             me = await asyncio.wait_for(bot.get_me(), timeout=timeout)
     except asyncio.TimeoutError as exc:
-        raise RuntimeError(f"在 {timeout} 秒内未能与 Telegram 成功握手") from exc
+        raise RuntimeError(f"exist {timeout} SecondFailed to successfully shake hands with Telegram") from exc
     except TelegramNetworkError as exc:
-        raise RuntimeError("Telegram 网络请求失败，请检查代理或网络策略") from exc
+        raise RuntimeError("Telegram Network request failed, please check the proxy or network policy") from exc
     except ClientError as exc:
-        raise RuntimeError("无法连接到代理或 Telegram，请检查代理配置") from exc
+        raise RuntimeError("Unable to connect to proxy or Telegram, please check proxy configuration") from exc
     else:
         worker_log.info(
-            "Telegram 连接正常，Bot=%s (id=%s)",
+            "Telegram The connection is OK, Bot=%s (id=%s)",
             me.username,
             me.id,
             extra=_session_extra(),
@@ -8006,51 +8013,51 @@ async def _ensure_bot_commands(bot: Bot) -> None:
                 await bot.set_my_commands(commands, scope=scope)
         except TelegramBadRequest as exc:
             worker_log.warning(
-                "设置 Bot 命令失败：%s",
+                "Set Bot command fail: %s",
                 exc,
                 extra={**_session_extra(), "scope": label},
             )
         else:
             worker_log.info(
-                "Bot 命令已同步",
+                "Bot Commands synchronized",
                 extra={**_session_extra(), "scope": label},
             )
 
 
 async def _ensure_worker_menu_button(bot: Bot) -> None:
-    """确保 worker 侧聊天菜单按钮文本为任务列表入口。"""
+    """Ensure the worker-side chat menu button text points to the task list."""
     try:
         await bot.set_chat_menu_button(
             menu_button=MenuButtonCommands(text=WORKER_MENU_BUTTON_TEXT),
         )
     except TelegramBadRequest as exc:
         worker_log.warning(
-            "设置聊天菜单失败：%s",
+            "Setting chat menu fail: %s",
             exc,
             extra=_session_extra(),
         )
     else:
         worker_log.info(
-            "聊天菜单已同步",
+            "Chat menu synced",
             extra={**_session_extra(), "text": WORKER_MENU_BUTTON_TEXT},
         )
 
 async def main():
     global _bot, CHAT_LONG_POLL_LOCK
-    # 初始化长轮询锁
+    # Initialize long polling lock
     CHAT_LONG_POLL_LOCK = asyncio.Lock()
     _bot = build_bot()
     try:
         await ensure_telegram_connectivity(_bot)
     except Exception as exc:
-        worker_log.error("Telegram 连通性检查失败：%s", exc, extra=_session_extra())
+        worker_log.error("Telegram Connectivity check failed: %s", exc, extra=_session_extra())
         if _bot:
             await _bot.session.close()
         raise SystemExit(1)
     try:
         await TASK_SERVICE.initialize()
     except Exception as exc:
-        worker_log.error("任务数据库初始化失败：%s", exc, extra=_session_extra())
+        worker_log.error("TaskDatabase initialization fail: %s", exc, extra=_session_extra())
         if _bot:
             await _bot.session.close()
         raise SystemExit(1)

@@ -1,13 +1,16 @@
 import os
+import sys
 from pathlib import Path
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
 
-from bot import TelegramSavedAttachment, _build_prompt_with_attachments
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from bot import ATTACHMENT_USAGE_HINT, TelegramSavedAttachment, _build_prompt_with_attachments
 
 
 def _make_attachment(relative: str) -> TelegramSavedAttachment:
-    """构造测试附件，方便复用。"""
+    """Construct a reusable attachment fixture for tests."""
 
     return TelegramSavedAttachment(
         kind="photo",
@@ -25,8 +28,8 @@ def test_prompt_includes_relative_directory_prefix():
     )
 
     first_line = prompt.splitlines()[0]
-    assert "附件列表" in first_line
-    assert "文件位于项目工作目录（./data/telegram/project/date/），可直接读取" in first_line
+    assert first_line == "Attachment list (files located under project workspace ./data/telegram/project/date/):"
+    assert ATTACHMENT_USAGE_HINT in prompt
 
 
 def test_prompt_handles_absolute_path_directory_prefix():
@@ -36,7 +39,7 @@ def test_prompt_handles_absolute_path_directory_prefix():
     )
 
     first_line = prompt.splitlines()[0]
-    assert "文件位于项目工作目录（/var/tmp/attachments/），可直接读取" in first_line
+    assert first_line == "Attachment list (files located under project workspace /var/tmp/attachments/):"
 
 
 def test_prompt_falls_back_when_directory_unknown():
@@ -46,5 +49,5 @@ def test_prompt_falls_back_when_directory_unknown():
     )
 
     first_line = prompt.splitlines()[0]
-    assert "文件位于项目工作目录，可直接读取" in first_line
-    assert "文件位于项目工作目录（）" not in first_line
+    assert first_line == "Attachment list (files reside within the project workspace):"
+    assert ATTACHMENT_USAGE_HINT in prompt

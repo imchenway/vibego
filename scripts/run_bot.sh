@@ -34,11 +34,11 @@ PROJECT_DEFAULT="${PROJECT_NAME:-}"
 
 usage() {
   cat <<USAGE
-用法：${0##*/} [--model 名称] [--project 名称] [--foreground] [--no-stop]
-  --model        启动指定模型 (codex|claudecode|gemini)，默认: $MODEL_DEFAULT
-  --project      指定项目别名，用于日志/会话区分
-  --foreground   在前台运行（调试用），默认后台
-  --no-stop      启动前不执行 stop_bot.sh（默认会先停旧实例）
+usage:${0##*/} [--model name] [--project name] [--foreground] [--no-stop]
+  --model        Start the specified model (codex|claudecode|gemini), default: $MODEL_DEFAULT
+  --project      Specify project alias for logging/Conversation distinction
+  --foreground   Run in foreground(for debugging), defaultBackstage
+  --no-stop      Not executed before startup stop_bot.sh(defaultOld instances will be stopped first)
 USAGE
 }
 
@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage; exit 0 ;;
     *)
-      echo "未知参数: $1" >&2
+      echo "unknown parameters: $1" >&2
       usage
       exit 1 ;;
   esac
@@ -68,14 +68,14 @@ done
 
 MODEL_SCRIPT="$MODELS_DIR/$MODEL.sh"
 if [[ ! -f "$MODEL_SCRIPT" ]]; then
-  echo "[run-bot] 不支持的模型: $MODEL" >&2
+  echo "[run-bot] Unsupported model: $MODEL" >&2
   exit 1
 fi
 
-# 加载公共函数 + 模型配置
+# Load public functions + Model configuration
 # shellcheck disable=SC1090
 source "$MODELS_DIR/common.sh"
-# 允许模型脚本重用环境变量
+# Allow model scripts to reuse environment variables
 MODEL_WORKDIR="${MODEL_WORKDIR:-}" 
 # shellcheck disable=SC1090
 source "$MODEL_SCRIPT"
@@ -104,24 +104,24 @@ expand_model_workdir() {
 MODEL_WORKDIR="$(expand_model_workdir "$MODEL_WORKDIR")"
 
 if [[ -z "$MODEL_WORKDIR" ]]; then
-  echo "[run-bot] 配置缺少 MODEL_WORKDIR，请检查 config/projects.json" >&2
+  echo "[run-bot] Configuration is missing MODEL_WORKDIR, Please check config/projects.json" >&2
   exit 1
 fi
 
 if [[ ! -d "$MODEL_WORKDIR" ]]; then
-  echo "[run-bot] 工作目录不存在: $MODEL_WORKDIR" >&2
+  echo "[run-bot] Working directory does not exist: $MODEL_WORKDIR" >&2
   exit 1
 fi
 
 if ! command -v tmux >/dev/null 2>&1; then
-  echo "[run-bot] 未检测到 tmux，可通过 'brew install tmux' 安装" >&2
+  echo "[run-bot] tmux not detected, pass 'brew install tmux' Install" >&2
   exit 1
 fi
 
 if [[ -n "$MODEL_CMD" ]]; then
   IFS=' ' read -r MODEL_CMD_BIN _ <<<"$MODEL_CMD"
   if [[ -n "$MODEL_CMD_BIN" ]] && ! command -v "$MODEL_CMD_BIN" >/dev/null 2>&1; then
-    echo "[run-bot] 未检测到模型命令: $MODEL_CMD_BIN" >&2
+    echo "[run-bot] Model command not detected: $MODEL_CMD_BIN" >&2
     exit 1
   fi
 fi
@@ -133,7 +133,7 @@ if (( FOREGROUND == 0 )); then
   CMD=("$0" --model "$MODEL" --project "$PROJECT_NAME" --foreground)
   (( NO_STOP )) && CMD+=(--no-stop)
   nohup "${CMD[@]}" >>"$RUN_LOG" 2>&1 &
-  echo "[run-bot] 后台启动 (model=$MODEL project=$PROJECT_NAME) 日志: $RUN_LOG"
+  echo "[run-bot] Start in background (model=$MODEL project=$PROJECT_NAME) log: $RUN_LOG"
   exit 0
 fi
 
@@ -150,7 +150,7 @@ fi
 source "$VENV_DIR/bin/activate"
 REQUIREMENTS_PATH="${VIBEGO_REQUIREMENTS_PATH:-$SOURCE_ROOT/scripts/requirements.txt}"
 if [[ ! -f "$REQUIREMENTS_PATH" ]]; then
-  echo "[run-bot] 未找到依赖清单: $REQUIREMENTS_PATH" >&2
+  echo "[run-bot] Dependency list not found: $REQUIREMENTS_PATH" >&2
   exit 1
 fi
 if [[ ! -f "$VENV_DIR/.requirements.installed" ]] || [[ "$REQUIREMENTS_PATH" -nt "$VENV_DIR/.requirements.installed" ]]; then

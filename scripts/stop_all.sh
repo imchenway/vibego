@@ -17,10 +17,10 @@ VERBOSE=0
 
 usage() {
   cat <<USAGE
-用法：${0##*/} [--dry-run] [--verbose]
-  --dry-run    仅打印将要执行的操作，不真正终止进程
-  --verbose    输出更详细的诊断信息
-  -h, --help   显示本帮助
+usage:${0##*/} [--dry-run] [--verbose]
+  --dry-run    Only prints what will be done, does not actually terminate the process
+  --verbose output more detailed diagnostic information
+  -h, --help   Show this help
 USAGE
 }
 
@@ -53,7 +53,7 @@ parse_args() {
       -h|--help)
         usage; exit 0 ;;
       *)
-        log_error "未知参数: $1"
+        log_error "unknown parameters: $1"
         usage
         exit 1 ;;
     esac
@@ -70,10 +70,10 @@ terminate_pattern() {
   local pids
   pids=$(list_pids "$pattern")
   if [[ -z "$pids" ]]; then
-    (( VERBOSE )) && log_info "未发现 $desc 进程"
+    (( VERBOSE )) && log_info "not found $desc process"
     return 0
   fi
-  log_info "停止 $desc: $pids"
+  log_info "stop $desc: $pids"
   if (( DRY_RUN )); then
     return 0
   fi
@@ -82,31 +82,31 @@ terminate_pattern() {
   local leftover
   leftover=$(list_pids "$pattern")
   if [[ -n "$leftover" ]]; then
-    log_warn "$desc 未完全退出，执行 kill -9 $leftover"
+    log_warn "$desc Incomplete exit, execute kill -9 $leftover"
     kill -9 $leftover >/dev/null 2>&1 || true
   fi
 }
 
 stop_workers() {
   if [[ ! -x "$STOP_BOT_SCRIPT" ]]; then
-    log_warn "未找到 stop_bot.sh，跳过 worker 清理"
+    log_warn "stop not found_bot.sh, Skip worker cleanup"
     return 0
   fi
   if (( DRY_RUN )); then
-    log_info "[dry-run] 调用 stop_bot.sh 清理所有 worker"
+    log_info "[dry-run] call stop_bot.sh Clean all workers"
     return 0
   fi
   if "$STOP_BOT_SCRIPT" >/dev/null 2>&1; then
-    log_info "worker 已停止"
+    log_info "worker alreadystop"
   else
-    log_warn "stop_bot.sh 返回非零状态，请检查日志"
+    log_warn "stop_bot.sh Returns non-zero status, please check the logs"
   fi
   return 0
 }
 
 stop_tmux_sessions() {
   if ! command -v tmux >/dev/null 2>&1; then
-    (( VERBOSE )) && log_info "未检测到 tmux，跳过会话清理"
+    (( VERBOSE )) && log_info "tmux not detected, session cleanup skipped"
     return 0
   fi
   local prefix="$DEFAULT_TMUX_PREFIX"
@@ -120,12 +120,12 @@ stop_tmux_sessions() {
   local tmux_output sessions
   tmux_output=$(tmux -u list-sessions 2>/dev/null || true)
   if [[ -z "$tmux_output" ]]; then
-    (( VERBOSE )) && log_info "未发现匹配 tmux 会话"
+    (( VERBOSE )) && log_info "not foundmatch tmux session"
     return 0
   fi
   sessions=$(printf '%s\n' "$tmux_output" | awk -F: -v prefix="$full_prefix" '$1 ~ "^" prefix {print $1}')
   if [[ -z "$sessions" ]]; then
-    (( VERBOSE )) && log_info "未发现匹配 tmux 会话"
+    (( VERBOSE )) && log_info "not foundmatch tmux session"
     return 0
   fi
   while IFS= read -r sess; do
@@ -134,7 +134,7 @@ stop_tmux_sessions() {
       log_info "[dry-run] tmux -u kill-session -t $sess"
     else
       tmux -u kill-session -t "$sess" >/dev/null 2>&1 || true
-      log_info "已终止 tmux 会话: $sess"
+      log_info "tmux session terminated: $sess"
     fi
   done <<<"$sessions"
   return 0
@@ -150,26 +150,26 @@ cleanup_state_files() {
         rm -f "$file"
       fi
       removed=1
-      log_info "已清理状态文件: $file"
+      log_info "Cleaned status file: $file"
     fi
   done
   if (( ! removed )) && (( VERBOSE )); then
-    log_info "无状态文件需要清理"
+    log_info "Stateless files need to be cleaned"
   fi
 }
 
 main() {
   parse_args "$@"
-  (( DRY_RUN )) && log_info "当前为 dry-run 模式，不会真正结束进程"
+  (( DRY_RUN )) && log_info "Dry-run mode: no processes will be terminated"
 
   stop_workers
   stop_tmux_sessions
   terminate_pattern "[Pp]ython.*master.py" "master"
   terminate_pattern "$ROOT_DIR/start.sh" "start.sh"
-  terminate_pattern "$ROOT_DIR/bot.py" "残留 worker"
+  terminate_pattern "$ROOT_DIR/bot.py" "residual worker"
   cleanup_state_files
 
-  log_info "所有相关进程与状态已处理完成"
+  log_info "All related processes and state cleaned up"
 }
 
 main "$@"

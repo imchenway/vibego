@@ -10,7 +10,7 @@ import master
 
 @pytest.fixture(autouse=True)
 def restore_manager():
-    """每个用例后还原全局 MANAGER，避免互相影响。"""
+    """Restore the global MANAGER after each use case to avoid affecting each other."""
 
     original = master.MANAGER
     yield
@@ -18,7 +18,7 @@ def restore_manager():
 
 
 class DummyBot:
-    """简化版 Bot，用于记录发送的消息。"""
+    """A simplified version of the Bot used to record sent messages."""
 
     def __init__(self) -> None:
         self.messages = []
@@ -28,7 +28,7 @@ class DummyBot:
 
 
 class DummyMessage:
-    """模拟 aiogram Message，仅保留测试所需接口。"""
+    """Simulate aiogram Message, retaining only the interfaces required for testing."""
 
     def __init__(self, chat_id: int) -> None:
         self.chat = SimpleNamespace(id=chat_id)
@@ -42,7 +42,7 @@ class DummyMessage:
 
 @pytest.fixture
 def update_state_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """为每个用例隔离 update_state.json 位置。"""
+    """Isolate update_state.json for each test case."""
 
     state_path = tmp_path / "update_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ def update_state_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.mark.asyncio
 async def test_ensure_update_state_without_latest(monkeypatch: pytest.MonkeyPatch, update_state_path: Path):
-    """无可用版本时仅记录 last_check。"""
+    """Record the last check when no latest version is available."""
 
     async def fake_fetch():
         return None
@@ -61,14 +61,14 @@ async def test_ensure_update_state_without_latest(monkeypatch: pytest.MonkeyPatc
     state = await master._ensure_update_state(force=True)
     assert "last_check" in state
     assert "latest_version" not in state
-    # 确保状态已写入文件
+    # Make sure the status is written to the file
     written = json.loads(update_state_path.read_text(encoding="utf-8"))
     assert "last_check" in written
 
 
 @pytest.mark.asyncio
 async def test_ensure_update_state_with_new_version(monkeypatch: pytest.MonkeyPatch, update_state_path: Path):
-    """检测到新版本时重置已通知列表。"""
+    """Reset the notified list when a new version is detected."""
 
     update_state_path.write_text(
         json.dumps({"latest_version": "0.2.58", "notified_chat_ids": [1, 2]}, ensure_ascii=False),
@@ -86,7 +86,7 @@ async def test_ensure_update_state_with_new_version(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_maybe_notify_update_single_chat(monkeypatch: pytest.MonkeyPatch, update_state_path: Path):
-    """同一 chat 仅提醒一次。"""
+    """Ensure a chat is notified only once."""
 
     state = {
         "latest_version": "9.9.9",
@@ -111,7 +111,7 @@ async def test_maybe_notify_update_single_chat(monkeypatch: pytest.MonkeyPatch, 
 
 @pytest.mark.asyncio
 async def test_maybe_notify_update_multiple_chats(monkeypatch: pytest.MonkeyPatch, update_state_path: Path):
-    """不同 chat 均会收到同一版本的提醒。"""
+    """Ensure multiple chats are notified for the same version."""
 
     state = {
         "latest_version": "8.0.0",
@@ -132,7 +132,7 @@ async def test_maybe_notify_update_multiple_chats(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_maybe_notify_update_skips_old_version(update_state_path: Path):
-    """当前版本不落后时不提醒。"""
+    """Skip notifications when the current version is up to date."""
 
     state = {
         "latest_version": master.__version__,
@@ -147,7 +147,7 @@ async def test_maybe_notify_update_skips_old_version(update_state_path: Path):
 
 @pytest.mark.asyncio
 async def test_notify_update_to_targets(monkeypatch: pytest.MonkeyPatch, update_state_path: Path):
-    """批量通知会遍历所有目标。"""
+    """Bulk notifications traverse all targets."""
 
     state = {
         "latest_version": "7.0.0",
@@ -166,7 +166,7 @@ async def test_notify_update_to_targets(monkeypatch: pytest.MonkeyPatch, update_
 
 
 def test_trigger_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch):
-    """成功触发升级命令时返回 True。"""
+    """Returns True when the upgrade command is successfully triggered."""
 
     recorded = {}
 
@@ -183,7 +183,7 @@ def test_trigger_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_trigger_upgrade_pipeline_failure(monkeypatch: pytest.MonkeyPatch):
-    """Popen 抛错时返回 False 并包含错误信息。"""
+    """Popen If an error occurs, it returns False and contains error information."""
 
     def raising(*_args, **_kwargs):
         raise OSError("boom")
@@ -196,21 +196,21 @@ def test_trigger_upgrade_pipeline_failure(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_cmd_upgrade_authorized(monkeypatch: pytest.MonkeyPatch):
-    """授权用户执行 /upgrade 时发送提示并触发命令。"""
+    """Authorized user to execute /upgrade Send prompts and trigger commands when needed."""
 
     message = DummyMessage(chat_id=999)
     monkeypatch.setattr(master, "_trigger_upgrade_pipeline", lambda: (True, None))
     master.MANAGER = SimpleNamespace(is_authorized=lambda _: True)
     await master.cmd_upgrade(message)
-    assert message.replies, "应至少回复一条消息"
+    assert message.replies, "Should reply to at least one message"
     assert "pipx upgrade vibego" in message.replies[0][0]
 
 
 @pytest.mark.asyncio
 async def test_cmd_upgrade_unauthorized(monkeypatch: pytest.MonkeyPatch):
-    """未授权用户无法执行 /upgrade。"""
+    """Unauthorized users cannot execute /upgrade."""
 
     message = DummyMessage(chat_id=321)
     master.MANAGER = SimpleNamespace(is_authorized=lambda _: False)
     await master.cmd_upgrade(message)
-    assert message.replies[0][0] == "未授权。"
+    assert message.replies[0][0] == "Not authorized."

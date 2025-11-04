@@ -75,7 +75,7 @@ def _make_task(
     depth: int = 0,
     task_type: str | None = None,
 ) -> TaskRecord:
-    """构造测试用任务记录。"""
+    """Construct task records for testing."""
 
     return TaskRecord(
         id=task_id,
@@ -104,11 +104,11 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
         (
             _make_task(
                 task_id="TASK_0001",
-                title="调研任务",
+                title="Research tasks",
                 status="research",
                 task_type="requirement",
             ),
-            "- 📌 调研任务",
+            "- [req] Research tasks",
         ),
         (
             _make_task(
@@ -122,12 +122,12 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
         (
             _make_task(
                 task_id="TASK_0003",
-                title="子任务",
+                title="subtask",
                 status="research",
                 depth=1,
                 task_type=None,
             ),
-            "  - ⚪ 子任务",
+            "  - ⚪ subtask",
         ),
     ],
 )
@@ -141,30 +141,30 @@ def test_task_service_description(tmp_path: Path):
         svc = TaskService(tmp_path / "tasks.db", "demo")
         await svc.initialize()
         task = await svc.create_root_task(
-            title="测试任务",
+            title="Test tasks",
             status="research",
             priority=3,
             task_type="task",
             tags=(),
             due_date=None,
-            description="初始描述",
+            description="initial description",
             actor="tester",
         )
-        assert task.description == "初始描述"
+        assert task.description == "initial description"
         assert task.task_type == "task"
 
         updated = await svc.update_task(
             task.id,
             actor="tester",
-            description="新的描述",
+            description="new description",
             task_type="defect",
         )
-        assert updated.description == "新的描述"
+        assert updated.description == "new description"
         assert updated.task_type == "defect"
 
         fetched = await svc.get_task(task.id)
         assert fetched is not None
-        assert fetched.description == "新的描述"
+        assert fetched.description == "new description"
         assert fetched.task_type == "defect"
 
     asyncio.run(_scenario())
@@ -179,16 +179,16 @@ def test_format_local_time_conversion():
     "raw, expected",
     [
         ("requirement", "requirement"),
-        ("需求", "requirement"),
+        ("need", "requirement"),
         ("Req", "requirement"),
         ("feature", "requirement"),
         ("defect", "defect"),
         ("bug", "defect"),
-        ("缺陷", "defect"),
+        ("defect", "defect"),
         ("task", "task"),
-        ("任务", "task"),
+        ("Task", "task"),
         ("risk", "risk"),
-        ("风险", "risk"),
+        ("risk", "risk"),
         ("", None),
         (None, None),
     ],
@@ -198,49 +198,49 @@ def test_normalize_task_type_variants(raw, expected):
 
 
 def test_format_task_detail_without_history():
-    task = _make_task(task_id="TASK_0100", title="测试任务", status="research", task_type="requirement")
+    task = _make_task(task_id="TASK_0100", title="Test tasks", status="research", task_type="requirement")
     notes = (
         TaskNoteRecord(
             id=1,
             task_id=task.id,
             note_type="research",
-            content="第一条备注",
+            content="First note",
             created_at="2025-01-01T00:00:00+08:00",
         ),
     )
 
     result = bot._format_task_detail(task, notes=notes)
     lines = result.splitlines()
-    assert lines[0] == "📝 标题：" + bot._escape_markdown_text("测试任务")
-    assert lines[1] == "🏷️ 任务编码：/TASK\\_0100"
-    assert lines[2].startswith("⚙️ 状态：")
-    assert lines[3].startswith("🚦 优先级：")
-    assert lines[4] == f"📂 类型：{bot._format_task_type('requirement')}"
-    assert any(line.startswith("🖊️ 描述：") for line in lines)
-    assert any(line.startswith("📅 创建时间：") for line in lines)
-    assert any(line.startswith("🔁 更新时间：") for line in lines)
-    assert "💬 备注记录：" not in result
-    assert "变更历史" not in result
-    assert "第一条备注" not in result
-    assert f"📂 类型：{bot._format_task_type('requirement')}" in result
+    assert lines[0] == "📝 title:" + bot._escape_markdown_text("Test tasks")
+    assert lines[1] == "🏷️ Task Code: /TASK\\_0100"
+    assert lines[2].startswith("⚙️ state:")
+    assert lines[3].startswith("🚦 Priority:")
+    assert lines[4] == f"📂 type:{bot._format_task_type('requirement')}"
+    assert any(line.startswith("🖊️ describe:") for line in lines)
+    assert any(line.startswith("📅 Creation time:") for line in lines)
+    assert any(line.startswith("🔁 Update time:") for line in lines)
+    assert "💬 Note record:" not in result
+    assert "Change history" not in result
+    assert "First note" not in result
+    assert f"📂 type:{bot._format_task_type('requirement')}" in result
 
 
 def test_format_task_detail_misc_note_without_label():
-    task = _make_task(task_id="TASK_0110", title="无标签任务", status="research")
+    task = _make_task(task_id="TASK_0110", title="Unlabeled Task", status="research")
     notes = (
         TaskNoteRecord(
             id=1,
             task_id=task.id,
             note_type="misc",
-            content="无需标签的备注内容",
+            content="Note content without tags",
             created_at="2025-02-02T12:00:00+08:00",
         ),
     )
     result = bot._format_task_detail(task, notes=notes)
     lines = result.splitlines()
     note_lines = [line for line in lines if line.startswith("- ")]
-    assert not note_lines, "移除备注后不应再展示备注行"
-    assert "备注" not in result
+    assert not note_lines, "The comment line should no longer be displayed after the comment is removed"
+    assert "Remark" not in result
 
 
 def test_task_note_flow_defaults_to_misc(monkeypatch, tmp_path: Path):
@@ -252,7 +252,7 @@ def test_task_note_flow_defaults_to_misc(monkeypatch, tmp_path: Path):
     async def scenario() -> None:
         await service.initialize()
         task = await service.create_root_task(
-            title="测试任务",
+            title="Test tasks",
             status="research",
             priority=3,
             task_type="requirement",
@@ -266,21 +266,21 @@ def test_task_note_flow_defaults_to_misc(monkeypatch, tmp_path: Path):
         await bot.on_note_task_id(message, state)
         current_state = await state.get_state()
         assert current_state == bot.TaskNoteStates.waiting_content.state
-        assert message.calls, "应提示输入备注内容"
-        assert message.calls[-1][0] == "请输入备注内容："
+        assert message.calls, "You should be prompted to enter the Remark content"
+        assert message.calls[-1][0] == "Please enter the Remark content:"
 
         content_message = DummyMessage()
         content_message.chat = message.chat
         content_message.from_user = message.from_user
-        content_message.text = "这是新的备注内容"
+        content_message.text = "This is new Remark content"
 
         await bot.on_note_content(content_message, state)
         assert await state.get_state() is None
 
         notes = await service.list_notes(task.id)
-        assert notes, "备注应已写入"
-        assert notes[-1].note_type == "misc", "默认类型应为 misc"
-        assert any("备注已添加" in call[0] for call in content_message.calls), "应输出成功提示"
+        assert notes, "Remarkshould have been written"
+        assert notes[-1].note_type == "misc", "Default type should be misc"
+        assert any("RemarkAdded" in call[0] for call in content_message.calls), "A success message should be output"
 
     asyncio.run(scenario())
 
@@ -290,7 +290,7 @@ def test_task_history_callback(monkeypatch):
     message.chat = SimpleNamespace(id=123)
     callback = DummyCallback("task:history:TASK_0200", message)
 
-    task = _make_task(task_id="TASK_0200", title="历史任务", status="test")
+    task = _make_task(task_id="TASK_0200", title="History Task", status="test")
 
     async def fake_get_task(task_id: str):
         assert task_id == task.id
@@ -301,8 +301,8 @@ def test_task_history_callback(monkeypatch):
             id=1,
             task_id=task.id,
             field="title",
-            old_value="旧标题",
-            new_value="历史任务",
+            old_value="old title",
+            new_value="History Task",
             actor="tester",
             event_type="field_change",
             payload=None,
@@ -337,22 +337,22 @@ def test_task_history_callback(monkeypatch):
 
     asyncio.run(bot.on_task_history(callback))
 
-    assert not message.edits, "历史消息不应再编辑原消息"
-    assert message.calls, "历史消息应通过新消息展示"
+    assert not message.edits, "Historical messages should no longer be edited."
+    assert message.calls, "Historical messages should be displayed via new messages"
     sent_text, parse_mode_value, reply_markup, _kwargs = message.calls[-1]
     assert parse_mode_value is not None
     assert sent_text.startswith("```\n")
-    assert "任务 TASK_0200 事件历史" in sent_text
-    assert "标题：历史任务" in sent_text
-    title_line_variants = ["- **更新标题** · 01-01 00:00", "- *更新标题* · 01-01 00:00"]
+    assert "Task TASK_0200 event history" in sent_text
+    assert "title:History Task" in sent_text
+    title_line_variants = ["- **Update title** - 01-01 00:00", "- *Update title* - 01-01 00:00"]
     assert any(fragment in sent_text for fragment in title_line_variants)
-    assert "  - 标题：旧标题 -> 历史任务" in sent_text
-    status_line_variants = ["- **更新状态** · 01-02 00:00", "- *更新状态* · 01-02 00:00"]
+    assert "  - title:old title -> History Task" in sent_text
+    status_line_variants = ["- **update status** - 01-02 00:00", "- *update status* - 01-02 00:00"]
     assert any(fragment in sent_text for fragment in status_line_variants)
-    assert "  - 状态：🔍 调研中 -> 🧪 测试中" in sent_text
+    assert "  - state:🔍 Under investigation -> 🧪 Under test" in sent_text
     assert reply_markup is not None
     assert reply_markup.inline_keyboard[-1][0].callback_data == f"{bot.TASK_HISTORY_BACK_CALLBACK}:{task.id}"
-    assert callback.answers and callback.answers[-1][0] == "已展示历史记录"
+    assert callback.answers and callback.answers[-1][0] == "Displayed history"
 
     latest_sent = message.sent_messages[-1]
     bot._clear_task_view(latest_sent.chat.id, latest_sent.message_id)
@@ -368,13 +368,13 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
     task = TaskRecord(
         id="TASK_0001",
         project_slug="demo",
-        title="调研任务",
+        title="Research tasks",
         status="research",
         priority=3,
         task_type="requirement",
         tags=(),
         due_date=None,
-        description="需要调研的事项",
+        description="Things that need to be investigated",
         parent_id=None,
         root_id="TASK_0001",
         depth=0,
@@ -425,7 +425,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
         assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
-        assert callback.answers and callback.answers[0][0] == "请补充任务描述，或点击跳过/取消"
+        assert callback.answers and callback.answers[0][0] == "Please add a task description, or choose Skip/Cancel."
         assert not recorded
         assert message.calls
         prompt_text, _, prompt_markup, _ = message.calls[0]
@@ -442,17 +442,17 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert reply_to is message
         lines = payload.splitlines()
         assert lines[0] == bot.VIBE_PHASE_PROMPT
-        assert "任务标题：调研任务" in payload
-        assert "任务编码：/TASK_0001" in payload
+        assert "Task Title: Research tasks" in payload
+        assert "Task Code: /TASK_0001" in payload
         assert "\\_" not in payload
-        assert "任务描述：需要调研的事项" in payload
-        assert "任务备注：-" in payload
-        assert "补充任务描述：-" in payload
-        assert payload.endswith("以下为任务执行记录，用于辅助回溯任务处理记录： -")
+        assert "Task Description: Things that need to be investigated" in payload
+        assert "Task Notes: -" in payload
+        assert "Supplementary Description: -" in payload
+        assert payload.endswith("Task execution history for traceability: -")
         assert await state.get_state() is None
         final_text, _, final_markup, _ = message.calls[-1]
         expected_block, _ = bot._wrap_text_in_code_block(payload)
-        assert final_text == f"已推送到模型：\n{expected_block}"
+        assert final_text == f"Pushed to model:\n{expected_block}"
         assert isinstance(final_markup, ReplyKeyboardMarkup)
         final_buttons = [button.text for row in final_markup.keyboard for button in row]
         assert bot.WORKER_MENU_BUTTON_TEXT in final_buttons
@@ -476,7 +476,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
     task = TaskRecord(
         id="TASK_0002",
         project_slug="demo",
-        title="测试任务",
+        title="Test tasks",
         status="test",
         priority=2,
         task_type="task",
@@ -532,14 +532,14 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
         assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
-        assert callback.answers and callback.answers[0][0] == "请补充任务描述，或点击跳过/取消"
+        assert callback.answers and callback.answers[0][0] == "Please add a task description, or choose Skip/Cancel."
         assert message.calls
         prompt_text, _, prompt_markup, _ = message.calls[0]
         assert prompt_text == bot._build_push_supplement_prompt()
         assert prompt_markup is not None
 
         input_message = DummyMessage()
-        input_message.text = "补充说明内容"
+        input_message.text = "Supplementary explanation content"
         await bot.on_task_push_model_supplement(input_message, state)
 
         assert recorded
@@ -548,21 +548,21 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         assert reply_to is message
         lines = payload.splitlines()
         assert lines[0] == bot.VIBE_PHASE_PROMPT
-        assert "任务标题：测试任务" in payload
-        assert "任务备注：-" in payload
-        assert "补充任务描述：补充说明内容" in payload
-        assert "以下为任务执行记录，用于辅助回溯任务处理记录： -" in payload
-        assert "测试阶段补充说明：" not in payload
+        assert "Task Title: Test tasks" in payload
+        assert "Task Notes: -" in payload
+        assert "Supplementary Description: Supplementary explanation content" in payload
+        assert "Task execution history for traceability: -" in payload
+        assert "Additional notes on the testing phase:" not in payload
         assert await state.get_state() is None
         final_text, _, final_markup, _ = message.calls[-1]
         expected_block, _ = bot._wrap_text_in_code_block(payload)
-        assert final_text == f"已推送到模型：\n{expected_block}"
+        assert final_text == f"Pushed to model:\n{expected_block}"
         assert isinstance(final_markup, ReplyKeyboardMarkup)
         final_buttons = [button.text for row in final_markup.keyboard for button in row]
         assert bot.WORKER_MENU_BUTTON_TEXT in final_buttons
         assert bot.WORKER_CREATE_TASK_BUTTON_TEXT in final_buttons
         assert ack_calls and ack_calls[0][2] is message
-        assert message.calls and "已推送到模型" in message.calls[-1][0]
+        assert message.calls and "Pushed to model" in message.calls[-1][0]
         assert logged_events
         payload = logged_events[0][1].get("payload") or {}
         assert payload.get("result") == "success"
@@ -581,7 +581,7 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
     task = TaskRecord(
         id="TASK_0004",
         project_slug="demo",
-        title="完成任务",
+        title="Complete the task",
         status="done",
         priority=1,
         task_type="task",
@@ -633,15 +633,15 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
-        assert recorded, "完成阶段应发送 /compact"
+        assert recorded, "Completion stage should be sent /compact"
         _, payload, reply_to = recorded[0]
         assert reply_to is message
         assert payload == "/compact"
-        assert callback.answers and callback.answers[0][0] == "已推送到模型"
+        assert callback.answers and callback.answers[0][0] == "Pushed to model"
         assert message.calls
         preview_text, preview_mode, _, _ = message.calls[0]
         expected_block, expected_mode = bot._wrap_text_in_code_block("/compact")
-        assert preview_text == f"已推送到模型：\n{expected_block}"
+        assert preview_text == f"Pushed to model:\n{expected_block}"
         assert preview_mode == expected_mode
         assert ack_calls and ack_calls[0][2] is message
         assert await state.get_state() is None
@@ -657,8 +657,8 @@ def test_history_context_respects_limits(monkeypatch):
             id=index + 1,
             task_id="TASK_1000",
             field="title",
-            old_value=f"旧值{index}",
-            new_value=f"新值{index}",
+            old_value=f"old value{index}",
+            new_value=f"new value{index}",
             actor="tester",
             event_type="field_change",
             payload=None,
@@ -678,8 +678,8 @@ def test_history_context_respects_limits(monkeypatch):
     context, count = asyncio.run(scenario())
     assert count == bot.MODEL_HISTORY_MAX_ITEMS
     assert len(context) <= bot.MODEL_HISTORY_MAX_CHARS
-    assert "旧值0" not in context
-    assert "新值59" in context
+    assert "old value0" not in context
+    assert "new value59" in context
 
 
 def test_push_model_missing_task(monkeypatch):
@@ -694,27 +694,27 @@ def test_push_model_missing_task(monkeypatch):
 
     asyncio.run(bot.on_task_push_model(callback, state))
 
-    assert callback.answers and callback.answers[0][0] == "任务不存在"
+    assert callback.answers and callback.answers[0][0] == "Taskdoes not exist"
     assert not message.calls
 
 
 def test_build_bug_report_intro_plain_task_id():
-    task = _make_task(task_id="TASK_0055", title="编辑描述任务", status="test")
+    task = _make_task(task_id="TASK_0055", title="Edit describeTask", status="test")
     intro = bot._build_bug_report_intro(task)
     assert "/TASK_0055" in intro
     assert "\\_" not in intro
 
 
 def test_build_bug_preview_plain_task_id():
-    task = _make_task(task_id="TASK_0055", title="编辑描述任务", status="test")
+    task = _make_task(task_id="TASK_0055", title="Edit describeTask", status="test")
     preview = bot._build_bug_preview_text(
         task=task,
-        description="缺陷描述",
-        reproduction="步骤",
-        logs="日志",
+        description="defectdescribe",
+        reproduction="step",
+        logs="log",
         reporter="Tester#007",
     )
-    assert "任务编码：/TASK_0055" in preview
+    assert "Task Code: /TASK_0055" in preview
     assert "\\_" not in preview
 
 
@@ -722,12 +722,12 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=321)
     message.from_user = SimpleNamespace(id=321, full_name="Tester")
-    message.text = "✅ 确认提交"
+    message.text = "Confirm submission"
     state, _storage = make_state(message)
 
     task = _make_task(
         task_id="TASK_AUTO",
-        title="自动推送任务",
+        title="Automatically push tasks",
         status="research",
         task_type="requirement",
     )
@@ -776,7 +776,7 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
 
     async def fake_render_detail(task_id: str):
         assert task_id == task.id
-        return "任务详情：- \n- 示例", ReplyKeyboardMarkup(keyboard=[])
+        return "TaskDetails:- \n- Example", ReplyKeyboardMarkup(keyboard=[])
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
     monkeypatch.setattr(bot.TASK_SERVICE, "add_note", fake_add_note)
@@ -789,9 +789,9 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
         await state.set_state(bot.TaskBugReportStates.waiting_confirm)
         await state.update_data(
             task_id=task.id,
-            description="缺陷描述",
-            reproduction="步骤",
-            logs="日志",
+            description="defectdescribe",
+            reproduction="step",
+            logs="log",
             reporter="Tester#001",
         )
         await bot.on_task_bug_confirm(message, state)
@@ -810,9 +810,9 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
 
     payload = logged_events[0]["payload"]
     assert payload["action"] == "bug_report"
-    assert payload["description"] == "缺陷描述"
-    assert payload["reproduction"] == "步骤"
-    assert payload["logs"] == "日志"
+    assert payload["description"] == "defectdescribe"
+    assert payload["reproduction"] == "step"
+    assert payload["logs"] == "log"
     assert payload["reporter"] == "Tester#001"
     assert payload["has_reproduction"] is True
     assert payload["has_logs"] is True
@@ -820,7 +820,7 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
     assert len(message.calls) == 1
     push_text, push_mode, push_markup, push_kwargs = message.calls[0]
     expected_block, expected_mode = bot._wrap_text_in_code_block("AUTO_PROMPT")
-    assert push_text == f"已推送到模型：\n{expected_block}"
+    assert push_text == f"Pushed to model:\n{expected_block}"
     assert push_mode == expected_mode
     assert isinstance(push_markup, ReplyKeyboardMarkup)
     assert push_kwargs.get("disable_notification") is False
@@ -830,12 +830,12 @@ def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp
     message = DummyMessage()
     message.chat = SimpleNamespace(id=654)
     message.from_user = SimpleNamespace(id=654, full_name="Tester")
-    message.text = "✅ 确认提交"
+    message.text = "Confirm submission"
     state, _storage = make_state(message)
 
     task = _make_task(
         task_id="TASK_SKIP",
-        title="不支持任务",
+        title="Task is not supported",
         status="unknown",
         task_type="requirement",
     )
@@ -857,7 +857,7 @@ def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp
         )
 
     async def fake_render_detail(task_id: str):
-        return "详情：-", ReplyKeyboardMarkup(keyboard=[])
+        return "Details:-", ReplyKeyboardMarkup(keyboard=[])
 
     push_called = False
 
@@ -883,7 +883,7 @@ def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp
         await state.set_state(bot.TaskBugReportStates.waiting_confirm)
         await state.update_data(
             task_id=task.id,
-            description="描述",
+            description="describe",
             reproduction="",
             logs="",
             reporter="Tester",
@@ -899,7 +899,7 @@ def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp
     assert logged_payloads and logged_payloads[0]["action"] == "bug_report"
     assert len(message.calls) == 1
     warning_text, _, warning_markup, _ = message.calls[0]
-    assert "当前状态暂不支持自动推送到模型" in warning_text
+    assert "The current state does not support automatic push to the model." in warning_text
     assert isinstance(warning_markup, ReplyKeyboardMarkup)
 
 
@@ -920,12 +920,12 @@ def test_handle_model_response_ignores_non_summary(monkeypatch, tmp_path: Path):
             session_key=str(session_path),
             session_path=session_path,
             event_offset=1,
-            content="普通回复 /TASK_0001",
+            content="Normal reply /TASK_0001",
         )
 
     asyncio.run(scenario())
     bot.PENDING_SUMMARIES.clear()
-    assert not calls, "普通模型回复不应写入历史"
+    assert not calls, "Normal model replies should not be written to history"
 
 
 def test_handle_model_response_keeps_summary_history(monkeypatch, tmp_path: Path):
@@ -963,16 +963,16 @@ def test_handle_model_response_keeps_summary_history(monkeypatch, tmp_path: Path
             session_key=session_key,
             session_path=session_path,
             event_offset=42,
-            content=f"SUMMARY_REQUEST_ID::{request_id}\n摘要内容",
+            content=f"SUMMARY_REQUEST_ID::{request_id}\nSummary content",
         )
 
     asyncio.run(scenario())
     assert bot.PENDING_SUMMARIES.get(session_key) is None
-    assert logged, "摘要应写入历史"
+    assert logged, "Summary should be written into history"
     payload = logged[0]
     assert payload["event_type"] == "model_summary"
     assert payload["task_id"] == "TASK_0001"
-    assert not logged_replies, "摘要流程不应触发 model_reply 落库"
+    assert not logged_replies, "The summary process should not trigger model_reply Dropped into the library"
     bot.PENDING_SUMMARIES.clear()
 
 
@@ -997,7 +997,7 @@ def test_handle_model_response_accepts_escaped_summary_tag(monkeypatch, tmp_path
         session_key=session_key,
         session_path=session_path,
         created_at=time.monotonic(),
-        buffer="前置 SUMMARY\\_REQUEST\\_ID::other",
+        buffer="Prefix SUMMARY\\_REQUEST\\_ID::other",
     )
 
     async def scenario() -> None:
@@ -1006,17 +1006,17 @@ def test_handle_model_response_accepts_escaped_summary_tag(monkeypatch, tmp_path
             session_key=session_key,
             session_path=session_path,
             event_offset=77,
-            content=f"SUMMARY\\_REQUEST\\_ID::{request_id}\n摘要内容含\\_下划线",
+            content=f"SUMMARY\\_REQUEST\\_ID::{request_id}\nSummary contentContains\\_Underline",
         )
 
     asyncio.run(scenario())
     assert bot.PENDING_SUMMARIES.get(session_key) is None
-    assert logged, "摘要应写入历史"
+    assert logged, "Summary should be written into history"
     payload = logged[0]
     assert payload["event_type"] == "model_summary"
     stored_payload = payload["payload"] or {}
     assert "SUMMARY_REQUEST_ID" in stored_payload.get("content", "")
-    assert "\\_" not in stored_payload.get("content", ""), "摘要内容应去除转义"
+    assert "\\_" not in stored_payload.get("content", ""), "Summary contentshould be stripped of escaping"
     bot.PENDING_SUMMARIES.clear()
 
 
@@ -1029,10 +1029,10 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     base_task = TaskRecord(
         id="TASK_0200",
         project_slug="demo",
-        title="摘要任务",
+        title="SummaryTask",
         status="research",
         priority=2,
-        description="说明",
+        description="illustrate",
         parent_id=None,
         root_id="TASK_0200",
         depth=0,
@@ -1042,10 +1042,10 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     updated_task = TaskRecord(
         id="TASK_0200",
         project_slug="demo",
-        title="摘要任务",
+        title="SummaryTask",
         status="test",
         priority=2,
-        description="说明",
+        description="illustrate",
         parent_id=None,
         root_id="TASK_0200",
         depth=0,
@@ -1070,7 +1070,7 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
         return []
 
     async def fake_history(task_id: str):
-        return ("历史记录：\n- 项目条目", 1)
+        return ("History:\n- Project Entries", 1)
 
     session_path = tmp_path / "summary_session.jsonl"
     session_path.write_text("", encoding="utf-8")
@@ -1097,16 +1097,16 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
 
     asyncio.run(scenario())
 
-    assert updates, "应更新任务状态为测试"
-    assert dispatch_calls, "应向模型推送摘要请求"
+    assert updates, "Task status should be updated to test"
+    assert dispatch_calls, "A summary request should be pushed to the model"
     prompt_text = dispatch_calls[0][1]
     assert prompt_text.startswith(
-        "进入摘要阶段...\n任务编码：/TASK_0200\nSUMMARY_REQUEST_ID::"
+        "Enter summary stage...\nTask Code: /TASK_0200\nSUMMARY_REQUEST_ID::"
     )
-    assert message.calls, "应向用户提示处理结果"
+    assert message.calls, "The user should be prompted with the processing results"
     reply_text, _, _, _ = message.calls[-1]
-    assert "任务状态已自动更新为“测试”" in reply_text
-    assert bot.PENDING_SUMMARIES, "应记录待落库的摘要上下文"
+    assert "TaskStatus has been automatically updated to \"Testing\"" in reply_text
+    assert bot.PENDING_SUMMARIES, "The summary context to be Dropped into the library should be recorded"
     args, kwargs = log_calls[0]
     payload = kwargs["payload"]
     assert payload.get("status_auto_updated") is True
@@ -1122,10 +1122,10 @@ def test_task_summary_command_skips_status_when_already_test(monkeypatch, tmp_pa
     task = TaskRecord(
         id="TASK_0300",
         project_slug="demo",
-        title="已有测试任务",
+        title="Already have Test tasks",
         status="test",
         priority=2,
-        description="说明",
+        description="illustrate",
         parent_id=None,
         root_id="TASK_0300",
         depth=0,
@@ -1140,7 +1140,7 @@ def test_task_summary_command_skips_status_when_already_test(monkeypatch, tmp_pa
         return task
 
     async def fake_update_task(*args, **kwargs):
-        raise AssertionError("不应在状态已为 test 时调用 update_task")
+        raise AssertionError("update should not be called when the status is already test_task")
 
     async def fake_list_notes(task_id: str):
         return []
@@ -1168,7 +1168,7 @@ def test_task_summary_command_skips_status_when_already_test(monkeypatch, tmp_pa
 
     asyncio.run(scenario())
     reply_text, _, _, _ = message.calls[-1]
-    assert "任务状态已自动更新为“测试”" not in reply_text
+    assert "TaskStatus has been automatically updated to \"Testing\"" not in reply_text
     bot.PENDING_SUMMARIES.clear()
 
 
@@ -1188,7 +1188,7 @@ def test_task_summary_command_handles_missing_task(monkeypatch):
 
     asyncio.run(scenario())
     reply_text, _, _, _ = message.calls[-1]
-    assert reply_text == "任务不存在"
+    assert reply_text == "Taskdoes not exist"
 
 
 def test_task_summary_command_accepts_alias_without_underscores(monkeypatch):
@@ -1211,7 +1211,7 @@ def test_task_summary_command_accepts_alias_without_underscores(monkeypatch):
     asyncio.run(scenario())
     assert captured.get("task_id") == "TASK_0500"
     reply_text, _, _, _ = message.calls[-1]
-    assert reply_text == "任务不存在"
+    assert reply_text == "Taskdoes not exist"
 
 
 def test_task_summary_command_alias_requires_task_id():
@@ -1225,7 +1225,7 @@ def test_task_summary_command_alias_requires_task_id():
 
     asyncio.run(scenario())
     reply_text, _, _, _ = message.calls[-1]
-    assert reply_text == "请提供任务 ID，例如：/task_summary_request_TASK_0001"
+    assert reply_text == "Please provide a task ID, for example: /task_summary_request_TASK_0001"
 
 
 def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
@@ -1286,7 +1286,7 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
         except Exception:  # pragma: no cover - best effort cleanup
             pass
 
-    # 清理全局状态，避免影响其他用例
+    # Clean up global state to avoid affecting other use cases
     bot.CHAT_SESSION_MAP.clear()
     bot.SESSION_OFFSETS.clear()
     bot.CHAT_LAST_MESSAGE.clear()
@@ -1303,42 +1303,42 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
     [
         (
             "research",
-            "描述A",
+            "describeA",
             (
-                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
-                ("contains", "任务描述：描述A"),
-                ("contains", "任务备注：-"),
-                ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
+                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\nTask Title: CaseTask"),
+                ("contains", "Task Description: describeA"),
+                ("contains", "Task Notes: -"),
+                ("endswith", "Task execution history for traceability: -"),
             ),
         ),
         (
             "research",
             None,
             (
-                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
-                ("contains", "任务描述：-"),
-                ("contains", "任务备注：-"),
-                ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
+                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\nTask Title: CaseTask"),
+                ("contains", "Task Description: -"),
+                ("contains", "Task Notes: -"),
+                ("endswith", "Task execution history for traceability: -"),
             ),
         ),
         (
             "test",
-            "测试说明",
+            "testillustrate",
             (
-                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
-                ("contains", "任务描述：测试说明"),
-                ("contains", "任务备注：-"),
-                ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
+                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\nTask Title: CaseTask"),
+                ("contains", "Task Description: testillustrate"),
+                ("contains", "Task Notes: -"),
+                ("endswith", "Task execution history for traceability: -"),
             ),
         ),
         (
             "test",
             " ",
             (
-                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
-                ("contains", "任务描述：-"),
-                ("contains", "任务备注：-"),
-                ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
+                ("startswith", f"{bot.VIBE_PHASE_PROMPT}\nTask Title: CaseTask"),
+                ("contains", "Task Description: -"),
+                ("contains", "Task Notes: -"),
+                ("endswith", "Task execution history for traceability: -"),
             ),
         ),
         (
@@ -1348,7 +1348,7 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
         ),
         (
             "done",
-            "已完成",
+            "Completed",
             (("equals", "/compact"),),
         ),
     ],
@@ -1357,7 +1357,7 @@ def test_build_model_push_payload_cases(status, description, expected_checks):
     task = TaskRecord(
         id="TASK_CHECK",
         project_slug="demo",
-        title="案例任务",
+        title="CaseTask",
         status=status,
         priority=3,
         task_type="task",
@@ -1384,20 +1384,20 @@ def test_build_model_push_payload_cases(status, description, expected_checks):
         elif kind == "endswith":
             assert payload.endswith(expected)
         else:
-            raise AssertionError(f"未知断言类型 {kind}")
+            raise AssertionError(f"Unknown assertion type {kind}")
 
 
 def test_build_model_push_payload_with_supplement():
     task = TaskRecord(
         id="TASK_CHECK_SUP",
         project_slug="demo",
-        title="补充示例",
+        title="Additional examples",
         status="test",
         priority=2,
         task_type="task",
         tags=(),
         due_date=None,
-        description="原始描述",
+        description="originaldescribe",
         parent_id=None,
         root_id="TASK_CHECK_SUP",
         depth=0,
@@ -1407,37 +1407,37 @@ def test_build_model_push_payload_with_supplement():
         archived=False,
     )
 
-    history = "2025-01-01T10:00:00+08:00 | 推送到模型（结果=success）\n补充任务描述：旧补充"
+    history = "2025-01-01T10:00:00+08:00 | push to model(result=success)\nSupplementary Description: old supplement"
 
-    payload = bot._build_model_push_payload(task, supplement="补充内容", history=history)
+    payload = bot._build_model_push_payload(task, supplement="Supplementary content", history=history)
     lines = payload.splitlines()
     assert lines[0] == bot.VIBE_PHASE_PROMPT
-    assert "任务描述：原始描述" in payload
-    assert "任务编码：/TASK_CHECK_SUP" in payload
+    assert "Task Description: originaldescribe" in payload
+    assert "Task Code: /TASK_CHECK_SUP" in payload
     assert "\\_" not in payload
-    assert "任务备注：-" in payload
-    assert "补充任务描述：补充内容" in payload
-    assert "以下为任务执行记录，用于辅助回溯任务处理记录：" in payload
-    assert "2025-01-01T10:00:00+08:00 | 推送到模型（结果=success）" in payload
-    assert "补充任务描述：旧补充" in payload
-    history_intro_index = payload.index("以下为任务执行记录，用于辅助回溯任务处理记录：")
-    assert payload.index("补充任务描述：补充内容") < history_intro_index
-    assert payload.endswith("补充任务描述：旧补充")
-    assert "## 测试阶段" not in payload
-    assert "测试阶段补充说明：" not in payload
+    assert "Task Notes: -" in payload
+    assert "Supplementary Description: Supplementary content" in payload
+    assert "Task execution history for traceability:" in payload
+    assert "2025-01-01T10:00:00+08:00 | push to model(result=success)" in payload
+    assert "Supplementary Description: old supplement" in payload
+    history_intro_index = payload.index("Task execution history for traceability:")
+    assert payload.index("Supplementary Description: Supplementary content") < history_intro_index
+    assert payload.endswith("Supplementary Description: old supplement")
+    assert "## testing phase" not in payload
+    assert "Additional notes on the testing phase:" not in payload
 
 
 def test_build_model_push_payload_without_history_formatting():
     task = TaskRecord(
         id="TASK_NO_HISTORY",
         project_slug="demo",
-        title="无历史任务",
+        title="noneHistory Task",
         status="research",
         priority=2,
         task_type="task",
         tags=(),
         due_date=None,
-        description="描述B",
+        description="describeB",
         parent_id=None,
         root_id="TASK_NO_HISTORY",
         depth=0,
@@ -1449,23 +1449,23 @@ def test_build_model_push_payload_without_history_formatting():
 
     payload = bot._build_model_push_payload(task)
     assert payload.splitlines()[0] == bot.VIBE_PHASE_PROMPT
-    assert "任务备注：-" in payload
-    assert "以下为任务执行记录，用于辅助回溯任务处理记录： -" in payload
-    assert payload.endswith("以下为任务执行记录，用于辅助回溯任务处理记录： -")
-    assert "需求调研问题分析阶段" not in payload
+    assert "Task Notes: -" in payload
+    assert "Task execution history for traceability: -" in payload
+    assert payload.endswith("Task execution history for traceability: -")
+    assert "needResearch problem analysis stage" not in payload
 
 
 def test_build_model_push_payload_with_notes():
     task = TaskRecord(
         id="TASK_CHECK_NOTES",
         project_slug="demo",
-        title="备注任务",
+        title="RemarkTask",
         status="research",
         priority=2,
         task_type="task",
         tags=(),
         due_date=None,
-        description="描述B",
+        description="describeB",
         parent_id=None,
         root_id="TASK_CHECK_NOTES",
         depth=0,
@@ -1480,20 +1480,20 @@ def test_build_model_push_payload_with_notes():
             id=1,
             task_id=task.id,
             note_type="misc",
-            content="第一条备注",
+            content="First note",
             created_at="2025-01-01T00:00:00+08:00",
         ),
         TaskNoteRecord(
             id=2,
             task_id=task.id,
             note_type="research",
-            content="第二条备注\n包含换行",
+            content="The second Remark\nContains newlines",
             created_at="2025-01-02T00:00:00+08:00",
         ),
     ]
 
     payload = bot._build_model_push_payload(task, notes=notes)
-    assert "任务备注：第一条备注；第二条备注 / 包含换行" in payload
+    assert "Task Notes: First note; Article 2Remark / Contains newlines" in payload
     assert payload.startswith(bot.VIBE_PHASE_PROMPT)
 
 
@@ -1501,13 +1501,13 @@ def test_build_model_push_payload_skips_bug_notes():
     task = TaskRecord(
         id="TASK_SKIP_BUG",
         project_slug="demo",
-        title="缺陷备注忽略",
+        title="defectRemarkneglect",
         status="test",
         priority=3,
         task_type="task",
         tags=(),
         due_date=None,
-        description="描述C",
+        description="describeC",
         parent_id=None,
         root_id="TASK_SKIP_BUG",
         depth=0,
@@ -1522,38 +1522,38 @@ def test_build_model_push_payload_skips_bug_notes():
             id=1,
             task_id=task.id,
             note_type="bug",
-            content="缺陷详情\n需要修复",
+            content="defectDetails\nNeeds repair",
             created_at="2025-01-03T00:00:00+08:00",
         ),
         TaskNoteRecord(
             id=2,
             task_id=task.id,
             note_type="misc",
-            content="仍需跟进",
+            content="Still need to follow up",
             created_at="2025-01-04T00:00:00+08:00",
         ),
     ]
 
     payload = bot._build_model_push_payload(task, notes=notes)
-    assert "缺陷详情" not in payload
-    assert "需要修复" not in payload
-    assert "任务备注：仍需跟进" in payload
-    assert "缺陷记录（最近 3 条）" not in payload
+    assert "defectDetails" not in payload
+    assert "Needs repair" not in payload
+    assert "Task Notes: Still need to follow up" in payload
+    assert "defectRecords (last 3)" not in payload
     assert payload.startswith(bot.VIBE_PHASE_PROMPT)
 
 
 def test_build_model_push_payload_removes_legacy_bug_header():
-    task = _make_task(task_id="TASK_LEGACY", title="兼容旧标题", status="test")
-    legacy_history = "缺陷记录（最近 3 条）：\n2025-01-02 10:00 | 已同步历史记录"
+    task = _make_task(task_id="TASK_LEGACY", title="Compatible with old title", status="test")
+    legacy_history = "defectRecords (last 3): \n2025-01-02 10:00 | History synced"
 
     payload = bot._build_model_push_payload(task, history=legacy_history)
 
-    assert "缺陷记录（最近 3 条）" not in payload
-    assert "2025-01-02 10:00 | 已同步历史记录" in payload
-    assert "以下为任务执行记录，用于辅助回溯任务处理记录：" in payload
+    assert "defectRecords (last 3)" not in payload
+    assert "2025-01-02 10:00 | History synced" in payload
+    assert "Task execution history for traceability:" in payload
 
 
-# --- 任务描述编辑交互 ---
+# --- Task description edit interaction ---
 
 
 def _extract_reply_labels(markup: ReplyKeyboardMarkup | None) -> list[str]:
@@ -1571,8 +1571,8 @@ def test_task_desc_edit_shows_menu_options(monkeypatch):
     callback = DummyCallback("task:desc_edit:TASK_EDIT", message)
     state, _storage = make_state(message)
 
-    task = _make_task(task_id="TASK_EDIT", title="示例任务", status="research")
-    task.description = "原始描述"
+    task = _make_task(task_id="TASK_EDIT", title="ExampleTask", status="research")
+    task.description = "originaldescribe"
 
     async def fake_get_task(task_id: str):
         assert task_id == "TASK_EDIT"
@@ -1588,26 +1588,26 @@ def test_task_desc_edit_shows_menu_options(monkeypatch):
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
     assert data.get("task_id") == "TASK_EDIT"
-    assert data.get("current_description") == "原始描述"
+    assert data.get("current_description") == "originaldescribe"
     assert callback.answers and callback.answers[-1] == (None, False)
-    assert len(message.calls) >= 3, "应先展示菜单与原描述再提示输入"
+    assert len(message.calls) >= 3, "The menu and original describe should be displayed first and then prompted for input."
     first_text, _parse_mode, first_markup, _ = message.calls[0]
-    assert "当前描述" in first_text
+    assert "currentlydescribe" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
     labels = _extract_reply_labels(first_markup)
     assert any(bot.TASK_DESC_CLEAR_TEXT in label for label in labels)
     assert any(bot.TASK_DESC_CANCEL_TEXT in label for label in labels)
     assert any(bot.TASK_DESC_REPROMPT_TEXT in label for label in labels)
     third_text, _, third_markup, _ = message.calls[2]
-    assert "请直接发送新的任务描述" in third_text
+    assert "Send the new task description or choose an action from the menu." in third_text
     assert third_markup is None
 
 
 def test_task_edit_description_redirects_to_fsm(monkeypatch):
     message = DummyMessage()
     state, _storage = make_state(message)
-    task = _make_task(task_id="TASK_EDIT", title="示例任务", status="research")
-    task.description = "原始描述"
+    task = _make_task(task_id="TASK_EDIT", title="ExampleTask", status="research")
+    task.description = "originaldescribe"
 
     async def fake_get_task(task_id: str):
         assert task_id == "TASK_EDIT"
@@ -1618,7 +1618,7 @@ def test_task_edit_description_redirects_to_fsm(monkeypatch):
     async def scenario() -> tuple[str | None, dict]:
         await state.update_data(task_id="TASK_EDIT", actor="Tester#1")
         await state.set_state(bot.TaskEditStates.waiting_field_choice)
-        message.text = "描述"
+        message.text = "describe"
         await bot.on_edit_field_choice(message, state)
         return await state.get_state(), await state.get_data()
 
@@ -1626,10 +1626,10 @@ def test_task_edit_description_redirects_to_fsm(monkeypatch):
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
     assert data.get("task_id") == "TASK_EDIT"
-    assert data.get("current_description") == "原始描述"
+    assert data.get("current_description") == "originaldescribe"
     assert len(message.calls) >= 3
     first_text, _, first_markup, _ = message.calls[0]
-    assert "当前描述" in first_text
+    assert "currentlydescribe" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 
@@ -1638,7 +1638,7 @@ def test_task_desc_reprompt_menu_replays_prompt():
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="olddescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         message.text = f"1. {bot.TASK_DESC_REPROMPT_TEXT}"
         await bot.on_task_desc_input(message, state)
@@ -1647,10 +1647,10 @@ def test_task_desc_reprompt_menu_replays_prompt():
     state_value, data = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
-    assert data.get("current_description") == "旧描述"
+    assert data.get("current_description") == "olddescribe"
     assert len(message.calls) >= 3
     first_text, _, first_markup, _ = message.calls[-3]
-    assert "当前描述" in first_text
+    assert "currentlydescribe" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 
@@ -1659,7 +1659,7 @@ def test_task_desc_input_clear_menu_enters_confirm():
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="olddescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         message.text = bot.TASK_DESC_CLEAR_TEXT
         await bot.on_task_desc_input(message, state)
@@ -1669,9 +1669,9 @@ def test_task_desc_input_clear_menu_enters_confirm():
 
     assert state_value == bot.TaskDescriptionStates.waiting_confirm.state
     assert data.get("new_description") == ""
-    assert message.calls, "应发送确认提示"
+    assert message.calls, "A confirmation prompt should be sent"
     confirm_text, _, confirm_markup, _ = message.calls[-1]
-    assert "请确认新的任务描述" in confirm_text
+    assert "Please confirm the updated task description:" in confirm_text
     assert isinstance(confirm_markup, ReplyKeyboardMarkup)
     labels = _extract_reply_labels(confirm_markup)
     assert any(bot.TASK_DESC_CONFIRM_TEXT in label for label in labels)
@@ -1680,11 +1680,11 @@ def test_task_desc_input_clear_menu_enters_confirm():
 
 def test_task_desc_input_moves_to_confirm():
     message = DummyMessage()
-    message.text = "新的描述"
+    message.text = "new description"
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="olddescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state(), await state.get_data()
@@ -1692,20 +1692,20 @@ def test_task_desc_input_moves_to_confirm():
     state_value, data = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_confirm.state
-    assert data.get("new_description") == "新的描述"
-    assert message.calls, "应发送确认提示"
+    assert data.get("new_description") == "new description"
+    assert message.calls, "A confirmation prompt should be sent"
     confirm_text, _, confirm_markup, _ = message.calls[-1]
-    assert "请确认新的任务描述" in confirm_text
+    assert "Please confirm the updated task description:" in confirm_text
     assert isinstance(confirm_markup, ReplyKeyboardMarkup)
 
 
 def test_task_desc_input_cancel_text():
     message = DummyMessage()
-    message.text = "取消"
+    message.text = "Cancel"
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="olddescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state()
@@ -1713,7 +1713,7 @@ def test_task_desc_input_cancel_text():
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and message.calls[-1][0] == "已取消编辑任务描述。"
+    assert message.calls and message.calls[-1][0] == "Task description editing cancelled."
 
 
 def test_task_desc_input_cancel_menu_button():
@@ -1722,7 +1722,7 @@ def test_task_desc_input_cancel_menu_button():
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="olddescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state()
@@ -1730,7 +1730,7 @@ def test_task_desc_input_cancel_menu_button():
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and message.calls[-1][0] == "已取消编辑任务描述。"
+    assert message.calls and message.calls[-1][0] == "Task description editing cancelled."
 
 
 def test_task_desc_input_rejects_too_long():
@@ -1739,7 +1739,7 @@ def test_task_desc_input_rejects_too_long():
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="olddescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state()
@@ -1747,12 +1747,12 @@ def test_task_desc_input_rejects_too_long():
     state_value = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
-    assert len(message.calls) >= 4, "超长后需要重新提示输入"
+    assert len(message.calls) >= 4, "If it is too long, you need to prompt for input again."
     warn_text, _, warn_markup, _ = message.calls[0]
-    assert "不可超过" in warn_text
+    assert "not to exceed" in warn_text
     assert isinstance(warn_markup, ReplyKeyboardMarkup)
     tail_text, _, tail_markup, _ = message.calls[-1]
-    assert "请直接发送新的任务描述" in tail_text
+    assert "Send the new task description or choose an action from the menu." in tail_text
     assert tail_markup is None
 
 
@@ -1760,7 +1760,7 @@ def test_task_desc_confirm_updates_description(monkeypatch):
     message = DummyMessage()
     state, _storage = make_state(message)
 
-    updated_task = _make_task(task_id="TASK_EDIT", title="描述任务", status="research")
+    updated_task = _make_task(task_id="TASK_EDIT", title="describeTask", status="research")
     update_calls: list[tuple[str, str, str]] = []
 
     async def fake_update(task_id: str, *, actor: str, description: str):
@@ -1770,7 +1770,7 @@ def test_task_desc_confirm_updates_description(monkeypatch):
 
     async def fake_render(task_id: str):
         assert task_id == "TASK_EDIT"
-        return "任务详情：示例", ReplyKeyboardMarkup(keyboard=[])
+        return "TaskDetails: Example", ReplyKeyboardMarkup(keyboard=[])
 
     monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update)
     monkeypatch.setattr(bot, "_render_task_detail", fake_render)
@@ -1779,9 +1779,9 @@ def test_task_desc_confirm_updates_description(monkeypatch):
         message.text = bot.TASK_DESC_CONFIRM_TEXT
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="最终描述",
+            new_description="finally describe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -1790,9 +1790,9 @@ def test_task_desc_confirm_updates_description(monkeypatch):
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert update_calls == [("TASK_EDIT", "Tester#1", "最终描述")]
-    assert message.calls and "任务描述已更新" in message.calls[0][0]
-    assert any("任务描述已更新：" in text for text, *_ in message.calls)
+    assert update_calls == [("TASK_EDIT", "Tester#1", "finally describe")]
+    assert message.calls and "Task description updated" in message.calls[0][0]
+    assert any("Task description updated: " in text for text, *_ in message.calls)
 
 
 def test_task_desc_confirm_requires_state():
@@ -1808,15 +1808,15 @@ def test_task_desc_confirm_requires_state():
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and "会话已失效" in message.calls[0][0]
+    assert message.calls and "Session has expired" in message.calls[0][0]
 
 
 def test_task_desc_retry_returns_to_input(monkeypatch):
     message = DummyMessage()
     state, _storage = make_state(message)
 
-    task = _make_task(task_id="TASK_EDIT", title="描述任务", status="research")
-    task.description = "原始描述"
+    task = _make_task(task_id="TASK_EDIT", title="describeTask", status="research")
+    task.description = "originaldescribe"
 
     async def fake_get_task(task_id: str):
         assert task_id == "TASK_EDIT"
@@ -1828,9 +1828,9 @@ def test_task_desc_retry_returns_to_input(monkeypatch):
         message.text = bot.TASK_DESC_RETRY_TEXT
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="草稿描述",
+            new_description="draftdescribe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -1842,9 +1842,9 @@ def test_task_desc_retry_returns_to_input(monkeypatch):
     assert data.get("new_description") is None
     assert len(message.calls) >= 4
     first_text, _, first_markup, _ = message.calls[0]
-    assert "已回到描述输入阶段" in first_text
+    assert "Returned to describe input stage" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
-    assert any("当前描述" in text for text, *_ in message.calls)
+    assert any("currentlydescribe" in text for text, *_ in message.calls)
 
 
 def test_task_desc_confirm_missing_description_reprompts():
@@ -1855,7 +1855,7 @@ def test_task_desc_confirm_missing_description_reprompts():
         message.text = bot.TASK_DESC_CONFIRM_TEXT
         await state.update_data(
             task_id="TASK_EDIT",
-            current_description="仍为旧描述",
+            current_description="stillolddescribe",
             actor="Tester#1",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
@@ -1868,9 +1868,9 @@ def test_task_desc_confirm_missing_description_reprompts():
     assert data.get("new_description") is None
     assert len(message.calls) >= 4
     first_text, _, first_markup, _ = message.calls[0]
-    assert "描述内容已失效" in first_text
+    assert "describeContent has expired" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
-    assert any("仍为旧描述" in text for text, *_ in message.calls)
+    assert any("stillolddescribe" in text for text, *_ in message.calls)
 
 
 def test_task_desc_retry_task_missing(monkeypatch):
@@ -1886,9 +1886,9 @@ def test_task_desc_retry_task_missing(monkeypatch):
         message.text = bot.TASK_DESC_RETRY_TEXT
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="草稿描述",
+            new_description="draftdescribe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -1897,7 +1897,7 @@ def test_task_desc_retry_task_missing(monkeypatch):
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and "任务不存在" in message.calls[0][0]
+    assert message.calls and "Taskdoes not exist" in message.calls[0][0]
 
 
 def test_task_desc_confirm_update_failure(monkeypatch):
@@ -1905,7 +1905,7 @@ def test_task_desc_confirm_update_failure(monkeypatch):
     state, _storage = make_state(message)
 
     async def fake_update(task_id: str, *, actor: str, description: str):
-        raise ValueError("无法更新描述")
+        raise ValueError("Unable to update describe")
 
     monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update)
 
@@ -1913,9 +1913,9 @@ def test_task_desc_confirm_update_failure(monkeypatch):
         message.text = bot.TASK_DESC_CONFIRM_TEXT
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="异常描述",
+            new_description="Exceptiondescribe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -1924,7 +1924,7 @@ def test_task_desc_confirm_update_failure(monkeypatch):
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and message.calls[0][0] == "无法更新描述"
+    assert message.calls and message.calls[0][0] == "Unable to update describe"
 
 
 def test_task_desc_confirm_unknown_message_prompts_menu():
@@ -1932,8 +1932,8 @@ def test_task_desc_confirm_unknown_message_prompts_menu():
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        message.text = "随便输入"
-        await state.update_data(task_id="TASK_EDIT", new_description="草稿", actor="Tester#1")
+        message.text = "Enter whatever you want"
+        await state.update_data(task_id="TASK_EDIT", new_description="draft", actor="Tester#1")
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
         return await state.get_state()
@@ -1941,7 +1941,7 @@ def test_task_desc_confirm_unknown_message_prompts_menu():
     state_value = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_confirm.state
-    assert message.calls and ("请使用菜单中的按钮" in message.calls[-1][0] or "当前处于确认阶段" in message.calls[-1][0])
+    assert message.calls and ("Please use the button in the menu" in message.calls[-1][0] or "Currently in the confirmation stage" in message.calls[-1][0])
     assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup)
 
 
@@ -1951,7 +1951,7 @@ def test_task_desc_confirm_cancel_menu_exits():
 
     async def scenario() -> str | None:
         message.text = bot.TASK_DESC_CANCEL_TEXT
-        await state.update_data(task_id="TASK_EDIT", new_description="草稿")
+        await state.update_data(task_id="TASK_EDIT", new_description="draft")
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
         return await state.get_state()
@@ -1959,7 +1959,7 @@ def test_task_desc_confirm_cancel_menu_exits():
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and message.calls[-1][0] == "已取消编辑任务描述。"
+    assert message.calls and message.calls[-1][0] == "Task description editing cancelled."
 
 
 def test_task_desc_legacy_callback_reprompts_input():
@@ -1968,7 +1968,7 @@ def test_task_desc_legacy_callback_reprompts_input():
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="olddescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_legacy_callback(callback, state)
         return await state.get_state(), await state.get_data()
@@ -1976,11 +1976,11 @@ def test_task_desc_legacy_callback_reprompts_input():
     state_value, data = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
-    assert data.get("current_description") == "旧描述"
-    assert callback.answers and callback.answers[-1] == ("任务描述编辑的按钮已移动到菜单栏，请使用菜单操作。", True)
+    assert data.get("current_description") == "olddescribe"
+    assert callback.answers and callback.answers[-1] == ("Task description editing is now available from the menu. Please use the menu options.", True)
     assert len(message.calls) >= 3
     first_text, _, first_markup, _ = message.calls[0]
-    assert "当前描述" in first_text
+    assert "currentlydescribe" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 
@@ -1990,7 +1990,7 @@ def test_task_desc_legacy_callback_replays_confirm():
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="TASK_EDIT", new_description="草稿描述")
+        await state.update_data(task_id="TASK_EDIT", new_description="draftdescribe")
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_legacy_callback(callback, state)
         return await state.get_state(), await state.get_data()
@@ -1998,9 +1998,9 @@ def test_task_desc_legacy_callback_replays_confirm():
     state_value, data = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_confirm.state
-    assert data.get("new_description") == "草稿描述"
-    assert callback.answers and callback.answers[-1] == ("任务描述编辑的按钮已移动到菜单栏，请使用菜单操作。", True)
-    assert message.calls and "请确认新的任务描述" in message.calls[-1][0]
+    assert data.get("new_description") == "draftdescribe"
+    assert callback.answers and callback.answers[-1] == ("Task description editing is now available from the menu. Please use the menu options.", True)
+    assert message.calls and "Please confirm the updated task description:" in message.calls[-1][0]
     assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup)
 
 
@@ -2010,7 +2010,7 @@ def test_format_history_description_push_model_includes_supplement():
         task_id="TASK_001",
         field="",
         old_value=None,
-        new_value="旧补充",
+        new_value="old supplement",
         actor="tester",
         event_type=bot.HISTORY_EVENT_TASK_ACTION,
         payload=json.dumps(
@@ -2018,16 +2018,16 @@ def test_format_history_description_push_model_includes_supplement():
                 "action": "push_model",
                 "result": "success",
                 "model": "codex",
-                "supplement": "最新补充描述",
+                "supplement": "Latest addition describe",
             }
         ),
         created_at="2025-01-01T00:00:00+08:00",
     )
 
     text = bot._format_history_description(record)
-    assert "结果：success" in text
-    assert "模型：codex" in text
-    assert "补充描述：最新补充描述" in text
+    assert "Result: success" in text
+    assert "Model: codex" in text
+    assert "Supplement describe:Latest addition describe" in text
 
 
 def test_normalize_task_id_accepts_legacy_variants():
@@ -2050,7 +2050,7 @@ def test_format_task_command_respects_markdown_escape(monkeypatch):
 def test_is_cancel_message_handles_menu_button():
     assert bot._is_cancel_message(bot.TASK_DESC_CANCEL_TEXT)
     assert bot._is_cancel_message(f"2. {bot.TASK_DESC_CANCEL_TEXT}")
-    assert not bot._is_cancel_message("继续编辑")
+    assert not bot._is_cancel_message("Continue editing")
 
 
 def test_on_text_handles_quick_task_lookup(monkeypatch):
@@ -2073,7 +2073,7 @@ def test_on_text_ignores_regular_commands(monkeypatch):
     message.text = "/task_show"
 
     async def fake_reply(detail_message: DummyMessage, task_id: str) -> None:  # pragma: no cover
-        raise AssertionError("不应触发任务详情回复")
+        raise AssertionError("should not triggerTaskDetailsreply")
 
     monkeypatch.setattr(bot, "_reply_task_detail_message", fake_reply)
 
@@ -2118,7 +2118,7 @@ def test_task_service_migrates_legacy_ids(tmp_path: Path):
                 None,
                 0,
                 "0001",
-                "根任务",
+                "Root Task",
                 "research",
                 3,
                 "task",
@@ -2145,13 +2145,13 @@ def test_task_service_migrates_legacy_ids(tmp_path: Path):
                 "TASK-0001",
                 1,
                 "0001.0001",
-                "子任务",
+                "subtask",
                 "test",
                 2,
                 "task",
                 "[]",
                 None,
-                "子任务描述",
+                "subtaskdescribe",
                 created,
                 created,
                 0,
@@ -2172,7 +2172,7 @@ def test_task_service_migrates_legacy_ids(tmp_path: Path):
                 None,
                 0,
                 "0002",
-                "第二个根任务",
+                "secondRoot Task",
                 "research",
                 3,
                 "task",
@@ -2186,7 +2186,7 @@ def test_task_service_migrates_legacy_ids(tmp_path: Path):
         )
             await db.execute(
             "INSERT INTO task_notes(task_id, note_type, content, created_at) VALUES (?, ?, ?, ?)",
-            ("TASK-0001", "misc", "备注内容", created),
+            ("TASK-0001", "misc", "Remark content", created),
         )
             await db.execute(
             """
@@ -2253,13 +2253,13 @@ def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
         svc = TaskService(tmp_path / "tasks.db", "demo")
         await svc.initialize()
         task = await svc.create_root_task(
-            title="列表示例",
+            title="List example",
             status="research",
             priority=3,
             task_type="task",
             tags=(),
             due_date=None,
-            description="描述A",
+            description="describeA",
             actor="tester",
         )
         monkeypatch.setattr(bot, "TASK_SERVICE", svc)
@@ -2272,16 +2272,16 @@ def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
         return message, task.id
 
     message, task_id = asyncio.run(_scenario())
-    assert message.calls, "应生成列表消息"
+    assert message.calls, "A list message should be generated"
     text, parse_mode, markup, _ = message.calls[0]
     lines = text.splitlines()
     assert lines[:3] == [
-        "*任务列表*",
-        "筛选状态：全部",
-        "分页信息：页码 1/1 · 每页 10 条 · 总数 1",
+        "*Tasklist*",
+        "filter state:all",
+        "Pagination information: Page number 1/1 - 10 items per page - Total 1",
     ]
-    assert "- 🛠️ 列表示例" not in text
-    assert "- ⚪ 列表示例" not in text
+    assert "- 🛠️ List example" not in text
+    assert "- ⚪ List example" not in text
     assert f"[{task_id}]" not in text
     assert markup is not None
     status_rows: list[list] = []
@@ -2289,33 +2289,33 @@ def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
         if any(btn.callback_data.startswith("task:detail") for btn in row):
             break
         status_rows.append(row)
-    assert status_rows, "应存在状态筛选按钮行"
+    assert status_rows, "Status filter button row should exist"
     first_row = status_rows[0]
-    assert first_row[0].text == "✔️ ⭐ 全部"
+    assert first_row[0].text == "✔️ ⭐ all"
     assert all(not btn.text.lstrip().startswith(tuple("0123456789")) for row in status_rows for btn in row)
     options_count = len(bot.STATUS_FILTER_OPTIONS)
     if options_count <= 4:
         assert len(status_rows) == 1
         assert len(status_rows[0]) == options_count
     else:
-        assert all(len(row) <= 3 for row in status_rows), "状态按钮每行不应超过三个"
+        assert all(len(row) <= 3 for row in status_rows), "There should be no more than three status buttons per row"
     assert any(
         btn.callback_data == "task:list_page:-:1:10"
         for row in status_rows
         for btn in row
-    ), "应包含筛选全部的按钮"
+    ), "Should contain a button to filter all"
     detail_texts = [
         btn.text
         for row in markup.inline_keyboard
         for btn in row
         if btn.callback_data == f"task:detail:{task_id}"
     ]
-    assert detail_texts, "应包含跳转详情的按钮"
-    assert "🛠️" in detail_texts[0], "详情按钮文本应展示类型图标"
+    assert detail_texts, "Should contain a button to jump to details"
+    assert "🛠️" in detail_texts[0], "Details button text should display type icon"
 
 
 def test_task_desc_confirm_numeric_input_1_confirms(monkeypatch):
-    """测试输入数字"1"应触发确认更新操作"""
+    """Test input numbers"1"Confirm update action should be triggered"""
     message = DummyMessage()
     state, _storage = make_state(message)
 
@@ -2323,22 +2323,22 @@ def test_task_desc_confirm_numeric_input_1_confirms(monkeypatch):
 
     async def fake_update_task(task_id: str, *, actor: str, **kwargs) -> TaskRecord:
         update_calls.append((task_id, actor, kwargs.get("description")))
-        return _make_task(task_id=task_id, title="任务", status="research")
+        return _make_task(task_id=task_id, title="Task", status="research")
 
     monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
 
     async def fake_render_task_detail(task_id: str):
-        return "任务详情", None
+        return "TaskDetails", None
 
     monkeypatch.setattr(bot, "_render_task_detail", fake_render_task_detail)
 
     async def scenario() -> str | None:
-        message.text = "1"  # 输入数字1，应该对应第一个选项"确认更新"
+        message.text = "1"  # Enter the number 1, which should correspond to the first option"Confirm update"
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="新的描述内容",
+            new_description="new descriptioncontent",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -2346,18 +2346,18 @@ def test_task_desc_confirm_numeric_input_1_confirms(monkeypatch):
 
     state_value = asyncio.run(scenario())
 
-    assert state_value is None, "确认后应清空状态"
-    assert update_calls == [("TASK_EDIT", "Tester#1", "新的描述内容")], "应调用更新任务"
-    assert message.calls and "任务描述已更新" in message.calls[0][0]
+    assert state_value is None, "The status should be cleared after confirmation"
+    assert update_calls == [("TASK_EDIT", "Tester#1", "new descriptioncontent")], "Update Task should be called"
+    assert message.calls and "Task description updated" in message.calls[0][0]
 
 
 def test_task_desc_confirm_numeric_input_2_retries(monkeypatch):
-    """测试输入数字"2"应触发重新输入操作"""
+    """Test input numbers"2"A re-enter action should be triggered"""
     message = DummyMessage()
     state, _storage = make_state(message)
 
-    task = _make_task(task_id="TASK_EDIT", title="描述任务", status="research")
-    task.description = "原始描述"
+    task = _make_task(task_id="TASK_EDIT", title="describeTask", status="research")
+    task.description = "originaldescribe"
 
     async def fake_get_task(task_id: str):
         assert task_id == "TASK_EDIT"
@@ -2366,12 +2366,12 @@ def test_task_desc_confirm_numeric_input_2_retries(monkeypatch):
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
 
     async def scenario() -> tuple[str | None, dict]:
-        message.text = "2"  # 输入数字2，应该对应第二个选项"重新输入"
+        message.text = "2"  # Enter the number 2, which should correspond to the second option"Re-enter"
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="草稿描述",
+            new_description="draftdescribe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -2379,26 +2379,26 @@ def test_task_desc_confirm_numeric_input_2_retries(monkeypatch):
 
     state_value, data = asyncio.run(scenario())
 
-    assert state_value == bot.TaskDescriptionStates.waiting_content.state, "应回到输入状态"
-    assert data.get("new_description") is None, "应清空草稿描述"
+    assert state_value == bot.TaskDescriptionStates.waiting_content.state, "Should return to input state"
+    assert data.get("new_description") is None, "draftdescribe should be cleared"
     assert len(message.calls) >= 4
     first_text, _, first_markup, _ = message.calls[0]
-    assert "已回到描述输入阶段" in first_text
+    assert "Returned to describe input stage" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 
 def test_task_desc_confirm_numeric_input_3_cancels():
-    """测试输入数字"3"应触发取消操作"""
+    """Test input numbers"3"Cancel operation should be triggered"""
     message = DummyMessage()
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        message.text = "3"  # 输入数字3，应该对应第三个选项"取消"
+        message.text = "3"  # Enter the number 3, which should correspond to the third option"Cancel"
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="草稿描述",
+            new_description="draftdescribe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -2406,14 +2406,14 @@ def test_task_desc_confirm_numeric_input_3_cancels():
 
     state_value = asyncio.run(scenario())
 
-    assert state_value is None, "取消后应清空状态"
-    assert message.calls and "已取消编辑任务描述" in message.calls[0][0]
+    assert state_value is None, "CancelThe status should be cleared after"
+    assert message.calls and "Task description editing cancelled." in message.calls[0][0]
     _, _, markup, _ = message.calls[0]
-    assert isinstance(markup, ReplyKeyboardMarkup), "应显示主菜单键盘"
+    assert isinstance(markup, ReplyKeyboardMarkup), "The main menu keyboard should be displayed"
 
 
 def test_task_desc_confirm_numeric_input_with_prefix():
-    """测试输入带前缀的按钮文本（如"1. ✅ 确认更新"）也能正确识别"""
+    """Test that numbered button text such as "1. Confirm update" is recognized"""
     message = DummyMessage()
     state, _storage = make_state(message)
 
@@ -2421,7 +2421,7 @@ def test_task_desc_confirm_numeric_input_with_prefix():
 
     async def fake_update_task(task_id: str, *, actor: str, **kwargs) -> TaskRecord:
         update_calls.append((task_id, actor, kwargs.get("description")))
-        return _make_task(task_id=task_id, title="任务", status="research")
+        return _make_task(task_id=task_id, title="Task", status="research")
 
     def monkeypatch_update():
         import bot as bot_module
@@ -2430,7 +2430,7 @@ def test_task_desc_confirm_numeric_input_with_prefix():
         return original_update
 
     async def fake_render_task_detail(task_id: str):
-        return "任务详情", None
+        return "TaskDetails", None
 
     def monkeypatch_render():
         import bot as bot_module
@@ -2439,16 +2439,16 @@ def test_task_desc_confirm_numeric_input_with_prefix():
         return original_render
 
     async def scenario() -> str | None:
-        message.text = "1. ✅ 确认更新"  # 带序号和emoji的完整按钮文本
+        message.text = "1. Confirm update"  # Full button text with sequence number and emoji
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="新的描述内容",
+            new_description="new descriptioncontent",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
 
-        # 临时替换函数
+        # Temporary replacement function
         original_update = monkeypatch_update()
         original_render = monkeypatch_render()
 
@@ -2456,29 +2456,29 @@ def test_task_desc_confirm_numeric_input_with_prefix():
             await bot.on_task_desc_confirm_stage_text(message, state)
             return await state.get_state()
         finally:
-            # 恢复原函数
+            # Restore original function
             bot.TASK_SERVICE.update_task = original_update
             bot._render_task_detail = original_render
 
     state_value = asyncio.run(scenario())
 
-    assert state_value is None, "确认后应清空状态"
-    assert update_calls == [("TASK_EDIT", "Tester#1", "新的描述内容")], "应调用更新任务"
-    assert message.calls and "任务描述已更新" in message.calls[0][0]
+    assert state_value is None, "The status should be cleared after confirmation"
+    assert update_calls == [("TASK_EDIT", "Tester#1", "new descriptioncontent")], "Update Task should be called"
+    assert message.calls and "Task description updated" in message.calls[0][0]
 
 
 def test_task_desc_confirm_text_input_still_works():
-    """测试直接输入文本（如"确认"、"取消"）仍然有效"""
+    """Test text input directly (e.g."confirm", "Cancel")still valid"""
     message = DummyMessage()
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        message.text = "取消"  # 直接输入文本
+        message.text = "Cancel"  # Enter text directly
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="草稿描述",
+            new_description="draftdescribe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -2486,22 +2486,22 @@ def test_task_desc_confirm_text_input_still_works():
 
     state_value = asyncio.run(scenario())
 
-    assert state_value is None, "取消后应清空状态"
-    assert message.calls and "已取消编辑任务描述" in message.calls[0][0]
+    assert state_value is None, "CancelThe status should be cleared after"
+    assert message.calls and "Task description editing cancelled." in message.calls[0][0]
 
 
 def test_task_desc_confirm_invalid_numeric_input():
-    """测试输入无效数字（如"0"、"99"）应提示重新选择"""
+    """Test input of invalid numbers (e.g."0", "99")Should be prompted to reselect"""
     message = DummyMessage()
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        message.text = "99"  # 超出范围的数字
+        message.text = "99"  # Number out of range
         await state.update_data(
             task_id="TASK_EDIT",
-            new_description="草稿描述",
+            new_description="draftdescribe",
             actor="Tester#1",
-            current_description="旧描述",
+            current_description="olddescribe",
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -2509,7 +2509,7 @@ def test_task_desc_confirm_invalid_numeric_input():
 
     state_value = asyncio.run(scenario())
 
-    # 应该保持在确认状态，并提示用户
+    # Should remain in the confirm state and prompt the user
     assert state_value == bot.TaskDescriptionStates.waiting_confirm.state
     assert message.calls
-    assert "当前处于确认阶段" in message.calls[0][0] or "请选择" in message.calls[0][0]
+    assert "Currently in the confirmation stage" in message.calls[0][0] or "Please select" in message.calls[0][0]

@@ -1,4 +1,4 @@
-"""任务持久化与业务逻辑。"""
+"""Persistence and business logic for the task subsystem."""
 from __future__ import annotations
 
 import asyncio
@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 
 
 class TaskService:
-    """封装任务相关的数据库操作。"""
+    """Wrap task-related database operations."""
 
     def __init__(self, db_path: Path, project_slug: str) -> None:
-        """初始化服务实例，绑定数据库路径与项目标识。"""
+        """Initialise the service with the database path and project slug."""
 
         self.db_path = Path(db_path)
         self.project_slug = project_slug
@@ -40,7 +40,7 @@ class TaskService:
         self._valid_statuses = set(TASK_STATUSES)
 
     async def initialize(self) -> None:
-        """确保数据库结构存在，并执行必要的迁移逻辑。"""
+        """Ensure the schema exists and run required migrations."""
 
         if self._initialized:
             return
@@ -58,7 +58,7 @@ class TaskService:
         self._initialized = True
 
     async def _create_tables(self, db: aiosqlite.Connection) -> None:
-        """创建或补全任务相关的全部表结构与索引。"""
+        """Create or augment all tables and indexes for tasks."""
 
         await db.execute(
             """
@@ -191,7 +191,7 @@ class TaskService:
         )
 
     async def _migrate_timezones(self, db: aiosqlite.Connection) -> None:
-        """将遗留的 UTC 字符串转换为上海时区表示。"""
+        """Convert legacy UTC timestamps to their Shanghai equivalents."""
 
         db.row_factory = aiosqlite.Row
         tables: Sequence[tuple[str, str, tuple[str, ...]]] = (
@@ -245,7 +245,7 @@ class TaskService:
             )
 
     async def _migrate_task_ids_to_underscore(self, db: aiosqlite.Connection) -> None:
-        """将历史任务 ID 的连字符/点号改写为下划线格式，保障 Telegram 命令可点击。"""
+        """Rewrite legacy task IDs with underscores so Telegram commands remain clickable."""
 
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -265,7 +265,7 @@ class TaskService:
         if not legacy_row:
             return
 
-        logger.info("检测到旧版任务 ID，开始迁移: project=%s", self.project_slug)
+        logger.info("Detected legacy task IDs, starting migration: project=%s", self.project_slug)
         await db.execute("PRAGMA foreign_keys = OFF")
         await db.execute("PRAGMA defer_foreign_keys = ON")
         mapping: Dict[str, str] = {}
@@ -289,27 +289,27 @@ class TaskService:
                     continue
                 if new_id is None:
                     logger.error(
-                        "任务 ID 迁移检测到无法规范化的值: project=%s value=%s",
+                        "Task ID migration encountered a non-normalisable value: project=%s value=%s",
                         self.project_slug,
                         old_id,
                     )
-                    raise ValueError("任务 ID 迁移失败：存在无法规范化的 ID")
+                    raise ValueError("Task ID migration failed: unable to normalise ID")
                 if new_id != old_id and new_id in existing_ids:
                     logger.error(
-                        "任务 ID 迁移检测到潜在冲突: project=%s old=%s new=%s",
+                        "Task ID migration detected a potential conflict: project=%s old=%s new=%s",
                         self.project_slug,
                         old_id,
                         new_id,
                     )
-                    raise ValueError("任务 ID 迁移冲突：目标 ID 已存在")
+                    raise ValueError("Task ID migration conflict: target ID already exists")
                 if new_id in mapping.values() or new_id in mapping:
                     logger.error(
-                        "任务 ID 迁移检测到冲突: project=%s old=%s new=%s",
+                        "Task ID migration detected a conflict: project=%s old=%s new=%s",
                         self.project_slug,
                         old_id,
                         new_id,
                     )
-                    raise ValueError("任务 ID 迁移冲突")
+                    raise ValueError("Task ID migration conflict")
                 mapping[old_id] = new_id
 
             if not mapping:
@@ -338,13 +338,13 @@ class TaskService:
 
         self._write_id_migration_report(mapping)
         logger.info(
-            "任务 ID 迁移完成: project=%s changed=%s",
+            "Task ID migration completed: project=%s changed=%s",
             self.project_slug,
             len(mapping),
         )
 
     async def _archive_legacy_child_tasks(self, db: aiosqlite.Connection) -> None:
-        """归档遗留的子任务，防止其继续出现在任务列表中。"""
+        """Archive legacy child tasks so they stop appearing in listings."""
 
         now = shanghai_now_iso()
         cursor = await db.execute(
@@ -364,15 +364,15 @@ class TaskService:
             changed = 0
         await cursor.close()
         if changed > 0:
-            logger.info("已归档遗留子任务: project=%s count=%s", self.project_slug, changed)
+            logger.info("Archived legacy child tasks: project=%s count=%s", self.project_slug, changed)
 
     async def _drop_child_sequences_table(self, db: aiosqlite.Connection) -> None:
-        """移除已废弃的子任务序列表，避免后续访问错误。"""
+        """Remove the defunct child sequence table to prevent stale lookups."""
 
         await db.execute("DROP TABLE IF EXISTS child_sequences")
 
     async def _verify_status_values(self, db: aiosqlite.Connection) -> None:
-        """校验任务表中的状态值是否符合当前合法枚举。"""
+        """Validate task status values against the allowed enumeration."""
 
         async with db.execute(
             "SELECT DISTINCT status FROM tasks WHERE project_slug = ?",
@@ -382,14 +382,14 @@ class TaskService:
         for (status,) in rows:
             if status is None:
                 logger.error(
-                    "任务状态检查发现 NULL 值: project=%s",
+                    "Task status integrity check found NULL value: project=%s",
                     self.project_slug,
                 )
                 continue
             normalized = self._normalize_status_token(status, context="integrity_check")
             if normalized not in self._valid_statuses:
                 logger.error(
-                    "任务状态检查发现无法识别的值: project=%s value=%s",
+                    "Task status integrity check found unknown value: project=%s value=%s",
                     self.project_slug,
                     status,
                 )
@@ -405,7 +405,7 @@ class TaskService:
         description: Optional[str] = None,
         actor: Optional[str],
     ) -> TaskRecord:
-        """创建顶级任务并写入初始历史记录。"""
+        """Create a root task and capture the initial history entry."""
 
         async with self._lock:
             async with aiosqlite.connect(self.db_path) as db:
@@ -483,7 +483,7 @@ class TaskService:
         include_archived: bool = False,
         exclude_statuses: Optional[Sequence[str]] = None,
     ) -> List[TaskRecord]:
-        """按条件查询任务列表，支持分页与状态过滤。"""
+        """List tasks with optional filters, status exclusions, and pagination."""
 
         query = [
             "SELECT * FROM tasks WHERE project_slug = ?",
@@ -515,7 +515,7 @@ class TaskService:
         page: int,
         page_size: int = DEFAULT_LIMIT,
     ) -> Tuple[List[TaskRecord], int, int]:
-        """按标题或描述模糊搜索任务，并返回结果与分页总数。"""
+        """Search tasks by title or description and return results, pages, and totals."""
 
         if page_size <= 0:
             page_size = DEFAULT_LIMIT
@@ -556,7 +556,7 @@ class TaskService:
         return [self._row_to_task(row, context="search") for row in rows], pages, total
 
     async def get_task(self, task_id: str) -> Optional[TaskRecord]:
-        """根据任务 ID 返回任务详情，不存在时返回 None。"""
+        """Return a task by ID, or ``None`` when it does not exist."""
 
         canonical_task_id = self._canonical_task_id(task_id)
         if not canonical_task_id:
@@ -588,11 +588,11 @@ class TaskService:
         description: Optional[str] = None,
         archived: Optional[bool] = None,
     ) -> TaskRecord:
-        """更新任务字段并记录历史，返回最新任务。"""
+        """Update a task, write history entries, and return the refreshed record."""
 
         canonical_task_id = self._canonical_task_id(task_id)
         if not canonical_task_id:
-            raise ValueError("任务不存在")
+            raise ValueError("Task does not exist")
         task_id = canonical_task_id
         async with self._lock:
             async with aiosqlite.connect(self.db_path) as db:
@@ -602,7 +602,7 @@ class TaskService:
                 row = await self._fetch_task_row(db, task_id)
                 if row is None:
                     await db.execute("ROLLBACK")
-                    raise ValueError("任务不存在")
+                    raise ValueError("Task does not exist")
                 updates = []
                 params: List[object] = []
                 history_items: List[Tuple[str, Optional[str], Optional[str]]] = []
@@ -614,7 +614,7 @@ class TaskService:
                     normalized_status = self._normalize_status_token(status, context="update")
                     if normalized_status != status:
                         logger.warning(
-                            "任务状态入参已自动修正: task_id=%s raw=%s normalized=%s",
+                            "Task status input corrected automatically: task_id=%s raw=%s normalized=%s",
                             task_id,
                             status,
                             normalized_status,
@@ -676,7 +676,7 @@ class TaskService:
                 await db.commit()
         updated = await self.get_task(task_id)
         if updated is None:
-            raise ValueError("任务不存在")
+            raise ValueError("Task does not exist")
         return updated
 
     async def add_note(
@@ -687,11 +687,11 @@ class TaskService:
         content: str,
         actor: Optional[str],
     ) -> TaskNoteRecord:
-        """为任务追加备注，并同步写入历史记录。"""
+        """Append a note to a task and persist a corresponding history entry."""
 
         canonical_task_id = self._canonical_task_id(task_id)
         if not canonical_task_id:
-            raise ValueError("任务不存在")
+            raise ValueError("Task does not exist")
         task_id = canonical_task_id
         now = shanghai_now_iso()
         async with self._lock:
@@ -702,7 +702,7 @@ class TaskService:
                 task_row = await self._fetch_task_row(db, task_id)
                 if task_row is None:
                     await db.execute("ROLLBACK")
-                    raise ValueError("任务不存在")
+                    raise ValueError("Task does not exist")
                 cursor = await db.execute(
                     """
                     INSERT INTO task_notes(task_id, note_type, content, created_at)
@@ -738,7 +738,7 @@ class TaskService:
         )
 
     async def list_notes(self, task_id: str) -> List[TaskNoteRecord]:
-        """列出指定任务的所有备注，按时间升序排列。"""
+        """Return every note for a task ordered by creation time."""
 
         canonical_task_id = self._canonical_task_id(task_id)
         if not canonical_task_id:
@@ -766,7 +766,7 @@ class TaskService:
         ]
 
     async def list_history(self, task_id: str) -> List[TaskHistoryRecord]:
-        """返回任务的历史记录列表。"""
+        """Return the full history list for a task."""
 
         canonical_task_id = self._canonical_task_id(task_id)
         if not canonical_task_id:
@@ -809,11 +809,11 @@ class TaskService:
         payload: Optional[Dict[str, Any]] = None,
         created_at: Optional[str] = None,
     ) -> None:
-        """记录任务相关的动作事件。"""
+        """Record a structured task event."""
 
         canonical_task_id = self._canonical_task_id(task_id)
         if not canonical_task_id:
-            raise ValueError("任务不存在")
+            raise ValueError("Task does not exist")
         task_id = canonical_task_id
 
         event_token = (event_type or "task_action").strip() or "task_action"
@@ -825,7 +825,7 @@ class TaskService:
             try:
                 payload_text = json.dumps(payload, ensure_ascii=False)
             except (TypeError, ValueError) as exc:
-                logger.warning("事件 payload 序列化失败: task_id=%s error=%s", task_id, exc)
+                logger.warning("Failed to serialise event payload: task_id=%s error=%s", task_id, exc)
                 payload_text = None
         async with self._lock:
             async with aiosqlite.connect(self.db_path) as db:
@@ -835,7 +835,7 @@ class TaskService:
                 row = await self._fetch_task_row(db, task_id)
                 if row is None:
                     await db.execute("ROLLBACK")
-                    raise ValueError("任务不存在")
+                    raise ValueError("Task does not exist")
                 await self._insert_history(
                     db,
                     task_id,
@@ -850,7 +850,7 @@ class TaskService:
                 await db.commit()
 
     async def delete_task(self, task_id: str, *, actor: Optional[str]) -> TaskRecord:
-        """通过归档标记实现逻辑删除，并返回最新任务状态。"""
+        """Perform a logical delete by marking the task archived and return the state."""
 
         updated = await self.update_task(task_id, actor=actor, archived=True)
         return updated
@@ -863,7 +863,7 @@ class TaskService:
         page_size: int = DEFAULT_LIMIT,
         exclude_statuses: Optional[Sequence[str]] = None,
     ) -> Tuple[List[TaskRecord], int]:
-        """基于页码拉取任务列表，并返回总页数。"""
+        """Fetch a specific page of tasks and return both the page data and total count."""
 
         total = await self.count_tasks(
             status=status,
@@ -887,7 +887,7 @@ class TaskService:
         include_archived: bool,
         exclude_statuses: Optional[Sequence[str]] = None,
     ) -> int:
-        """统计满足条件的任务数量，用于分页。"""
+        """Count tasks that satisfy the provided filters."""
 
         query = "SELECT COUNT(1) AS c FROM tasks WHERE project_slug = ?"
         params: List[object] = [self.project_slug]
@@ -908,7 +908,7 @@ class TaskService:
         return int(row["c"] if row else 0)
 
     async def backup(self, target_path: Path) -> None:
-        """将当前数据库备份到指定路径。"""
+        """Backup the current database to the target path."""
 
         target_path = target_path.expanduser()
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -921,7 +921,7 @@ class TaskService:
 
     @staticmethod
     def _convert_task_id_token(value: Optional[str]) -> Optional[str]:
-        """统一任务 ID 的分隔符，兼容历史格式。"""
+        """Normalise task ID separators to remain compatible with legacy formats."""
 
         if value is None:
             return None
@@ -930,14 +930,14 @@ class TaskService:
         if token.startswith("TASK"):
             suffix = token[4:]
             if suffix and not suffix.startswith("_"):
-                # 旧格式 TASK0001/TASK0001_1 需要补下划线
+                # Legacy formats like TASK0001/TASK0001_1 require an underscore.
                 token = f"TASK_{suffix}"
             else:
                 token = f"TASK{suffix}"
         return token
 
     def _canonical_task_id(self, value: Optional[str]) -> Optional[str]:
-        """将外部传入的任务 ID 规范化为统一格式。"""
+        """Normalise externally provided task IDs into the canonical format."""
 
         if value is None:
             return None
@@ -948,7 +948,7 @@ class TaskService:
         return self._convert_task_id_token(token)
 
     def _write_id_migration_report(self, mapping: Dict[str, str]) -> None:
-        """将任务 ID 迁移结果记录为 JSON 报告，便于排查。"""
+        """Write a JSON report describing task ID migration results."""
 
         if not mapping:
             return
@@ -969,13 +969,13 @@ class TaskService:
             report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
         except Exception as exc:
             logger.warning(
-                "写入任务 ID 迁移报告失败: project=%s error=%s",
+                "Failed to write task ID migration report: project=%s error=%s",
                 self.project_slug,
                 exc,
             )
 
     async def _fetch_task_row(self, db: aiosqlite.Connection, task_id: str):
-        """从数据库查询指定任务的原始行。"""
+        """Fetch the raw task row from the database."""
 
         canonical_task_id = self._canonical_task_id(task_id)
         if not canonical_task_id:
@@ -988,7 +988,7 @@ class TaskService:
             return await cursor.fetchone()
 
     async def _next_root_sequence(self, db: aiosqlite.Connection) -> int:
-        """自增并返回 root 任务序列号。"""
+        """Increment and return the next root task sequence."""
 
         async with db.execute(
             "SELECT last_root FROM task_sequences WHERE project_slug = ?",
@@ -1022,7 +1022,7 @@ class TaskService:
         payload: Optional[str] = None,
         created_at: Optional[str] = None,
     ) -> None:
-        """写入任务历史记录，自动补齐时间戳。"""
+        """Insert a task history entry while filling timestamps automatically."""
 
         normalized = ensure_shanghai_iso(created_at) if created_at else None
         timestamp = normalized or shanghai_now_iso()
@@ -1044,16 +1044,16 @@ class TaskService:
         )
 
     def _normalize_status_token(self, value: Optional[str], *, context: str) -> str:
-        """将状态字符串标准化，兼容遗留 design 并记录异常数据。"""
+        """Normalise status strings, providing compatibility with legacy aliases."""
 
         if not value:
-            logger.warning("检测到空任务状态，已回退默认: context=%s", context)
+            logger.warning("Encountered empty task status; falling back to default: context=%s", context)
             return TASK_STATUSES[0]
         token = str(value).strip().lower()
         mapped = STATUS_ALIASES.get(token, token)
         if mapped not in self._valid_statuses:
             logger.warning(
-                "检测到未知任务状态: value=%s mapped=%s context=%s",
+                "Unknown task status detected: value=%s mapped=%s context=%s",
                 value,
                 mapped,
                 context,
@@ -1061,7 +1061,7 @@ class TaskService:
             return mapped
         if mapped != token:
             logger.info(
-                "任务状态已根据别名转换: raw=%s normalized=%s context=%s",
+                "Task status converted via alias: raw=%s normalized=%s context=%s",
                 value,
                 mapped,
                 context,
@@ -1074,7 +1074,7 @@ class TaskService:
         *,
         context: str,
     ) -> TaskRecord:
-        """将 sqlite row 转换为 TaskRecord 实例。"""
+        """Convert a sqlite row into a ``TaskRecord`` instance."""
 
         tags_raw = row["tags"] or "[]"
         try:

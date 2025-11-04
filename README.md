@@ -1,4 +1,4 @@
-# vibego
+# vibego - vibe coding via Telegram anytime, anywhere
 
 **Drive your terminal AI CLI via Telegram anytime and anywhere (supports Codex / ClaudeCode)**
 
@@ -48,6 +48,9 @@ Use the official Telegram BotFather guide (<https://core.telegram.org/bots#botfa
 
 Before continuing, make sure Codex / ClaudeCode CLIs are installed and logged in, and that you have a Telegram bot token
 ready.
+
+- Consider merging the contents of [AGENTS-en.md](AGENTS-en.md)￼ into your `$HOME/.codex/AGENTS.md` or
+  `$HOME/.claude/CLAUDE.md`.
 
 ```bash
 pipx install vibego  # or pip install --user vibego

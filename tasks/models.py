@@ -1,4 +1,4 @@
-"""任务相关的数据模型定义。"""
+"""Data models used by the task subsystem."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -14,7 +14,7 @@ except ZoneInfoNotFoundError:
 
 
 def _format_shanghai(dt: datetime) -> str:
-    """格式化时间为上海时区 ISO8601 字符串（秒级，带偏移）。"""
+    """Format a datetime as an ISO8601 string in the Shanghai timezone."""
 
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -23,13 +23,13 @@ def _format_shanghai(dt: datetime) -> str:
 
 
 def shanghai_now_iso() -> str:
-    """返回当前上海时区的 ISO8601 字符串。"""
+    """Return the current time in Shanghai as an ISO8601 string."""
 
     return _format_shanghai(datetime.now(SHANGHAI_TZ))
 
 
 def ensure_shanghai_iso(value: Optional[str]) -> Optional[str]:
-    """将任意 ISO 字符串规范化为上海时区表示。"""
+    """Normalize an ISO string to the Shanghai timezone representation."""
 
     if value is None:
         return None
@@ -44,7 +44,7 @@ def ensure_shanghai_iso(value: Optional[str]) -> Optional[str]:
 
 @dataclass(slots=True)
 class TaskRecord:
-    """表示单个任务的核心字段集合。"""
+    """Core fields that describe a single task."""
 
     id: str
     project_slug: str
@@ -66,7 +66,7 @@ class TaskRecord:
 
 @dataclass(slots=True)
 class TaskNoteRecord:
-    """描述附加在任务上的备注信息。"""
+    """Note information attached to a task."""
 
     id: int
     task_id: str
@@ -77,7 +77,7 @@ class TaskNoteRecord:
 
 @dataclass(slots=True)
 class TaskHistoryRecord:
-    """记录任务字段的历史变更信息。"""
+    """Historical trace of changes to task fields."""
 
     id: int
     task_id: str

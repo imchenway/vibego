@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-# vibego CLI 入口脚本，便于本地直接执行。
+# vibego CLI entry script for convenient local execution.
 
 from vibego_cli import main
 
 
 if __name__ == "__main__":
     main()
-

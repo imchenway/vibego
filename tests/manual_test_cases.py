@@ -1,4 +1,4 @@
-"""手动测试用例：模拟 10 种实际使用场景"""
+"""Manual test cases: simulate 10 real-life usage scenarios"""
 
 import sys
 from pathlib import Path
@@ -9,28 +9,28 @@ sys.path.insert(0, str(project_root))
 from bot import _unescape_if_already_escaped, _prepare_model_payload, _IS_MARKDOWN_V2
 
 print("\n" + "=" * 80)
-print("手动测试：10 种实际使用场景")
+print("Manual testing: 10 real-world usage scenarios")
 print("=" * 80 + "\n")
 
 test_cases = [
     {
-        "name": "场景1：用户提供的真实问题（后续步骤）",
-        "input": r"""\#\#\# 📋 后续步骤
+        "name": "Scenario 1: Real question provided by user (next steps)",
+        "input": r"""\#\#\# 📋 Next steps
 
-1\. \*\*重启 Bot 服务\*\*以应用修复：
+1\. \*\*Restart the Bot service\*\*To apply the fix:
    \`\`\`bash
    python -m vibego\_cli stop
    python -m vibego\_cli start
    \`\`\`
 
-2\. \*\*验证 TASK\_0011\*\* 现在可以正常显示""",
-        "description": "用户提交的原始问题，包含代码块和转义字符"
+2\. \*\*Verify TASK\_0011\*\* Now it can be displayed normally""",
+        "description": "Original user-submitted question containing code blocks and escaped characters"
     },
     {
-        "name": "场景2：包含 Python 代码的任务描述",
-        "input": r"""修复 \*\*数据库连接池\*\* 的问题
+        "name": "Scenario 2: Task description containing Python code",
+        "input": r"""Repair \*\*Database connection pool\*\* question
 
-示例代码：
+Sample code:
 \`\`\`python
 import asyncpg
 
@@ -42,76 +42,76 @@ async def connect():
     return pool
 \`\`\`
 
-\*\*重要\*\*：需要检查环境变量""",
-        "description": "包含 Python 代码块的任务描述"
+\*\*important\*\*:Need to check environment variables""",
+        "description": "Task description containing Python code chunks"
     },
     {
-        "name": "场景3：仅包含粗体和列表的简单文本",
-        "input": r"""\*\*任务目标\*\*：
-\- 优化性能
-\- 修复缺陷
-\- 更新文档""",
-        "description": "简单的列表和粗体文本"
+        "name": "Scenario 3: Simple text with only bold and list",
+        "input": r"""\*\*Mission objectives\*\*:
+\- Optimize performance
+\- fix bug
+\-Update documentation""",
+        "description": "Simple lists and bold text"
     },
     {
-        "name": "场景4：包含行内代码的说明",
-        "input": r"""使用 \`vibego\_cli\` 命令行工具来管理任务，主要命令包括：
-\- \`start\` \- 启动服务
-\- \`stop\` \- 停止服务
-\- \`status\` \- 查看状态""",
-        "description": "包含行内代码的说明文本"
+        "name": "Scenario 4: Instructions containing inline code",
+        "input": r"""use \`vibego\_cli\` Command line tools to manage tasks, the main commands include:
+\-\`start\` \- Start service
+\-\`stop\` \- Stop service
+\-\`status\` \- View status""",
+        "description": "Contains descriptive text for inline code"
     },
     {
-        "name": "场景5：多种代码块混合",
-        "input": r"""配置步骤：
+        "name": "Scenario 5: Mixing of multiple code blocks",
+        "input": r"""Configuration steps:
 
-1\. 编辑配置文件 \`config\.yaml\`：
+1\. Edit configuration file \`config\.yaml\`:
    \`\`\`yaml
    database:
      host: localhost
      port: 5432
    \`\`\`
 
-2\. 运行初始化脚本：
+2\. Run the initialization script:
    \`\`\`bash
    ./init\.sh \-\-force
    \`\`\`""",
-        "description": "混合 YAML 和 Bash 代码块"
+        "description": "Mixing YAML and Bash code blocks"
     },
     {
-        "name": "场景6：包含链接的文本",
-        "input": r"""参考文档：\[官方文档\]\(https\://docs\.example\.com\)
+        "name": "Scenario 6: Text containing links",
+        "input": r"""Reference document:\[Official documentation\]\(https\://docs\.example\.com\)
 
-查看 \[GitHub 仓库\]\(https\://github\.com/example/repo\) 了解更多""",
-        "description": "包含 Markdown 链接"
+Check \[GitHub storehouse\]\(https\://github\.com/example/repo\) learn more""",
+        "description": "Contains Markdown links"
     },
     {
-        "name": "场景7：复杂的表格和列表",
-        "input": r"""\#\#\# 测试结果
+        "name": "Scenario 7: Complex tables and lists",
+        "input": r"""\#\#\# Test results
 
-\| 测试项 \| 结果 \|
+\| Test item \| result \|
 \|\-\-\-\-\-\-\|\-\-\-\-\-\-\|
-\| 单元测试 \| ✅ 通过 \|
-\| 集成测试 \| ✅ 通过 \|
-\| 性能测试 \| ⚠️ 待优化 \|""",
-        "description": "包含 Markdown 表格"
+| unit testing | PASS |
+| Integration testing | PASS |
+\| Performance Test \| ⚠️ To be optimized \|""",
+        "description": "Contains Markdown tables"
     },
     {
-        "name": "场景8：Git 命令示例",
-        "input": r"""Git 操作步骤：
+        "name": "Scenario 8: Git command example",
+        "input": r"""Git Operation steps:
 
 \`\`\`bash
 git add \.
-git commit \-m "fix\: 修复任务显示问题"
+git commit \-m "fix\: Fix task display issue"
 git push origin main
 \`\`\`
 
-注意：不要使用 \`git push \-\-force\`""",
-        "description": "包含 Git 命令的代码块"
+Note: Do not use \`git push \-\-force\`""",
+        "description": "Code block containing Git commands"
     },
     {
-        "name": "场景9：Docker 配置",
-        "input": r"""Docker 配置：
+        "name": "Scenario 9: Docker configuration",
+        "input": r"""Docker Configuration:
 
 \`\`\`dockerfile
 FROM python:3\.11\-slim
@@ -123,11 +123,11 @@ RUN pip install \-r requirements\.txt
 
 CMD \["python", "bot\.py"\]
 \`\`\`""",
-        "description": "包含 Dockerfile 的代码块"
+        "description": "Code block containing Dockerfile"
     },
     {
-        "name": "场景10：JSON 配置示例",
-        "input": r"""配置文件示例 \`config\.json\`：
+        "name": "Scenario 10: JSON configuration example",
+        "input": r"""Configuration file example \`config\.json\`:
 
 \`\`\`json
 \{
@@ -137,66 +137,66 @@ CMD \["python", "bot\.py"\]
   \}
 \}
 \`\`\`""",
-        "description": "包含 JSON 配置的代码块"
+        "description": "Code block containing JSON configuration"
     }
 ]
 
-print(f"当前 parse_mode: {'MarkdownV2' if _IS_MARKDOWN_V2 else 'Markdown'}\n")
+print(f"current parse_mode: {'MarkdownV2' if _IS_MARKDOWN_V2 else 'Markdown'}\n")
 
 for i, case in enumerate(test_cases, 1):
     print(f"\n{'=' * 80}")
-    print(f"测试用例 {i}/{len(test_cases)}: {case['name']}")
-    print(f"描述: {case['description']}")
+    print(f"test case {i}/{len(test_cases)}: {case['name']}")
+    print(f"describe: {case['description']}")
     print(f"{'=' * 80}\n")
 
     input_text = case['input']
 
-    # 步骤1：智能反转义
+    # Step 1: Smart Unescaping
     unescaped = _unescape_if_already_escaped(input_text)
 
-    # 步骤2：格式化为最终输出（这会被发送到 Telegram）
+    # Step 2: Format for final output (this will be sent to Telegram)
     final_output = _prepare_model_payload(unescaped)
 
-    print("原始输入（前100字符）:")
+    print("Raw input (first 100 characters):")
     print(f"  {repr(input_text[:100])}...")
     print()
 
-    print("反转义后（前100字符）:")
+    print("After escaping (first 100 characters):")
     print(f"  {repr(unescaped[:100])}...")
     print()
 
-    print("最终输出（前100字符）:")
+    print("Final output (first 100 characters):")
     print(f"  {repr(final_output[:100])}...")
     print()
 
-    # 关键检查
+    # critical check
     checks = {
-        "代码块标记正常": "```" in final_output or "`" in final_output,
-        "粗体格式正常": "*" in final_output,
-        "未残留 MarkdownV2 转义": all(
+        "Code block tags are ok": "```" in final_output or "`" in final_output,
+        "Bold format is normal": "*" in final_output,
+        "No remaining MarkdownV2 escaping": all(
             escape not in final_output for escape in ("\\*", "\\#", "\\[", "\\]")
         ),
     }
 
-    print("关键检查:")
+    print("critical check:")
     for check_name, passed in checks.items():
-        status = "✅" if passed else "❌"
+        status = "PASS" if passed else "FAIL"
         print(f"  {status} {check_name}")
 
-    # 额外检查：代码块内的下划线应该保持转义
+    # Extra check: underscores inside code blocks should remain escaped
     if "vibego\\_cli" in input_text or "create\\_pool" in input_text or "bot\\_token" in input_text:
         if "vibego\\_cli" in final_output or "create\\_pool" in final_output or "bot\\_token" in final_output:
-            print(f"  ✅ 代码块内的下划线正确保护")
+            print("  OK: Underscores within code blocks are properly protected")
         else:
-            print(f"  ⚠️  代码块内的下划线可能被反转义")
+            print(f"  ⚠️  Underscores within code blocks may be escaped")
 
 print("\n" + "=" * 80)
-print("测试完成")
+print("Test completed")
 print("=" * 80 + "\n")
 
-print("总结:")
-print("- 所有测试用例都经过了智能反转义处理")
-print("- 代码块标记正确转换为 ``` 和 `")
-print("- 代码块内容保持原有转义状态")
-print("- 普通文本的转义符号被正确清理")
+print("Summarize:")
+print("- All test cases have been intelligently unescaped.")
+print("- Code block tags are correctly converted to ``` and `")
+print("- The content of the code block remains in its original escaped state")
+print("- Escape symbols for normal text are properly sanitized")
 print()

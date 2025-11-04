@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Codex 模型配置
+# Codex Model configuration
 
 model_configure() {
   MODEL_NAME="codex"

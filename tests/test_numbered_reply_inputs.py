@@ -1,7 +1,11 @@
 import asyncio
+import os
 from types import SimpleNamespace
 
 import pytest
+
+os.environ.setdefault("BOT_TOKEN", "test-token")
+os.environ.setdefault("MODEL_WORKDIR", "/tmp")
 
 import bot
 from tasks.fsm import TaskCreateStates
@@ -56,10 +60,10 @@ class StubMessage:
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("1. 需求", "需求"),
+        ("1. need", "need"),
         ("3. 3", "3"),
-        ("5. 取消", "取消"),
-        (" 无编号 ", "无编号"),
+        ("5. Cancel", "Cancel"),
+        (" No number ", "No number"),
         ("", ""),
     ],
 )
@@ -70,11 +74,11 @@ def test_strip_number_prefix(raw, expected):
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("需求", "需求"),
-        ("1. 需求", "需求"),
+        ("need", "need"),
+        ("1. need", "need"),
         ("2", bot._format_task_type("defect")),
-        ("4. 风险", "风险"),
-        ("5", "取消"),
+        ("4. risk", "risk"),
+        ("5", "Cancel"),
         ("req", "req"),
         ("", ""),
         ("9", "9"),
@@ -82,7 +86,7 @@ def test_strip_number_prefix(raw, expected):
 )
 def test_resolve_reply_choice_task_types(raw, expected):
     options = [bot._format_task_type(code) for code in bot.TASK_TYPES]
-    options.append("取消")
+    options.append("Cancel")
     assert bot._resolve_reply_choice(raw, options=options) == expected
 
 
@@ -91,7 +95,7 @@ def test_resolve_reply_choice_task_types(raw, expected):
     [
         ("1. 1", "1"),
         ("3", "3"),
-        ("6. 跳过", bot.SKIP_TEXT),
+        ("6. Skip", bot.SKIP_TEXT),
         ("6", bot.SKIP_TEXT),
         ("8", "8"),
     ],
@@ -105,16 +109,16 @@ def test_resolve_reply_choice_priority(raw, expected):
 @pytest.mark.parametrize(
     "raw, expected_type",
     [
-        ("1. 需求", "requirement"),
-        ("2", "defect"),
-        ("3. 优化", "task"),
-        ("4", "risk"),
-    ],
+            ("1. Requirement", "requirement"),
+            ("2", "defect"),
+            ("3. Task", "task"),
+            ("4", "risk"),
+        ],
 )
 def test_task_create_type_accepts_number_inputs(raw, expected_type):
     state = StubState(
         data={
-            "title": "测试标题",
+            "title": "test title",
             "priority": bot.DEFAULT_PRIORITY,
         },
         state=TaskCreateStates.waiting_type,
@@ -126,11 +130,11 @@ def test_task_create_type_accepts_number_inputs(raw, expected_type):
     assert state.data["task_type"] == expected_type
 
 
-@pytest.mark.parametrize("raw", ["5", "5. 取消"])
+@pytest.mark.parametrize("raw", ["5", "5. Cancel"])
 def test_task_create_type_numeric_cancel(raw):
     state = StubState(
         data={
-            "title": "测试标题",
+            "title": "test title",
             "priority": bot.DEFAULT_PRIORITY,
         },
         state=TaskCreateStates.waiting_type,
@@ -140,13 +144,13 @@ def test_task_create_type_numeric_cancel(raw):
 
     assert state.state is None
     assert not state.data
-    assert message.calls and "已取消创建任务。" in message.calls[-1]["text"]
+    assert message.calls and "Task creation cancelled." in message.calls[-1]["text"]
 
 
 @pytest.mark.parametrize(
     "task_type, expected_prefix",
     [
-        ("requirement", "📌"),
+        ("requirement", "[req]"),
         ("defect", "🐞"),
         ("task", "🛠️"),
         ("risk", "⚠️"),
@@ -158,18 +162,18 @@ def test_format_task_type_includes_emoji(task_type, expected_prefix):
 
 
 def test_format_task_type_handles_empty():
-    assert bot._format_task_type(None) == "⚪ 未设置"
+    assert bot._format_task_type(None) == "⚪ Not Set"
 
 
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("📌 需求", "requirement"),
-        ("🐞 缺陷", "defect"),
-        ("🛠️ 优化", "task"),
-        ("⚠️ 风险", "risk"),
-        ("📌需求", "requirement"),
-        ("1. 📌 需求", "requirement"),
+        ("[req] need", "requirement"),
+        ("🐞 defect", "defect"),
+        ("🛠️ optimization", "task"),
+        ("⚠️ risk", "risk"),
+        ("[req]need", "requirement"),
+        ("1. [req] need", "requirement"),
     ],
 )
 def test_normalize_task_type_accepts_emoji(raw, expected):

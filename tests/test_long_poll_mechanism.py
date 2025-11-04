@@ -1,11 +1,11 @@
 """
-测试长轮询机制（两阶段轮询）。
+Test the long polling mechanism (two-phase polling).
 
-测试场景：
-1. 快速轮询阶段：首次发送成功前的快速监听
-2. 延迟轮询阶段：首次发送成功后，启动 3 分钟间隔的长轮询
-3. 新消息中断：收到新消息时终止延迟轮询
-4. 轮询次数限制：达到最大次数后自动退出
+Test scenario:
+1. Fast polling phase: fast monitoring before the first successful transmission
+2. Delayed polling phase: After the first successful transmission, a long polling interval of 3 minutes is started.
+3. New message interrupt: Terminate deferred polling when new message is received
+4. Polling times limit: Automatically exit after reaching the maximum number of times
 """
 
 import asyncio
@@ -29,7 +29,7 @@ import bot
 
 @pytest.fixture(autouse=True)
 def _force_claudecode(monkeypatch):
-    """确保测试始终走 ClaudeCode 分支。"""
+    """Make sure your tests always go to the ClaudeCode branch."""
     monkeypatch.setattr(bot, "ACTIVE_MODEL", "claudecode")
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "claudecode")
     return
@@ -37,7 +37,7 @@ def _force_claudecode(monkeypatch):
 
 @pytest.fixture
 def mock_session_path(tmp_path):
-    """创建临时会话文件。"""
+    """Create a temporary session file."""
     session_file = tmp_path / "test_session.jsonl"
     session_file.write_text("")
     return session_file
@@ -45,7 +45,7 @@ def mock_session_path(tmp_path):
 
 @pytest.fixture(autouse=True)
 def reset_global_state():
-    """每个测试前重置全局状态。"""
+    """Reset global state before each test."""
     bot.CHAT_LONG_POLL_STATE.clear()
     bot.SESSION_OFFSETS.clear()
     bot.CHAT_DELIVERED_HASHES.clear()
@@ -60,12 +60,12 @@ def reset_global_state():
 
 
 # ============================================================================
-# 单元测试：辅助函数
+# Unit testing: helper functions
 # ============================================================================
 
 
 def test_interrupt_long_poll_sets_flag():
-    """测试 _interrupt_long_poll() 设置中断标志。"""
+    """test _interrupt_long_poll() Set interrupt flag."""
     chat_id = 12345
     bot.CHAT_LONG_POLL_STATE[chat_id] = {
         "active": True,
@@ -80,32 +80,32 @@ def test_interrupt_long_poll_sets_flag():
 
 
 def test_interrupt_long_poll_no_state():
-    """测试 _interrupt_long_poll() 在无状态时不报错。"""
+    """test _interrupt_long_poll() No error is reported when there is no state."""
     chat_id = 12345
-    # 确保没有状态
+    # Make sure there is no status
     bot.CHAT_LONG_POLL_STATE.pop(chat_id, None)
 
-    # 不应抛出异常
+    # No exception should be thrown
     asyncio.run(bot._interrupt_long_poll(chat_id))
 
 
 # ============================================================================
-# 集成测试：_watch_and_notify 两阶段轮询
+# Integrated test:_watch_and_notify two-phase polling
 # ============================================================================
 
 
 @pytest.mark.asyncio
 async def test_watch_and_notify_quick_exit_without_delivery(mock_session_path):
     """
-    测试场景 1：快速轮询阶段，无消息时在超时后退出。
+    testScenario 1: In the fast polling phase, when there is no message, exist times out and exits.
     """
     chat_id = 12345
 
     with patch.object(bot, "_deliver_pending_messages", new_callable=AsyncMock) as mock_deliver:
-        # 模拟始终无消息
+        # Simulation always has no message
         mock_deliver.return_value = False
 
-        # 使用短超时（0.5 秒）
+        # Use short timeout (0.5 seconds)
         await bot._watch_and_notify(
             chat_id=chat_id,
             session_path=mock_session_path,
@@ -113,17 +113,17 @@ async def test_watch_and_notify_quick_exit_without_delivery(mock_session_path):
             interval=0.1,
         )
 
-        # 应该调用了 _deliver_pending_messages 多次
+        # should be called _deliver_pending_messages many times
         assert mock_deliver.call_count >= 3
 
-    # 不应该有长轮询状态
+    # There should be no long polling state
     assert chat_id not in bot.CHAT_LONG_POLL_STATE
 
 
 @pytest.mark.asyncio
 async def test_watch_and_notify_enters_long_poll_after_first_delivery(mock_session_path):
     """
-    测试场景 2：快速轮询阶段，首次发送成功后进入延迟轮询模式。
+    testScenario 2: In the fast polling stage, the delayed polling mode is entered after the first Second-rate is sent successfully.
     """
     chat_id = 12345
     delivery_count = 0
@@ -131,12 +131,12 @@ async def test_watch_and_notify_enters_long_poll_after_first_delivery(mock_sessi
     async def mock_deliver(cid, path, **kwargs):
         nonlocal delivery_count
         delivery_count += 1
-        # 第一次返回 True（首次发送成功）
-        # 之后返回 False（无新消息）
+        # Return True for the first time (sent successfully for the first time)
+        # Return False afterwards (no new messages)
         return delivery_count == 1
 
     with patch.object(bot, "_deliver_pending_messages", side_effect=mock_deliver):
-        # 启动监听任务
+        # Start listening task
         task = asyncio.create_task(
             bot._watch_and_notify(
                 chat_id=chat_id,
@@ -146,20 +146,20 @@ async def test_watch_and_notify_enters_long_poll_after_first_delivery(mock_sessi
             )
         )
 
-        # 等待首次发送成功
+        # Waiting for the first successful delivery
         await asyncio.sleep(0.15)
 
-        # 检查是否进入了延迟轮询模式
+        # Check if delayed polling mode has been entered
         assert chat_id in bot.CHAT_LONG_POLL_STATE
         assert bot.CHAT_LONG_POLL_STATE[chat_id]["active"] is True
         assert bot.CHAT_LONG_POLL_STATE[chat_id]["round"] == 0
         assert bot.CHAT_LONG_POLL_STATE[chat_id]["max_rounds"] == 600
 
-        # 中断任务（避免等待 3 分钟）
+        # Interrupt task (avoid waiting 3 minutes)
         await bot._interrupt_long_poll(chat_id)
         await asyncio.sleep(0.1)
 
-        # 取消任务
+        # Cancel task
         task.cancel()
         try:
             await task
@@ -170,7 +170,7 @@ async def test_watch_and_notify_enters_long_poll_after_first_delivery(mock_sessi
 @pytest.mark.asyncio
 async def test_watch_and_notify_long_poll_increments_round(mock_session_path):
     """
-    测试场景 3：延迟轮询阶段，无新消息时轮询计数递增。
+    testScenario 3: Delayed polling phase, the polling count is incremented when there are no new messages.
     """
     chat_id = 12345
     delivery_count = 0
@@ -178,11 +178,11 @@ async def test_watch_and_notify_long_poll_increments_round(mock_session_path):
     async def mock_deliver(cid, path, **kwargs):
         nonlocal delivery_count
         delivery_count += 1
-        # 第一次返回 True，之后返回 False
+        # Returns True the first time, then False
         return delivery_count == 1
 
     with patch.object(bot, "_deliver_pending_messages", side_effect=mock_deliver):
-        # 使用短轮询间隔便于测试
+        # Use short polling intervals for testing
         original_interval = 180.0
         short_interval = 0.1
 
@@ -195,17 +195,17 @@ async def test_watch_and_notify_long_poll_increments_round(mock_session_path):
             )
         )
 
-        # 等待进入延迟轮询模式
+        # Waiting to enter delayed polling mode
         await asyncio.sleep(0.15)
 
-        # 手动修改间隔为短间隔（测试用）
-        # 注：实际代码中间隔是 180 秒，这里模拟快速轮询
-        # 检查轮询计数是否递增（需要等待多个轮询周期）
+        # Manually change the interval to a short interval (for testing)
+        # Note: The interval in the actual code is 180 seconds, here we simulate fast polling
+        # Check if poll count is incremented (needs to wait multiple poll cycles)
 
-        # 等待几次轮询
+        # Wait for several polls
         await asyncio.sleep(0.3)
 
-        # 中断并清理
+        # Break and clean up
         await bot._interrupt_long_poll(chat_id)
         await asyncio.sleep(0.1)
         task.cancel()
@@ -218,7 +218,7 @@ async def test_watch_and_notify_long_poll_increments_round(mock_session_path):
 @pytest.mark.asyncio
 async def test_watch_and_notify_interrupted_by_new_message(mock_session_path):
     """
-    测试场景 4：延迟轮询被新消息中断。
+    testScenario 4: Delayed polling interrupted by new messages.
     """
     chat_id = 12345
     delivery_count = 0
@@ -226,7 +226,7 @@ async def test_watch_and_notify_interrupted_by_new_message(mock_session_path):
     async def mock_deliver(cid, path, **kwargs):
         nonlocal delivery_count
         delivery_count += 1
-        return delivery_count == 1  # 只第一次返回 True
+        return delivery_count == 1  # Only returns True the first time
 
     with patch.object(bot, "_deliver_pending_messages", side_effect=mock_deliver):
         task = asyncio.create_task(
@@ -238,21 +238,21 @@ async def test_watch_and_notify_interrupted_by_new_message(mock_session_path):
             )
         )
 
-        # 等待进入延迟轮询模式
+        # Waiting to enter delayed polling mode
         await asyncio.sleep(0.15)
         assert chat_id in bot.CHAT_LONG_POLL_STATE
 
-        # 模拟新消息到达，中断轮询
+        # Simulate the arrival of new messages and interrupt polling
         await bot._interrupt_long_poll(chat_id)
 
-        # 等待任务检测到中断标志并退出
+        # Wait for the task to detect the interrupt flag and exit
         await asyncio.sleep(0.2)
 
-        # 任务应该已经退出，状态被清理
+        # The task should have exited and the status cleared
         assert chat_id not in bot.CHAT_LONG_POLL_STATE or \
                bot.CHAT_LONG_POLL_STATE[chat_id].get("interrupted") is True
 
-        # 清理
+        # clean up
         task.cancel()
         try:
             await task
@@ -263,10 +263,10 @@ async def test_watch_and_notify_interrupted_by_new_message(mock_session_path):
 @pytest.mark.asyncio
 async def test_watch_and_notify_long_poll_resets_on_new_delivery(mock_session_path):
     """
-    测试场景 5：延迟轮询中收到新消息，重置轮询计数。
+    testScenario 5: New messages are received in delayed polling and the polling count is reset.
     """
     chat_id = 12345
-    delivery_sequence = [True, False, False, True, False]  # 第 1 和第 4 次有消息
+    delivery_sequence = [True, False, False, True, False]  # 1st and 4th news
     delivery_index = 0
 
     async def mock_deliver(cid, path, **kwargs):
@@ -285,14 +285,14 @@ async def test_watch_and_notify_long_poll_resets_on_new_delivery(mock_session_pa
             )
         )
 
-        # 等待进入延迟轮询模式
+        # Waiting to enter delayed polling mode
         await asyncio.sleep(0.15)
         assert chat_id in bot.CHAT_LONG_POLL_STATE
 
-        # 等待几次轮询，确保计数增加
+        # Wait a few polls to make sure the count increases
         await asyncio.sleep(0.25)
 
-        # 中断并清理
+        # Break and clean up
         await bot._interrupt_long_poll(chat_id)
         await asyncio.sleep(0.1)
         task.cancel()
@@ -303,12 +303,12 @@ async def test_watch_and_notify_long_poll_resets_on_new_delivery(mock_session_pa
 
 
 # ============================================================================
-# 边界条件测试
+# Boundary condition test
 # ============================================================================
 
 
 def test_interrupt_long_poll_idempotent():
-    """测试重复调用 _interrupt_long_poll() 是幂等的。"""
+    """testRepeated calls _interrupt_long_poll() is idempotent."""
     chat_id = 12345
     bot.CHAT_LONG_POLL_STATE[chat_id] = {
         "active": True,
@@ -317,11 +317,11 @@ def test_interrupt_long_poll_idempotent():
         "interrupted": False,
     }
 
-    # 第一次调用
+    # first call
     asyncio.run(bot._interrupt_long_poll(chat_id))
     assert bot.CHAT_LONG_POLL_STATE[chat_id]["interrupted"] is True
 
-    # 第二次调用（应该仍然是 True，不报错）
+    # Second call (should still be True, no error reported)
     asyncio.run(bot._interrupt_long_poll(chat_id))
     assert bot.CHAT_LONG_POLL_STATE[chat_id]["interrupted"] is True
 
@@ -329,38 +329,38 @@ def test_interrupt_long_poll_idempotent():
 @pytest.mark.asyncio
 async def test_watch_and_notify_max_rounds_limit(mock_session_path):
     """
-    测试场景 6：延迟轮询达到最大次数后退出。
+    testScenario 6: Exit after delayed polling reaches the maximum Second-rate number.
 
-    注意：由于实际间隔是 180 秒 × 10 次 = 30 分钟，
-    这里只测试逻辑，不等待实际时间。
+    NOTE: Since the actual interval is 180 seconds × 10 Second-rate = 30 minutes,
+    Here we only test the logic and do not wait for the actual time.
     """
     chat_id = 12345
 
-    # 修改最大轮询次数为 2（便于测试）
+    # Modify the maximum number of polling Second-rates to 2 (convenient for testing)
     async def mock_deliver(cid, path, **kwargs):
-        # 只在第一次返回 True，进入延迟轮询
-        # 后续返回 False，让轮询计数递增
+        # Only the first Second-rate of exist returns True and enters delayed polling.
+        # Subsequently return False to increment the polling count
         if not hasattr(mock_deliver, "called"):
             mock_deliver.called = True
             return True
         return False
 
     with patch.object(bot, "_deliver_pending_messages", side_effect=mock_deliver):
-        # 这里无法轻易测试，因为需要等待 180 秒 × 次数
-        # 实际测试中，可以通过 monkeypatch 修改 long_poll_interval
-        # 这里仅做逻辑验证
+        # It cannot be easily tested here because you need to wait 180 seconds. × Second-ratenumber
+        # In actual testing, long can be modified through monkeypatch_poll_interval
+        # Only logical verification is done here
         pass
 
 
 # ============================================================================
-# 性能测试：确保不阻塞事件循环
+# Performance test: Make sure not to block the event loop
 # ============================================================================
 
 
 @pytest.mark.asyncio
 async def test_watch_and_notify_does_not_block_event_loop(mock_session_path):
     """
-    测试 _watch_and_notify 不会阻塞事件循环。
+    test _watch_and_notify Does not block the event loop.
     """
     chat_id = 12345
 
@@ -377,7 +377,7 @@ async def test_watch_and_notify_does_not_block_event_loop(mock_session_path):
             )
         )
 
-        # 在监听运行的同时执行其他任务
+        # Perform other tasks while monitoring is running
         other_task_completed = False
 
         async def other_task():
@@ -387,13 +387,13 @@ async def test_watch_and_notify_does_not_block_event_loop(mock_session_path):
 
         other = asyncio.create_task(other_task())
 
-        # 等待 other_task 完成
+        # waiting for other_task Complete
         await other
 
-        # 验证 other_task 在 _watch_and_notify 运行期间完成
+        # Verify other_task exist _watch_and_notify Completed during runtime
         assert other_task_completed is True
 
-        # 清理
+        # clean up
         task.cancel()
         try:
             await task

@@ -1,9 +1,9 @@
-"""测试智能反转义功能，特别是代码块保护场景。"""
+"""Test smart anti-escaping capabilities, especially code block protection scenarios."""
 
 import sys
 from pathlib import Path
 
-# 添加项目根目录到 Python 路径
+# Add project root directory to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -15,22 +15,22 @@ from bot import (
 
 
 def test_is_already_escaped():
-    """测试预转义检测功能。"""
+    """Test pre-escape detection functionality."""
     print("=" * 60)
-    print("测试 1: 预转义检测")
+    print("Test 1: Pre-escape detection")
     print("=" * 60)
 
     test_cases = [
-        # (输入, 期望结果, 描述)
-        (r"\*\*粗体\*\*", True, "连续转义模式"),
-        (r"\#\#\# 标题", True, "标题转义"),
-        (r"这是\*\*粗体\*\*文本", True, "包含转义的普通文本"),
-        (r"python -m vibego\_cli stop", True, "包含转义下划线"),
-        ("正常文本", False, "无转义字符"),
-        ("hello_world", False, "普通下划线"),
-        ("**粗体**", False, "未转义的粗体"),
-        ("短文本", False, "太短的文本"),
-        (r"\*", True, "单个转义字符也应识别为已转义"),
+        # (enter, expected result, describe)
+        (r"\*\*bold\*\*", True, "Continuous escape mode"),
+        (r"\#\#\# title", True, "titleescape"),
+        (r"This is\*\*bold\*\*text", True, "Includeescapeof ordinarytext"),
+        (r"python -m vibego\_cli stop", True, "Contains escaped underscores"),
+        ("normal text", False, "No escape characters"),
+        ("hello_world", False, "plain underscore"),
+        ("**Bold**", False, "unescapedBold"),
+        ("short text", False, "text too short"),
+        (r"\*", True, "Single escaped characters should also be recognized as escaped"),
     ]
 
     passed = 0
@@ -38,36 +38,36 @@ def test_is_already_escaped():
 
     for text, expected, desc in test_cases:
         result = _is_already_escaped(text)
-        status = "✅" if result == expected else "❌"
+        status = "PASS" if result == expected else "FAIL"
         if result == expected:
             passed += 1
         else:
             failed += 1
         print(f"{status} {desc}")
-        print(f"   输入: {repr(text)}")
-        print(f"   期望: {expected}, 实际: {result}")
+        print(f"   enter: {repr(text)}")
+        print(f"   expect: {expected}, actual: {result}")
         print()
 
-    print(f"通过: {passed}/{passed + failed}")
+    print(f"pass: {passed}/{passed + failed}")
     print()
     return failed == 0
 
 
 def test_unescape_markdown_v2():
-    """测试基础反转义功能。"""
+    """Test basic anti-escaping functionality."""
     print("=" * 60)
-    print("测试 2: 基础反转义")
+    print("Test 2: Basic anti-escaping")
     print("=" * 60)
 
     test_cases = [
-        # (输入, 期望输出, 描述)
-        (r"\*\*粗体\*\*", "**粗体**", "粗体反转义"),
-        (r"\#\#\# 标题", "### 标题", "标题反转义"),
-        (r"列表\:\n\- 项目1\n\- 项目2", "列表:\n- 项目1\n- 项目2", "列表反转义"),
-        (r"代码 \`code\`", "代码 `code`", "行内代码反转义"),
-        (r"链接 \[text\]\(url\)", "链接 [text](url)", "链接反转义"),
-        (r"python \-m vibego\_cli", "python -m vibego_cli", "命令反转义"),
-        ("正常文本", "正常文本", "无需反转义"),
+        # (enter, expectoutput, describe)
+        (r"\*\*bold\*\*", "**Bold**", "Boldoppositeescape"),
+        (r"\#\#\# title", "### title", "titleoppositeescape"),
+        (r"List\:\n\- Project 1\n\- Project 2", "list:\n- Item 1\n- Item 2", "listoppositeescape"),
+        (r"code \`code\`", "code `code`", "Inside the industrycodeoppositeescape"),
+        (r"Link \[text\]\(url\)", "Link [text](url)", "Linkoppositeescape"),
+        (r"python \-m vibego\_cli", "python -m vibego_cli", "command escaping"),
+        ("normal text", "normal text", "No need to unescape"),
     ]
 
     passed = 0
@@ -75,64 +75,64 @@ def test_unescape_markdown_v2():
 
     for input_text, expected, desc in test_cases:
         result = _unescape_markdown_v2(input_text)
-        status = "✅" if result == expected else "❌"
+        status = "PASS" if result == expected else "FAIL"
         if result == expected:
             passed += 1
         else:
             failed += 1
         print(f"{status} {desc}")
-        print(f"   输入: {repr(input_text)}")
-        print(f"   期望: {repr(expected)}")
-        print(f"   实际: {repr(result)}")
+        print(f"   enter: {repr(input_text)}")
+        print(f"   expect: {repr(expected)}")
+        print(f"   actual: {repr(result)}")
         print()
 
-    print(f"通过: {passed}/{passed + failed}")
+    print(f"pass: {passed}/{passed + failed}")
     print()
     return failed == 0
 
 
 def test_code_block_protection():
-    """测试代码块保护场景（最重要的测试）。"""
+    """Test the code block protection scenario (the most important test)."""
     print("=" * 60)
-    print("测试 3: 代码块保护（核心功能）")
+    print("Test 3: codeBlock protection (core feature)")
     print("=" * 60)
 
     test_cases = [
-        # (输入, 期望输出, 描述)
+        # (enter, expectoutput, describe)
         (
-            r"正常文本\*\*粗体\*\* `code_with\_underscore` 继续文本",
-            r"正常文本**粗体** `code_with\_underscore` 继续文本",
-            "单行代码块内下划线保护",
+            r"normal text\*\*bold\*\* `code_with\_underscore` continuetext",
+            r"normal text**Bold** `code_with\_underscore` continuetext",
+            "Underline protection within single-line code block",
         ),
         (
-            r"\#\#\# 标题\n\n```python\nprint('hello\_world')\n```\n\n继续\*\*文本\*\*",
-            r"### 标题\n\n```python\nprint('hello\_world')\n```\n\n继续**文本**",
-            "多行代码块保护",
+            r"\#\#\# title\n\n```python\nprint('hello\_world')\n```\n\ncontinue\*\*text\*\*",
+            r"### title\n\n```python\nprint('hello\_world')\n```\n\ncontinue**text**",
+            "Multi-line code block protection",
         ),
         (
-            r"使用 `vibego\_cli` 命令",
-            r"使用 `vibego\_cli` 命令",
-            "行内代码中的转义保持不变",
+            r"use `vibego\_cli` Order",
+            r"use `vibego\_cli` Order",
+            "Inline code segments remain escaped",
         ),
         (
             r"```bash\npython -m vibego\_cli stop\npython -m vibego\_cli start\n```",
             r"```bash\npython -m vibego\_cli stop\npython -m vibego\_cli start\n```",
-            "代码块内的命令完整保护",
+            "Commands inside code blocks remain untouched",
         ),
         (
-            r"\*\*步骤\*\*\:\n\n```bash\nls -la\n```\n\n\*\*结果\*\*\: 成功",
-            r"**步骤**:\n\n```bash\nls -la\n```\n\n**结果**: 成功",
-            "代码块前后文本都反转义",
+            r"\*\*step\*\*\:\n\n```bash\nls -la\n```\n\n\*\*result\*\*\: success",
+            r"**step**:\n\n```bash\nls -la\n```\n\n**result**: success",
+            "Text surrounding code blocks is left unchanged",
         ),
         (
-            r"`interface\{\}` 是 Go 的语法",
-            r"`interface\{\}` 是 Go 的语法",
-            "行内代码中的大括号保护",
+            r"`interface\{\}` is the syntax of Go",
+            r"`interface\{\}` is the syntax of Go",
+            "Braces remain quoted inside inline code",
         ),
         (
-            r"配置 `\{\"key\": \"value\"\}` 格式",
-            r"配置 `\{\"key\": \"value\"\}` 格式",
-            "行内代码中的 JSON 保护",
+            r"Configuration `\{\"key\": \"value\"\}` Format",
+            r"Configuration `\{\"key\": \"value\"\}` Format",
+            "JSON braces remain protected inside inline code",
         ),
     ]
 
@@ -141,40 +141,40 @@ def test_code_block_protection():
 
     for input_text, expected, desc in test_cases:
         result = _unescape_if_already_escaped(input_text)
-        status = "✅" if result == expected else "❌"
+        status = "PASS" if result == expected else "FAIL"
         if result == expected:
             passed += 1
         else:
             failed += 1
         print(f"{status} {desc}")
-        print(f"   输入: {repr(input_text)}")
-        print(f"   期望: {repr(expected)}")
-        print(f"   实际: {repr(result)}")
+        print(f"   enter: {repr(input_text)}")
+        print(f"   expect: {repr(expected)}")
+        print(f"   actual: {repr(result)}")
         if result != expected:
-            print(f"   差异: 期望与实际不匹配")
+            print(f"   difference: expectDoes not match actual")
         print()
 
-    print(f"通过: {passed}/{passed + failed}")
+    print(f"pass: {passed}/{passed + failed}")
     print()
     return failed == 0
 
 
 def test_edge_cases():
-    """测试边界情况。"""
+    """Test edge cases."""
     print("=" * 60)
-    print("测试 4: 边界情况")
+    print("Test 4: boundary case")
     print("=" * 60)
 
     test_cases = [
-        # (输入, 期望输出, 描述)
-        ("", "", "空字符串"),
-        ("   ", "   ", "仅空格"),
-        (None, None, "None 值"),  # 需要处理 None
-        ("正常文本无需处理", "正常文本无需处理", "未检测到预转义"),
-        (r"\*", "*", "单个转义字符同样需要反转义"),
-        (r"```\n\n```", r"```\n\n```", "空代码块"),
-        (r"`单独的反引号", r"`单独的反引号", "不匹配的反引号"),
-        (r"混合 **未转义** 和 \*\*已转义\*\*", r"混合 **未转义** 和 **已转义**", "混合转义状态"),
+        # (enter, expectoutput, describe)
+        ("", "", "empty string"),
+        ("   ", "   ", "spaces only"),
+        (None, None, "None value"),  # Needs to be processed None
+        ("normal textNo processing required", "normal textNo processing required", "Pre-escaping not detected"),
+        (r"\*", "*", "Single escape characters also need to be unescaped"),
+        (r"```\n\n```", r"```\n\n```", "empty code block"),
+        (r"`Backticks alone", r"`Backticks alone", "unmatched backtick"),
+        (r"mix **unescaped** and \*\*Escaped\*\*", r"mix **unescaped** and **escaped**", "mixescapestate"),
     ]
 
     passed = 0
@@ -183,156 +183,156 @@ def test_edge_cases():
     for input_text, expected, desc in test_cases:
         try:
             if input_text is None:
-                # _unescape_if_already_escaped 应该处理 None
+                # _unescape_if_already_escaped Should handle None
                 result = _unescape_if_already_escaped(input_text)
             else:
                 result = _unescape_if_already_escaped(input_text)
-            status = "✅" if result == expected else "❌"
+            status = "PASS" if result == expected else "FAIL"
             if result == expected:
                 passed += 1
             else:
                 failed += 1
             print(f"{status} {desc}")
-            print(f"   输入: {repr(input_text)}")
-            print(f"   期望: {repr(expected)}")
-            print(f"   实际: {repr(result)}")
+            print(f"   enter: {repr(input_text)}")
+            print(f"   expect: {repr(expected)}")
+            print(f"   actual: {repr(result)}")
             print()
         except Exception as e:
             failed += 1
-            print(f"❌ {desc}")
-            print(f"   输入: {repr(input_text)}")
-            print(f"   错误: {e}")
+            print(f"FAIL {desc}")
+            print(f"   enter: {repr(input_text)}")
+            print(f"   mistake: {e}")
             print()
 
-    print(f"通过: {passed}/{passed + failed}")
+    print(f"pass: {passed}/{passed + failed}")
     print()
     return failed == 0
 
 
 def test_real_world_example():
-    """测试真实场景示例（来自用户提供的问题）。"""
+    """Test real-life scenario examples (from user-provided questions)."""
     print("=" * 60)
-    print("测试 5: 真实场景示例")
+    print("Test 5: Real scenario examples")
     print("=" * 60)
 
-    # 用户提供的问题示例
-    input_text = r"""\#\#\# 📋 后续步骤
+    # Examples of questions provided by users
+    input_text = r"""\#\#\# 📋 Follow-up steps
 
-1\. \*\*重启 Bot 服务\*\*以应用修复：
+1\. \*\*Restart the Bot service\*\*To apply the fix:
    \`\`\`bash
    python -m vibego\_cli stop
    python -m vibego\_cli start
    \`\`\`
 
-2\. \*\*验证 TASK\_0011\*\* 现在可以正常显示：
-   - 在 Telegram 中点击任务列表中的 TASK\_0011
-   - 应该可以看到完整的任务详情，不再显示错误"""
+2\. \*\*Verify TASK\_0011\*\* Now it displays normally:
+   - Click TASK\ in the task list in Telegram_0011
+   - You should be able to see the complete task details and no more mistakes will be displayed."""
 
-    expected_output = r"""### 📋 后续步骤
+    expected_output = r"""### 📋 Follow-up steps
 
-1. **重启 Bot 服务**以应用修复：
+1. **Restart the Bot service**To apply the fix:
    ```bash
    python -m vibego\_cli stop
    python -m vibego\_cli start
    ```
 
-2. **验证 TASK_0011** 现在可以正常显示：
-   - 在 Telegram 中点击任务列表中的 TASK_0011
-   - 应该可以看到完整的任务详情，不再显示错误"""
+2. **Verify TASK_0011** Now it displays normally:
+   - Click TASK in the task list in Telegram_0011
+   - You should be able to see the complete task details and no more mistakes will be displayed."""
 
     result = _unescape_if_already_escaped(input_text)
 
     if result == expected_output:
-        print("✅ 真实场景测试通过")
-        print("   问题已修复：代码块内的 vibego_cli 命令保持转义")
-        print("   普通文本的转义符号已清理")
+        print("Real scenario test passed")
+        print("   Issue fixed: vibego inside code block_cli OrderKeepescape")
+        print("   ordinarytextofescapeSymbols cleaned")
         print()
         return True
     else:
-        print("❌ 真实场景测试失败")
-        print(f"   输入长度: {len(input_text)}")
-        print(f"   期望长度: {len(expected_output)}")
-        print(f"   实际长度: {len(result)}")
+        print("FAIL Real scenario test failed")
+        print(f"   enterlength: {len(input_text)}")
+        print(f"   expectlength: {len(expected_output)}")
+        print(f"   actuallength: {len(result)}")
         print()
-        print("差异详情:")
+        print("differenceDetails:")
         print("=" * 60)
-        print("期望输出:")
+        print("expectoutput:")
         print(expected_output)
         print("=" * 60)
-        print("实际输出:")
+        print("actualoutput:")
         print(result)
         print("=" * 60)
         return False
 
 
 def test_performance():
-    """测试性能（可选）。"""
+    """Test performance (optional)."""
     print("=" * 60)
-    print("测试 6: 性能测试")
+    print("Test 6: Performance testing")
     print("=" * 60)
 
     import time
 
-    # 模拟大文本
-    large_text = r"\*\*标题\*\*\n" * 1000 + r"```python\ncode\n```" * 100
+    # Simulate large text
+    large_text = r"\*\*title\*\*\n" * 1000 + r"```python\ncode\n```" * 100
 
     start = time.time()
     for _ in range(100):
         _unescape_if_already_escaped(large_text)
     elapsed = time.time() - start
 
-    print(f"✅ 处理 100 次大文本耗时: {elapsed:.3f} 秒")
-    print(f"   平均每次: {elapsed / 100 * 1000:.2f} 毫秒")
-    print(f"   文本大小: {len(large_text)} 字符")
+    print(f"Processing large text 100 times took {elapsed:.3f} seconds")
+    print(f"   average every time: {elapsed / 100 * 1000:.2f} Millisecond")
+    print(f"   textsize: {len(large_text)} character")
     print()
 
-    # 性能阈值：平均每次处理应该在 10ms 以内
+    # Performance threshold value: average every time processing should be within 10ms
     if elapsed / 100 < 0.01:
-        print("✅ 性能测试通过")
+        print("Performance test passed")
         return True
     else:
-        print("⚠️  性能测试警告：处理速度较慢")
-        return True  # 不算失败，只是警告
+        print("⚠️  Performance testingWarning: Slow processing")
+        return True  # Not a failure, just a warning
 
 
 def main():
-    """运行所有测试。"""
+    """Run all tests."""
     print("\n")
     print("╔" + "=" * 58 + "╗")
-    print("║" + " " * 15 + "智能反转义功能测试套件" + " " * 15 + "║")
+    print("║" + " " * 15 + "Smart anti-escaping functional test suite" + " " * 15 + "║")
     print("╚" + "=" * 58 + "╝")
     print("\n")
 
     results = {
-        "预转义检测": test_is_already_escaped(),
-        "基础反转义": test_unescape_markdown_v2(),
-        "代码块保护": test_code_block_protection(),
-        "边界情况": test_edge_cases(),
-        "真实场景": test_real_world_example(),
-        "性能测试": test_performance(),
+        "Pre-escape detection": test_is_already_escaped(),
+        "Basic anti-escaping": test_unescape_markdown_v2(),
+        "codeblock protection": test_code_block_protection(),
+        "boundary case": test_edge_cases(),
+        "real scene": test_real_world_example(),
+        "Performance testing": test_performance(),
     }
 
     print("\n")
     print("=" * 60)
-    print("测试总结")
+    print("Test summary")
     print("=" * 60)
 
     passed_count = sum(1 for passed in results.values() if passed)
     total_count = len(results)
 
     for name, passed in results.items():
-        status = "✅ 通过" if passed else "❌ 失败"
+        status = "PASS" if passed else "FAIL"
         print(f"{status} - {name}")
 
     print("=" * 60)
-    print(f"总计: {passed_count}/{total_count} 通过")
+    print(f"total: {passed_count}/{total_count} pass")
     print("=" * 60)
 
     if passed_count == total_count:
-        print("\n🎉 所有测试通过！代码块保护功能正常工作。\n")
+        print("\n🎉 Placehavetest pass!codeblock protectionFunction works fine.\n")
         return 0
     else:
-        print(f"\n⚠️  有 {total_count - passed_count} 个测试失败，需要修复。\n")
+        print(f"\n⚠️  have {total_count - passed_count} A test failed and needs to be fixed. \n")
         return 1
 
 

@@ -30,9 +30,9 @@ PROJECT_DEFAULT="${PROJECT_NAME:-}"
 
 usage() {
   cat <<USAGE
-用法：${0##*/} [--model 名称] [--project 名称]
-  --model    目标模型，默认 $MODEL_DEFAULT
-  --project  项目别名；未指定时尝试使用当前目录配置
+usage:${0##*/} [--model name] [--project name]
+  --model    target model, default $MODEL_DEFAULT
+  --project  Project alias; attempts to use the current directory configuration when not specified
 USAGE
 }
 
@@ -48,7 +48,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage; exit 0 ;;
     *)
-      echo "未知参数: $1" >&2
+      echo "unknown parameters: $1" >&2
       usage
       exit 1 ;;
   esac
@@ -94,7 +94,7 @@ graceful_shutdown_claudecode() {
   done
   (( has_claude )) || return 0
 
-  printf '[stop-bot] 检测到 ClaudeCode 会话，尝试发送 /exit (session=%s)\n' "$session"
+  printf '[stop-bot] ClaudeCode session detected, trying to send /exit (session=%s)\n' "$session"
   for pane in "${pane_ids[@]}"; do
     tmux -u send-keys -t "$pane" Escape
     tmux -u send-keys -t "$pane" C-u
@@ -112,11 +112,11 @@ graceful_shutdown_claudecode() {
       fi
     done
     if (( still_running == 0 )); then
-      printf '[stop-bot] ClaudeCode 会话已响应 /exit (session=%s)\n' "$session"
+      printf '[stop-bot] ClaudeCode Session has responded /exit (session=%s)\n' "$session"
       break
     fi
     if (( $(date +%s) >= end_time )); then
-      printf '[stop-bot] ClaudeCode /exit 超时，将继续执行强制关闭 (session=%s)\n' "$session" >&2
+      printf '[stop-bot] ClaudeCode /exit Timeout, forced shutdown will continue (session=%s)\n' "$session" >&2
       break
     fi
     sleep 0.5
@@ -215,11 +215,11 @@ if [[ -n "$PROJECT_OVERRIDE" ]]; then
   stop_single_worker "$PROJECT_NAME" "$MODEL"
 else
   if ! stop_all_workers; then
-    # fallback:默认 project 名称
+    # fallback:default project name
     stop_single_worker "project" "$MODEL"
   fi
 fi
 
-# 已通过 pid 文件与 tmux 会话按项目停止进程，无需额外全局 pkill，避免误杀其它项目
+# The process has been stopped by project through the pid file and tmux session. No additional global pkill is needed to avoid accidentally killing other projects.
 
 exit 0

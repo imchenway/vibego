@@ -1,7 +1,4 @@
-"""统一日志配置工具。
-
-提供 master / worker 共用的 logging 配置，确保写入同一文件。
-"""
+"""Unified logging configuration helpers shared between master and worker."""
 
 from __future__ import annotations
 
@@ -19,10 +16,10 @@ _CONFIGURED = False
 
 
 class ContextLoggerAdapter(logging.LoggerAdapter):
-    """支持 per-call extra 覆盖的 LoggerAdapter。"""
+    """LoggerAdapter that allows per-call extra overrides."""
 
     def process(self, msg: str, kwargs: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
-        """合并默认 extra 与调用者提供的 extra，避免上下文丢失。"""
+        """Merge default extras with user-provided extras to preserve context."""
 
         provided: Optional[Dict[str, Any]] = kwargs.pop("extra", None)
         merged: Dict[str, Any] = dict(self.extra)
@@ -33,7 +30,7 @@ class ContextLoggerAdapter(logging.LoggerAdapter):
 
 
 def _default_config_root() -> Path:
-    """按照环境变量与 XDG 规范解析配置根目录。"""
+    """Resolve the configuration root based on environment variables and XDG conventions."""
 
     override = os.environ.get("MASTER_CONFIG_ROOT") or os.environ.get("VIBEGO_CONFIG_DIR")
     if override:
@@ -44,7 +41,7 @@ def _default_config_root() -> Path:
 
 
 def _resolve_log_file() -> Path:
-    """根据环境变量确定日志文件位置。"""
+    """Determine the log file path using environment variables when available."""
     candidate = os.environ.get("LOG_FILE")
     default_path = _default_config_root() / "logs/vibe.log"
     target = Path(candidate).expanduser() if candidate else default_path
@@ -53,7 +50,7 @@ def _resolve_log_file() -> Path:
 
 
 def _determine_level(level_name: str) -> int:
-    """解析日志等级字符串，无法识别时回退为 INFO。"""
+    """Resolve a log level string, falling back to INFO if unknown."""
 
     level = getattr(logging, level_name.upper(), None)
     if isinstance(level, int):
@@ -62,7 +59,7 @@ def _determine_level(level_name: str) -> int:
 
 
 def _resolve_timezone() -> ZoneInfo:
-    """从环境变量解析日志时区，默认为上海时区。"""
+    """Parse the log timezone from environment variables, defaulting to Asia/Shanghai."""
 
     tz_name = os.environ.get("LOG_TIMEZONE", "Asia/Shanghai").strip()
     try:
@@ -72,15 +69,15 @@ def _resolve_timezone() -> ZoneInfo:
 
 
 class _TimezoneFormatter(logging.Formatter):
-    """将日志时间统一格式化为指定时区。"""
+    """Format log timestamps using a specific timezone."""
 
     def __init__(self, *args: Any, timezone: ZoneInfo, **kwargs: Any) -> None:
-        """保存目标时区并初始化基础 Formatter。"""
+        """Store the target timezone and initialise the base formatter."""
         super().__init__(*args, **kwargs)
         self._timezone = timezone
 
     def formatTime(self, record: logging.LogRecord, datefmt: Optional[str] = None) -> str:
-        """按照预设时区格式化日志时间。"""
+        """Format the timestamp according to the configured timezone."""
         dt = datetime.fromtimestamp(record.created, tz=self._timezone)
         if datefmt:
             return dt.strftime(datefmt)
@@ -88,7 +85,7 @@ class _TimezoneFormatter(logging.Formatter):
 
 
 def configure_base_logger(*, level_env: str | None = None, stderr_env: str | None = None) -> logging.Logger:
-    """初始化基础 logger，仅执行一次。"""
+    """Initialise the base logger (idempotent)."""
     global _CONFIGURED
     logger = logging.getLogger("vibe")
     if _CONFIGURED:
@@ -132,7 +129,7 @@ def create_logger(
     level_env: str | None = None,
     stderr_env: str | None = None,
 ) -> ContextLoggerAdapter:
-    """创建带上下文的 LoggerAdapter。"""
+    """Create a LoggerAdapter with context enrichments."""
 
     base = configure_base_logger(level_env=level_env, stderr_env=stderr_env)
     extra = {
@@ -145,7 +142,7 @@ def create_logger(
 
 
 def enrich(logger: ContextLoggerAdapter, **kwargs: Any) -> ContextLoggerAdapter:
-    """返回带额外上下文的新 LoggerAdapter。"""
+    """Return a new LoggerAdapter with extended context."""
 
     merged: Dict[str, Any] = {**getattr(logger, "extra", {}), **kwargs}
     return ContextLoggerAdapter(logger.logger, merged)
