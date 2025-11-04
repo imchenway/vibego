@@ -8,6 +8,6 @@ from __future__ import annotations
 
 __all__ = ["main", "__version__"]
 
-__version__ = "0.2.58"
+__version__ = "0.2.59"
 
 from .main import main  # noqa: E402
