@@ -259,14 +259,14 @@ ENABLE_PLAN_PROGRESS = (os.environ.get("ENABLE_PLAN_PROGRESS", "1").strip().lowe
 AUTO_COMPACT_THRESHOLD = max(_env_int("AUTO_COMPACT_THRESHOLD", 0), 0)
 
 PLAN_STATUS_LABELS = {
-    "completed": "done",
+    "completed": "✅",
     "in_progress": "🔄",
     "pending": "⏳",
 }
 
 DELIVERABLE_KIND_MESSAGE = "message"
 DELIVERABLE_KIND_PLAN = "plan_update"
-MODEL_COMPLETION_PREFIX = "Model execution completed. Response follows:"
+MODEL_COMPLETION_PREFIX = "✅ Model execution completed. Response follows:"
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage single-message limit
 
 
@@ -2075,7 +2075,7 @@ async def _broadcast_worker_keyboard(bot: Bot) -> None:
 STATUS_LABELS = {
     "research": "🔍 Researching",
     "test": "🧪 Testing",
-    "done": "Completed",
+    "done": "✅ Completed",
 }
 
 NOTE_LABELS = {
@@ -2093,7 +2093,7 @@ TASK_TYPE_LABELS = {
 }
 
 TASK_TYPE_EMOJIS = {
-    "requirement": "[req]",
+    "requirement": "📌",
     "defect": "🐞",
     "task": "🛠️",
     "risk": "⚠️",
@@ -2151,11 +2151,11 @@ TASK_DESC_CLEAR_CALLBACK = "task:desc_clear"
 TASK_DESC_CONFIRM_CALLBACK = "task:desc_confirm"
 TASK_DESC_RETRY_CALLBACK = "task:desc_retry"
 TASK_DESC_CANCEL_CALLBACK = "task:desc_cancel"
-TASK_DESC_CLEAR_TEXT = "Clear description"
-TASK_DESC_CANCEL_TEXT = "Cancel"
-TASK_DESC_REPROMPT_TEXT = "Reopen input prompt"
-TASK_DESC_CONFIRM_TEXT = "Confirm update"
-TASK_DESC_RETRY_TEXT = "Re-enter"
+TASK_DESC_CLEAR_TEXT = "🗑️ Clear description"
+TASK_DESC_CANCEL_TEXT = "❌ Cancel"
+TASK_DESC_REPROMPT_TEXT = "✏️ Reopen input prompt"
+TASK_DESC_CONFIRM_TEXT = "✅ Confirm update"
+TASK_DESC_RETRY_TEXT = "✏️ Re-enter"
 
 DESCRIPTION_MAX_LENGTH = 3000
 SEARCH_KEYWORD_MIN_LENGTH = 2
@@ -3205,9 +3205,9 @@ def _build_task_desc_confirm_text(preview_segment: str) -> str:
     return (
         "Please confirm the updated task description:\n"
         f"{preview_segment}\n\n"
-        "1. Tap Confirm Update to save now.\n"
-        "2. Tap Re-enter to revise the description.\n"
-        "3. Tap Cancel to abort this edit."
+        "1. Tap \"✅ Confirm update\" to save now.\n"
+        "2. Tap \"✏️ Re-enter\" to revise the description.\n"
+        "3. Tap \"❌ Cancel\" to abort this edit."
     )
 
 
@@ -3422,8 +3422,8 @@ def _build_description_keyboard() -> ReplyKeyboardMarkup:
 
 def _build_confirm_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="Confirm creation")],
-        [KeyboardButton(text="Cancel")],
+        [KeyboardButton(text="✅ Confirm creation")],
+        [KeyboardButton(text="❌ Cancel")],
     ]
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
@@ -3433,8 +3433,8 @@ def _build_bug_confirm_keyboard() -> ReplyKeyboardMarkup:
     """Defect submission process confirmation keyboard."""
 
     rows = [
-        [KeyboardButton(text="Confirm submission")],
-        [KeyboardButton(text="Cancel")],
+        [KeyboardButton(text="✅ Confirm submission")],
+        [KeyboardButton(text="❌ Cancel")],
     ]
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
@@ -3597,7 +3597,7 @@ async def _prompt_model_supplement_input(message: Message) -> None:
 
 def _build_task_search_prompt() -> str:
     lines = [
-        "Please enter the task search keyword (at least 2 characters). Fuzzy matching of title and description is supported.",
+        "Please enter task search keywords (at least 2 characters). Fuzzy matching of title and description is supported.",
         'Send "Skip" or send "Cancel" to return to the task list.',
     ]
     return "\n".join(lines)
@@ -5767,11 +5767,11 @@ async def _build_task_list_view(
     display_pages = total_pages or 1
     current_page_display = min(page, display_pages)
     lines = [
-        "*Tasklist*",
+        "*task list*",
         f"Filter state: {_format_status(status) if status else 'all'}",
     ]
     if not tasks:
-        lines.append("currentIf there is no matching Task, you can use the state button above to switch.")
+        lines.append("If there is no matching task, use the status buttons above to switch categories.")
     lines.append(
         f"Paging info: page {current_page_display}/{display_pages}, {limit} items per page, total {total}"
     )
@@ -5812,11 +5812,11 @@ async def _build_task_list_view(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔍 Search Task",
+                text="🔍 search tasks",
                 callback_data=f"{TASK_LIST_SEARCH_CALLBACK}:{status_token}:{page}:{limit}",
             ),
             InlineKeyboardButton(
-                text="➕ Create Task",
+                text="➕ Create tasks",
                 callback_data=TASK_LIST_CREATE_CALLBACK,
             ),
         ]
@@ -5850,7 +5850,7 @@ async def _build_task_search_view(
     else:
         escaped_keyword = _escape_markdown_text(sanitized_keyword)
     lines = [
-        "*TaskSearch results*",
+        "*Task search results*",
         f"Search keywords: {escaped_keyword}",
         "Search scope: title, describe",
         f"Paging info: page {current_page_display}/{display_pages}, {limit} items per page, total {total}",
@@ -6127,7 +6127,7 @@ async def on_task_list_return(callback: CallbackQuery, state: FSMContext) -> Non
         sent = await _answer_with_markdown(origin or callback.message, text, reply_markup=markup)
         if sent is not None:
             _init_task_view_context(sent, view_state)
-    await callback.answer("Returned to task list")
+    await callback.answer("Task list has been returned")
 
 
 @router.callback_query(F.data == TASK_LIST_CREATE_CALLBACK)
@@ -6170,7 +6170,7 @@ async def on_task_list_search_keyword(message: Message, state: FSMContext) -> No
     if resolved == "Cancel" or resolved == SKIP_TEXT or not trimmed:
         await state.clear()
         await _restore_list()
-        await message.answer("Returned to task list.", reply_markup=_build_worker_main_keyboard())
+        await message.answer("Task list has been returned.", reply_markup=_build_worker_main_keyboard())
         return
 
     if len(trimmed) < SEARCH_KEYWORD_MIN_LENGTH:
@@ -6210,7 +6210,7 @@ async def on_task_list_search_keyword(message: Message, state: FSMContext) -> No
         sent = await _answer_with_markdown(message, search_text, reply_markup=search_markup)
         if sent is not None:
             _init_task_view_context(sent, search_state)
-    await message.answer("The search is complete and the results have been displayed.", reply_markup=_build_worker_main_keyboard())
+    await message.answer("Search completed.", reply_markup=_build_worker_main_keyboard())
 
 
 @router.message(Command("task_show"))
@@ -6383,7 +6383,7 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
 
 @router.message(TaskCreateStates.waiting_confirm)
 async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
-    options = ["Confirm creation", "Cancel"]
+    options = ["✅ Confirm creation", "❌ Cancel"]
     resolved = _resolve_reply_choice(message.text, options=options)
     stripped = _strip_number_prefix((message.text or "").strip()).lower()
     if resolved == options[1] or stripped in {"cancel"}:
@@ -6391,9 +6391,9 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
         await message.answer("Task creation cancelled.", reply_markup=ReplyKeyboardRemove())
         await message.answer("Returned to main menu.", reply_markup=_build_worker_main_keyboard())
         return
-    if resolved != options[0] and stripped not in {"confirm", "Confirm creation"}:
+    if resolved != options[0] and stripped not in {"confirm", "confirm creation"}:
         await message.answer(
-            "Please select \"Confirm creation\" or \"Cancel\". Enter the number directly or tap the keyboard button:",
+            "Please select \"✅ Confirm creation\" or \"❌ Cancel\". Enter the number directly or tap the keyboard button:",
             reply_markup=_build_confirm_keyboard(),
         )
         return
@@ -6592,7 +6592,7 @@ async def on_task_desc_confirm_stage_text(message: Message, state: FSMContext) -
         return
 
     # Process confirmed updates.
-    if resolved == options[0] or stripped in {"confirm", "confirmrenew"}:
+    if resolved == options[0] or stripped in {"confirm", "confirm update", "confirmrenew"}:
         new_description = data.get("new_description")
         if new_description is None:
             await state.set_state(TaskDescriptionStates.waiting_content)
@@ -6628,7 +6628,7 @@ async def on_task_desc_confirm_stage_text(message: Message, state: FSMContext) -
 
     # Invalid input, prompt user
     await message.answer(
-        "Currently in the confirmation stage. Choose Confirm, Re-enter, or Cancel by entering the number or pressing a keyboard button:",
+        "Currently in the confirmation stage. Choose \"✅ Confirm update\", \"✏️ Re-enter\", or \"❌ Cancel\" by entering the number or pressing a keyboard button:",
         reply_markup=_build_task_desc_confirm_keyboard(),
     )
 
@@ -7488,14 +7488,16 @@ async def on_task_bug_confirm(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Bug report cancelled.", reply_markup=_build_worker_main_keyboard())
         return
-    resolved = _resolve_reply_choice(message.text or "", options=["Confirm submission", "Cancel"])
-    if resolved == "Cancel":
+    options = ["✅ Confirm submission", "❌ Cancel"]
+    resolved = _resolve_reply_choice(message.text or "", options=options)
+    if resolved == options[1]:
         await state.clear()
         await message.answer("Bug report cancelled.", reply_markup=_build_worker_main_keyboard())
         return
-    if resolved not in {"Confirm submission"}:
+    stripped = _strip_number_prefix((message.text or "").strip()).lower()
+    if resolved != options[0] and stripped not in {"confirm submission"}:
         await message.answer(
-            "Please reply with \"Confirm submission\" or type \"Cancel\".",
+            "Please reply with \"✅ Confirm submission\" or type \"Cancel\".",
             reply_markup=_build_bug_confirm_keyboard(),
         )
         return
@@ -7677,14 +7679,14 @@ async def on_task_detail_back(callback: CallbackQuery) -> None:
         await _fallback_task_detail_back(callback)
         return
     if await _try_edit_message(message, text, reply_markup=markup):
-        await callback.answer("Returned to task list.")
+        await callback.answer("Task list has been returned.")
         return
     _clear_task_view(chat.id, message.message_id)
     sent = await _answer_with_markdown(message, text, reply_markup=markup)
     if sent is not None:
         cloned_state = TaskViewState(kind=prev_state.kind, data=dict(prev_state.data))
         _init_task_view_context(sent, cloned_state)
-        await callback.answer("Returned to task list.")
+        await callback.answer("Task list has been returned.")
         return
     await _fallback_task_detail_back(callback)
 
