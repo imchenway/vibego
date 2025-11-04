@@ -118,7 +118,7 @@ def test_auto_compact_triggers_after_threshold(auto_compact_env):
     ])
     first = asyncio.run(bot._deliver_pending_messages(chat_id, session))
     assert first is True
-    assert env["responses"] == [(chat_id, "Model execution completed. Response follows:\n\nfirst reply")]
+    assert env["responses"] == [(chat_id, "✅ Model execution completed. Response follows:\n\nfirst reply")]
     assert env["tmux_calls"] == []
     assert env["dummy_bot"].sent_messages == []
 
