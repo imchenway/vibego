@@ -150,7 +150,7 @@ def test_task_create_type_numeric_cancel(raw):
 @pytest.mark.parametrize(
     "task_type, expected_prefix",
     [
-        ("requirement", "[req]"),
+        ("requirement", "📌"),
         ("defect", "🐞"),
         ("task", "🛠️"),
         ("risk", "⚠️"),
@@ -168,12 +168,12 @@ def test_format_task_type_handles_empty():
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("[req] need", "requirement"),
+        ("📌 need", "requirement"),
         ("🐞 defect", "defect"),
         ("🛠️ optimization", "task"),
         ("⚠️ risk", "risk"),
-        ("[req]need", "requirement"),
-        ("1. [req] need", "requirement"),
+        ("📌need", "requirement"),
+        ("1. 📌 need", "requirement"),
     ],
 )
 def test_normalize_task_type_accepts_emoji(raw, expected):
