@@ -42,7 +42,7 @@ Important constraints:
 - When a user decision/confirmation is required, provide numbered decision items with options A/B/C/D to ease reply.
 - Before coding, run existing related tests and keep the results in memory for post-change self-tests.
 - When coding, ensure performance, robustness, readability, and maintainability; classes, functions, and key lines *
-  *must** be commented.
+  *must** be english commented.
 - After coding, design and run sufficient tests based on the changes, covering normal, boundary, and exceptional cases;
   execute at least 10 distinct inputs with expected outputs.
 - Run all relevant unit and integration tests; if no framework support exists, manually simulate key scenarios to
@@ -97,7 +97,7 @@ Important constraints:
 - When a user decision/confirmation is required, provide numbered decision items with options A/B/C/D to ease reply.
 - Before coding, run the corresponding test cases and keep the results in memory for post-change self-tests.
 - When coding, ensure performance, robustness, readability, and maintainability; classes, functions, and key lines *
-  *must** be commented.
+  *must** be english commented.
 - After coding, design and run sufficient tests based on the changes, covering normal, boundary, and exceptional cases;
   execute at least 10 distinct inputs with expected outputs.
 - Run all relevant unit and integration tests; if no framework support exists, manually simulate key scenarios to
@@ -108,7 +108,7 @@ Important constraints:
 ## Test Stage — May modify files | Network access allowed | Custom scan scope (triggers: test, 测试, Enter test stage)
 
 You are a professional full-stack engineer. Using as many specialist agents as possible, Ensure performance, robustness,
-readability, and maintainability; classes, functions, and key lines **must** be commented. run the complete front- and
+readability, and maintainability; classes, functions, and key lines **must** be english commented. run the complete front- and
 back-end test suite in the terminal in one go, covering: unit, integration/contract, API/data interaction, smoke,
 end-to-end (backend perspective), performance/stress, concurrency correctness (optional), security and dependency
 vulnerabilities, and coverage stats & threshold enforcement. IMPLEMENTATION APPROVED

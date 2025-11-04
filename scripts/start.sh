@@ -118,8 +118,9 @@ ensure_codex_installed() {
 ensure_codex_installed
 
 select_python_binary() {
-  # Choose to meet CPython <=3.12 interpreter, disabled by default 3.13(pydantic-core There is no compatible wheel in the pipx base environment)
+  # Select a compatible CPython version; defaults accept 3.9-3.14 and can be overridden via env variables.
   local allow_py313="${VIBEGO_ALLOW_PY313:-}"
+  local supported_max_minor="${VIBEGO_MAX_MINOR:-14}"
   local candidates=()
   local chosen=""
   local name
@@ -152,17 +153,23 @@ select_python_binary() {
     if [[ -n "${VIBEGO_PYTHON:-}" && "$name" == "$VIBEGO_PYTHON" ]]; then
       explicit_override=1
     fi
-    if [[ "$minor" =~ ^[0-9]+$ ]] && (( minor == 13 )) && [[ "$allow_py313" != "1" ]] && (( explicit_override == 0 )); then
-      log_line "jump over ${name} (Version ${version_raw}): Python 3 is disabled by default.13, Configurable VIBEGO_ALLOW_PY313=1 cover" >&2
-      continue
+    if [[ "$minor" =~ ^[0-9]+$ ]] && (( minor == 13 )) && (( explicit_override == 0 )); then
+      if [[ "$allow_py313" == "0" ]]; then
+        log_line "Skip ${name} (version ${version_raw}): disabled explicitly by VIBEGO_ALLOW_PY313=0" >&2
+        continue
+      fi
+      log_line "Detected ${name} (version ${version_raw}): Python 3.13 accepted by default; use VIBEGO_ALLOW_PY313=1 to prefer or 0 to disable" >&2
     fi
-    if [[ "$minor" =~ ^[0-9]+$ ]] && (( minor > 13 )); then
-      log_line "jump over ${name} (Version ${version_raw}): higher than 3.13" >&2
+    if [[ "$minor" =~ ^[0-9]+$ ]] && (( minor > supported_max_minor )) && (( explicit_override == 0 )); then
+      log_line "Skip ${name} (version ${version_raw}): above supported ceiling 3.${supported_max_minor}; override with VIBEGO_MAX_MINOR if needed" >&2
       continue
     fi
     if [[ "$minor" =~ ^[0-9]+$ ]] && (( minor < 9 )); then
       log_line "jump over ${name} (Version ${version_raw}): less than 3.9, May be missing official wheels" >&2
       continue
+    fi
+    if [[ "$minor" =~ ^[0-9]+$ ]] && (( minor >= 14 )); then
+      log_line "Detected ${name} (version ${version_raw}): ensure dependencies support this Python version" >&2
     fi
     chosen="$name"
     log_line "Using the Python interpreter:${chosen} (Version ${version_raw})" >&2
