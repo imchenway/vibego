@@ -150,12 +150,12 @@ _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
 }
 
 # Append agents.md metadata to stage prompts to keep audit records consistent.
-AGENTS_PHASE_SUFFIX = ", then list the triggered agents.md stage, task name, and task code (e.g., /TASK_0001)."
+AGENTS_PHASE_SUFFIX = ", please execute according to the prompt words of the specified stage, then list the triggered agents.md stage, task name, and task code (e.g., /TASK_0001).the following is the description of this task and the execution history"
 # Stage prompts sent to models (vibe and test) reuse the unified suffix for consistent output.
 VIBE_PHASE_PROMPT = f"Enter vibe stage{AGENTS_PHASE_SUFFIX}"
 TEST_PHASE_PROMPT = f"Enter test stage{AGENTS_PHASE_SUFFIX}"
 # Dedicated prefix when reporting defects, inserted before the unified stage prompt.
-BUG_REPORT_PREFIX = "Report a defect. Refer to the latest defect description at the bottom."
+BUG_REPORT_PREFIX = "Report a defect. please execute according to the prompt words of the specified stage, Refer to the latest defect description at the bottom."
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()

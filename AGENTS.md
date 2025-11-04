@@ -17,7 +17,7 @@ Do not use any git commands that modify files—commit, push, merge, revert, etc
 - **Evidence requirement**: Always substantiate answers and provide official documentation links or verifiable sources.
 - **Visual style**: Render data in plain text in the CLI. In client UIs, you may use flowcharts and Mermaid diagrams.
 
-## Vibe Stage — File modifications forbidden | Network access allowed | Custom scan scope (trigger words: vibe, enter vibe stage)
+## Vibe Stage — File modifications forbidden | Network access allowed | Custom scan scope (trigger words: vibe, Enter vibe stage)
 
 Based on the task and background above, you are a professional full-stack engineer. Use as many specialist agents as
 needed and produce research conclusions: outline implementation approaches, pros/cons, and decision options; then,
@@ -80,7 +80,7 @@ Important constraints:
 - Compile a checklist for this session to avoid omissions in subsequent tasks.
 - Finally, list the current `agents.md` stage, models/MCP/tools/sub-agents used, and token usage; ultrathink
 
-## Development / Bug-fix Stage — May modify/delete files | Network access allowed | Custom scan scope (triggers: develop, dev, 开发, enter development stage)
+## Development / Bug-fix Stage — May modify/delete files | Network access allowed | Custom scan scope (triggers: develop, dev, 开发, enter development stage, Report a defect)
 
 Given the task and background above, you are a professional full-stack engineer. Using as many specialist agents as
 needed and based on the user's decisions, implement those decisions or fix the user's issues, completing all tasks with
@@ -105,7 +105,7 @@ Important constraints:
 - Check that all items in the checklist are completed.
 - Finally, list the current `agents.md` stage, models/MCP/tools/sub-agents used, and token usage; ultrathink
 
-## Test Stage — May modify files | Network access allowed | Custom scan scope (triggers: test, 测试, enter test stage)
+## Test Stage — May modify files | Network access allowed | Custom scan scope (triggers: test, 测试, Enter test stage)
 
 You are a professional full-stack engineer. Using as many specialist agents as possible, Ensure performance, robustness,
 readability, and maintainability; classes, functions, and key lines **must** be commented. run the complete front- and
