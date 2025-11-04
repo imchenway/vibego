@@ -300,7 +300,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "task_type": "requirement",
             "max_length": 20,
             "expect_prefix": f"{bot._status_icon('done')} {bot.TASK_TYPE_EMOJIS['requirement']} ",
-            "expect_exact": "[ok] [req] -",
+            "expect_exact": "✅ 📌 -",
             "expect_ellipsis": False,
         },
         {

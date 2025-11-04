@@ -108,7 +108,7 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
                 status="research",
                 task_type="requirement",
             ),
-            "- [req] Research tasks",
+            "- 📌 Research tasks",
         ),
         (
             _make_task(
@@ -722,7 +722,7 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=321)
     message.from_user = SimpleNamespace(id=321, full_name="Tester")
-    message.text = "Confirm submission"
+    message.text = "✅ Confirm submission"
     state, _storage = make_state(message)
 
     task = _make_task(
@@ -2413,7 +2413,7 @@ def test_task_desc_confirm_numeric_input_3_cancels():
 
 
 def test_task_desc_confirm_numeric_input_with_prefix():
-    """Test that numbered button text such as "1. Confirm update" is recognized"""
+    """Test that numbered button text such as "1. ✅ Confirm update" is recognized"""
     message = DummyMessage()
     state, _storage = make_state(message)
 
@@ -2439,7 +2439,7 @@ def test_task_desc_confirm_numeric_input_with_prefix():
         return original_render
 
     async def scenario() -> str | None:
-        message.text = "1. Confirm update"  # Full button text with sequence number and emoji
+        message.text = "1. ✅ Confirm update"  # Full button text with sequence number and emoji
         await state.update_data(
             task_id="TASK_EDIT",
             new_description="new descriptioncontent",

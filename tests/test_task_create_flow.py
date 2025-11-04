@@ -316,7 +316,7 @@ def test_task_create_confirm_invalid_prompts_again():
 
     assert state.state == TaskCreateStates.waiting_confirm
     assert message.calls
-    assert "Please select \"Confirm creation\" or \"Cancel\"" in message.calls[-1]["text"]
+    assert "Please select \"✅ Confirm creation\" or \"❌ Cancel\"" in message.calls[-1]["text"]
     assert isinstance(message.calls[-1]["reply_markup"], ReplyKeyboardMarkup)
 
 
