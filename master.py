@@ -2198,7 +2198,8 @@ async def _process_restart_request(
 
     lock = _ensure_restart_lock()
     async with lock:
-        global_restart_in_progress
+        # Use global so the restart flag is shared across concurrent handlers
+        global _restart_in_progress
         if _restart_in_progress:
             await message.answer("A restart request is already being executed, please try again later. ")
             return
@@ -2258,7 +2259,8 @@ async def cmd_start(message: Message) -> None:
 
 async def _perform_restart(message: Message, start_script: Path) -> None:
     """Asynchronous execution ./start.sh,If it fails, roll back the mark and notify the administrator """
-    global_restart_in_progress
+    # Use global so restart flag resets affect the module-level state
+    global _restart_in_progress
     lock = _ensure_restart_lock()
     bot = message.bot
     chat_id = message.chat.id

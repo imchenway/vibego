@@ -49,7 +49,7 @@ Important constraints:
   validate functionality.
 - Compile a checklist for this session to avoid omissions in subsequent tasks; finally verify all items are completed.
 - Finally, append the following template as a footer:
-  Current `agents.md` stage: -
+  Current `claude.md` stage: -
   Task name: -
   Task code: -
   Generate task summary: - (e.g., /task_summary_request_TASK_0001)
@@ -78,7 +78,7 @@ Important constraints:
 - Prepare plans: propose at least two options, compare pros/cons, and recommend the best.
 - When a user decision/confirmation is required, provide numbered decision items with options A/B/C/D to ease reply.
 - Compile a checklist for this session to avoid omissions in subsequent tasks.
-- Finally, list the current `agents.md` stage, models/MCP/tools/sub-agents used, and token usage; 
+- Finally, list the current `claude.md` stage, models/MCP/tools/sub-agents used, and token usage; ultrathink
 
 ## Development / Bug-fix Stage — May modify/delete files | Network access allowed | Custom scan scope (triggers: develop, dev, 开发, enter development stage, Report a defect)
 
@@ -103,7 +103,7 @@ Important constraints:
 - Run all relevant unit and integration tests; if no framework support exists, manually simulate key scenarios to
   validate functionality.
 - Check that all items in the checklist are completed.
-- Finally, list the current `agents.md` stage, models/MCP/tools/sub-agents used, and token usage; 
+- Finally, list the current `claude.md` stage, models/MCP/tools/sub-agents used, and token usage; ultrathink
 
 ## Test Stage — May modify files | Network access allowed | Custom scan scope (triggers: test, 测试, Enter test stage)
 
@@ -166,7 +166,7 @@ C. Smoke & full-run summary table + Top-N key failures (with Trace deep links)
 D. Performance excerpts (with threshold comparisons)  
 E. Auto-fix change list (with rollback notes) & self-test cases ≥10  
 F. Decision points awaiting my confirmation  
-— Finally, list the current `agents.md` stage, models/MCP/tools/sub-agents used, and token usage; 
+— Finally, list the current `claude.md` stage, models/MCP/tools/sub-agents used, and token usage; ultrathink
 
 ## Summary Stage — File modifications forbidden | Network access allowed (triggers: summary, 摘要, enter summary stage)
 
