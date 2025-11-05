@@ -42,6 +42,8 @@ vibego init          # 初始化配置目录并写入 Master Bot Token
 vibego start         # 启动 master 服务
 ```
 
+然后在 telegram 创建的 bot中点击`/statr`，enjoy it！
+
 ## 目录结构
 
 - `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / 预留 Gemini）。
