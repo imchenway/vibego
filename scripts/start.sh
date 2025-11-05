@@ -445,13 +445,13 @@ fi
 log_info "master Started in background, PID=$MASTER_PID, Log writing ${LOG_FILE}"
 
 # Health check: wait for master to come online and verify key workers
-log_info "Start health check..."
+log_info "Start master readiness check..."
 HEALTHCHECK_START=$(date +%s)
 
-if python scripts/master_healthcheck.py --project hyphavibebotbackend; then
+if python scripts/master_healthcheck.py --master-log "$LOG_FILE"; then
   HEALTHCHECK_END=$(date +%s)
   HEALTHCHECK_DURATION=$((HEALTHCHECK_END - HEALTHCHECK_START))
-  log_info "OK: Master health check passed (elapsed ${HEALTHCHECK_DURATION}s)"
+  log_info "OK: Master readiness confirmed (elapsed ${HEALTHCHECK_DURATION}s)"
 else
   HEALTHCHECK_END=$(date +%s)
   HEALTHCHECK_DURATION=$((HEALTHCHECK_END - HEALTHCHECK_START))
