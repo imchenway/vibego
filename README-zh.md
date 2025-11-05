@@ -12,6 +12,8 @@
 
 ## 环境依赖
 
+**终端环境安装且登录了 codex/claudeCode**
+
 ```bash
 brew install python@3.11 tmux
 python3 -m venv ~/.config/vibego/runtime/venv

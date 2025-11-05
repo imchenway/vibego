@@ -14,6 +14,7 @@ For the Simplified Chinese version, see [README-zh.md](README-zh.md).
 
 ## Environment Requirements
 
+**The terminal environment has installed and login in codex / claudeCode**
 ```bash
 brew install python@3.11 tmux
 python3 -m venv ~/.config/vibego/runtime/venv
