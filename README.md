@@ -2,7 +2,7 @@
 
 **Drive your terminal AI CLI via Telegram anytime and anywhere (supports Codex / ClaudeCode)**
 
-For the Simplified Chinese version, see [README-zh.md](README-zh.md).
+For the Simplified Chinese version, see [中文文档](README-zh.md).
 
 ## Features
 
