@@ -2163,8 +2163,21 @@ async def _notify_restart_success(bot: Bot) -> None:
     except Exception as exc:
         log.error("Failed to send restart successful notification: %s", exc, extra={"chat": chat_id})
     else:
-        # After a successful restart, the project list will no longer be included to avoid extra noise during high-frequency restarts.
+        # Restart succeeded; notify admins and push the refreshed project overview for quick status check.
         log.info("Restart successful notification has been sent", extra={"chat": chat_id, "duration": restart_duration})
+        try:
+            manager = await _ensure_manager()
+        except RuntimeError as exc:  # pragma: no cover - defensive guard if startup order changes
+            log.warning("Manager unavailable when trying to push project overview: %s", exc)
+        else:
+            try:
+                await _send_projects_overview_to_chat(bot, chat_id, manager)
+            except Exception as exc:  # pragma: no cover - avoid crashing startup hook
+                log.error(
+                    "Failed to send project overview after restart notification: %s",
+                    exc,
+                    extra={"chat": chat_id},
+                )
     finally:
         candidates = (signal_path, RESTART_SIGNAL_PATH, *LEGACY_RESTART_SIGNAL_PATHS)
         for candidate in candidates:

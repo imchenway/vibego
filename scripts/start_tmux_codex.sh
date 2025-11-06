@@ -18,6 +18,9 @@ MODEL_WORKDIR="${MODEL_WORKDIR:-$ROOT_DIR}"
 MODEL_SESSION_ROOT="${MODEL_SESSION_ROOT:-${CODEX_SESSION_ROOT:-$HOME/.codex/sessions}}"
 MODEL_SESSION_GLOB="${MODEL_SESSION_GLOB:-rollout-*.jsonl}"
 SESSION_POINTER_FILE="${SESSION_POINTER_FILE:-$LOG_ROOT/${MODEL_NAME:-codex}/${PROJECT_NAME:-project}/current_session.txt}"
+SESSION_LOCK_FILE="${SESSION_LOCK_FILE:-${SESSION_POINTER_FILE%.txt}.lock.json}"
+SESSION_CAPTURE_TIMEOUT="${SESSION_CAPTURE_TIMEOUT:-180}"
+SESSION_CAPTURE_POLL_INTERVAL="${SESSION_CAPTURE_POLL_INTERVAL:-0.5}"
 
 # Avoid oh-my-zsh popping up update prompts in non-interactive environments
 export DISABLE_UPDATE_PROMPT="${DISABLE_UPDATE_PROMPT:-true}"
@@ -67,6 +70,7 @@ MODEL_SESSION_ROOT=$(expand_path "$MODEL_SESSION_ROOT")
 SESSION_POINTER_FILE=$(expand_path "$SESSION_POINTER_FILE")
 ensure_dir "$(dirname "$LOG_PATH")"
 ensure_dir "$(dirname "$SESSION_POINTER_FILE")"
+ensure_dir "$(dirname "$SESSION_LOCK_FILE")"
 
 run_tmux() {
   if (( DRY_RUN )); then
@@ -143,5 +147,21 @@ if (( DRY_RUN )); then
 fi
 
 : > "$SESSION_POINTER_FILE"
+rm -f "$SESSION_LOCK_FILE"
+
+if (( ! DRY_RUN )); then
+  WATCH_ARGS=("$PYTHON_EXEC" "$ROOT_DIR/scripts/session_pointer_watch.py" "--pointer" "$SESSION_POINTER_FILE" "--lock" "$SESSION_LOCK_FILE" "--glob" "$MODEL_SESSION_GLOB" "--workdir" "$MODEL_WORKDIR" "--tmux-session" "$SESSION_NAME" "--project" "${PROJECT_NAME:-}")
+  if [[ -n "$MODEL_SESSION_ROOT" ]]; then
+    WATCH_ARGS+=("--session-root" "$MODEL_SESSION_ROOT")
+  fi
+  if [[ -n "$CODEX_SESSIONS_ROOT" ]]; then
+    WATCH_ARGS+=("--additional-root" "$CODEX_SESSIONS_ROOT")
+  fi
+  WATCH_ARGS+=("--additional-root" "$(dirname "$SESSION_POINTER_FILE")")
+  WATCH_ARGS+=("--additional-root" "$(dirname "$SESSION_POINTER_FILE")/sessions")
+  WATCH_ARGS+=("--timeout" "$SESSION_CAPTURE_TIMEOUT")
+  WATCH_ARGS+=("--poll" "$SESSION_CAPTURE_POLL_INTERVAL")
+  "${WATCH_ARGS[@]}" >/dev/null 2>&1 &
+fi
 
 exit 0
