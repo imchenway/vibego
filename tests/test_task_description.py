@@ -170,6 +170,78 @@ def test_task_service_description(tmp_path: Path):
     asyncio.run(_scenario())
 
 
+def test_create_task_does_not_write_history(tmp_path: Path):
+    async def _scenario() -> None:
+        svc = TaskService(tmp_path / "tasks.db", "demo")
+        await svc.initialize()
+        task = await svc.create_root_task(
+            title="Historyless task",
+            status="research",
+            priority=2,
+            task_type="task",
+            tags=(),
+            due_date=None,
+            description="",
+            actor="tester",
+        )
+        history = await svc.list_history(task.id)
+        assert history == []
+
+    asyncio.run(_scenario())
+
+
+def test_status_update_is_not_tracked_in_history(tmp_path: Path):
+    async def _scenario() -> None:
+        svc = TaskService(tmp_path / "tasks.db", "demo")
+        await svc.initialize()
+        task = await svc.create_root_task(
+            title="Stateful task",
+            status="research",
+            priority=3,
+            task_type="task",
+            tags=(),
+            due_date=None,
+            description="",
+            actor="tester",
+        )
+        updated = await svc.update_task(
+            task.id,
+            actor="tester",
+            status="test",
+        )
+        assert updated.status == "test"
+        history = await svc.list_history(task.id)
+        assert history == []
+
+    asyncio.run(_scenario())
+
+
+def test_add_note_is_not_tracked_in_history(tmp_path: Path):
+    async def _scenario() -> None:
+        svc = TaskService(tmp_path / "tasks.db", "demo")
+        await svc.initialize()
+        task = await svc.create_root_task(
+            title="Noted task",
+            status="research",
+            priority=3,
+            task_type="task",
+            tags=(),
+            due_date=None,
+            description="",
+            actor="tester",
+        )
+        await svc.add_note(
+            task.id,
+            note_type="misc",
+            content="memo",
+            actor="tester",
+        )
+        history = await svc.list_history(task.id)
+        assert history == []
+
+    asyncio.run(_scenario())
+
+
 def test_format_local_time_conversion():
     assert bot._format_local_time("2025-01-01T00:00:00+08:00") == "2025-01-01 00:00"
     assert bot._format_local_time("invalid") == "invalid"
@@ -458,10 +530,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert bot.WORKER_MENU_BUTTON_TEXT in final_buttons
         assert bot.WORKER_CREATE_TASK_BUTTON_TEXT in final_buttons
         assert ack_calls and ack_calls[0][2] is message
-        assert logged_events and logged_events[0][0] == "TASK_0001"
-        event_payload = logged_events[0][1].get("payload") or {}
-        assert event_payload.get("result") == "success"
-        assert event_payload.get("history_items") == 0
+        assert not logged_events, "Push-to-model actions should no longer enter task history"
 
     asyncio.run(_scenario())
 
@@ -563,10 +632,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         assert bot.WORKER_CREATE_TASK_BUTTON_TEXT in final_buttons
         assert ack_calls and ack_calls[0][2] is message
         assert message.calls and "Pushed to model" in message.calls[-1][0]
-        assert logged_events
-        payload = logged_events[0][1].get("payload") or {}
-        assert payload.get("result") == "success"
-        assert payload.get("has_supplement") is True
+        assert not logged_events, "Push-to-model actions should no longer enter task history"
 
     asyncio.run(_scenario())
 
@@ -637,7 +703,7 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
         _, payload, reply_to = recorded[0]
         assert reply_to is message
         assert payload == "/compact"
-        assert callback.answers and callback.answers[0][0] == "Pushed to model"
+        assert callback.answers and callback.answers[0][0] == "has been pushed to model"
         assert message.calls
         preview_text, preview_mode, _, _ = message.calls[0]
         expected_block, expected_mode = bot._wrap_text_in_code_block("/compact")
@@ -645,8 +711,7 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
         assert preview_mode == expected_mode
         assert ack_calls and ack_calls[0][2] is message
         assert await state.get_state() is None
-        assert logged_events
-        assert logged_events[0][1]["payload"].get("result") == "success"
+        assert not logged_events, "Push-to-model actions should no longer enter task history"
 
     asyncio.run(_scenario())
 
@@ -694,7 +759,7 @@ def test_push_model_missing_task(monkeypatch):
 
     asyncio.run(bot.on_task_push_model(callback, state))
 
-    assert callback.answers and callback.answers[0][0] == "Taskdoes not exist"
+    assert callback.answers and callback.answers[0][0] == "Task does not exist"
     assert not message.calls
 
 
@@ -2027,7 +2092,7 @@ def test_format_history_description_push_model_includes_supplement():
     text = bot._format_history_description(record)
     assert "Result: success" in text
     assert "Model: codex" in text
-    assert "Supplement describe:Latest addition describe" in text
+    assert "Supplementary Description: Latest addition describe" in text
 
 
 def test_normalize_task_id_accepts_legacy_variants():

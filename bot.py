@@ -3030,6 +3030,9 @@ async def _build_history_context_for_model(task_id: str) -> tuple[str, int]:
     return "\n".join(trimmed_lines), len(trimmed_lines)
 
 
+SKIPPED_TASK_HISTORY_ACTIONS: set[str] = {"push_model", "summary_request"}
+
+
 async def _log_task_action(
     task_id: str,
     *,
@@ -3043,11 +3046,20 @@ async def _log_task_action(
 ) -> None:
     """Encapsulate task event writing and record logs when exceptions occur to avoid interrupting the main process."""
 
+    action_token = (action or "").strip()
+    if action_token in SKIPPED_TASK_HISTORY_ACTIONS:
+        worker_log.debug(
+            "Skipped logging task action in history: task_id=%s action=%s",
+            task_id,
+            action_token,
+            extra=_session_extra(),
+        )
+        return
     data_payload: Optional[Dict[str, Any]]
     if payload is None:
-        data_payload = {"action": action}
+        data_payload = {"action": action_token}
     else:
-        data_payload = {"action": action, **payload}
+        data_payload = {"action": action_token, **payload}
     try:
         await TASK_SERVICE.log_task_event(
             task_id,
@@ -4318,29 +4330,12 @@ async def _log_model_reply_event(
     session_path: Path,
     event_offset: int,
 ) -> None:
-    """Write model responses to Task history."""
+    """Model replies are no longer persisted to history."""
 
-    trimmed = _trim_history_value(content, limit=HISTORY_DISPLAY_VALUE_LIMIT)
-    payload = {
-        "model": ACTIVE_MODEL or "",
-        "session": str(session_path),
-        "offset": event_offset,
-    }
-    if content:
-        payload["content"] = content[:MODEL_REPLY_PAYLOAD_LIMIT]
-    try:
-        await TASK_SERVICE.log_task_event(
-            task_id,
-            event_type=HISTORY_EVENT_MODEL_REPLY,
-            actor=f"model/{ACTIVE_MODEL or 'codex'}",
-            new_value=trimmed,
-            payload=payload,
-        )
-    except ValueError:
-        worker_log.warning(
-            "The model reply writes fail: Task does not exist",
-            extra={"task_id": task_id, **_session_extra(path=session_path)},
-        )
+    worker_log.debug(
+        "Skipping history write for model reply",
+        extra={"task_id": task_id, "session": str(session_path)},
+    )
 
 
 async def _maybe_finalize_summary(
