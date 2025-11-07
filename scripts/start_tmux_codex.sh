@@ -21,6 +21,8 @@ SESSION_POINTER_FILE="${SESSION_POINTER_FILE:-$LOG_ROOT/${MODEL_NAME:-codex}/${P
 SESSION_LOCK_FILE="${SESSION_LOCK_FILE:-${SESSION_POINTER_FILE%.txt}.lock.json}"
 SESSION_CAPTURE_TIMEOUT="${SESSION_CAPTURE_TIMEOUT:-180}"
 SESSION_CAPTURE_POLL_INTERVAL="${SESSION_CAPTURE_POLL_INTERVAL:-0.5}"
+# Ensure optional CODEX session root is always defined even under `set -u`
+: "${CODEX_SESSIONS_ROOT:=}"
 
 # Avoid oh-my-zsh popping up update prompts in non-interactive environments
 export DISABLE_UPDATE_PROMPT="${DISABLE_UPDATE_PROMPT:-true}"

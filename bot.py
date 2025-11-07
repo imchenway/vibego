@@ -5607,7 +5607,7 @@ def _format_plan_update(arguments: Any, *, event_timestamp: Optional[str]) -> Op
     if not steps:
         return None
 
-    header = "currentTaskExecution plan:"
+    header = "current task execution plan:"
     body_parts = [header]
     if lines:
         body_parts.extend(lines)
