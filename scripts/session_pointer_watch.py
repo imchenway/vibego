@@ -239,8 +239,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             observer.join(timeout=5)
 
     if session_path is None:
-        log.error("Failed to detect rollout file within timeout %.1fs", args.timeout)
-        return 0  # Do not fail startup; worker will fall back to legacy behaviour.
+        log.error(
+            "Failed to detect rollout file within timeout %.1fs (tmux session=%s, project=%s)",
+            args.timeout,
+            args.tmux_session or "-",
+            args.project or "-",
+        )
+        return 1
 
     _write_pointer(pointer_path, session_path)
     _write_lock(

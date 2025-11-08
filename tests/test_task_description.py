@@ -1301,6 +1301,7 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
     monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_LOCK_REQUIRED", False)
 
     bot.CHAT_SESSION_MAP.clear()
     bot.SESSION_OFFSETS.clear()

@@ -258,6 +258,7 @@ SEND_FAILURE_NOTICE_COOLDOWN = float(os.environ.get("SEND_FAILURE_NOTICE_COOLDOW
 SESSION_INITIAL_BACKTRACK_BYTES = int(os.environ.get("SESSION_INITIAL_BACKTRACK_BYTES", "16384"))
 ENABLE_PLAN_PROGRESS = (os.environ.get("ENABLE_PLAN_PROGRESS", "1").strip().lower() not in {"0", "false", "no", "off"})
 AUTO_COMPACT_THRESHOLD = max(_env_int("AUTO_COMPACT_THRESHOLD", 0), 0)
+SESSION_LOCK_REQUIRED = (os.environ.get("SESSION_LOCK_REQUIRED", "1").strip().lower() not in {"0", "false", "no", "off"})
 
 PLAN_STATUS_LABELS = {
     "completed": "✅",
@@ -1038,6 +1039,7 @@ async def _dispatch_prompt_to_model(
         pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
 
     lock_session = _read_session_lock_path()
+    lock_required = _is_session_lock_enforced()
     if lock_session is not None:
         if session_path is None:
             worker_log.info(
@@ -1056,52 +1058,64 @@ async def _dispatch_prompt_to_model(
         _sync_pointer_with_lock(pointer_path, lock_session)
         session_path = lock_session
     else:
-        if pointer_path is not None and session_path is None:
-            session_path = _read_pointer_path(pointer_path)
-            if session_path is not None:
-                worker_log.info(
-                    "[session-map] chat=%s pointer -> %s",
-                    chat_id,
-                    session_path,
-                    extra=_session_extra(path=session_path),
-                )
-        elif session_path is not None:
+        if session_path is not None:
             worker_log.info(
                 "[session-map] chat=%s reuse session %s",
                 chat_id,
                 session_path,
                 extra=_session_extra(path=session_path),
             )
+        elif lock_required:
+            await _reply_to_chat(
+                chat_id,
+                _session_lock_missing_message(),
+                reply_to=reply_to,
+            )
+            worker_log.error(
+                "[session-lock] Session lock required but missing",
+                extra={"chat": chat_id, "lock_file": SESSION_LOCK_FILE_PATH or "-"},
+            )
+            return False, None
+        else:
+            if pointer_path is not None and session_path is None:
+                session_path = _read_pointer_path(pointer_path)
+                if session_path is not None:
+                    worker_log.info(
+                        "[session-map] chat=%s pointer -> %s",
+                        chat_id,
+                        session_path,
+                        extra=_session_extra(path=session_path),
+                    )
 
-        target_cwd = CODEX_WORKDIR if CODEX_WORKDIR else None
-        if pointer_path is not None:
-            current_cwd = _read_session_meta_cwd(session_path) if session_path else None
-            if session_path is None or (target_cwd and current_cwd != target_cwd):
-                latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
-                if latest is not None:
-                    try:
-                        SESSION_OFFSETS[str(latest)] = latest.stat().st_size
-                    except FileNotFoundError:
-                        SESSION_OFFSETS[str(latest)] = 0
-                    _update_pointer(pointer_path, latest)
-                    session_path = latest
-                    worker_log.info(
-                        "[session-map] chat=%s switch to cwd-matched %s",
-                        chat_id,
-                        session_path,
-                        extra=_session_extra(path=session_path),
-                    )
-            if _is_claudecode_model():
-                fallback = _find_latest_claudecode_rollout(pointer_path)
-                if fallback is not None and fallback != session_path:
-                    _update_pointer(pointer_path, fallback)
-                    session_path = fallback
-                    worker_log.info(
-                        "[session-map] chat=%s fallback to ClaudeCode session %s",
-                        chat_id,
-                        session_path,
-                        extra=_session_extra(path=session_path),
-                    )
+            target_cwd = CODEX_WORKDIR if CODEX_WORKDIR else None
+            if pointer_path is not None:
+                current_cwd = _read_session_meta_cwd(session_path) if session_path else None
+                if session_path is None or (target_cwd and current_cwd != target_cwd):
+                    latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+                    if latest is not None:
+                        try:
+                            SESSION_OFFSETS[str(latest)] = latest.stat().st_size
+                        except FileNotFoundError:
+                            SESSION_OFFSETS[str(latest)] = 0
+                        _update_pointer(pointer_path, latest)
+                        session_path = latest
+                        worker_log.info(
+                            "[session-map] chat=%s (lock disabled) switch to cwd-matched %s",
+                            chat_id,
+                            session_path,
+                            extra=_session_extra(path=session_path),
+                        )
+                if _is_claudecode_model():
+                    fallback = _find_latest_claudecode_rollout(pointer_path)
+                    if fallback is not None and fallback != session_path:
+                        _update_pointer(pointer_path, fallback)
+                        session_path = fallback
+                        worker_log.info(
+                            "[session-map] chat=%s (lock disabled) fallback to ClaudeCode session %s",
+                            chat_id,
+                            session_path,
+                            extra=_session_extra(path=session_path),
+                        )
 
     needs_session_wait = session_path is None
     if needs_session_wait and pointer_path is None:
@@ -4833,6 +4847,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
     target_cwd = CODEX_WORKDIR or None
 
     lock_session = _read_session_lock_path()
+    lock_required = _is_session_lock_enforced()
     if lock_session is not None:
         if session_path is None or session_path != lock_session:
             worker_log.info(
@@ -4844,6 +4859,12 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
         _sync_pointer_with_lock(pointer_path, lock_session)
         session_path = lock_session
     else:
+        if lock_required:
+            worker_log.error(
+                "[session-lock] Session lock required but missing during watcher ensure",
+                extra={"chat": chat_id, "lock_file": SESSION_LOCK_FILE_PATH or "-"},
+            )
+            return None
         if session_path is None and pointer_path is not None:
             session_path = _read_pointer_path(pointer_path)
             if session_path is not None:
@@ -5328,6 +5349,23 @@ def _session_lock_file() -> Optional[Path]:
     if not SESSION_LOCK_FILE_PATH:
         return None
     return resolve_path(SESSION_LOCK_FILE_PATH)
+
+
+def _is_session_lock_enforced() -> bool:
+    """Return True when the worker must rely on the captured session lock."""
+
+    return SESSION_LOCK_REQUIRED and bool(SESSION_LOCK_FILE_PATH)
+
+
+def _session_lock_missing_message() -> str:
+    """Build a human-readable error when the session lock is missing."""
+
+    target = SESSION_LOCK_FILE_PATH or "session_lock.json"
+    return (
+        "当前 worker 未检测到会话锁，无法定位本项目独占的模型会话。\n"
+        f"缺失的锁文件：{target}\n"
+        "请在对应项目目录重新执行 scripts/run_bot.sh（或等效启动脚本）以捕获新的 tmux 会话。"
+    )
 
 
 def _read_session_lock_path() -> Optional[Path]:

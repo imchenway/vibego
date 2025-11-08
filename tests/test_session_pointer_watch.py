@@ -92,7 +92,7 @@ def test_pointer_written_when_rollout_appears(tmp_path):
 
 def test_no_rollout_leaves_pointer_empty(tmp_path):
     result = _run_session_watch(tmp_path, create_plan=None, timeout=0.2)
-    assert result["exit_code"] == 0
+    assert result["exit_code"] == 1
     assert result["pointer"] == ""
     assert result["lock"] is None
 

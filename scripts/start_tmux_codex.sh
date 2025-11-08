@@ -163,7 +163,10 @@ if (( ! DRY_RUN )); then
   WATCH_ARGS+=("--additional-root" "$(dirname "$SESSION_POINTER_FILE")/sessions")
   WATCH_ARGS+=("--timeout" "$SESSION_CAPTURE_TIMEOUT")
   WATCH_ARGS+=("--poll" "$SESSION_CAPTURE_POLL_INTERVAL")
-  "${WATCH_ARGS[@]}" >/dev/null 2>&1 &
+  if ! "${WATCH_ARGS[@]}"; then
+    echo "Failed to capture Codex/Claude session log for tmux session '$SESSION_NAME'. Please check CLI startup output." >&2
+    exit 1
+  fi
 fi
 
 exit 0
