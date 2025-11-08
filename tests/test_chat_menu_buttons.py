@@ -46,6 +46,13 @@ def test_worker_keyboard_button_text():
     assert markup.keyboard[0][1].text == bot.WORKER_CREATE_TASK_BUTTON_TEXT
 
 
+def test_worker_button_variants_include_translations():
+    assert "📋 Task List" in bot.WORKER_MENU_BUTTON_TEXT_VARIANTS
+    assert "📋 任务列表" in bot.WORKER_MENU_BUTTON_TEXT_VARIANTS
+    assert "➕ Create Task" in bot.WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS
+    assert "➕ 创建任务" in bot.WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS
+
+
 def test_worker_keyboard_resize_enabled():
     markup = bot._build_worker_main_keyboard()
     assert markup.resize_keyboard is True

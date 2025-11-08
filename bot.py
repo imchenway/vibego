@@ -1840,8 +1840,33 @@ BOT_COMMANDS: list[tuple[str, str]] = [
 COMMAND_KEYWORDS: set[str] = {command for command, _ in BOT_COMMANDS}
 COMMAND_KEYWORDS.update({"task_child", "task_children", "task_delete"})
 
-WORKER_MENU_BUTTON_TEXT = "📋 Task List"
-WORKER_CREATE_TASK_BUTTON_TEXT = "➕ Create Task"
+def _button_text_variants(env_key: str, fallback: Sequence[str]) -> tuple[str, ...]:
+    """Return button label candidates sourced from env or fallback list."""
+
+    raw = (os.environ.get(env_key) or "").strip()
+    if not raw:
+        return tuple(fallback)
+    variants = []
+    for segment in raw.split("|"):
+        cleaned = segment.strip()
+        if cleaned and cleaned not in variants:
+            variants.append(cleaned)
+    return tuple(variants or fallback)
+
+
+WORKER_MENU_BUTTON_TEXT_VARIANTS = _button_text_variants(
+    "WORKER_MENU_BUTTON_TEXTS",
+    ("📋 Task List", "📋 任务列表"),
+)
+WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS = _button_text_variants(
+    "WORKER_CREATE_TASK_BUTTON_TEXTS",
+    ("➕ Create Task", "➕ 创建任务"),
+)
+
+WORKER_MENU_BUTTON_TEXT = WORKER_MENU_BUTTON_TEXT_VARIANTS[0]
+WORKER_CREATE_TASK_BUTTON_TEXT = WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS[0]
+WORKER_MENU_BUTTON_TEXT_SET = set(WORKER_MENU_BUTTON_TEXT_VARIANTS)
+WORKER_CREATE_TASK_BUTTON_TEXT_SET = set(WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS)
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "Invalid task ID format. Use patterns like TASK_0001."
@@ -6064,7 +6089,7 @@ async def on_task_list(message: Message) -> None:
     await _handle_task_list_request(message)
 
 
-@router.message(F.text == WORKER_MENU_BUTTON_TEXT)
+@router.message(F.text.in_(WORKER_MENU_BUTTON_TEXT_SET))
 async def on_task_list_button(message: Message) -> None:
     await _handle_task_list_request(message)
 
@@ -6099,7 +6124,7 @@ async def _dispatch_task_new_command(source_message: Message, actor: Optional[Us
     await dp.feed_update(bot_instance, update)
 
 
-@router.message(F.text == WORKER_CREATE_TASK_BUTTON_TEXT)
+@router.message(F.text.in_(WORKER_CREATE_TASK_BUTTON_TEXT_SET))
 async def on_task_create_button(message: Message, state: FSMContext) -> None:
     await state.clear()
     try:
