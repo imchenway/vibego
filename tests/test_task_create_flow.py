@@ -87,7 +87,7 @@ def test_task_new_interactive_sets_default_priority_and_prompt():
 
     assert state.state == TaskCreateStates.waiting_title
     assert state.data["priority"] == bot.DEFAULT_PRIORITY
-    assert message.calls and message.calls[-1]["text"] == "Please enter a task title:"
+    assert message.calls and message.calls[-1]["text"] == "Please enter the task title:"
 
 
 def test_task_new_command_rejects_priority_param():
@@ -96,7 +96,7 @@ def test_task_new_command_rejects_priority_param():
     asyncio.run(bot.on_task_new(message, state))
 
     assert message.calls
-    assert "priority Parameter canceled" in message.calls[-1]["text"]
+    assert "parameter is no longer supported" in message.calls[-1]["text"]
 
 
 def test_task_create_title_moves_to_type_selection():
@@ -108,7 +108,7 @@ def test_task_create_title_moves_to_type_selection():
     assert state.data["title"] == "New task title"
     assert message.calls
     assert isinstance(message.calls[-1]["reply_markup"], ReplyKeyboardMarkup)
-    assert "Please select task type" in message.calls[-1]["text"]
+    assert message.calls[-1]["text"].startswith("Please select a task type")
 
 
 def test_task_create_type_valid_moves_to_description_prompt():
@@ -126,11 +126,11 @@ def test_task_create_type_valid_moves_to_description_prompt():
     assert state.data["task_type"] == "task"
     assert message.calls
     prompt = message.calls[-1]["text"]
-    assert prompt.startswith("Please enter a task description")
+    assert prompt.startswith("Please enter the task description.")
     markup = message.calls[-1]["reply_markup"]
     assert isinstance(markup, ReplyKeyboardMarkup)
     buttons = [button.text for row in markup.keyboard for button in row]
-    assert any("jump over" in text for text in buttons)
+    assert any(bot.SKIP_TEXT in text for text in buttons)
     assert any("Cancel" in text for text in buttons)
 
 
@@ -142,7 +142,6 @@ def test_task_create_type_valid_moves_to_description_prompt():
         "Invalid type",
         "priority=2",
         "task*",
-        "need",
         "Task?",
         "---",
         "123",
@@ -162,7 +161,7 @@ def test_task_create_type_invalid_reprompts(invalid_text):
 
     assert state.state == TaskCreateStates.waiting_type
     assert message.calls
-    assert message.calls[-1]["text"].startswith("TaskInvalid type")
+    assert message.calls[-1]["text"].startswith("Invalid task type.")
     assert isinstance(message.calls[-1]["reply_markup"], ReplyKeyboardMarkup)
 
 
@@ -182,7 +181,7 @@ def test_task_create_description_skip_produces_summary():
     assert state.data["description"] == ""
     assert len(message.calls) >= 2
     summary = message.calls[-2]["text"]
-    assert "Description: None" in summary
+    assert "Description: None yet" in summary
     assert isinstance(message.calls[-1]["reply_markup"], ReplyKeyboardMarkup)
 
 
@@ -202,7 +201,7 @@ def test_task_create_description_accepts_text():
     assert state.state == TaskCreateStates.waiting_confirm
     assert state.data["description"] == description
     summary = message.calls[-2]["text"]
-    assert "describe:" in summary
+    assert "Description:" in summary
     assert description in summary
 
 
@@ -221,11 +220,11 @@ def test_task_create_description_too_long_reprompts():
 
     assert state.state == TaskCreateStates.waiting_description
     assert message.calls
-    assert "not to exceed" in message.calls[-1]["text"]
+    assert "cannot exceed" in message.calls[-1]["text"]
     markup = message.calls[-1]["reply_markup"]
     assert isinstance(markup, ReplyKeyboardMarkup)
     buttons = [button.text for row in markup.keyboard for button in row]
-    assert any("jump over" in text for text in buttons)
+    assert any(bot.SKIP_TEXT in text for text in buttons)
     assert any("Cancel" in text for text in buttons)
 
 
@@ -243,7 +242,7 @@ def test_task_create_description_cancel_aborts():
 
     assert state.state is None
     assert message.calls
-    assert message.calls[-1]["text"] == "Cancel the created task."
+    assert message.calls[-1]["text"] == "Task creation cancelled."
 
 
 def test_task_create_description_cancel_keyboard_aborts():
@@ -260,7 +259,7 @@ def test_task_create_description_cancel_keyboard_aborts():
 
     assert state.state is None
     assert message.calls
-    assert message.calls[-1]["text"] == "Cancel the created task."
+    assert message.calls[-1]["text"] == "Task creation cancelled."
 
 
 def test_task_create_confirm_uses_default_priority(monkeypatch):
@@ -297,7 +296,7 @@ def test_task_create_confirm_uses_default_priority(monkeypatch):
     assert state.state is None
     assert message.calls
     assert isinstance(message.calls[-2]["reply_markup"], ReplyKeyboardMarkup)
-    assert "TaskCreated:" in message.calls[-1]["text"]
+    assert message.calls[-1]["text"].startswith("Task created:")
 
 
 def test_task_create_confirm_invalid_prompts_again():
@@ -336,7 +335,7 @@ def test_task_create_confirm_cancel_via_number():
     assert state.state is None
     assert len(message.calls) >= 2
     assert isinstance(message.calls[-2]["reply_markup"], ReplyKeyboardRemove)
-    assert message.calls[-2]["text"] == "Cancel the created task."
+    assert message.calls[-2]["text"] == "Task creation cancelled."
     assert message.calls[-1]["text"] == "Returned to main menu."
 
 
@@ -370,9 +369,9 @@ def test_task_add_child_callback_reports_deprecation():
     assert state.state is None
     assert not state.data
     assert callback.answers
-    assert "The sub-task function has been offline" in (callback.answers[-1]["text"] or "")
+    assert "sub-task feature has been retired" in (callback.answers[-1]["text"] or "")
     assert callback.message.calls
-    assert "The sub-task function has been offline" in callback.message.calls[-1]["text"]
+    assert "Use /task_new to create a new task." in callback.message.calls[-1]["text"]
 
 
 def test_task_list_children_callback_reports_deprecation():

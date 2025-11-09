@@ -763,6 +763,39 @@ def test_push_model_missing_task(monkeypatch):
     assert not message.calls
 
 
+def test_push_model_prompt_not_duplicated(monkeypatch):
+    message = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_0005", message)
+    state, _storage = make_state(message)
+
+    task = _make_task(
+        task_id="TASK_0005",
+        title="No duplicate prompt",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0005"
+        return task
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
+        assert len(message.calls) == 1
+
+        duplicate = DummyCallback("task:push_model:TASK_0005", message)
+        await bot.on_task_push_model(duplicate, state)
+
+        assert duplicate.answers
+        assert duplicate.answers[-1][0] == bot.PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT
+        assert len(message.calls) == 1
+
+    asyncio.run(_scenario())
+
+
 def test_build_bug_report_intro_plain_task_id():
     task = _make_task(task_id="TASK_0055", title="Edit describeTask", status="test")
     intro = bot._build_bug_report_intro(task)
@@ -2144,6 +2177,24 @@ def test_on_text_ignores_regular_commands(monkeypatch):
     monkeypatch.setattr(bot, "_reply_task_detail_message", fake_reply)
 
     asyncio.run(bot.on_text(message))
+
+
+def test_on_text_skips_model_dispatch_during_task_creation(monkeypatch):
+    message = DummyMessage()
+    message.text = "Implement customer portal"
+
+    async def fake_dispatch(*_args, **_kwargs):  # pragma: no cover
+        raise AssertionError("model dispatch should be suppressed during wizard input")
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_dispatch)
+
+    state, _storage = make_state(message)
+
+    async def scenario() -> None:
+        await state.set_state(bot.TaskCreateStates.waiting_title.state)
+        await bot.on_text(message, state)
+
+    asyncio.run(scenario())
 
 
 def test_on_task_quick_command_handles_slash_task(monkeypatch):

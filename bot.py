@@ -2394,6 +2394,9 @@ MODEL_PUSH_SUPPLEMENT_STATUSES: set[str] = {
     "research",
     "test",
 }
+PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT = (
+    "A supplementary description prompt is already active. Please respond or tap Skip/Cancel."
+)
 
 SUMMARY_COMMAND_PREFIX = "/task_summary_request_"
 SUMMARY_COMMAND_ALIASES: tuple[str, ...] = (
@@ -6849,6 +6852,10 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
+    current_state = await state.get_state()
+    existing_context: Dict[str, Any] = {}
+    if current_state == TaskPushStates.waiting_supplement.state:
+        existing_context = await state.get_data()
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await callback.answer("Task does not exist", show_alert=True)
@@ -6859,10 +6866,20 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
     actor = _actor_from_callback(callback)
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
     if task.status in MODEL_PUSH_SUPPLEMENT_STATUSES:
+        origin_message = callback.message
+        origin_message_id = origin_message.message_id if origin_message else None
+        if (
+            current_state == TaskPushStates.waiting_supplement.state
+            and existing_context.get("task_id") == task_id
+            and existing_context.get("origin_message_id") == origin_message_id
+        ):
+            await callback.answer(PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT)
+            return
         await state.clear()
         await state.update_data(
             task_id=task_id,
-            origin_message=callback.message,
+            origin_message=origin_message,
+            origin_message_id=origin_message_id,
             chat_id=chat_id,
             actor=actor,
         )
@@ -6962,16 +6979,31 @@ async def on_task_push_model_fill(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("Callback parameter error.", show_alert=True)
         return
     _, _, task_id = parts
+    current_state = await state.get_state()
+    existing_context: Dict[str, Any] = {}
+    if current_state == TaskPushStates.waiting_supplement.state:
+        existing_context = await state.get_data()
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
         await callback.answer("Task does not exist", show_alert=True)
         return
     actor = _actor_from_callback(callback)
+    origin_message = callback.message
+    origin_message_id = origin_message.message_id if origin_message else None
+    if (
+        current_state == TaskPushStates.waiting_supplement.state
+        and existing_context.get("task_id") == task_id
+        and existing_context.get("origin_message_id") == origin_message_id
+    ):
+        await callback.answer(PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT)
+        return
+    await state.clear()
     await state.update_data(
         task_id=task_id,
-        origin_message=callback.message,
-        chat_id=callback.message.chat.id if callback.message else callback.from_user.id,
+        origin_message=origin_message,
+        origin_message_id=origin_message_id,
+        chat_id=origin_message.chat.id if origin_message else callback.from_user.id,
         actor=actor,
     )
     await state.set_state(TaskPushStates.waiting_supplement)
@@ -8141,9 +8173,13 @@ async def on_start(m: Message):
         await m.answer(_format_env_issue_message())
 
 @router.message(F.text)
-async def on_text(m: Message):
+async def on_text(m: Message, state: FSMContext | None = None):
     # Automatically record chat when first received message_id to state document
     _auto_record_chat_id(m.chat.id)
+
+    current_state: Optional[str] = None
+    if state is not None:
+        current_state = await state.get_state()
 
     prompt = (m.text or "").strip()
     if not prompt:
@@ -8153,6 +8189,12 @@ async def on_text(m: Message):
         await _reply_task_detail_message(m, task_id_candidate)
         return
     if prompt.startswith("/"):
+        return
+    if current_state:
+        worker_log.debug(
+            "Suppressed model dispatch due to active wizard state",
+            extra={**_session_extra(), "chat": m.chat.id, "state": current_state},
+        )
         return
     await _handle_prompt_dispatch(m, prompt)
 
