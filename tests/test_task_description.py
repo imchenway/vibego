@@ -1120,6 +1120,55 @@ def test_handle_model_response_accepts_escaped_summary_tag(monkeypatch, tmp_path
     bot.PENDING_SUMMARIES.clear()
 
 
+@pytest.mark.parametrize(
+    "summary_line",
+    [
+        "SUMMARY_REQUEST_ID: req_multi",
+        "SUMMARY_REQUEST_ID：req_multi",
+        "**SUMMARY_REQUEST_ID：req_multi**",
+    ],
+)
+def test_handle_model_response_accepts_colon_variants(monkeypatch, tmp_path: Path, summary_line: str):
+    logged: list[dict] = []
+
+    async def fake_log_event(task_id: str, **kwargs):
+        logged.append({"task_id": task_id, **kwargs})
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "log_task_event", fake_log_event)
+
+    session_path = tmp_path / "summary-colon.jsonl"
+    session_path.write_text("", encoding="utf-8")
+    session_key = str(session_path)
+    request_id = "req_multi"
+
+    bot.PENDING_SUMMARIES.clear()
+    bot.PENDING_SUMMARIES[session_key] = bot.PendingSummary(
+        task_id="TASK_0003",
+        request_id=request_id,
+        actor="tester",
+        session_key=session_key,
+        session_path=session_path,
+        created_at=time.monotonic(),
+    )
+
+    async def scenario() -> None:
+        await bot._handle_model_response(
+            chat_id=1,
+            session_key=session_key,
+            session_path=session_path,
+            event_offset=7,
+            content=f"{summary_line}\nSummary body",
+        )
+
+    asyncio.run(scenario())
+    assert bot.PENDING_SUMMARIES.get(session_key) is None
+    assert logged, "Summary should be written into history"
+    payload = logged[0]
+    assert payload["event_type"] == "model_summary"
+    assert payload["task_id"] == "TASK_0003"
+    bot.PENDING_SUMMARIES.clear()
+
+
 def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.text = "/task_summary_request_TASK_0200"

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes, math
+import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes, math, unicodedata
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal
@@ -1929,6 +1929,10 @@ WORKER_COMMAND_BUTTON_TEXT = WORKER_COMMAND_BUTTON_TEXT_VARIANTS[0]
 WORKER_MENU_BUTTON_TEXT_SET = set(WORKER_MENU_BUTTON_TEXT_VARIANTS)
 WORKER_CREATE_TASK_BUTTON_TEXT_SET = set(WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS)
 WORKER_COMMAND_BUTTON_TEXT_SET = set(WORKER_COMMAND_BUTTON_TEXT_VARIANTS)
+WORKER_KEYBOARD_BROADCAST_TEXT = os.environ.get(
+    "WORKER_KEYBOARD_BROADCAST_TEXT",
+    "Keyboard refreshed. Use the menu below to view tasks, create tasks, or manage commands.",
+).strip() or "Keyboard refreshed. Use the menu below to view tasks, create tasks, or manage commands."
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "Invalid task ID format. Use patterns like TASK_0001."
@@ -2390,6 +2394,24 @@ async def _broadcast_worker_keyboard(bot: Bot) -> None:
         worker_log.info("No chat targets available; skipping menu broadcast", extra=_session_extra())
         return
     for chat_id in targets:
+        keyboard_markup = _build_worker_main_keyboard()
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=WORKER_KEYBOARD_BROADCAST_TEXT,
+                reply_markup=keyboard_markup,
+            )
+        except TelegramForbiddenError as exc:
+            worker_log.warning("Keyboard push rejected: %s", exc, extra={**_session_extra(), "chat": chat_id})
+            continue
+        except TelegramBadRequest as exc:
+            worker_log.warning("Keyboard push failed: %s", exc, extra={**_session_extra(), "chat": chat_id})
+        except (TelegramRetryAfter, TelegramNetworkError) as exc:
+            worker_log.error("Keyboard push hit network issues: %s", exc, extra={**_session_extra(), "chat": chat_id})
+            await _notify_send_failure_message(chat_id)
+            continue
+        except Exception as exc:
+            worker_log.error("Unexpected error while pushing keyboard: %s", exc, extra={**_session_extra(), "chat": chat_id})
         try:
             text, inline_markup = await _build_task_list_view(status=None, page=1, limit=DEFAULT_PAGE_SIZE)
         except Exception as exc:
@@ -4700,6 +4722,14 @@ async def _log_model_reply_event(
     )
 
 
+def _sanitize_summary_text(text: Optional[str]) -> str:
+    """Normalize escaped underscores while retaining user formatting."""
+
+    if not text:
+        return ""
+    return text.replace("\\_", "_")
+
+
 async def _maybe_finalize_summary(
     session_key: str,
     *,
@@ -4712,15 +4742,19 @@ async def _maybe_finalize_summary(
     pending = PENDING_SUMMARIES.get(session_key)
     if not pending:
         return
-    request_tag = f"SUMMARY_REQUEST_ID::{pending.request_id}"
-    normalized_buffer = (pending.buffer or "").replace("\\_", "_")
-    normalized_content = content.replace("\\_", "_")
+    sanitized_buffer = _sanitize_summary_text(pending.buffer or "")
+    sanitized_content = _sanitize_summary_text(content)
     combined_text = (
-        f"{normalized_buffer}\n{normalized_content}"
-        if normalized_buffer
-        else normalized_content
+        f"{sanitized_buffer}\n{sanitized_content}"
+        if sanitized_buffer
+        else sanitized_content
     )
-    if request_tag not in combined_text:
+    normalized_combined = unicodedata.normalize("NFKC", combined_text)
+    tag_pattern = re.compile(
+        rf"SUMMARY_REQUEST_ID\s*(?:[:：]{{1,2}})?\s*{re.escape(pending.request_id)}",
+        re.IGNORECASE,
+    )
+    if not tag_pattern.search(normalized_combined):
         pending.buffer = combined_text
         return
     summary_text = combined_text

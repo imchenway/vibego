@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import MenuButtonCommands, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import MenuButtonCommands, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup
 
 import bot
 import master
@@ -319,9 +319,17 @@ def test_worker_broadcast_pushes_to_targets(tmp_path, monkeypatch):
 
     mock_bot = AsyncMock()
     asyncio.run(bot._broadcast_worker_keyboard(mock_bot))
-    assert mock_bot.send_message.await_count == 2
-    payload = {call.kwargs["chat_id"] for call in mock_bot.send_message.await_args_list}
-    assert payload == {333, 444}
+    assert mock_bot.send_message.await_count == 4
+    calls_by_chat: dict[int, list] = {}
+    for call in mock_bot.send_message.await_args_list:
+        chat_id = call.kwargs["chat_id"]
+        calls_by_chat.setdefault(chat_id, []).append(call.kwargs.get("reply_markup"))
+    assert set(calls_by_chat) == {333, 444}
+    for markups in calls_by_chat.values():
+        assert any(isinstance(markup, ReplyKeyboardMarkup) for markup in markups)
+        assert any(isinstance(markup, InlineKeyboardMarkup) for markup in markups)
+        reply_markup = next(markup for markup in markups if isinstance(markup, ReplyKeyboardMarkup))
+        assert reply_markup.keyboard[1][0].text == bot.WORKER_COMMAND_BUTTON_TEXT
 
     monkeypatch.delenv("STATE_FILE", raising=False)
     monkeypatch.delenv("MASTER_PROJECTS_PATH", raising=False)
