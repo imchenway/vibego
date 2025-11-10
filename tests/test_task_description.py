@@ -798,6 +798,106 @@ def test_push_model_prompt_not_duplicated(monkeypatch):
     asyncio.run(_scenario())
 
 
+def test_push_model_duplicate_prompt_after_state_clear(monkeypatch):
+    message = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_LOCK", message)
+    state, _storage = make_state(message)
+
+    task = _make_task(
+        task_id="TASK_LOCK",
+        title="Lock prompts",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_LOCK"
+        return task
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
+        assert len(message.calls) == 1
+        await state.clear()
+        duplicate = DummyCallback("task:push_model:TASK_LOCK", message)
+        await bot.on_task_push_model(duplicate, state)
+        assert duplicate.answers
+        assert duplicate.answers[-1][0] == bot.PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT
+        assert len(message.calls) == 1
+
+    asyncio.run(_scenario())
+    bot._release_push_supplement_lock(message.chat.id, task.id)
+
+
+def test_push_model_lock_released_after_completion(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_UNLOCK", message)
+    state, _storage = make_state(message)
+
+    task = _make_task(
+        task_id="TASK_UNLOCK",
+        title="Unlock prompts",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_UNLOCK"
+        return task
+
+    async def fake_list_history(task_id: str):
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
+
+    recorded: list[str] = []
+    ack_calls: list[tuple[int, Path | None, DummyMessage | None]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        assert not ack_immediately
+        recorded.append(prompt)
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        ack_calls.append((chat_id, session_path, reply_to))
+
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    async def fake_log_event(task_id: str, **kwargs):
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "log_task_event", fake_log_event)
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
+
+        skip_message = DummyMessage()
+        skip_message.text = bot.SKIP_TEXT
+        skip_message.chat = message.chat
+        skip_message.from_user = message.from_user
+        with pytest.raises(SkipHandler):
+            await bot.on_task_push_model_supplement(skip_message, state)
+
+        assert await state.get_state() is None
+        assert recorded
+        assert ack_calls
+
+        second_callback = DummyCallback("task:push_model:TASK_UNLOCK", message)
+        await bot.on_task_push_model(second_callback, state)
+        assert len(message.calls) >= 2
+        assert second_callback.answers
+        assert second_callback.answers[-1][0] == "Please add a task description, or choose Skip/Cancel."
+
+    asyncio.run(_scenario())
+    bot._release_push_supplement_lock(message.chat.id, task.id)
+
+
 def test_build_bug_report_intro_plain_task_id():
     task = _make_task(task_id="TASK_0055", title="Edit describeTask", status="test")
     intro = bot._build_bug_report_intro(task)

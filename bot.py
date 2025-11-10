@@ -2733,6 +2733,62 @@ MODEL_PUSH_SUPPLEMENT_STATUSES: set[str] = {
     "research",
     "test",
 }
+
+
+@dataclass(slots=True)
+class _PushSupplementLock:
+    """Track active push-to-model supplement prompts to prevent duplicates."""
+
+    origin_message_id: Optional[int]
+    created_at: float
+
+
+PUSH_SUPPLEMENT_LOCK_TTL_SECONDS = _env_int("PUSH_SUPPLEMENT_LOCK_TTL", 300)
+PUSH_SUPPLEMENT_LOCKS: dict[tuple[int, str], _PushSupplementLock] = {}
+
+
+def _prune_push_supplement_locks(*, now: Optional[float] = None) -> None:
+    """Remove expired supplement locks to avoid leaking memory."""
+
+    if not PUSH_SUPPLEMENT_LOCKS:
+        return
+    current_time = now if now is not None else time.monotonic()
+    expired_keys = [
+        key
+        for key, lock in PUSH_SUPPLEMENT_LOCKS.items()
+        if current_time - lock.created_at >= PUSH_SUPPLEMENT_LOCK_TTL_SECONDS
+    ]
+    for key in expired_keys:
+        PUSH_SUPPLEMENT_LOCKS.pop(key, None)
+
+
+def _acquire_push_supplement_lock(
+    chat_id: int,
+    task_id: str,
+    *,
+    origin_message_id: Optional[int],
+) -> bool:
+    """Ensure only one supplement prompt per chat/task is active at a time."""
+
+    _prune_push_supplement_locks()
+    key = (chat_id, task_id)
+    if key in PUSH_SUPPLEMENT_LOCKS:
+        return False
+    PUSH_SUPPLEMENT_LOCKS[key] = _PushSupplementLock(
+        origin_message_id=origin_message_id,
+        created_at=time.monotonic(),
+    )
+    return True
+
+
+def _release_push_supplement_lock(chat_id: Optional[int], task_id: Optional[str]) -> None:
+    """Allow future prompts once the current flow is completed."""
+
+    if chat_id is None or not task_id:
+        return
+    PUSH_SUPPLEMENT_LOCKS.pop((chat_id, task_id), None)
+
+
 PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT = (
     "A supplementary description prompt is already active. Please respond or tap Skip/Cancel."
 )
@@ -7681,15 +7737,22 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
         ):
             await callback.answer(PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT)
             return
+        if not _acquire_push_supplement_lock(chat_id, task_id, origin_message_id=origin_message_id):
+            await callback.answer(PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT)
+            return
         await state.clear()
-        await state.update_data(
-            task_id=task_id,
-            origin_message=origin_message,
-            origin_message_id=origin_message_id,
-            chat_id=chat_id,
-            actor=actor,
-        )
-        await state.set_state(TaskPushStates.waiting_supplement)
+        try:
+            await state.update_data(
+                task_id=task_id,
+                origin_message=origin_message,
+                origin_message_id=origin_message_id,
+                chat_id=chat_id,
+                actor=actor,
+            )
+            await state.set_state(TaskPushStates.waiting_supplement)
+        except Exception:
+            _release_push_supplement_lock(chat_id, task_id)
+            raise
         await callback.answer("Please add a task description, or choose Skip/Cancel.")
         if callback.message:
             await _prompt_model_supplement_input(callback.message)
@@ -7737,13 +7800,16 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
     stored_id = data.get("task_id")
     if stored_id and stored_id != task_id:
         task_id = stored_id
+    lock_task_id = task_id
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
+        _release_push_supplement_lock(data.get("chat_id") or (callback.message.chat.id if callback.message else callback.from_user.id), lock_task_id)
         await callback.answer("Task does not exist", show_alert=True)
         return
     actor = _actor_from_callback(callback)
     chat_id = data.get("chat_id") or (callback.message.chat.id if callback.message else callback.from_user.id)
+    lock_chat_id = chat_id
     origin_message = data.get("origin_message") or callback.message
     try:
         success, prompt, session_path = await _push_task_to_model(
@@ -7755,6 +7821,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
         )
     except ValueError as exc:
         await state.clear()
+        _release_push_supplement_lock(lock_chat_id, lock_task_id)
         worker_log.error(
             "Missing push template: %s",
             exc,
@@ -7763,6 +7830,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("Push fail: Missing template configuration", show_alert=True)
         return
     await state.clear()
+    _release_push_supplement_lock(lock_chat_id, lock_task_id)
     if not success:
         await callback.answer("Push fail: model is not ready", show_alert=True)
         return
@@ -7804,15 +7872,23 @@ async def on_task_push_model_fill(callback: CallbackQuery, state: FSMContext) ->
     ):
         await callback.answer(PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT)
         return
+    chat_id = origin_message.chat.id if origin_message else callback.from_user.id
+    if not _acquire_push_supplement_lock(chat_id, task_id, origin_message_id=origin_message_id):
+        await callback.answer(PUSH_MODEL_SUPPLEMENT_IN_PROGRESS_TEXT)
+        return
     await state.clear()
-    await state.update_data(
-        task_id=task_id,
-        origin_message=origin_message,
-        origin_message_id=origin_message_id,
-        chat_id=origin_message.chat.id if origin_message else callback.from_user.id,
-        actor=actor,
-    )
-    await state.set_state(TaskPushStates.waiting_supplement)
+    try:
+        await state.update_data(
+            task_id=task_id,
+            origin_message=origin_message,
+            origin_message_id=origin_message_id,
+            chat_id=chat_id,
+            actor=actor,
+        )
+        await state.set_state(TaskPushStates.waiting_supplement)
+    except Exception:
+        _release_push_supplement_lock(chat_id, task_id)
+        raise
     await callback.answer()
     if callback.message:
         await _prompt_model_supplement_input(callback.message)
@@ -7824,19 +7900,24 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "Cancel"]
     resolved = _resolve_reply_choice(raw_text, options=options)
+    data = await state.get_data()
+    lock_chat_id = data.get("chat_id") or message.chat.id
+    lock_task_id = data.get("task_id")
     if resolved == "Cancel" or trimmed == "Cancel":
         await state.clear()
+        _release_push_supplement_lock(lock_chat_id, lock_task_id)
         await message.answer("Push to the model cancelled.", reply_markup=_build_worker_main_keyboard())
         raise SkipHandler()
-    data = await state.get_data()
-    task_id = data.get("task_id")
+    task_id = lock_task_id
     if not task_id:
         await state.clear()
+        _release_push_supplement_lock(lock_chat_id, lock_task_id)
         await message.answer("The push session has expired, please click the button again.", reply_markup=_build_worker_main_keyboard())
         raise SkipHandler()
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
+        _release_push_supplement_lock(lock_chat_id, lock_task_id)
         await message.answer("Task not found. Push cancelled.", reply_markup=_build_worker_main_keyboard())
         raise SkipHandler()
     supplement: Optional[str] = None
@@ -7861,6 +7942,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         )
     except ValueError as exc:
         await state.clear()
+        _release_push_supplement_lock(lock_chat_id, lock_task_id)
         worker_log.error(
             "Missing push template: %s",
             exc,
@@ -7869,6 +7951,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         await message.answer("Push failed: missing template configuration.", reply_markup=_build_worker_main_keyboard())
         raise SkipHandler()
     await state.clear()
+    _release_push_supplement_lock(lock_chat_id, lock_task_id)
     if not success:
         await message.answer("Push failed: model is not ready. Please retry shortly.", reply_markup=_build_worker_main_keyboard())
         raise SkipHandler()
