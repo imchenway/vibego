@@ -872,6 +872,33 @@ def _prepend_completion_header(text: str) -> str:
         return f"{MODEL_COMPLETION_PREFIX}\n\n{text}"
     return MODEL_COMPLETION_PREFIX
 
+
+def _strip_completion_header(text: str) -> str:
+    """Remove the completion header that _prepend_completion_header() adds."""
+
+    if not text:
+        return ""
+    prefix = MODEL_COMPLETION_PREFIX
+    if not text.startswith(prefix):
+        return text
+    remainder = text[len(prefix) :]
+    # _prepend_completion_header inserts two newlines between the prefix and body
+    return remainder.lstrip("\n")
+
+
+def _hash_delivery_variants(text: str) -> set[str]:
+    """Return sha256 hashes for the original payload and its header-stripped variant."""
+
+    payload = _prepare_model_payload(text)
+    hashes = {
+        hashlib.sha256(payload.encode("utf-8", errors="ignore")).hexdigest(),
+    }
+    stripped = _strip_completion_header(text)
+    if stripped != text:
+        stripped_payload = _prepare_model_payload(stripped)
+        hashes.add(hashlib.sha256(stripped_payload.encode("utf-8", errors="ignore")).hexdigest())
+    return hashes
+
 # pylint: disable=too-many-locals
 async def reply_large_text(
     chat_id: int,
@@ -5187,9 +5214,8 @@ async def _deliver_pending_messages(
             continue
         # Determine the Where to add completion prefix based on the polling phase
         formatted_text = _prepend_completion_header(text_to_send) if add_completion_header else text_to_send
-        payload_for_hash = _prepare_model_payload(formatted_text)
-        initial_hash = hashlib.sha256(payload_for_hash.encode("utf-8", errors="ignore")).hexdigest()
-        if initial_hash in delivered_hashes:
+        hash_variants = _hash_delivery_variants(formatted_text)
+        if delivered_hashes.intersection(hash_variants):
             worker_log.info(
                 "Skip duplicate model output",
                 extra={
@@ -5244,11 +5270,10 @@ async def _deliver_pending_messages(
         else:
             delivered_response = True
             last_sent = delivered_payload
-            final_hash_payload = _prepare_model_payload(delivered_payload or formatted_text)
-            message_hash = hashlib.sha256(final_hash_payload.encode("utf-8", errors="ignore")).hexdigest()
             _set_last_message(chat_id, session_key, delivered_payload or formatted_text)
-            delivered_hashes.add(initial_hash)
-            delivered_hashes.add(message_hash)
+            payload_variant = delivered_payload or formatted_text
+            delivered_hashes.update(hash_variants)
+            delivered_hashes.update(_hash_delivery_variants(payload_variant))
             delivered_offsets.add(event_offset)
             CHAT_FAILURE_NOTICES.pop(chat_id, None)
             last_committed_offset = event_offset
