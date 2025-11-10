@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes, math, unicodedata
+import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes, math, unicodedata, threading
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal
@@ -116,6 +116,108 @@ STATE_DIR_PATH = CONFIG_ROOT_PATH / "state"
 LOG_DIR_PATH = CONFIG_ROOT_PATH / "logs"
 for _path in (CONFIG_DIR_PATH, STATE_DIR_PATH, LOG_DIR_PATH):
     _path.mkdir(parents=True, exist_ok=True)
+
+SESSION_OFFSET_STORE_PATH = STATE_DIR_PATH / "session_offsets.json"
+SESSION_OFFSET_STORE_LOCK = threading.Lock()
+SESSION_OFFSET_FLUSH_TASK: Optional[asyncio.Task] = None
+SESSION_OFFSET_FLUSH_INTERVAL = 0.5
+
+
+def _load_session_offset_store() -> dict[str, int]:
+    if not SESSION_OFFSET_STORE_PATH.exists():
+        return {}
+    try:
+        raw = SESSION_OFFSET_STORE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        worker_log.warning(
+            "Failed to parse session offset store; a new file will be created.",
+            extra={"store": str(SESSION_OFFSET_STORE_PATH)},
+        )
+        return {}
+    cleaned: dict[str, int] = {}
+    for key, value in data.items():
+        try:
+            cleaned[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return cleaned
+
+
+SESSION_OFFSET_STORE: dict[str, int] = _load_session_offset_store()
+
+
+def _write_session_offset_store(data: dict[str, int]) -> None:
+    tmp_path = SESSION_OFFSET_STORE_PATH.with_suffix(".tmp")
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    tmp_path.write_text(payload, encoding="utf-8")
+    tmp_path.replace(SESSION_OFFSET_STORE_PATH)
+
+
+async def _flush_session_offsets_async() -> None:
+    global SESSION_OFFSET_FLUSH_TASK
+    try:
+        await asyncio.sleep(SESSION_OFFSET_FLUSH_INTERVAL)
+        with SESSION_OFFSET_STORE_LOCK:
+            _write_session_offset_store(SESSION_OFFSET_STORE)
+    finally:
+        SESSION_OFFSET_FLUSH_TASK = None
+
+
+def _schedule_session_offset_flush() -> None:
+    global SESSION_OFFSET_FLUSH_TASK
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        with SESSION_OFFSET_STORE_LOCK:
+            _write_session_offset_store(SESSION_OFFSET_STORE)
+        return
+    if SESSION_OFFSET_FLUSH_TASK is None or SESSION_OFFSET_FLUSH_TASK.done():
+        SESSION_OFFSET_FLUSH_TASK = loop.create_task(_flush_session_offsets_async())
+
+
+def _get_persisted_session_offset(session_key: str) -> Optional[int]:
+    with SESSION_OFFSET_STORE_LOCK:
+        value = SESSION_OFFSET_STORE.get(session_key)
+    return value
+
+
+def _store_session_offset(session_key: str, offset: int) -> None:
+    normalized = max(int(offset or 0), 0)
+    current = SESSION_OFFSETS.get(session_key)
+    if current == normalized:
+        # Still mirror the latest value to ensure callers rely on the dictionary even when unchanged.
+        SESSION_OFFSETS[session_key] = normalized
+        return
+    SESSION_OFFSETS[session_key] = normalized
+    with SESSION_OFFSET_STORE_LOCK:
+        previous = SESSION_OFFSET_STORE.get(session_key)
+        if previous == normalized:
+            return
+        SESSION_OFFSET_STORE[session_key] = normalized
+    _schedule_session_offset_flush()
+
+
+def _init_session_offset(session_path: Path, *, allow_backtrack: bool = False) -> None:
+    session_key = str(session_path)
+    if session_key in SESSION_OFFSETS:
+        return
+    persisted = _get_persisted_session_offset(session_key)
+    if persisted is not None:
+        _store_session_offset(session_key, persisted)
+        return
+    try:
+        size = session_path.stat().st_size
+    except FileNotFoundError:
+        size = 0
+    backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
+    if not allow_backtrack or backtrack <= 0:
+        _store_session_offset(session_key, size)
+        return
+    _store_session_offset(session_key, max(size - backtrack, 0))
 
 def _env_int(name: str, default: int) -> int:
     """Read an integer environment variable, falling back to the default on failure."""
@@ -1113,9 +1215,9 @@ async def _dispatch_prompt_to_model(
                     latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
                     if latest is not None:
                         try:
-                            SESSION_OFFSETS[str(latest)] = latest.stat().st_size
+                            _store_session_offset(str(latest), latest.stat().st_size)
                         except FileNotFoundError:
-                            SESSION_OFFSETS[str(latest)] = 0
+                            _store_session_offset(str(latest), 0)
                         _update_pointer(pointer_path, latest)
                         session_path = latest
                         worker_log.info(
@@ -1185,15 +1287,7 @@ async def _dispatch_prompt_to_model(
     assert session_path is not None
     session_key = str(session_path)
     if session_key not in SESSION_OFFSETS:
-        initial_offset = 0
-        if session_path.exists():
-            try:
-                size = session_path.stat().st_size
-            except FileNotFoundError:
-                size = 0
-            backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
-            initial_offset = max(size - backtrack, 0)
-        SESSION_OFFSETS[session_key] = initial_offset
+        _init_session_offset(session_path)
         worker_log.info(
             "[session-map] init offset for %s -> %s",
             session_key,
@@ -5027,7 +5121,7 @@ async def _deliver_pending_messages(
     last_committed_offset = previous_offset
 
     if not events:
-        SESSION_OFFSETS[session_key] = max(previous_offset, new_offset)
+        _store_session_offset(session_key, max(previous_offset, new_offset))
         return False
 
     worker_log.info(
@@ -5054,11 +5148,11 @@ async def _deliver_pending_messages(
                 },
             )
             last_committed_offset = event_offset
-            SESSION_OFFSETS[session_key] = event_offset
+            _store_session_offset(session_key, event_offset)
             continue
         if not text_to_send:
             last_committed_offset = event_offset
-            SESSION_OFFSETS[session_key] = event_offset
+            _store_session_offset(session_key, event_offset)
             continue
         if deliverable.kind == DELIVERABLE_KIND_PLAN:
             if ENABLE_PLAN_PROGRESS:
@@ -5084,12 +5178,12 @@ async def _deliver_pending_messages(
                 plan_completed_flag = bool(CHAT_PLAN_COMPLETION.get(chat_id))
             delivered_offsets.add(event_offset)
             last_committed_offset = event_offset
-            SESSION_OFFSETS[session_key] = event_offset
+            _store_session_offset(session_key, event_offset)
             continue
         if deliverable.kind != DELIVERABLE_KIND_MESSAGE:
             delivered_offsets.add(event_offset)
             last_committed_offset = event_offset
-            SESSION_OFFSETS[session_key] = event_offset
+            _store_session_offset(session_key, event_offset)
             continue
         # Determine the Where to add completion prefix based on the polling phase
         formatted_text = _prepend_completion_header(text_to_send) if add_completion_header else text_to_send
@@ -5106,7 +5200,7 @@ async def _deliver_pending_messages(
             )
             delivered_offsets.add(event_offset)
             last_committed_offset = event_offset
-            SESSION_OFFSETS[session_key] = event_offset
+            _store_session_offset(session_key, event_offset)
             continue
         worker_log.info(
             "Prepare to send model output",
@@ -5120,7 +5214,7 @@ async def _deliver_pending_messages(
         try:
             delivered_payload = await reply_large_text(chat_id, formatted_text)
         except TelegramBadRequest as exc:
-            SESSION_OFFSETS[session_key] = previous_offset
+            _store_session_offset(session_key, previous_offset)
             _clear_last_message(chat_id, session_key)
             worker_log.error(
                 "Send message fail (request is invalid): %s",
@@ -5134,7 +5228,7 @@ async def _deliver_pending_messages(
             await _notify_send_failure_message(chat_id)
             return False
         except (TelegramNetworkError, TelegramRetryAfter) as exc:
-            SESSION_OFFSETS[session_key] = last_committed_offset
+            _store_session_offset(session_key, last_committed_offset)
             _clear_last_message(chat_id, session_key)
             worker_log.warning(
                 "Send message fails and will try again: %s",
@@ -5158,7 +5252,7 @@ async def _deliver_pending_messages(
             delivered_offsets.add(event_offset)
             CHAT_FAILURE_NOTICES.pop(chat_id, None)
             last_committed_offset = event_offset
-            SESSION_OFFSETS[session_key] = event_offset
+            _store_session_offset(session_key, event_offset)
             worker_log.info(
                 "Model output sent successfully",
                 extra={
@@ -5200,7 +5294,7 @@ async def _deliver_pending_messages(
                 "offset": str(last_committed_offset),
             },
         )
-        SESSION_OFFSETS[session_key] = max(last_committed_offset, new_offset)
+        _store_session_offset(session_key, max(last_committed_offset, new_offset))
 
     if delivered_response:
         # The message is actually sent, and returning True indicates that this call was sent successfully.
@@ -5342,15 +5436,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
 
     session_key = str(session_path)
     if session_key not in SESSION_OFFSETS:
-        initial_offset = 0
-        if session_path.exists():
-            try:
-                size = session_path.stat().st_size
-            except FileNotFoundError:
-                size = 0
-            backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
-            initial_offset = max(size - backtrack, 0)
-        SESSION_OFFSETS[session_key] = initial_offset
+        _init_session_offset(session_path)
         worker_log.info(
             "[session-map] init offset for %s -> %s",
             session_key,
@@ -6216,11 +6302,8 @@ def _read_session_events(path: Path) -> Tuple[int, List[SessionDeliverable]]:
     key = str(path)
     offset = SESSION_OFFSETS.get(key)
     if offset is None:
-        try:
-            offset = path.stat().st_size
-        except FileNotFoundError:
-            offset = 0
-        SESSION_OFFSETS[key] = offset
+        _init_session_offset(path)
+        offset = SESSION_OFFSETS.get(key, 0)
     events: List[SessionDeliverable] = []
     new_offset = offset
 

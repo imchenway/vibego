@@ -898,6 +898,66 @@ def test_push_model_lock_released_after_completion(monkeypatch, tmp_path: Path):
     bot._release_push_supplement_lock(message.chat.id, task.id)
 
 
+def test_init_session_offset_prefers_persisted_value(monkeypatch, tmp_path: Path):
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("existing\n", encoding="utf-8")
+    session_key = str(session_file)
+    store_path = tmp_path / "session_offsets.json"
+    monkeypatch.setattr(bot, "SESSION_OFFSET_STORE_PATH", store_path)
+    original_store = dict(bot.SESSION_OFFSET_STORE)
+    original_offsets = dict(bot.SESSION_OFFSETS)
+    bot.SESSION_OFFSET_STORE.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.SESSION_OFFSET_STORE[session_key] = 5
+    try:
+        bot._init_session_offset(session_file)
+        assert bot.SESSION_OFFSETS[session_key] == 5
+    finally:
+        bot.SESSION_OFFSET_STORE.clear()
+        bot.SESSION_OFFSET_STORE.update(original_store)
+        bot.SESSION_OFFSETS.clear()
+        bot.SESSION_OFFSETS.update(original_offsets)
+
+
+def test_init_session_offset_defaults_to_tail(monkeypatch, tmp_path: Path):
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("A" * 42, encoding="utf-8")
+    session_key = str(session_file)
+    store_path = tmp_path / "session_offsets.json"
+    monkeypatch.setattr(bot, "SESSION_OFFSET_STORE_PATH", store_path)
+    original_store = dict(bot.SESSION_OFFSET_STORE)
+    original_offsets = dict(bot.SESSION_OFFSETS)
+    bot.SESSION_OFFSET_STORE.clear()
+    bot.SESSION_OFFSETS.clear()
+    try:
+        bot._init_session_offset(session_file)
+        assert bot.SESSION_OFFSETS[session_key] == session_file.stat().st_size
+    finally:
+        bot.SESSION_OFFSET_STORE.clear()
+        bot.SESSION_OFFSET_STORE.update(original_store)
+        bot.SESSION_OFFSETS.clear()
+        bot.SESSION_OFFSETS.update(original_offsets)
+
+
+def test_store_session_offset_writes_without_event_loop(monkeypatch, tmp_path: Path):
+    store_path = tmp_path / "session_offsets.json"
+    monkeypatch.setattr(bot, "SESSION_OFFSET_STORE_PATH", store_path)
+    original_store = dict(bot.SESSION_OFFSET_STORE)
+    original_offsets = dict(bot.SESSION_OFFSETS)
+    bot.SESSION_OFFSET_STORE.clear()
+    bot.SESSION_OFFSETS.clear()
+    try:
+        bot._store_session_offset("session-key", 99)
+        assert "session-key" in bot.SESSION_OFFSET_STORE
+        data = json.loads(store_path.read_text(encoding="utf-8"))
+        assert data["session-key"] == 99
+    finally:
+        bot.SESSION_OFFSET_STORE.clear()
+        bot.SESSION_OFFSET_STORE.update(original_store)
+        bot.SESSION_OFFSETS.clear()
+        bot.SESSION_OFFSETS.update(original_offsets)
+
+
 def test_build_bug_report_intro_plain_task_id():
     task = _make_task(task_id="TASK_0055", title="Edit describeTask", status="test")
     intro = bot._build_bug_report_intro(task)
