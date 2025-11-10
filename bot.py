@@ -991,6 +991,22 @@ async def _dispatch_prompt_to_model(
 ) -> tuple[bool, Optional[Path]]:
     """Handle session binding, acknowledgement, and watcher setup after pushing a prompt."""
 
+    if _is_menu_control_message(prompt):
+        worker_log.warning(
+            "Rejected menu control prompt before tmux dispatch",
+            extra={
+                "chat": chat_id,
+                **_session_extra(),
+                "token": _normalize_choice_token(prompt),
+            },
+        )
+        await _reply_to_chat(
+            chat_id,
+            "Skip/Cancel inputs are ignored outside interactive menus. Please send an actual prompt.",
+            reply_to=reply_to,
+        )
+        return False, None
+
     prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
     if prev_watcher is not None:
         if not prev_watcher.done():
@@ -1816,6 +1832,17 @@ async def _enqueue_media_group_message(message: Message, text_part: Optional[str
 
 async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
     """Wrapper routine that pushes prompts to the model."""
+
+    if _is_menu_control_message(prompt):
+        worker_log.info(
+            "Dropped menu control prompt during dispatch",
+            extra={
+                **_session_extra(),
+                "chat": getattr(message.chat, "id", None),
+                "token": _normalize_choice_token(prompt),
+            },
+        )
+        return
 
     if ENV_ISSUES:
         message_text = _format_env_issue_message()

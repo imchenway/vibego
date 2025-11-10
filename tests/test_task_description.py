@@ -2232,6 +2232,40 @@ def test_on_text_ignores_numbered_cancel_without_state(monkeypatch):
     assert not message.calls, "Suppressing cancel input should stay silent"
 
 
+def test_handle_prompt_dispatch_rejects_menu_control():
+    message = DummyMessage()
+    menu_input = f"1. {bot.SKIP_TEXT}"
+
+    asyncio.run(bot._handle_prompt_dispatch(message, menu_input))
+
+    assert not message.calls, "Menu control inputs should be ignored silently"
+
+
+def test_dispatch_prompt_to_model_rejects_menu_control(monkeypatch):
+    replies: list[tuple[int, str]] = []
+
+    async def fake_reply(chat_id: int, text: str, reply_to=None, **kwargs):  # pragma: no cover
+        replies.append((chat_id, text))
+
+    def fake_tmux(*_args, **_kwargs):  # pragma: no cover
+        raise AssertionError("Menu control prompt should never reach tmux")
+
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux)
+
+    result = asyncio.run(
+        bot._dispatch_prompt_to_model(
+            1234,
+            f"2. {bot.TASK_DESC_CANCEL_TEXT}",
+            reply_to=None,
+        )
+    )
+
+    assert result == (False, None)
+    assert replies, "User should be informed that menu control inputs are ignored"
+    assert "ignored" in replies[0][1], "Reply must explain why the prompt was dropped"
+
+
 def test_on_task_quick_command_handles_slash_task(monkeypatch):
     message = DummyMessage()
     message.text = "/TASK_0042"
