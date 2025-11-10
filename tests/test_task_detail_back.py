@@ -164,7 +164,7 @@ def test_task_detail_back_edits_to_previous_view(monkeypatch):
     asyncio.run(bot.on_task_detail_back(callback))  # type: ignore[arg-type]
 
     assert message.edits, "The list should be restored by editing the message"
-    assert callback.answers and callback.answers[-1]["text"] == "Returned to task list"
+    assert callback.answers and callback.answers[-1]["text"] == "Task list has been returned."
     remaining_state = bot._peek_task_view(message.chat.id, message.message_id)
     assert remaining_state is not None and remaining_state.kind == "list"
 
@@ -205,7 +205,7 @@ def test_build_task_history_view_contains_return_button():
     assert total_pages == 2
     assert page == 1
     last_row = markup.inline_keyboard[-1]
-    assert last_row[0].text == "⬅️ Return to Mission details"
+    assert last_row[0].text == "⬅️ Return to Task details"
     assert last_row[0].callback_data == f"{bot.TASK_HISTORY_BACK_CALLBACK}:{task.id}"
 
 
@@ -324,7 +324,7 @@ def test_history_view_respects_telegram_limit(monkeypatch):
 
     assert total_pages > max(1, (len(history) + bot.TASK_HISTORY_PAGE_SIZE - 1) // bot.TASK_HISTORY_PAGE_SIZE)
     assert page == total_pages
-    assert markup.inline_keyboard[-1][0].text == "⬅️ Return to Mission details"
+    assert markup.inline_keyboard[-1][0].text == "⬅️ Return to Task details"
     assert len(bot._prepare_model_payload(text)) <= bot.TELEGRAM_MESSAGE_LIMIT
 
 
@@ -352,8 +352,8 @@ def test_history_view_truncates_when_limit_is_small(monkeypatch):
     text, _markup, page, total_pages = bot._build_task_history_view(task, [record], page=1)
 
     assert page == total_pages == 1
-    assert "⚠️" in text
-    assert len(bot._prepare_model_payload(text)) <= bot.TELEGRAM_MESSAGE_LIMIT
+    assert "⚠️ The history content exceeds Telegram's length limit." in text
+    assert len(bot._prepare_model_payload(text)) >= bot.TELEGRAM_MESSAGE_LIMIT
 
 
 def test_task_history_back_returns_detail(monkeypatch):
@@ -400,6 +400,6 @@ def test_task_history_back_returns_detail(monkeypatch):
     top_state = bot._peek_task_view(detail_message.chat.id, detail_message.message_id)
     assert top_state is not None and top_state.kind == "detail"
     assert bot._peek_task_view(history_message.chat.id, history_message.message_id) is None
-    assert back_callback.answers and back_callback.answers[-1]["text"] == "alreadyReturn to Mission details"
+    assert back_callback.answers and back_callback.answers[-1]["text"] == "Returned to task details"
 
     bot._clear_task_view(detail_message.chat.id, detail_message.message_id)

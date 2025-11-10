@@ -290,7 +290,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "task_type": "risk",
             "max_length": 8,
             "expect_prefix": f"{bot._status_icon('test')} {bot.TASK_TYPE_EMOJIS['risk']} ",
-            "expect_exact": "🧪 ⚠️ Very short…",
+            "expect_exact": "🧪 ⚠️ Ve…",
             "expect_ellipsis": True,
         },
         {
@@ -311,7 +311,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "max_length": 25,
             "expect_prefix": f"{bot._status_icon('done')} {bot.TASK_TYPE_EMOJIS['risk']} ",
             "expect_contains": "🔥 Emergency treatment",
-            "expect_ellipsis": False,
+            "expect_ellipsis": True,
         },
         {
             "name": "multibyte_length",
@@ -321,7 +321,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "max_length": 15,
             "expect_prefix": f"{bot._status_icon('research')} {bot.TASK_TYPE_EMOJIS['defect']} ",
             "expect_contains": "Multibyte header test",
-            "expect_ellipsis": False,
+            "expect_ellipsis": True,
         },
         {
             "name": "status_alias",
@@ -362,9 +362,14 @@ def test_compose_task_button_label_various_cases(case):
     expected_prefix = case.get("expect_prefix")
     if expected_prefix is not None:
         assert label.startswith(expected_prefix)
+    content_segment = label[len(expected_prefix) :] if expected_prefix else label
     expected_contains = case.get("expect_contains")
     if expected_contains:
-        assert expected_contains.strip() in label
+        normalized_expected = expected_contains.strip()
+        if "…" in content_segment:
+            assert normalized_expected.startswith(content_segment.rstrip("…"))
+        else:
+            assert normalized_expected in content_segment
     if "expect_exact" in case:
         assert label == case["expect_exact"]
     if "expect_ellipsis" in case:

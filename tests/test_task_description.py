@@ -97,6 +97,7 @@ def _make_task(
 
 TYPE_UNSET = bot._format_task_type(None)
 TYPE_REQUIREMENT = bot._format_task_type("requirement")
+DESC_PROMPT_PREFIX = "The current description is shown below."
 
 
 @pytest.mark.parametrize(
@@ -284,18 +285,18 @@ def test_format_task_detail_without_history():
 
     result = bot._format_task_detail(task, notes=notes)
     lines = result.splitlines()
-    assert lines[0] == "📝 title:" + bot._escape_markdown_text("Test tasks")
-    assert lines[1] == "🏷️ Task Code: /TASK\\_0100"
-    assert lines[2].startswith("⚙️ state:")
-    assert lines[3].startswith("🚦 Priority:")
-    assert lines[4] == f"📂 type:{bot._format_task_type('requirement')}"
-    assert any(line.startswith("🖊️ describe:") for line in lines)
-    assert any(line.startswith("📅 Creation time:") for line in lines)
-    assert any(line.startswith("🔁 Update time:") for line in lines)
+    assert lines[0] == "📝 Title: " + bot._escape_markdown_text("Test tasks")
+    expected_task_id = bot._format_task_command(task.id)
+    assert lines[1] == f"🏷️ Task ID: {expected_task_id}"
+    assert lines[2] == f"⚙️ Status: {bot._format_status(task.status)}"
+    assert lines[3] == f"🚦 Priority: {bot._format_priority(task.priority)}"
+    assert lines[4] == f"📂 Type: {bot._format_task_type(task.task_type)}"
+    assert lines[5] == "🖊️ Description: None"
+    assert any(line.startswith("📅 Created At:") for line in lines)
+    assert any(line.startswith("🔁 Updated At:") for line in lines)
     assert "💬 Note record:" not in result
     assert "Change history" not in result
     assert "First note" not in result
-    assert f"📂 type:{bot._format_task_type('requirement')}" in result
 
 
 def test_format_task_detail_misc_note_without_label():
@@ -339,8 +340,8 @@ def test_task_note_flow_defaults_to_misc(monkeypatch, tmp_path: Path):
         await bot.on_note_task_id(message, state)
         current_state = await state.get_state()
         assert current_state == bot.TaskNoteStates.waiting_content.state
-        assert message.calls, "You should be prompted to enter the Remark content"
-        assert message.calls[-1][0] == "Please enter the Remark content:"
+        assert message.calls, "You should be prompted to enter the remark content"
+        assert message.calls[-1][0] == "Please enter the remark content:"
 
         content_message = DummyMessage()
         content_message.chat = message.chat
@@ -351,9 +352,9 @@ def test_task_note_flow_defaults_to_misc(monkeypatch, tmp_path: Path):
         assert await state.get_state() is None
 
         notes = await service.list_notes(task.id)
-        assert notes, "Remarkshould have been written"
+        assert notes, "Remark should have been written"
         assert notes[-1].note_type == "misc", "Default type should be misc"
-        assert any("RemarkAdded" in call[0] for call in content_message.calls), "A success message should be output"
+        assert any("Remark added:" in call[0] for call in content_message.calls), "A success message should be output"
 
     asyncio.run(scenario())
 
@@ -416,13 +417,11 @@ def test_task_history_callback(monkeypatch):
     assert parse_mode_value is not None
     assert sent_text.startswith("```\n")
     assert "Task TASK_0200 event history" in sent_text
-    assert "title:History Task" in sent_text
-    title_line_variants = ["- **Update title** - 01-01 00:00", "- *Update title* - 01-01 00:00"]
-    assert any(fragment in sent_text for fragment in title_line_variants)
-    assert "  - title:old title -> History Task" in sent_text
-    status_line_variants = ["- **update status** - 01-02 00:00", "- *update status* - 01-02 00:00"]
-    assert any(fragment in sent_text for fragment in status_line_variants)
-    assert "  - state:🔍 Under investigation -> 🧪 Under test" in sent_text
+    assert "Title: History Task" in sent_text
+    assert "Update Title" in sent_text
+    assert "  - Title: old title -> History Task" in sent_text
+    assert "Update Status" in sent_text
+    assert "  - Status: 🔍 Researching -> 🧪 Testing" in sent_text
     assert reply_markup is not None
     assert reply_markup.inline_keyboard[-1][0].callback_data == f"{bot.TASK_HISTORY_BACK_CALLBACK}:{task.id}"
     assert callback.answers and callback.answers[-1][0] == "Displayed history"
@@ -815,7 +814,7 @@ def test_build_bug_preview_plain_task_id():
         logs="log",
         reporter="Tester#007",
     )
-    assert "Task Code: /TASK_0055" in preview
+    assert "Task code: /TASK_0055" in preview
     assert "\\_" not in preview
 
 
@@ -1000,7 +999,7 @@ def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp
     assert logged_payloads and logged_payloads[0]["action"] == "bug_report"
     assert len(message.calls) == 1
     warning_text, _, warning_markup, _ = message.calls[0]
-    assert "The current state does not support automatic push to the model." in warning_text
+    assert "The current status does not support automatic push to the model." in warning_text
     assert isinstance(warning_markup, ReplyKeyboardMarkup)
 
 
@@ -1201,12 +1200,11 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     assert updates, "Task status should be updated to test"
     assert dispatch_calls, "A summary request should be pushed to the model"
     prompt_text = dispatch_calls[0][1]
-    assert prompt_text.startswith(
-        "Enter summary stage...\nTask Code: /TASK_0200\nSUMMARY_REQUEST_ID::"
-    )
+    assert prompt_text.startswith("Entering the summary stage...")
+    assert "\nTask code: /TASK_0200\nSUMMARY_REQUEST_ID::" in prompt_text
     assert message.calls, "The user should be prompted with the processing results"
     reply_text, _, _, _ = message.calls[-1]
-    assert "TaskStatus has been automatically updated to \"Testing\"" in reply_text
+    assert "Task status automatically adjusted to 'test'." in reply_text
     assert bot.PENDING_SUMMARIES, "The summary context to be Dropped into the library should be recorded"
     args, kwargs = log_calls[0]
     payload = kwargs["payload"]
@@ -1289,7 +1287,7 @@ def test_task_summary_command_handles_missing_task(monkeypatch):
 
     asyncio.run(scenario())
     reply_text, _, _, _ = message.calls[-1]
-    assert reply_text == "Taskdoes not exist"
+    assert reply_text == "Task does not exist"
 
 
 def test_task_summary_command_accepts_alias_without_underscores(monkeypatch):
@@ -1312,7 +1310,7 @@ def test_task_summary_command_accepts_alias_without_underscores(monkeypatch):
     asyncio.run(scenario())
     assert captured.get("task_id") == "TASK_0500"
     reply_text, _, _, _ = message.calls[-1]
-    assert reply_text == "Taskdoes not exist"
+    assert reply_text == "Task does not exist"
 
 
 def test_task_summary_command_alias_requires_task_id():
@@ -1595,7 +1593,7 @@ def test_build_model_push_payload_with_notes():
     ]
 
     payload = bot._build_model_push_payload(task, notes=notes)
-    assert "Task Notes: First note; Article 2Remark / Contains newlines" in payload
+    assert "Task Notes: First note；The second Remark / Contains newlines" in payload
     assert payload.startswith(bot.VIBE_PHASE_PROMPT)
 
 
@@ -1694,7 +1692,7 @@ def test_task_desc_edit_shows_menu_options(monkeypatch):
     assert callback.answers and callback.answers[-1] == (None, False)
     assert len(message.calls) >= 3, "The menu and original describe should be displayed first and then prompted for input."
     first_text, _parse_mode, first_markup, _ = message.calls[0]
-    assert "currentlydescribe" in first_text
+    assert DESC_PROMPT_PREFIX in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
     labels = _extract_reply_labels(first_markup)
     assert any(bot.TASK_DESC_CLEAR_TEXT in label for label in labels)
@@ -1731,7 +1729,7 @@ def test_task_edit_description_redirects_to_fsm(monkeypatch):
     assert data.get("current_description") == "originaldescribe"
     assert len(message.calls) >= 3
     first_text, _, first_markup, _ = message.calls[0]
-    assert "currentlydescribe" in first_text
+    assert DESC_PROMPT_PREFIX in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 
@@ -1752,7 +1750,7 @@ def test_task_desc_reprompt_menu_replays_prompt():
     assert data.get("current_description") == "olddescribe"
     assert len(message.calls) >= 3
     first_text, _, first_markup, _ = message.calls[-3]
-    assert "currentlydescribe" in first_text
+    assert DESC_PROMPT_PREFIX in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 
@@ -1851,7 +1849,7 @@ def test_task_desc_input_rejects_too_long():
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
     assert len(message.calls) >= 4, "If it is too long, you need to prompt for input again."
     warn_text, _, warn_markup, _ = message.calls[0]
-    assert "not to exceed" in warn_text
+    assert "cannot exceed" in warn_text
     assert isinstance(warn_markup, ReplyKeyboardMarkup)
     tail_text, _, tail_markup, _ = message.calls[-1]
     assert "Send the new task description or choose an action from the menu." in tail_text
@@ -1894,7 +1892,7 @@ def test_task_desc_confirm_updates_description(monkeypatch):
     assert state_value is None
     assert update_calls == [("TASK_EDIT", "Tester#1", "finally describe")]
     assert message.calls and "Task description updated" in message.calls[0][0]
-    assert any("Task description updated: " in text for text, *_ in message.calls)
+    assert any("Task description updated" in text for text, *_ in message.calls)
 
 
 def test_task_desc_confirm_requires_state():
@@ -1910,7 +1908,7 @@ def test_task_desc_confirm_requires_state():
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and "Session has expired" in message.calls[0][0]
+    assert message.calls and "The session has expired, please operate again." in message.calls[0][0]
 
 
 def test_task_desc_retry_returns_to_input(monkeypatch):
@@ -1944,9 +1942,9 @@ def test_task_desc_retry_returns_to_input(monkeypatch):
     assert data.get("new_description") is None
     assert len(message.calls) >= 4
     first_text, _, first_markup, _ = message.calls[0]
-    assert "Returned to describe input stage" in first_text
+    assert "Returned to the description input stage" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
-    assert any("currentlydescribe" in text for text, *_ in message.calls)
+    assert any(DESC_PROMPT_PREFIX in text for text, *_ in message.calls)
 
 
 def test_task_desc_confirm_missing_description_reprompts():
@@ -1970,7 +1968,7 @@ def test_task_desc_confirm_missing_description_reprompts():
     assert data.get("new_description") is None
     assert len(message.calls) >= 4
     first_text, _, first_markup, _ = message.calls[0]
-    assert "describeContent has expired" in first_text
+    assert "The draft description has expired" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
     assert any("stillolddescribe" in text for text, *_ in message.calls)
 
@@ -1999,7 +1997,7 @@ def test_task_desc_retry_task_missing(monkeypatch):
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert message.calls and "Taskdoes not exist" in message.calls[0][0]
+    assert message.calls and "Task not found. The editing process has ended." in message.calls[0][0]
 
 
 def test_task_desc_confirm_update_failure(monkeypatch):
@@ -2082,7 +2080,7 @@ def test_task_desc_legacy_callback_reprompts_input():
     assert callback.answers and callback.answers[-1] == ("Task description editing is now available from the menu. Please use the menu options.", True)
     assert len(message.calls) >= 3
     first_text, _, first_markup, _ = message.calls[0]
-    assert "currentlydescribe" in first_text
+    assert DESC_PROMPT_PREFIX in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 
@@ -2462,9 +2460,9 @@ def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
     text, parse_mode, markup, _ = message.calls[0]
     lines = text.splitlines()
     assert lines[:3] == [
-        "*Tasklist*",
-        "filter state:all",
-        "Pagination information: Page number 1/1 - 10 items per page - Total 1",
+        "*task list*",
+        "Filter state: all",
+        "Paging info: page 1/1, 10 items per page, total 1",
     ]
     assert "- 🛠️ List example" not in text
     assert "- ⚪ List example" not in text
@@ -2477,7 +2475,7 @@ def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
         status_rows.append(row)
     assert status_rows, "Status filter button row should exist"
     first_row = status_rows[0]
-    assert first_row[0].text == "✔️ ⭐ all"
+    assert first_row[0].text == "✔️ ⭐ All"
     assert all(not btn.text.lstrip().startswith(tuple("0123456789")) for row in status_rows for btn in row)
     options_count = len(bot.STATUS_FILTER_OPTIONS)
     if options_count <= 4:
@@ -2569,7 +2567,7 @@ def test_task_desc_confirm_numeric_input_2_retries(monkeypatch):
     assert data.get("new_description") is None, "draftdescribe should be cleared"
     assert len(message.calls) >= 4
     first_text, _, first_markup, _ = message.calls[0]
-    assert "Returned to describe input stage" in first_text
+    assert "Returned to the description input stage" in first_text
     assert isinstance(first_markup, ReplyKeyboardMarkup)
 
 

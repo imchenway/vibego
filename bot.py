@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes
+import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes, math
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal
@@ -51,6 +51,8 @@ from aiogram.exceptions import (
 from aiohttp import BasicAuth, ClientError
 
 from logging_setup import create_logger
+from command_center.fsm import CommandPresetStates
+from command_center.service import CommandPresetRecord, CommandPresetService
 from tasks import TaskHistoryRecord, TaskNoteRecord, TaskRecord, TaskService
 from tasks.commands import parse_simple_kv, parse_structured_text
 from tasks.constants import (
@@ -1375,6 +1377,18 @@ DATA_ROOT.mkdir(parents=True, exist_ok=True)
 PROJECT_SLUG = (PROJECT_NAME or "default").replace("/", "-") or "default"
 TASK_DB_PATH = DATA_ROOT / f"{PROJECT_SLUG}.db"
 TASK_SERVICE = TaskService(TASK_DB_PATH, PROJECT_SLUG)
+COMMAND_DB_PATH = DATA_ROOT / f"{PROJECT_SLUG}_commands.db"
+COMMAND_PRESET_SERVICE = CommandPresetService(COMMAND_DB_PATH, PROJECT_SLUG)
+COMMAND_LIST_PAGE_SIZE = max(1, min(_env_int("COMMAND_CENTER_PAGE_SIZE", 5), 20))
+COMMAND_LIST_CALLBACK = "cmd:list"
+COMMAND_DETAIL_CALLBACK = "cmd:detail"
+COMMAND_CREATE_CALLBACK = "cmd:create"
+COMMAND_EDIT_CALLBACK = "cmd:edit"
+COMMAND_RUN_CALLBACK = "cmd:run"
+COMMAND_RUN_EXECUTE_CALLBACK = "cmd:run_exec"
+COMMAND_DELETE_CALLBACK = "cmd:delete"
+COMMAND_DELETE_EXECUTE_CALLBACK = "cmd:delete_exec"
+COMMAND_TOGGLE_CONFIRM_CALLBACK = "cmd:toggle_confirm"
 
 ATTACHMENT_STORAGE_ROOT = (DATA_ROOT / "telegram").expanduser()
 ATTACHMENT_STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1904,11 +1918,17 @@ WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS = _button_text_variants(
     "WORKER_CREATE_TASK_BUTTON_TEXTS",
     ("➕ Create Task", "➕ 创建任务"),
 )
+WORKER_COMMAND_BUTTON_TEXT_VARIANTS = _button_text_variants(
+    "WORKER_COMMAND_BUTTON_TEXTS",
+    ("⚙️ Command Center", "⚙️ 命令管理"),
+)
 
 WORKER_MENU_BUTTON_TEXT = WORKER_MENU_BUTTON_TEXT_VARIANTS[0]
 WORKER_CREATE_TASK_BUTTON_TEXT = WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS[0]
+WORKER_COMMAND_BUTTON_TEXT = WORKER_COMMAND_BUTTON_TEXT_VARIANTS[0]
 WORKER_MENU_BUTTON_TEXT_SET = set(WORKER_MENU_BUTTON_TEXT_VARIANTS)
 WORKER_CREATE_TASK_BUTTON_TEXT_SET = set(WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS)
+WORKER_COMMAND_BUTTON_TEXT_SET = set(WORKER_COMMAND_BUTTON_TEXT_VARIANTS)
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "Invalid task ID format. Use patterns like TASK_0001."
@@ -1921,10 +1941,273 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text=WORKER_MENU_BUTTON_TEXT),
                 KeyboardButton(text=WORKER_CREATE_TASK_BUTTON_TEXT),
-            ]
+            ],
+            [
+                KeyboardButton(text=WORKER_COMMAND_BUTTON_TEXT),
+            ],
         ],
         resize_keyboard=True,
     )
+
+
+def _format_command_preview(command: str) -> str:
+    """Return a one-line preview for list buttons."""
+
+    if not command:
+        return ""
+    first_line = command.strip().splitlines()[0]
+    if not first_line:
+        return ""
+    preview = first_line.strip()
+    max_length = 30
+    if len(preview) > max_length:
+        preview = f"{preview[:max_length]}…"
+    return preview
+
+
+async def _build_command_list_view(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the command list text and inline keyboard."""
+
+    total = await COMMAND_PRESET_SERVICE.count_presets()
+    total_pages = max(1, math.ceil(total / COMMAND_LIST_PAGE_SIZE))
+    current_page = min(max(1, page), total_pages)
+    presets = await COMMAND_PRESET_SERVICE.list_presets(current_page, COMMAND_LIST_PAGE_SIZE)
+    lines = [
+        "*命令管理*",
+        f"共 {total} 条命令，页码 {current_page}/{total_pages}，每页 {COMMAND_LIST_PAGE_SIZE} 条。",
+    ]
+    if not presets:
+        lines.append("尚未配置命令，点击“➕ 新建命令”开始。")
+    else:
+        lines.append("")
+        lines.append("当前命令：")
+        for preset in presets:
+            lines.append(f"- {_escape_markdown_text(preset.title)}")
+    rows: list[list[InlineKeyboardButton]] = []
+    for preset in presets:
+        preview = _format_command_preview(preset.command)
+        label = f"▶️ {preset.title}"
+        if preview:
+            label = f"{label} · {preview}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label[:60],
+                    callback_data=f"{COMMAND_DETAIL_CALLBACK}:{preset.id}:{current_page}",
+                )
+            ]
+        )
+
+    nav_row: list[InlineKeyboardButton] = []
+    if current_page > 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ 上一页",
+                callback_data=f"{COMMAND_LIST_CALLBACK}:{current_page-1}",
+            )
+        )
+    if current_page < total_pages:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="下一页 ➡️",
+                callback_data=f"{COMMAND_LIST_CALLBACK}:{current_page+1}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ 新建命令",
+                callback_data=f"{COMMAND_CREATE_CALLBACK}:{current_page}",
+            ),
+            InlineKeyboardButton(
+                text="🔄 刷新",
+                callback_data=f"{COMMAND_LIST_CALLBACK}:{current_page}",
+            ),
+        ]
+    )
+    text = "\n".join(lines)
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    return text, markup
+
+
+def _build_command_detail_view(
+    preset: CommandPresetRecord,
+    origin_page: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the detail view for a preset."""
+
+    lines = [
+        f"*命令：{_escape_markdown_text(preset.title)}*",
+        f"ID: `{preset.id}`",
+        (
+            f"工作目录: `{_escape_markdown_text(preset.workdir)}`"
+            if preset.workdir
+            else "工作目录: 继承当前终端会话"
+        ),
+        f"执行前确认: {'需要' if preset.require_confirmation else '无需'}",
+        "",
+        "*命令内容*",
+    ]
+    block_text, _ = _wrap_text_in_code_block(preset.command)
+    lines.append(block_text)
+    text = "\n".join(lines)
+    confirm_label = "🔐 确认：开" if preset.require_confirmation else "🔓 确认：关"
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="▶️ 执行",
+                    callback_data=f"{COMMAND_RUN_CALLBACK}:{preset.id}:{origin_page}",
+                ),
+                InlineKeyboardButton(
+                    text=confirm_label,
+                    callback_data=f"{COMMAND_TOGGLE_CONFIRM_CALLBACK}:{preset.id}:{origin_page}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ 编辑",
+                    callback_data=f"{COMMAND_EDIT_CALLBACK}:{preset.id}:{origin_page}",
+                ),
+                InlineKeyboardButton(
+                    text="🗑️ 删除",
+                    callback_data=f"{COMMAND_DELETE_CALLBACK}:{preset.id}:{origin_page}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ 返回列表",
+                    callback_data=f"{COMMAND_LIST_CALLBACK}:{origin_page}",
+                ),
+            ],
+        ]
+    )
+    return text, markup
+
+
+def _command_confirm_label(mode: str) -> str:
+    """Return the confirm button label for the wizard."""
+
+    return "✅ 创建命令" if mode == "create" else "✅ 保存命令"
+
+
+def _build_command_confirm_keyboard(mode: str) -> ReplyKeyboardMarkup:
+    """Return the confirmation keyboard for the wizard."""
+
+    rows = [
+        [KeyboardButton(text=_command_confirm_label(mode))],
+        [KeyboardButton(text="❌ Cancel")],
+    ]
+    _number_reply_buttons(rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+def _parse_confirmation_choice(value: Optional[str]) -> Optional[bool]:
+    """Parse yes/no style input into a boolean."""
+
+    token = _normalize_choice_token(value).lower()
+    if not token:
+        return None
+    true_tokens = {"yes", "y", "true", "1", "需要", "要", "on"}
+    false_tokens = {"no", "n", "false", "0", "无需", "不需要", "off"}
+    if token in true_tokens:
+        return True
+    if token in false_tokens:
+        return False
+    return None
+
+
+def _format_command_summary_text(
+    *,
+    name: str,
+    command_text: str,
+    workdir: Optional[str],
+    require_confirmation: bool,
+) -> str:
+    """Render the wizard summary preview."""
+
+    lines = [
+        "*命令预览*",
+        f"名称: {_escape_markdown_text(name)}",
+        (
+            f"工作目录: `{_escape_markdown_text(workdir)}`"
+            if workdir
+            else "工作目录: 继承当前终端会话"
+        ),
+        f"执行前确认: {'需要' if require_confirmation else '无需'}",
+        "",
+        "*命令内容*",
+    ]
+    block_text, _ = _wrap_text_in_code_block(command_text)
+    lines.append(block_text)
+    return "\n".join(lines)
+
+
+def _combine_command_prompt(
+    *,
+    command_text: str,
+    workdir: Optional[str],
+) -> str:
+    """Construct the multi-line prompt sent to the CLI."""
+
+    segments: list[str] = []
+    if workdir:
+        segments.append(f"cd {shlex.quote(workdir)}")
+    body = (command_text or "").strip()
+    if body:
+        segments.append(body)
+    return "\n".join(segment.strip() for segment in segments if segment.strip())
+
+
+async def _render_command_list_message(
+    *,
+    target_message: Optional[Message],
+    fallback_message: Message,
+    page: int,
+) -> None:
+    """Render the command list either by editing the existing message or replying."""
+
+    text, markup = await _build_command_list_view(page)
+    if target_message and await _try_edit_message(target_message, text, reply_markup=markup):
+        return
+    await _answer_with_markdown(fallback_message, text, reply_markup=markup)
+
+
+async def _render_command_detail_message(
+    *,
+    target_message: Optional[Message],
+    fallback_message: Message,
+    preset: CommandPresetRecord,
+    origin_page: int,
+) -> None:
+    """Render the command detail view in-place when possible."""
+
+    text, markup = _build_command_detail_view(preset, origin_page)
+    if target_message and await _try_edit_message(target_message, text, reply_markup=markup):
+        return
+    await _answer_with_markdown(fallback_message, text, reply_markup=markup)
+
+
+async def _dispatch_command_preset(message: Message, preset: CommandPresetRecord) -> None:
+    """Send the configured command to the CLI pipeline."""
+
+    prompt = _combine_command_prompt(command_text=preset.command, workdir=preset.workdir)
+    if not prompt:
+        await message.answer("命令内容为空，无法执行。", reply_markup=_build_worker_main_keyboard())
+        return
+    notice = f"已派发命令 `{_escape_markdown_text(preset.title)}`，请留意终端输出。"
+    await _answer_with_markdown(message, notice)
+    await _handle_prompt_dispatch(message, prompt)
+
+
+async def _cancel_command_wizard(message: Message, state: FSMContext) -> None:
+    """Reset the wizard state and notify the user."""
+
+    await state.clear()
+    await message.answer("命令配置已取消。", reply_markup=_build_worker_main_keyboard())
 
 
 def _resolve_worker_target_chat_ids() -> List[int]:
@@ -2439,7 +2722,10 @@ SUMMARY_COMMAND_ALIASES: tuple[str, ...] = (
 )
 
 
-LEGACY_BUG_HISTORY_HEADER = "Bug History (latest 3 entries)"
+LEGACY_BUG_HISTORY_HEADERS: tuple[str, ...] = (
+    "Bug History (latest 3 entries)",
+    "defectRecords (last 3)",
+)
 
 
 def _strip_legacy_bug_header(text: str) -> str:
@@ -2450,8 +2736,8 @@ def _strip_legacy_bug_header(text: str) -> str:
     cleaned_lines: list[str] = []
     for line in text.splitlines():
         token = line.strip()
-        if token and token.startswith(LEGACY_BUG_HISTORY_HEADER):
-        # Handle legacy formats such as "Bug History (latest 3 entries) -" or colon variants
+        if token and any(token.lower().startswith(header.lower()) for header in LEGACY_BUG_HISTORY_HEADERS):
+            # Handle legacy formats such as "Bug History (latest 3 entries) -" or colon variants
             continue
         cleaned_lines.append(line)
     return "\n".join(cleaned_lines).strip()
@@ -6208,6 +6494,458 @@ async def on_task_create_button(message: Message, state: FSMContext) -> None:
         await message.answer("Unable to initiate Task creation, please try again or use /task_new Order.")
 
 
+@router.message(F.text.in_(WORKER_COMMAND_BUTTON_TEXT_SET))
+async def on_command_center_button(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    text, markup = await _build_command_list_view(page=1)
+    await _answer_with_markdown(message, text, reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_LIST_CALLBACK}:"))
+async def on_command_list_callback(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("原始消息不存在", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer("分页参数错误", show_alert=True)
+        return
+    try:
+        page = int(parts[-1])
+    except ValueError:
+        page = 1
+    await _render_command_list_message(
+        target_message=callback.message,
+        fallback_message=callback.message,
+        page=page,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_DETAIL_CALLBACK}:"))
+async def on_command_detail_callback(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("原始消息不存在", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        preset_id = int(parts[2])
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    if preset is None:
+        await callback.answer("命令不存在，已回到列表。", show_alert=True)
+        await _render_command_list_message(
+            target_message=callback.message,
+            fallback_message=callback.message,
+            page=page,
+        )
+        return
+    await _render_command_detail_message(
+        target_message=callback.message,
+        fallback_message=callback.message,
+        preset=preset,
+        origin_page=page,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_CREATE_CALLBACK}:"))
+async def on_command_create_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer("无法启动命令配置：缺少消息上下文", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        page = int(parts[2])
+    except ValueError:
+        page = 1
+    await state.clear()
+    await state.update_data(mode="create", origin_page=page)
+    await state.set_state(CommandPresetStates.waiting_name)
+    await callback.answer()
+    await callback.message.answer("请输入命令名称：", reply_markup=_build_description_keyboard())
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_EDIT_CALLBACK}:"))
+async def on_command_edit_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer("无法进入编辑：缺少消息上下文", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        preset_id = int(parts[2])
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    if preset is None:
+        await callback.answer("命令不存在", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(
+        mode="edit",
+        preset_id=preset.id,
+        origin_page=page,
+        name=preset.title,
+        command_text=preset.command,
+        workdir=preset.workdir,
+        require_confirmation=preset.require_confirmation,
+    )
+    await state.set_state(CommandPresetStates.waiting_name)
+    await callback.answer()
+    await callback.message.answer(
+        f"当前名称：{preset.title}\n请输入新的命令名称，或发送 Skip 保持不变：",
+        reply_markup=_build_description_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_TOGGLE_CONFIRM_CALLBACK}:"))
+async def on_command_toggle_confirm(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("原始消息不存在", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        preset_id = int(parts[2])
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    preset = await COMMAND_PRESET_SERVICE.toggle_confirmation(preset_id)
+    if preset is None:
+        await callback.answer("命令不存在", show_alert=True)
+        return
+    await _render_command_detail_message(
+        target_message=callback.message,
+        fallback_message=callback.message,
+        preset=preset,
+        origin_page=page,
+    )
+    await callback.answer("执行前确认状态已切换")
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_RUN_CALLBACK}:"))
+async def on_command_run_callback(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("原始消息不存在", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        preset_id = int(parts[2])
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    if preset is None:
+        await callback.answer("命令不存在", show_alert=True)
+        return
+    if preset.require_confirmation:
+        confirm_markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ 确认执行",
+                        callback_data=f"{COMMAND_RUN_EXECUTE_CALLBACK}:{preset.id}:{page}",
+                    ),
+                    InlineKeyboardButton(
+                        text="⬅️ 返回详情",
+                        callback_data=f"{COMMAND_DETAIL_CALLBACK}:{preset.id}:{page}",
+                    ),
+                ]
+            ]
+        )
+        prompt_text = f"确认执行命令 `{_escape_markdown_text(preset.title)}` 吗？"
+        await _answer_with_markdown(callback.message, prompt_text, reply_markup=confirm_markup)
+        await callback.answer("请确认执行")
+        return
+    await callback.answer("命令已派发")
+    await _dispatch_command_preset(callback.message, preset)
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_RUN_EXECUTE_CALLBACK}:"))
+async def on_command_run_execute(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("原始消息不存在", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        preset_id = int(parts[2])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    if preset is None:
+        await callback.answer("命令不存在", show_alert=True)
+        return
+    await callback.answer("命令已派发")
+    await _dispatch_command_preset(callback.message, preset)
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_DELETE_CALLBACK}:"))
+async def on_command_delete_callback(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("原始消息不存在", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        preset_id = int(parts[2])
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    if preset is None:
+        await callback.answer("命令不存在", show_alert=True)
+        return
+    confirm_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 确认删除",
+                    callback_data=f"{COMMAND_DELETE_EXECUTE_CALLBACK}:{preset.id}:{page}",
+                ),
+                InlineKeyboardButton(
+                    text="⬅️ 返回详情",
+                    callback_data=f"{COMMAND_DETAIL_CALLBACK}:{preset.id}:{page}",
+                ),
+            ]
+        ]
+    )
+    text = f"确认删除命令 `{_escape_markdown_text(preset.title)}` 吗？"
+    await _answer_with_markdown(callback.message, text, reply_markup=confirm_markup)
+    await callback.answer("请确认删除")
+
+
+@router.callback_query(F.data.startswith(f"{COMMAND_DELETE_EXECUTE_CALLBACK}:"))
+async def on_command_delete_execute(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("原始消息不存在", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    try:
+        preset_id = int(parts[2])
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("参数错误", show_alert=True)
+        return
+    deleted = await COMMAND_PRESET_SERVICE.delete_preset(preset_id)
+    if not deleted:
+        await callback.answer("命令不存在", show_alert=True)
+        return
+    await callback.answer("命令已删除")
+    await callback.message.answer("命令已删除，返回列表。")
+    await _render_command_list_message(
+        target_message=callback.message,
+        fallback_message=callback.message,
+        page=page,
+    )
+
+
+@router.message(CommandPresetStates.waiting_name)
+async def on_command_wizard_name(message: Message, state: FSMContext) -> None:
+    raw_text = message.text or ""
+    if _is_cancel_message(raw_text):
+        await _cancel_command_wizard(message, state)
+        return
+    data = await state.get_data()
+    if mode == "edit" and _is_skip_message(raw_text):
+        existing = data.get("name")
+        if not existing:
+            await message.answer("原命令名称缺失，请重新输入：", reply_markup=_build_description_keyboard())
+            return
+        name = existing
+    else:
+        trimmed = raw_text.strip()
+        if not trimmed:
+            await message.answer("命令名称不能为空，请重新输入：", reply_markup=_build_description_keyboard())
+            return
+        name = trimmed
+    await state.update_data(name=name)
+    await state.set_state(CommandPresetStates.waiting_command)
+    prompt = (
+        "请输入命令内容，将作为完整文本注入 CLI："
+        if mode == "create"
+        else "请输入新的命令内容，或发送 Skip 保持不变："
+    )
+    await message.answer(prompt, reply_markup=_build_description_keyboard())
+
+
+@router.message(CommandPresetStates.waiting_command)
+async def on_command_wizard_command(message: Message, state: FSMContext) -> None:
+    raw_text = message.text or ""
+    if _is_cancel_message(raw_text):
+        await _cancel_command_wizard(message, state)
+        return
+    data = await state.get_data()
+    mode = data.get("mode", "create")
+    if mode == "edit" and _is_skip_message(raw_text):
+        existing = data.get("command_text")
+        if not existing:
+            await message.answer("原命令内容缺失，请重新输入：", reply_markup=_build_description_keyboard())
+            return
+        command_text = existing
+    else:
+        if not raw_text.strip():
+            await message.answer("命令内容不能为空，请重新输入：", reply_markup=_build_description_keyboard())
+            return
+        command_text = raw_text
+    await state.update_data(command_text=command_text)
+    await state.set_state(CommandPresetStates.waiting_workdir)
+    current_dir = data.get("workdir")
+    if current_dir:
+        prompt = (
+            f"当前工作目录：{current_dir}\n"
+            "请输入新的目录（绝对路径），或发送 Skip 继承当前终端："
+        )
+    else:
+        prompt = "请输入命令执行目录（绝对路径），或发送 Skip 继承当前终端："
+    await message.answer(prompt, reply_markup=_build_description_keyboard())
+
+
+@router.message(CommandPresetStates.waiting_workdir)
+async def on_command_wizard_workdir(message: Message, state: FSMContext) -> None:
+    raw_text = message.text or ""
+    if _is_cancel_message(raw_text):
+        await _cancel_command_wizard(message, state)
+        return
+    data = await state.get_data()
+    mode = data.get("mode", "create")
+    if _is_skip_message(raw_text):
+        workdir = data.get("workdir") if mode == "edit" else None
+    else:
+        trimmed = raw_text.strip()
+        workdir = trimmed or None
+    await state.update_data(workdir=workdir)
+    await state.set_state(CommandPresetStates.waiting_confirmation_flag)
+    current_flag = data.get("require_confirmation")
+    current_label = "需要" if current_flag else "无需"
+    prompt = (
+        f"当前设置：{current_label if current_flag is not None else '默认需要'}。\n"
+        "执行前是否需要确认？回复 yes/no、1/0，或发送 Skip 保持当前设置："
+    )
+    await message.answer(prompt, reply_markup=_build_description_keyboard())
+
+
+@router.message(CommandPresetStates.waiting_confirmation_flag)
+async def on_command_wizard_confirmation(message: Message, state: FSMContext) -> None:
+    raw_text = message.text or ""
+    if _is_cancel_message(raw_text):
+        await _cancel_command_wizard(message, state)
+        return
+    data = await state.get_data()
+    mode = data.get("mode", "create")
+    if _is_skip_message(raw_text):
+        require_confirmation = bool(data.get("require_confirmation", True))
+    else:
+        parsed = _parse_confirmation_choice(raw_text)
+        if parsed is None:
+            await message.answer(
+                "请输入 yes/no、1/0，或发送 Skip 保持当前设置：",
+                reply_markup=_build_description_keyboard(),
+            )
+            return
+        require_confirmation = parsed
+    name = data.get("name")
+    command_text = data.get("command_text")
+    if not name or not command_text:
+        await message.answer("命令信息不完整，请从头重新开始配置。", reply_markup=_build_worker_main_keyboard())
+        await state.clear()
+        return
+    workdir = data.get("workdir")
+    await state.update_data(require_confirmation=require_confirmation)
+    await state.set_state(CommandPresetStates.waiting_final_confirmation)
+    summary = _format_command_summary_text(
+        name=name,
+        command_text=command_text,
+        workdir=workdir,
+        require_confirmation=require_confirmation,
+    )
+    await _answer_with_markdown(message, summary, reply_markup=_build_command_confirm_keyboard(mode))
+
+
+@router.message(CommandPresetStates.waiting_final_confirmation)
+async def on_command_wizard_confirm(message: Message, state: FSMContext) -> None:
+    raw_text = message.text or ""
+    if _is_cancel_message(raw_text):
+        await _cancel_command_wizard(message, state)
+        return
+    data = await state.get_data()
+    mode = data.get("mode", "create")
+    confirm_label = _command_confirm_label(mode)
+    if _normalize_choice_token(raw_text) != _normalize_choice_token(confirm_label):
+        await message.answer(
+            "请输入确认选项，或发送 Cancel 退出：",
+            reply_markup=_build_command_confirm_keyboard(mode),
+        )
+        return
+    name = data.get("name")
+    command_text = data.get("command_text")
+    require_confirmation = bool(data.get("require_confirmation", True))
+    workdir = data.get("workdir")
+    origin_page = int(data.get("origin_page") or 1)
+    if not name or not command_text:
+        await message.answer("命令数据缺失，流程已终止。", reply_markup=_build_worker_main_keyboard())
+        await state.clear()
+        return
+    if mode == "edit":
+        preset_id = data.get("preset_id")
+        if not preset_id:
+            await message.answer("缺少命令 ID，无法保存。", reply_markup=_build_worker_main_keyboard())
+            await state.clear()
+            return
+        record = await COMMAND_PRESET_SERVICE.update_preset(
+            preset_id,
+            title=name,
+            command=command_text,
+            workdir=workdir,
+            require_confirmation=require_confirmation,
+        )
+        if record is None:
+            await message.answer("命令不存在或已删除。", reply_markup=_build_worker_main_keyboard())
+            await state.clear()
+            return
+    else:
+        record = await COMMAND_PRESET_SERVICE.create_preset(
+            title=name,
+            command=command_text,
+            workdir=workdir,
+            require_confirmation=require_confirmation,
+        )
+    await state.clear()
+    await message.answer("命令已保存。", reply_markup=_build_worker_main_keyboard())
+    detail_text, detail_markup = _build_command_detail_view(record, origin_page)
+    await _answer_with_markdown(message, detail_text, reply_markup=detail_markup)
+
+
 @router.callback_query(F.data.startswith("task:list_page:"))
 async def on_task_list_page(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
@@ -8329,6 +9067,13 @@ async def main():
         await TASK_SERVICE.initialize()
     except Exception as exc:
         worker_log.error("TaskDatabase initialization fail: %s", exc, extra=_session_extra())
+        if _bot:
+            await _bot.session.close()
+        raise SystemExit(1)
+    try:
+        await COMMAND_PRESET_SERVICE.initialize()
+    except Exception as exc:
+        worker_log.error("Command preset initialization fail: %s", exc, extra=_session_extra())
         if _bot:
             await _bot.session.close()
         raise SystemExit(1)
