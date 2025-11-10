@@ -10,6 +10,7 @@ from typing import Optional
 import aiosqlite
 
 import pytest
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -506,7 +507,8 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
 
         skip_message = DummyMessage()
         skip_message.text = bot.SKIP_TEXT
-        await bot.on_task_push_model_supplement(skip_message, state)
+        with pytest.raises(SkipHandler):
+            await bot.on_task_push_model_supplement(skip_message, state)
 
         assert recorded
         chat_id, payload, reply_to = recorded[0]
@@ -609,7 +611,8 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
 
         input_message = DummyMessage()
         input_message.text = "Supplementary explanation content"
-        await bot.on_task_push_model_supplement(input_message, state)
+        with pytest.raises(SkipHandler):
+            await bot.on_task_push_model_supplement(input_message, state)
 
         assert recorded
         chat_id, payload, reply_to = recorded[0]
@@ -2195,6 +2198,38 @@ def test_on_text_skips_model_dispatch_during_task_creation(monkeypatch):
         await bot.on_text(message, state)
 
     asyncio.run(scenario())
+
+
+def test_on_text_ignores_numbered_skip_without_state(monkeypatch):
+    message = DummyMessage()
+    message.text = f"1. {bot.SKIP_TEXT}"
+    dispatch_calls: list[tuple] = []
+
+    async def fake_dispatch(*_args, **_kwargs):  # pragma: no cover
+        dispatch_calls.append((_args, _kwargs))
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_dispatch)
+
+    asyncio.run(bot.on_text(message))
+
+    assert not dispatch_calls, "Skip menu input should not reach model dispatch"
+    assert not message.calls, "No extra prompts should be sent for suppressed skip input"
+
+
+def test_on_text_ignores_numbered_cancel_without_state(monkeypatch):
+    message = DummyMessage()
+    message.text = f"2. {bot.TASK_DESC_CANCEL_TEXT}"
+    dispatch_calls: list[tuple] = []
+
+    async def fake_dispatch(*_args, **_kwargs):  # pragma: no cover
+        dispatch_calls.append((_args, _kwargs))
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_dispatch)
+
+    asyncio.run(bot.on_text(message))
+
+    assert not dispatch_calls, "Cancel menu input should not reach model dispatch"
+    assert not message.calls, "Suppressing cancel input should stay silent"
 
 
 def test_on_task_quick_command_handles_slash_task(monkeypatch):

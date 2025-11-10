@@ -20,6 +20,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.filters.command import CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import (
     Message,
     BufferedInputFile,
@@ -2297,6 +2298,12 @@ def _is_cancel_message(value: Optional[str]) -> bool:
     # Support buttons that include emojis to avoid repeated cancellation clicks.
     cancel_tokens.add(_normalize_choice_token(TASK_DESC_CANCEL_TEXT).lower())
     return lowered in cancel_tokens
+
+
+def _is_menu_control_message(value: Optional[str]) -> bool:
+    """Return True when the payload represents a generic Skip/Cancel menu action."""
+
+    return _is_skip_message(value) or _is_cancel_message(value)
 
 
 _MARKDOWN_ESCAPE_RE = re.compile(r"([_*\[\]()~`>#+=|{}.!])")
@@ -7021,18 +7028,18 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     if resolved == "Cancel" or trimmed == "Cancel":
         await state.clear()
         await message.answer("Push to the model cancelled.", reply_markup=_build_worker_main_keyboard())
-        return
+        raise SkipHandler()
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
         await message.answer("The push session has expired, please click the button again.", reply_markup=_build_worker_main_keyboard())
-        return
+        raise SkipHandler()
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
         await message.answer("Task not found. Push cancelled.", reply_markup=_build_worker_main_keyboard())
-        return
+        raise SkipHandler()
     supplement: Optional[str] = None
     if trimmed and resolved != SKIP_TEXT:
         if len(trimmed) > DESCRIPTION_MAX_LENGTH:
@@ -7040,7 +7047,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
                 f"Supplementary task description cannot exceed {DESCRIPTION_MAX_LENGTH} characters. Please re-enter:",
                 reply_markup=_build_description_keyboard(),
             )
-            return
+            raise SkipHandler()
         supplement = raw_text.strip()
     chat_id = data.get("chat_id") or message.chat.id
     origin_message = data.get("origin_message")
@@ -7061,11 +7068,11 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
             extra={"task_id": task_id, "status": task.status if task else None},
         )
         await message.answer("Push failed: missing template configuration.", reply_markup=_build_worker_main_keyboard())
-        return
+        raise SkipHandler()
     await state.clear()
     if not success:
         await message.answer("Push failed: model is not ready. Please retry shortly.", reply_markup=_build_worker_main_keyboard())
-        return
+        raise SkipHandler()
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
     await _reply_to_chat(
         chat_id,
@@ -7076,6 +7083,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
+    raise SkipHandler()
 
 
 @router.callback_query(F.data.startswith("task:history:"))
@@ -8194,6 +8202,16 @@ async def on_text(m: Message, state: FSMContext | None = None):
         worker_log.debug(
             "Suppressed model dispatch due to active wizard state",
             extra={**_session_extra(), "chat": m.chat.id, "state": current_state},
+        )
+        return
+    if _is_menu_control_message(prompt):
+        worker_log.info(
+            "Suppressed stray menu control input without active wizard",
+            extra={
+                **_session_extra(),
+                "chat": getattr(m.chat, "id", None),
+                "token": _normalize_choice_token(prompt),
+            },
         )
         return
     await _handle_prompt_dispatch(m, prompt)
