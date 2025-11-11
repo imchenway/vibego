@@ -7,6 +7,7 @@
 """
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -320,3 +321,137 @@ def test_stop_all_refreshes_project_list(repo: ProjectRepository, tmp_path: Path
 
     # 验证：消息应该被编辑（刷新项目列表）
     assert len(callback_message._edits) > 0, "停止全部项目后应该编辑消息（刷新项目列表）"
+
+
+@pytest.mark.asyncio
+async def test_notify_restart_success_pushes_project_overview(repo: ProjectRepository, tmp_path: Path, monkeypatch):
+    """重启信号存在时，应该在上线通知后推送项目列表。"""
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+
+    restart_signal = tmp_path / "state" / "restart_signal.json"
+    restart_signal.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "chat_id": 321,
+        "timestamp": datetime.now(master.LOCAL_TZ).isoformat(),
+    }
+    restart_signal.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(master, "RESTART_SIGNAL_PATH", restart_signal)
+    monkeypatch.setattr(master, "LEGACY_RESTART_SIGNAL_PATHS", tuple())
+
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_send_projects_overview_to_chat", overview_mock)
+    monkeypatch.setattr(master.asyncio, "sleep", AsyncMock())
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    await master._notify_restart_success(bot)
+
+    overview_mock.assert_awaited_once()
+    called_bot, called_chat, _manager = overview_mock.await_args_list[0].args[:3]
+    assert called_bot is bot
+    assert called_chat == payload["chat_id"]
+    assert _manager is manager
+
+
+@pytest.mark.asyncio
+async def test_notify_restart_success_missing_signal_triggers_admin_overview(repo: ProjectRepository, tmp_path: Path, monkeypatch):
+    """缺少重启信号但预期重启时，应向管理员推送项目列表。"""
+    manager = _build_manager(repo, tmp_path)
+    manager.admin_ids = [111, 222]
+    master.MANAGER = manager
+
+    monkeypatch.setenv("MASTER_RESTART_EXPECTED", "1")
+    monkeypatch.setattr(master, "RESTART_SIGNAL_PATH", tmp_path / "state" / "restart_signal.json")
+    monkeypatch.setattr(master, "LEGACY_RESTART_SIGNAL_PATHS", tuple())
+
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_send_projects_overview_to_chat", overview_mock)
+    monkeypatch.setattr(master.asyncio, "sleep", AsyncMock())
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    await master._notify_restart_success(bot)
+
+    assert overview_mock.await_count == len(manager.admin_ids)
+    called_ids = sorted(call.args[1] for call in overview_mock.await_args_list)
+    assert called_ids == sorted(manager.admin_ids)
+
+
+@pytest.mark.asyncio
+async def test_notify_restart_success_invalid_chat_id_fallback(repo: ProjectRepository, tmp_path: Path, monkeypatch):
+    """重启信号 chat_id 异常时，应退回管理员推送。"""
+    manager = _build_manager(repo, tmp_path)
+    manager.admin_ids = [333]
+    master.MANAGER = manager
+
+    restart_signal = tmp_path / "state" / "restart_signal.json"
+    restart_signal.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "chat_id": "invalid",
+        "timestamp": datetime.now(master.LOCAL_TZ).isoformat(),
+    }
+    restart_signal.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(master, "RESTART_SIGNAL_PATH", restart_signal)
+    monkeypatch.setattr(master, "LEGACY_RESTART_SIGNAL_PATHS", tuple())
+
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_send_projects_overview_to_chat", overview_mock)
+    monkeypatch.setattr(master.asyncio, "sleep", AsyncMock())
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    await master._notify_restart_success(bot)
+
+    overview_mock.assert_awaited_once()
+    assert overview_mock.await_args_list[0].args[1] == manager.admin_ids[0]
+
+
+@pytest.mark.asyncio
+async def test_notify_restart_success_send_failure_triggers_admin_overview(repo: ProjectRepository, tmp_path: Path, monkeypatch):
+    """上线通知发送失败时，应改为向管理员广播项目列表。"""
+    manager = _build_manager(repo, tmp_path)
+    manager.admin_ids = [444, 555]
+    master.MANAGER = manager
+
+    restart_signal = tmp_path / "state" / "restart_signal.json"
+    restart_signal.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "chat_id": 999,
+        "timestamp": datetime.now(master.LOCAL_TZ).isoformat(),
+    }
+    restart_signal.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(master, "RESTART_SIGNAL_PATH", restart_signal)
+    monkeypatch.setattr(master, "LEGACY_RESTART_SIGNAL_PATHS", tuple())
+
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_send_projects_overview_to_chat", overview_mock)
+    monkeypatch.setattr(master.asyncio, "sleep", AsyncMock())
+
+    bot = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError("send failed")))
+
+    await master._notify_restart_success(bot)
+
+    assert overview_mock.await_count == len(manager.admin_ids)
+    called_ids = sorted(call.args[1] for call in overview_mock.await_args_list)
+    assert called_ids == sorted(manager.admin_ids)
+
+
+@pytest.mark.asyncio
+async def test_send_restart_project_overview_deduplicates_chats(repo: ProjectRepository, tmp_path: Path, monkeypatch):
+    """项目列表推送应去重，防止触发人重复收到。"""
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_send_projects_overview_to_chat", overview_mock)
+    monkeypatch.setattr(master.asyncio, "sleep", AsyncMock())
+
+    bot = SimpleNamespace()
+
+    await master._send_restart_project_overview(bot, [1, 1, 2])
+
+    assert overview_mock.await_count == 2
+    called_ids = sorted(call.args[1] for call in overview_mock.await_args_list)
+    assert called_ids == [1, 2]
