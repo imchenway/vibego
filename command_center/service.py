@@ -238,6 +238,24 @@ class CommandService:
 
         return await self.get_command(command_id)
 
+    async def delete_command(self, command_id: int) -> None:
+        """删除指定命令，依赖外键自动清理由其衍生的别名与历史。"""
+
+        await self.initialize()
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("PRAGMA foreign_keys = ON")
+                cursor = await db.execute(
+                    """
+                    DELETE FROM commands
+                    WHERE project_slug = ? AND id = ?
+                    """,
+                    (self.project_slug, command_id),
+                )
+                if cursor.rowcount == 0:
+                    raise CommandNotFoundError("命令不存在或已被删除")
+                await db.commit()
+
     async def replace_aliases(self, command_id: int, aliases: Sequence[str]) -> Tuple[str, ...]:
         """以新列表覆盖命令别名。"""
 
