@@ -1829,6 +1829,7 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
     await _dispatch_prompt_to_model(message.chat.id, prompt, reply_to=message)
 
 BOT_COMMANDS: list[tuple[str, str]] = [
+    ("start", "打开任务概览"),
     ("help", "查看全部命令"),
     ("tasks", "任务命令清单"),
     ("task_new", "创建任务"),
@@ -3268,9 +3269,9 @@ def _format_task_detail(
         title_text = _escape_markdown_text(title_raw) if title_raw else "-"
 
     task_id_text = _format_task_command(task.id)
+    # 任务详情的元信息仅保留任务编码及类型，避免状态字段造成额外占行
     meta_line = (
         f"🏷️ 任务编码：{task_id_text}"
-        f" · ⚙️ 状态：{_format_status(task.status)}"
         f" · 📂 类型：{_format_task_type(task.task_type)}"
     )
     lines: list[str] = [

@@ -31,6 +31,7 @@ from project_repository import ProjectRepository
 TOKEN_PATTERN = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{20,}$")
 BOTFATHER_URL = "https://core.telegram.org/bots#botfather"
 START_SIGNAL_PATH = config.STATE_DIR / "start_signal.json"
+TELEGRAM_BOT_LIMITATION_DOC = "https://core.telegram.org/bots/faq#how-can-i-message-a-user"
 
 DEFAULT_GLOBAL_COMMANDS: tuple[dict[str, object], ...] = (
     {
@@ -147,6 +148,30 @@ def _collect_auto_start_targets(env_values: Dict[str, str]) -> list[int]:
     return deduped
 
 
+def _load_known_master_chats() -> set[int]:
+    """读取 master_state.json 中记录的 chat_id，用于判断是否已与 Bot 建立会话。"""
+
+    state_path = config.MASTER_STATE
+    if not state_path.exists():
+        return set()
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(raw, dict):
+        return set()
+    chats: set[int] = set()
+    for item in raw.values():
+        if not isinstance(item, dict):
+            continue
+        chat_id = item.get("chat_id")
+        if isinstance(chat_id, int):
+            chats.add(chat_id)
+        elif isinstance(chat_id, str) and chat_id.isdigit():
+            chats.add(int(chat_id))
+    return chats
+
+
 def _write_start_signal(chat_ids: Sequence[int]) -> None:
     """将启动通知请求写入 state 目录，供 master 启动后读取。"""
 
@@ -155,7 +180,9 @@ def _write_start_signal(chat_ids: Sequence[int]) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     START_SIGNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    START_SIGNAL_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    temp_path = START_SIGNAL_PATH.with_suffix(".json.tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp_path, START_SIGNAL_PATH)
 
 
 def _schedule_start_notification(env_values: Dict[str, str]) -> bool:
@@ -165,12 +192,38 @@ def _schedule_start_notification(env_values: Dict[str, str]) -> bool:
     if not targets:
         print("提示：未检测到 MASTER_CHAT_ID 或管理员列表，无法自动推送 /start。")
         return False
+
+    known_chats = _load_known_master_chats()
+    if not known_chats:
+        print(
+            "提示：尚未检测到任何已登记的 chat_id，请先在 Telegram 中对 Bot 发送 /start，"
+            f"否则平台将拒绝主动消息（参考官方限制：{TELEGRAM_BOT_LIMITATION_DOC}）。"
+        )
+        return False
+
+    missing = [str(chat_id) for chat_id in targets if chat_id not in known_chats]
+    if len(missing) == len(targets):
+        print(
+            "提示：自动推送目标尚未与 Bot 建立对话，将不会发送。请先手动 /start 后再执行 `vibego start`。"
+        )
+        print("涉及 chat_id：", ", ".join(missing))
+        print(f"Telegram 限制说明：{TELEGRAM_BOT_LIMITATION_DOC}")
+        return False
+
+    if missing:
+        print(
+            "警告：以下 chat_id 仍未与 Bot 建立对话，自动 /start 推送将跳过："
+            + ", ".join(missing)
+        )
+        print(f"请参考 Telegram 限制：{TELEGRAM_BOT_LIMITATION_DOC}")
+
+    eligible = [chat_id for chat_id in targets if chat_id in known_chats]
     try:
-        _write_start_signal(targets)
+        _write_start_signal(eligible)
     except OSError as exc:
         print("自动推送信号写入失败：", exc)
         return False
-    print("已安排 master 启动通知，将推送到 chat_id:", ", ".join(str(t) for t in targets))
+    print("已安排 master 启动通知，将推送到 chat_id:", ", ".join(str(t) for t in eligible))
     return True
 
 
