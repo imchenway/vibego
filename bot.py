@@ -1893,7 +1893,7 @@ async def _list_combined_commands() -> List[CommandDefinition]:
     global_commands = await GLOBAL_COMMAND_SERVICE.list_commands()
 
     def _sort_key(item: CommandDefinition) -> tuple[int, str, str]:
-        scope_rank = 1 if _is_global_command(item) else 0
+        scope_rank = 0 if _is_global_command(item) else 1
         title_key = (item.title or item.name or "").casefold()
         name_key = (item.name or "").casefold()
         return (scope_rank, title_key, name_key)

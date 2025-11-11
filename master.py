@@ -206,8 +206,11 @@ GLOBAL_COMMAND_NEW_CALLBACK = "system:commands:new"
 GLOBAL_COMMAND_EDIT_PREFIX = "system:commands:edit:"
 GLOBAL_COMMAND_FIELD_PREFIX = "system:commands:field:"
 GLOBAL_COMMAND_TOGGLE_PREFIX = "system:commands:toggle:"
+GLOBAL_COMMAND_DELETE_PROMPT_PREFIX = "system:commands:delete_prompt:"
+GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX = "system:commands:delete_confirm:"
 GLOBAL_COMMAND_INLINE_LIMIT = 12
 GLOBAL_COMMAND_STATE_KEY = "global_command_flow"
+GLOBAL_COMMAND_PREVIEW_MAX_CHARS = 400
 
 # Telegram 在不同客户端可能插入零宽字符或额外空白，提前归一化按钮文本。
 ZERO_WIDTH_CHARACTERS: Tuple[str, ...] = ("\u200b", "\u200c", "\u200d", "\ufeff")
@@ -325,7 +328,6 @@ def _build_global_command_keyboard(commands: Sequence[CommandDefinition]) -> Inl
             ]
         )
     inline_keyboard.append([InlineKeyboardButton(text="🆕 新增通用命令", callback_data=GLOBAL_COMMAND_NEW_CALLBACK)])
-    inline_keyboard.append([InlineKeyboardButton(text="🔁 刷新", callback_data=GLOBAL_COMMAND_REFRESH_CALLBACK)])
     inline_keyboard.append([InlineKeyboardButton(text="⬅️ 返回系统设置", callback_data=SYSTEM_SETTINGS_MENU_CALLBACK)])
     inline_keyboard.append([InlineKeyboardButton(text="📂 返回项目列表", callback_data="project:refresh:*")])
     return _ensure_numbered_markup(InlineKeyboardMarkup(inline_keyboard=inline_keyboard))
@@ -346,9 +348,67 @@ def _build_global_command_edit_keyboard(command: CommandDefinition) -> InlineKey
         ],
         [InlineKeyboardButton(text="🔁 别名", callback_data=f"{GLOBAL_COMMAND_FIELD_PREFIX}aliases:{command.id}")],
         [InlineKeyboardButton(text=toggle_label, callback_data=f"{GLOBAL_COMMAND_TOGGLE_PREFIX}{command.id}")],
+        [
+            InlineKeyboardButton(
+                text="🗑 删除命令",
+                callback_data=f"{GLOBAL_COMMAND_DELETE_PROMPT_PREFIX}{command.id}",
+            )
+        ],
         [InlineKeyboardButton(text="⬅️ 返回列表", callback_data=GLOBAL_COMMAND_REFRESH_CALLBACK)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def _truncate_field_preview(value: str) -> str:
+    """限制字段预览长度，避免刷屏。"""
+
+    text = value.strip()
+    if len(text) <= GLOBAL_COMMAND_PREVIEW_MAX_CHARS:
+        return text
+    return text[: GLOBAL_COMMAND_PREVIEW_MAX_CHARS - 1] + "…"
+
+
+def _build_field_preview_text(field: str, command: CommandDefinition) -> str:
+    """根据字段类型输出当前值提示，便于用户确认。"""
+
+    if field == "command":
+        current = _truncate_field_preview(command.command or "")
+        snippet = current or "（当前为空）"
+        indented = textwrap.indent(snippet, "    ")
+        return f"当前指令：\n{indented}"
+    if field == "title":
+        return f"当前标题：{command.title or '（当前为空）'}"
+    if field == "description":
+        return f"当前描述：{command.description or '（当前为空）'}"
+    if field == "timeout":
+        return f"当前超时：{command.timeout or '-'} 秒"
+    if field == "aliases":
+        alias_text = ", ".join(command.aliases) if command.aliases else "（无别名）"
+        return f"当前别名：{alias_text}"
+    return ""
+
+
+def _build_field_prompt_text(field: str, command: CommandDefinition) -> Optional[str]:
+    """拼装包含当前值与操作提示的文本。"""
+
+    prompt_map = {
+        "title": "请输入新的命令标题：",
+        "command": "请输入新的执行指令：",
+        "description": "请输入新的命令描述（可留空）：",
+        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
+        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
+    }
+    prompt = prompt_map.get(field)
+    if prompt is None:
+        return None
+    preview = _build_field_preview_text(field, command)
+    lines = []
+    if preview:
+        lines.append(preview)
+        lines.append("")
+    lines.append(prompt)
+    lines.append("发送“取消”可终止当前操作。")
+    return "\n".join(lines)
 
 
 async def _send_global_command_overview_message(message: Message, notice: Optional[str] = None) -> None:
@@ -3398,20 +3458,13 @@ async def on_global_command_field(callback: CallbackQuery, state: FSMContext) ->
         return
     command_id = int(raw_id)
     try:
-        await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+        command = await GLOBAL_COMMAND_SERVICE.get_command(command_id)
     except CommandNotFoundError:
         await callback.answer("通用命令不存在", show_alert=True)
         await _edit_global_command_overview(callback, notice="目标命令已被删除。")
         return
-    prompt_map = {
-        "title": "请输入新的命令标题：",
-        "command": "请输入新的执行指令：",
-        "description": "请输入新的命令描述（可留空）：",
-        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
-        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
-    }
-    prompt = prompt_map.get(field)
-    if prompt is None:
+    prompt_text = _build_field_prompt_text(field, command)
+    if prompt_text is None:
         await callback.answer("暂不支持该字段", show_alert=True)
         return
     await state.update_data(
@@ -3426,7 +3479,7 @@ async def on_global_command_field(callback: CallbackQuery, state: FSMContext) ->
     else:
         await state.set_state(CommandEditStates.waiting_value)
     if callback.message:
-        await callback.message.answer(f"{prompt}\n发送“取消”可终止当前操作。")
+        await callback.message.answer(prompt_text)
     await callback.answer("请发送新的值")
 
 
@@ -3451,6 +3504,66 @@ async def on_global_command_toggle(callback: CallbackQuery) -> None:
     action_text = "已启用" if updated.enabled else "已停用"
     await _edit_global_command_overview(callback, notice=f"{updated.name} {action_text}")
     await callback.answer(action_text)
+
+
+@router.callback_query(F.data.startswith(GLOBAL_COMMAND_DELETE_PROMPT_PREFIX))
+async def on_global_command_delete_prompt(callback: CallbackQuery) -> None:
+    """提醒管理员确认删除命令。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    raw_id = (callback.data or "")[len(GLOBAL_COMMAND_DELETE_PROMPT_PREFIX) :]
+    if not raw_id.isdigit():
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    try:
+        command = await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _edit_global_command_overview(callback, notice="目标命令已被删除。")
+        return
+    confirm_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 确认删除",
+                    callback_data=f"{GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX}{command_id}",
+                ),
+                InlineKeyboardButton(
+                    text="取消",
+                    callback_data=f"{GLOBAL_COMMAND_EDIT_PREFIX}{command_id}",
+                ),
+            ]
+        ]
+    )
+    if callback.message:
+        await callback.message.answer(
+            f"确定要删除通用命令 {command.name} 吗？此操作不可恢复。",
+            reply_markup=confirm_markup,
+        )
+    await callback.answer("请确认删除")
+
+
+@router.callback_query(F.data.startswith(GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX))
+async def on_global_command_delete_confirm(callback: CallbackQuery) -> None:
+    """执行命令删除操作。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    raw_id = (callback.data or "")[len(GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX) :]
+    if not raw_id.isdigit():
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    try:
+        await GLOBAL_COMMAND_SERVICE.delete_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _edit_global_command_overview(callback, notice="目标命令已被删除。")
+        return
+    await _edit_global_command_overview(callback, notice="通用命令已彻底删除。")
+    await callback.answer("已删除")
 
 
 @router.message(CommandCreateStates.waiting_name)
@@ -3515,6 +3628,90 @@ async def on_global_command_create_shell(message: Message, state: FSMContext) ->
     await state.clear()
     await message.answer(f"通用命令 {created.name} 已创建，描述与别名可稍后在编辑面板补齐。")
     await _send_global_command_overview_message(message, notice="新的通用命令已生效。")
+
+
+@router.message(CommandEditStates.waiting_value)
+async def on_global_command_edit_value(message: Message, state: FSMContext) -> None:
+    """处理通用命令字段更新。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "edit"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令编辑已取消。")
+        return
+    command_id = data.get("command_id")
+    field = data.get("field")
+    if not command_id or not field:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择通用命令。")
+        return
+    updates: Dict[str, object] = {}
+    if field == "title":
+        updates["title"] = text
+    elif field == "command":
+        if not text:
+            await message.answer("命令内容不能为空，请重新输入：")
+            return
+        updates["command"] = text
+    elif field == "description":
+        updates["description"] = text
+    elif field == "timeout":
+        try:
+            updates["timeout"] = int(text)
+        except ValueError:
+            await message.answer("超时需为整数秒，请重新输入：")
+            return
+    else:
+        await message.answer("暂不支持该字段。")
+        await state.clear()
+        return
+    try:
+        updated = await GLOBAL_COMMAND_SERVICE.update_command(command_id, **updates)
+    except (ValueError, CommandAlreadyExistsError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(f"通用命令 {updated.name} 已更新。")
+    await _send_global_command_overview_message(message, notice="通用命令字段已更新。")
+
+
+@router.message(CommandEditStates.waiting_aliases)
+async def on_global_command_edit_aliases(message: Message, state: FSMContext) -> None:
+    """处理通用命令别名更新。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "edit"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令编辑已取消。")
+        return
+    command_id = data.get("command_id")
+    if not command_id:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择通用命令。")
+        return
+    aliases = _parse_global_alias_input(text)
+    conflict_slug = await _detect_project_command_conflict(aliases)
+    if conflict_slug:
+        await message.answer(f"别名与项目 {conflict_slug} 的命令冲突，请重新输入：")
+        return
+    try:
+        updated_aliases = await GLOBAL_COMMAND_SERVICE.replace_aliases(command_id, aliases)
+    except (ValueError, CommandAliasConflictError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    if updated_aliases:
+        alias_text = ", ".join(updated_aliases)
+        await message.answer(f"别名已更新：{alias_text}")
+    else:
+        await message.answer("别名已清空。")
+    await _send_global_command_overview_message(message, notice="别名已同步至通用命令。")
 
 
 @router.message()
@@ -3888,85 +4085,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("Master 停止")
-@router.message(CommandEditStates.waiting_value)
-async def on_global_command_edit_value(message: Message, state: FSMContext) -> None:
-    """处理通用命令字段更新。"""
-
-    data = await state.get_data()
-    if not _is_global_command_flow(data, "edit"):
-        return
-    text = (message.text or "").strip()
-    if _is_cancel_text(text):
-        await state.clear()
-        await message.answer("通用命令编辑已取消。")
-        return
-    command_id = data.get("command_id")
-    field = data.get("field")
-    if not command_id or not field:
-        await state.clear()
-        await message.answer("上下文已失效，请重新选择通用命令。")
-        return
-    updates: Dict[str, object] = {}
-    if field == "title":
-        updates["title"] = text
-    elif field == "command":
-        if not text:
-            await message.answer("命令内容不能为空，请重新输入：")
-            return
-        updates["command"] = text
-    elif field == "description":
-        updates["description"] = text
-    elif field == "timeout":
-        try:
-            updates["timeout"] = int(text)
-        except ValueError:
-            await message.answer("超时需为整数秒，请重新输入：")
-            return
-    else:
-        await message.answer("暂不支持该字段。")
-        await state.clear()
-        return
-    try:
-        updated = await GLOBAL_COMMAND_SERVICE.update_command(command_id, **updates)
-    except (ValueError, CommandAlreadyExistsError, CommandNotFoundError) as exc:
-        await message.answer(str(exc))
-        return
-    await state.clear()
-    await message.answer(f"通用命令 {updated.name} 已更新。")
-    await _send_global_command_overview_message(message, notice="通用命令字段已更新。")
-
-
-@router.message(CommandEditStates.waiting_aliases)
-async def on_global_command_edit_aliases(message: Message, state: FSMContext) -> None:
-    """处理通用命令别名更新。"""
-
-    data = await state.get_data()
-    if not _is_global_command_flow(data, "edit"):
-        return
-    text = (message.text or "").strip()
-    if _is_cancel_text(text):
-        await state.clear()
-        await message.answer("通用命令编辑已取消。")
-        return
-    command_id = data.get("command_id")
-    if not command_id:
-        await state.clear()
-        await message.answer("上下文已失效，请重新选择通用命令。")
-        return
-    aliases = _parse_global_alias_input(text)
-    conflict_slug = await _detect_project_command_conflict(aliases)
-    if conflict_slug:
-        await message.answer(f"别名与项目 {conflict_slug} 的命令冲突，请重新输入：")
-        return
-    try:
-        updated_aliases = await GLOBAL_COMMAND_SERVICE.replace_aliases(command_id, aliases)
-    except (ValueError, CommandAliasConflictError, CommandNotFoundError) as exc:
-        await message.answer(str(exc))
-        return
-    await state.clear()
-    if updated_aliases:
-        alias_text = ", ".join(updated_aliases)
-        await message.answer(f"别名已更新：{alias_text}")
-    else:
-        await message.answer("别名已清空。")
-    await _send_global_command_overview_message(message, notice="别名已同步至通用命令。")

@@ -45,6 +45,51 @@ def _patch_command_services(
 
 
 @pytest.mark.asyncio
+async def test_global_commands_listed_before_project(monkeypatch):
+    global_commands = [
+        CommandDefinition(
+            id=30,
+            project_slug="__global__",
+            scope="global",
+            name="alpha",
+            title="Alpha",
+            command="echo alpha",
+            description="",
+            aliases=(),
+        ),
+        CommandDefinition(
+            id=31,
+            project_slug="__global__",
+            scope="global",
+            name="zulu",
+            title="Zulu",
+            command="echo zulu",
+            description="",
+            aliases=(),
+        ),
+    ]
+    project_commands = [
+        CommandDefinition(
+            id=1,
+            project_slug="demo",
+            scope="project",
+            name="beta",
+            title="Beta",
+            command="./beta.sh",
+            description="",
+            aliases=(),
+        )
+    ]
+    _patch_command_services(
+        monkeypatch,
+        project_commands=project_commands,
+        global_commands=global_commands,
+    )
+    combined = await bot._list_combined_commands()
+    assert [cmd.name for cmd in combined] == ["alpha", "zulu", "beta"]
+
+
+@pytest.mark.asyncio
 async def test_build_command_overview_view_hides_detailed_list(monkeypatch):
     project_commands = [
         CommandDefinition(
