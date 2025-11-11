@@ -1,20 +1,20 @@
-# vibego - vibe coding via Telegram anytime, anywhere
+# vibego - 通过 telegram 随时随地的进行 vibe coding
 
-**Drive your terminal AI CLI via Telegram anytime and anywhere (supports Codex / ClaudeCode)**
+**通过 Telegram 随时随地驱动你的终端 AI CLI（支持 Codex / ClaudeCode）**
 
-For the Simplified Chinese version, see [中文文档](README-zh.md).
+For the english version, see [README-en](README-en.md).
 
-## Features
+## 功能介绍
 
-1. Control your terminal AI CLI through Telegram whenever you need it.
-2. Capture lightweight task management and bug reports directly inside Telegram.
-3. Switch between Codex / ClaudeCode terminal CLIs in one tap from Telegram.
-4. Send commands over the HTTPS channel provided by the Telegram Bot API, protected by end‑to‑end TLS.
-5. Keep runtime logs and state files under `~/.config/vibego/` so sensitive data never leaves the machine.
+1. 通过 Telegram 随时随地驱动你的终端 AI CLI;
+2. 通过 telegram 做到简单的任务管理与缺陷报告，可在 Telegram 中直接记录并追踪；
+3. 通过 telegram 随时在 Codex / ClaudeCode 终端 CLI 间一键切换；
+4. 通过 Telegram Bot API 的 HTTPS 请求通道传输指令到 CLI，链路全程由 TLS 加密保护。
+5. 运行期日志和状态文件统一写入本机 ~/.config/vibego/，敏感数据不出终端；
 
-## Environment Requirements
+## 环境依赖
 
-**The terminal environment has installed and login in codex / claudeCode**
+**终端环境安装且登录了 codex/claudeCode**
 
 ```bash
 brew install python@3.11 tmux
@@ -22,185 +22,174 @@ python3 -m venv ~/.config/vibego/runtime/venv
 source ~/.config/vibego/runtime/venv/bin/activate
 ```
 
-## Quick Start
+## 快速开始
 
-### Create and retrieve a Telegram bot token
+### 创建并获取 telegram bot token
 
-Use the official Telegram BotFather guide (<https://core.telegram.org/bots#botfather>):
+建议通过 PyPI 安装的 `vibego` 命令完成初始化与启动，示例：
 
-1. Search for `@BotFather` in the Telegram client and start a chat.
-2. Send `/start`, then `/newbot`, and follow the prompts for bot name and username.
-3. BotFather returns an HTTP API token resembling `123456789:ABC...`; store it safely.
-4. To regenerate or reset the token, send `/token` in the same chat and pick the bot.
+- 首次创建 Token 可参考 Telegram 官方 BotFather 指南（<https://core.telegram.org/bots#botfather>）：
+    1) 在 Telegram 客户端搜索 `@BotFather` 并开始对话；
+    2) 发送 `/start`，然后依次发送 `/newbot`，根据提示输入机器人名称与用户名；
+    3) BotFather 将返回以 `123456789:ABC...` 形式的 HTTP API Token，请妥善保存；
+    4) 若需重新获取或重置 Token，可在同一对话中发送 `/token`，选择目标机器人后领取新令牌。
 
-### Install and start vibego
+### 安装 & 启动 vibego
 
-Before continuing, make sure Codex / ClaudeCode CLIs are installed and logged in, and that you have a Telegram bot token
-ready.
+执行该步骤之前，确保您的终端已经安装并登录了 codex /claudeCode，且已经准备好了 telegram bot token。
 
-- Consider merging the contents of [AGENTS-en.md](AGENTS-en.md)￼ into your `$HOME/.codex/AGENTS.md` or
-  `$HOME/.claude/CLAUDE.md`.
+- 考虑将[AGENTS-zh.md](AGENTS-zh.md)中的内容结合到你的 `$HOME/.codex/AGENTS.md` 或 `$HOME/.claude/CLAUDE.md` 中
 
 ```bash
-pipx install vibego  # or pip install --user vibego
-vibego init          # initialise the config directory and persist the Master Bot Token
-vibego start         # start the master service
+pipx install vibego  # 或者 pip install --user vibego
+vibego init          # 初始化配置目录并写入 Master Bot Token
+vibego start         # 启动 master 服务
 ```
 
-Then click on `/start` in the bot created by Telegram ,Enjoy it!
+然后在 telegram 创建的 bot中点击`/statr`，enjoy it！
 
-## Directory Layout
+## 目录结构
 
-- `bot.py`: aiogram 3 worker that supports multiple model sessions (Codex / ClaudeCode / reserved Gemini).
-- `scripts/run_bot.sh`: one-click bootstrap (builds venv, starts tmux + model CLI + bot).
-- `scripts/stop_bot.sh`: terminates the worker for a project (tmux session + bot process).
-- `scripts/start_tmux_codex.sh`: low-level tmux/CLI launcher invoked by `run_bot.sh`, forces UTF‑8 via `tmux -u`.
-- `scripts/models/`: model configuration modules (`common.sh` / `codex.sh` / `claudecode.sh` / `gemini.sh`).
-- `logs/<model>/<project>/`: runtime logs (`run_bot.log`, `model.log`, `bot.pid`, `current_session.txt`), defaulted to
-  `~/.config/vibego/logs/`.
-    - `model.log` is rotated by `scripts/log_writer.py`, with 20 MB cap per file and 24-hour retention (override via
-      `MODEL_LOG_MAX_BYTES`, `MODEL_LOG_RETENTION_SECONDS`).
-- `.env.example`: configuration template to copy to `.env` and adjust.
+- `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / 预留 Gemini）。
+- `scripts/run_bot.sh`：一键启动脚本（自动建 venv、启动 tmux + 模型 CLI + bot）。
+- `scripts/stop_bot.sh`：终止当前项目 worker（tmux + bot 进程）。
+- `scripts/start_tmux_codex.sh`：底层 tmux/CLI 启动器，被 `run_bot.sh` 调用，默认以 `tmux -u` 强制启用 UTF-8。
+- `scripts/models/`：模型配置模块（`common.sh`/`codex.sh`/`claudecode.sh`/`gemini.sh`）。
+- `logs/<model>/<project>/`：运行日志（`run_bot.log`、`model.log`、`bot.pid`、`current_session.txt`），默认位于
+  `~/.config/vibego/logs/`。
+    - `model.log` 由 `scripts/log_writer.py` 控制，单文件上限 20MB，仅保留最近 24 小时的归档（可通过 `MODEL_LOG_MAX_BYTES`、
+      `MODEL_LOG_RETENTION_SECONDS` 覆盖）。
+- `.env.example`：环境配置模板（复制为 `.env` 后按需修改）。
 
-## Logs & Directories
+## 日志 & 目录
 
 ```
 ~/.config/vibego/logs/
   └─ codex/
       └─ mall-backend/
-           ├─ run_bot.log     # output from run_bot.sh
-           ├─ model.log       # model CLI output captured through tmux pipe-pane
-           ├─ bot.pid         # current bot process PID (used by stop_bot.sh)
-           └─ current_session.txt  # pointer to the latest JSONL session
+           ├─ run_bot.log     # run_bot.sh 输出
+           ├─ model.log       # tmux pipe-pane 捕获的模型 CLI 输出
+           ├─ bot.pid         # 当前 bot 进程 PID（stop_bot.sh 使用）
+           └─ current_session.txt  # 最近一次 JSONL 会话指针
 ```
 
-> Starting in 2025, all logs, databases, and state files default to `~/.config/vibego/`. Use
-`./scripts/migrate_runtime.sh` to migrate legacy files created inside the repository back into the runtime directory.
+> 从 2025 年起，所有日志、数据库、状态文件默认写入 `~/.config/vibego/`；`scripts/migrate_runtime.sh`
+> 可将旧版本在仓库内生成的运行期文件一次性迁移到该目录。
 
-## Model Switching
+## 模型切换
 
-- Supported model parameters: `codex`, `claudecode`, `gemini` (placeholder).
-- Switch flow: `stop_bot.sh --model <old>` → `run_bot.sh --model <new>`.
-- Each model keeps an isolated configuration in `scripts/models/<model>.sh`; shared logic lives in
-  `scripts/models/common.sh`.
-- `ACTIVE_MODEL` is echoed in `/start` replies and logs, and exported to the environment for `bot.py`.
+- 支持参数：`codex`、`claudecode`、`gemini`（占位）。
+- 切换流程：`stop_bot.sh --model <旧>` → `run_bot.sh --model <新>`。
+- 每个模型在 `scripts/models/<model>.sh` 中维护独立配置，互不依赖；公共逻辑位于 `scripts/models/common.sh`。
+- `ACTIVE_MODEL` 会在 `/start` 回复及日志中显示，并写入环境变量供 `bot.py` 使用。
 
 ### Codex
 
-| Variable             | Description                                                                      |
-|----------------------|----------------------------------------------------------------------------------|
-| `CODEX_WORKDIR`      | Codex CLI working directory (defaults to the value in `.env` or repository root) |
-| `CODEX_CMD`          | Launch command, default `codex --dangerously-bypass-...`                         |
-| `CODEX_SESSION_ROOT` | JSONL root directory (default `~/.codex/sessions`)                               |
-| `CODEX_SESSION_GLOB` | JSONL file pattern (default `rollout-*.jsonl`)                                   |
+| 变量                   | 说明                                            |
+|----------------------|-----------------------------------------------|
+| `CODEX_WORKDIR`      | Codex CLI 工作目录（默认 `.env` 中自定义或 fallback ROOT） |
+| `CODEX_CMD`          | 启动命令，默认 `codex --dangerously-bypass-...`      |
+| `CODEX_SESSION_ROOT` | JSONL 根目录（默认 `~/.codex/sessions`）             |
+| `CODEX_SESSION_GLOB` | JSONL 文件匹配（默认 `rollout-*.jsonl`）              |
 
 ### ClaudeCode
 
-| Variable              | Description                                                  |
-|-----------------------|--------------------------------------------------------------|
-| `CLAUDE_WORKDIR`      | Project directory (defaults to the same value used by Codex) |
-| `CLAUDE_CMD`          | CLI launch command, for example `claude --project <path>`    |
-| `CLAUDE_PROJECT_ROOT` | JSONL root directory (default `~/.claude/projects`)          |
-| `CLAUDE_SESSION_GLOB` | JSONL file pattern (default `*.jsonl`)                       |
-| `CLAUDE_PROJECT_KEY`  | Optional: explicitly set `~/.claude/projects/<key>`          |
+| 变量                    | 说明                                    |
+|-----------------------|---------------------------------------|
+| `CLAUDE_WORKDIR`      | 工程目录（默认与 Codex 相同）                    |
+| `CLAUDE_CMD`          | CLI 启动命令，示例 `claude --project <path>` |
+| `CLAUDE_PROJECT_ROOT` | JSONL 根目录（默认 `~/.claude/projects`）    |
+| `CLAUDE_SESSION_GLOB` | JSONL 文件匹配（默认 `*.jsonl`）              |
+| `CLAUDE_PROJECT_KEY`  | 可选：显式指定 `~/.claude/projects/<key>` 路径 |
 
-### Gemini (placeholder)
+### Gemini（预留）
 
-- `scripts/models/gemini.sh` currently contains a placeholder command to be expanded once the official CLI is available.
+- `scripts/models/gemini.sh` 暂使用占位命令，可在后续接入官方 CLI 时扩展。
 
-## aiogram Worker Behaviour
+## aiogram Worker 行为
 
-- `/start`: returns `chat_id`, `MODE`, and `ACTIVE_MODEL`; logs record `chat_id` and `user_id`.
-- Text messages:
-    1. Pick the `SessionAdapter` based on `ACTIVE_MODEL`, read `current_session.txt`, and search `MODEL_SESSION_ROOT` if
-       necessary.
-    2. Inject the prompt into tmux (send `Esc` to clear modes, `Ctrl+J` for newline, `Enter` to submit).
-    3. Initialise offsets from `SESSION_OFFSETS`; `_deliver_pending_messages()` streams tail updates from the JSONL log.
-    4. During the watcher phase, the bot informs the user the `ACTIVE_MODEL` is processing and pushes the result once
-       ready (Markdown preserved).
-- MODE = A still honours `AGENT_CMD` for direct CLI execution.
+- `/start`：返回 `chat_id`、`MODE`、`ACTIVE_MODEL`；日志打印 `chat_id` 与 `user_id`。
+- 文本消息：
+    1. 依据 `ACTIVE_MODEL` 选择 `SessionAdapter`，读取 `current_session.txt` 中记录的 JSONL 文件，必要时搜索
+       `MODEL_SESSION_ROOT` 以回填。
+    2. 将 prompt 注入 tmux（发送 `Esc` 清空模式、`C-j` 换行、`Enter` 提交）。
+    3. 首次读取 `SESSION_OFFSETS` 初始化偏移；随后通过 `_deliver_pending_messages()` 补发当前尾部内容并持续轮询 JSONL。
+    4. watcher 阶段提示 `ACTIVE_MODEL` 正在处理中，完成后自动推送结果（保留 Markdown）。
+- MODE=A 下仍支持 `AGENT_CMD` 直接执行 CLI。
 
-## New Scripts
+## 新增脚本
 
 - `run_bot.sh`
-    - `--model <name>`: codex / claudecode / gemini.
-    - `--project <slug>`: directory name for logs/sessions; defaults to a slug derived from the working directory.
-    - `--foreground`: keep the process in the foreground (default: background via `nohup`).
-    - `--no-stop`: skip the pre-launch stop step (defaults to invoking `stop_bot.sh` for idempotency).
+    - `--model <name>`：codex / claudecode / gemini。
+    - `--project <slug>`：日志/会话目录名称；未提供时依据工作目录推导。
+    - `--foreground`：前台运行（默认后台 + `nohup`）。
+    - `--no-stop`：启动前跳过 stop（默认先执行 `stop_bot.sh` 保证幂等）。
 - `stop_bot.sh`
-    - Idempotent stop: issues `tmux kill-session`, terminates the process from `bot.pid`, and clears cached files.
-    - Example: `./scripts/stop_bot.sh --model codex --project mall-backend`.
+    - 幂等终止：`tmux kill-session`、关闭 `bot.pid` 指向的进程、移除缓存。
+    - 示例：`./scripts/stop_bot.sh --model codex --project mall-backend`。
 
-## Configuration Highlights
+## 配置要点
 
-### `.env` (master global configuration)
+### `.env`（Master 全局配置）
 
-- Location: `~/.config/vibego/.env` (override with `VIBEGO_CONFIG_DIR`).
-- `MASTER_BOT_TOKEN`: token for the master bot; collected by `vibego init` and required for startup.
-- `MASTER_CHAT_ID` / `MASTER_USER_ID`: captured automatically the first time you interact with the master in Telegram to
-  mark authorised admins.
-- `MASTER_WHITELIST`: comma-separated list of chat IDs. Leave empty to allow any chat; latest value always wins if auto
-  updates occur.
-- You can add optional variables for proxies, log level, default model, etc. Scripts fall back to sensible defaults if
-  unspecified.
+- 文件位置：`~/.config/vibego/.env`（可通过环境变量 `VIBEGO_CONFIG_DIR` 自定义）。
+- `MASTER_BOT_TOKEN`：master bot 的 Token，由 `vibego init` 引导输入，启动时必须存在。
+- `MASTER_CHAT_ID` / `MASTER_USER_ID`：首次在 Telegram 与 master 交互时自动写入，表示已授权的管理员账号。
+- `MASTER_WHITELIST`：逗号分隔的 chat_id 列表，留空表示不限制；若与自动写入冲突以最新值为准。
+- 其他可选变量（代理、日志级别、默认模型等）可按需新增，未设置时脚本使用默认值。
 
-- Project definitions persist in `~/.config/vibego/config/master.db` (SQLite) with a JSON mirror at
-  `~/.config/vibego/config/projects.json`. For offline edits, use the `config/projects.json.example` template in the
-  repository.
-- The master “⚙️ Project Management” menu can create/edit/delete projects; offline JSON edits are imported at startup
-  and synced to the database.
-- Required fields: `bot_name`, `bot_token`, `project_slug`, `default_model`.
-- Optional fields: `workdir` (project path), `allowed_chat_id` (pre-authorised chat). Leave blank to let the worker
-  capture the first valid chat and persist it to `~/.config/vibego/state/master_state.json`.
-- Other custom fields are currently ignored.
+- 项目配置持久化在 `~/.config/vibego/config/master.db`（SQLite），对应的 JSON 镜像为
+  `~/.config/vibego/config/projects.json`。如需离线编辑，可参考仓库内的 `config/projects.json.example` 模板。
+- Master「⚙️ 项目管理」可新增/编辑/删除项目；仍可离线编辑 JSON，启动时会自动导入并同步至数据库。
+- 必填字段：`bot_name`、`bot_token`、`project_slug`、`default_model`。
+- 可选字段：`workdir`（项目路径）、`allowed_chat_id`（用于预设授权）。留空时，worker 首次收到消息会自动记录 chat_id 并写回
+  `~/.config/vibego/state/master_state.json`。
+- 其他自定义字段暂不读取。
 
-### Automatic Authorisation & State
+### 自动授权 & 状态
 
-- If `allowed_chat_id` is empty when the worker starts, the first authorised message writes to `state/state.json` and is
-  applied immediately.
-- Master restarts: call `stop_bot.sh` first, then restore running projects from the saved state.
+- worker 启动时若 `allowed_chat_id` 为空，首次合法消息会写入 `state/state.json` 并立即生效。
+- master 重启：先调用 `stop_bot.sh` 清理，再依据 state 还原正在运行的项目。
 
-## Roadmap
+## 后续规划
 
-- Master bot will poll all project bots and invoke run/stop scripts to orchestrate workers; current version ships the
-  worker layout and logging standard first.
-- Gemini CLI support will be added once an official integration path is available.
+- Master bot 将统一轮询多个项目 bot，并调用 run/stop 脚本管理
+  worker；当前版本先提供 worker 端结构与日志规范。
+- Gemini CLI 接入待官方方案确定后补充。
 
-## Notes
+## 注意
 
-- `~/.config/vibego/.env` stores sensitive tokens and admin metadata—never commit it.
-- To trim log size, clean up `logs/<model>/<project>/` as needed or adjust script thresholds.
-- If you previously ran an old source checkout, run `./scripts/migrate_runtime.sh` and ensure only `.example` templates
-  remain in the repository to avoid committing databases or logs.
-- The master caches version checks and reminds you once per release; rerun `/projects` or restart the master to force a
-  new check.
+- `~/.config/vibego/.env` 内包含敏感 Token 与管理员信息，请勿提交至版本库。
+- 若需减少日志体积，可按需清理 `logs/<model>/<project>/` 或调整脚本输出阈值。
+- 如果以源码仓库方式运行过旧版本，请执行 `./scripts/migrate_runtime.sh` 并确认仓库中仅保留 `.example`
+  模板文件，避免误将数据库或日志提交至 Git。
+- Master 会缓存版本检测结果，每个版本只提醒一次；如需立即重试可执行 `/projects` 或重启 master。
 
-## Master Control
+## Master 控制
 
-- Launch the admin bot with `MASTER_BOT_TOKEN` (running `python master.py`).
-- Master stores the project list in `~/.config/vibego/config/master.db`; use the project management menu or edit
-  `~/.config/vibego/config/projects.json` directly. Key fields:
-    - `bot_name`: Telegram bot username (with or without `@`; CLI adds `@` when displaying).
-    - `bot_token`: Telegram token for the worker.
-    - `default_model`: default model (codex / claudecode / gemini).
-    - `project_slug`: directory/log slug.
-    - `workdir`: project working directory (optional).
-    - `allowed_chat_id`: authorised chat injected into the runtime environment.
-- State snapshot: `~/.config/vibego/state/master_state.json` records the active model and running status for each
-  project. On restart the master calls `stop_bot.sh`, then restores workers according to the state file.
+- 管理员 Bot 使用 `MASTER_BOT_TOKEN` 启动（运行 `python master.py`）。
+- 项目列表由 Master 仓库（`~/.config/vibego/config/master.db`）维护，可通过项目管理按钮或
+  `~/.config/vibego/config/projects.json` 同步文件更新。示例字段：
+    - `bot_name`：对应 Telegram 机器人的用户名（可带或不带 `@`，展示与交互时自动加 `@`）
+    - `bot_token`：对应 worker 的 Telegram Token
+    - `default_model`：默认模型（codex / claudecode / gemini）
+    - `project_slug`：日志/目录名称
+    - `workdir`：项目工作目录（可选）
+    - `allowed_chat_id`：项目 worker 的授权 chat（用于 run_bot 时注入环境）
+- 状态持久化：`~/.config/vibego/state/master_state.json` 自动记录各项目当前模型与运行状态，master 重启时会先 `stop_bot.sh`
+  清理现场，再根据状态恢复。
 
-### Management Commands
+### 管理命令
 
-| Command                     | Description                                                                 |
-|-----------------------------|-----------------------------------------------------------------------------|
-| `/projects`                 | List all projects with their current status and model.                      |
-| `/run <project> [model]`    | Start a project worker; optional `model` overrides the default/current one. |
-| `/stop <project>`           | Stop the project worker.                                                    |
-| `/switch <project> <model>` | Stop the worker and relaunch it with a new model.                           |
-| `/start`                    | Show help and the total number of projects.                                 |
-| `/upgrade`                  | Run `pipx upgrade vibego && vibego stop && vibego start` to self-upgrade.   |
+| 命令                          | 说明                                                            |
+|-----------------------------|---------------------------------------------------------------|
+| `/projects`                 | 列出所有项目当前状态与模型                                                 |
+| `/run <project> [model]`    | 启动指定项目 worker，模型可选（默认使用当前/配置值）                                |
+| `/stop <project>`           | 停止项目 worker                                                   |
+| `/switch <project> <model>` | 停止后以新模型重新启动                                                   |
+| `/start`                    | 显示帮助与项目数量                                                     |
+| `/upgrade`                  | 执行 `pipx upgrade vibego && vibego stop && vibego start` 完成自升级 |
 
-- `<project>` accepts either the `project_slug` or `@bot_name`. Responses automatically render clickable `@` links.
+- `<project>` 参数可填写 `project_slug` 或对应 `@bot_name`，命令回复将自动展示可点击的 `@` 链接。
 
-> The master only interacts with the admin bot. Project bots continue to handle business traffic through the worker (
-`bot.py`) launched by `run_bot.sh`.
+> master 仅与管理员 bot 交互；项目 bot 仍由 worker（run_bot.sh 启动的 `bot.py`）负责处理业务消息。
