@@ -43,7 +43,7 @@ def test_worker_keyboard_structure():
 def test_worker_keyboard_button_text():
     markup = bot._build_worker_main_keyboard()
     assert markup.keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
-    assert markup.keyboard[0][1].text == bot.WORKER_CREATE_TASK_BUTTON_TEXT
+    assert markup.keyboard[0][1].text == bot.WORKER_COMMANDS_BUTTON_TEXT
 
 
 def test_worker_keyboard_resize_enabled():

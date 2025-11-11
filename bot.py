@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes
+from contextlib import suppress
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal
@@ -52,6 +53,7 @@ from aiohttp import BasicAuth, ClientError
 from logging_setup import create_logger
 from tasks import TaskHistoryRecord, TaskNoteRecord, TaskRecord, TaskService
 from tasks.commands import parse_simple_kv, parse_structured_text
+from tasks.models import shanghai_now_iso
 from tasks.constants import (
     DEFAULT_PAGE_SIZE,
     DEFAULT_PRIORITY,
@@ -68,6 +70,15 @@ from tasks.fsm import (
     TaskListSearchStates,
     TaskNoteStates,
     TaskPushStates,
+)
+from command_center import (
+    CommandCreateStates,
+    CommandEditStates,
+    CommandDefinition,
+    CommandService,
+    CommandAliasConflictError,
+    CommandAlreadyExistsError,
+    CommandNotFoundError,
 )
 # --- 简单 .env 加载 ---
 def load_env(p: str = ".env"):
@@ -1320,6 +1331,7 @@ DATA_ROOT.mkdir(parents=True, exist_ok=True)
 PROJECT_SLUG = (PROJECT_NAME or "default").replace("/", "-") or "default"
 TASK_DB_PATH = DATA_ROOT / f"{PROJECT_SLUG}.db"
 TASK_SERVICE = TaskService(TASK_DB_PATH, PROJECT_SLUG)
+COMMAND_SERVICE = CommandService(TASK_DB_PATH, PROJECT_SLUG)
 
 ATTACHMENT_STORAGE_ROOT = (DATA_ROOT / "telegram").expanduser()
 ATTACHMENT_STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1811,13 +1823,29 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("task_show", "查看任务详情"),
     ("task_update", "更新任务字段"),
     ("task_note", "添加任务备注"),
+    ("commands", "命令管理入口"),
 ]
 
 COMMAND_KEYWORDS: set[str] = {command for command, _ in BOT_COMMANDS}
 COMMAND_KEYWORDS.update({"task_child", "task_children", "task_delete"})
 
 WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
+WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
+
+COMMAND_EXEC_PREFIX = "cmd:run:"
+COMMAND_EDIT_PREFIX = "cmd:edit:"
+COMMAND_FIELD_PREFIX = "cmd:field:"
+COMMAND_TOGGLE_PREFIX = "cmd:toggle:"
+COMMAND_NEW_CALLBACK = "cmd:new"
+COMMAND_REFRESH_CALLBACK = "cmd:refresh"
+COMMAND_CLOSE_CALLBACK = "cmd:close"
+COMMAND_HISTORY_CALLBACK = "cmd:history"
+COMMAND_TRIGGER_PREFIXES = ("/", "!", ".")
+COMMAND_HISTORY_LIMIT = 8
+COMMAND_INLINE_LIMIT = 12
+COMMAND_OUTPUT_MAX_CHARS = _env_int("COMMAND_OUTPUT_MAX_CHARS", 3500)
+COMMAND_STDERR_MAX_CHARS = _env_int("COMMAND_STDERR_MAX_CHARS", 1200)
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
@@ -1829,11 +1857,338 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text=WORKER_MENU_BUTTON_TEXT),
-                KeyboardButton(text=WORKER_CREATE_TASK_BUTTON_TEXT),
+                KeyboardButton(text=WORKER_COMMANDS_BUTTON_TEXT),
             ]
         ],
         resize_keyboard=True,
     )
+
+
+def _command_alias_label(aliases: Sequence[str]) -> str:
+    """格式化别名文本。"""
+
+    if not aliases:
+        return "-"
+    return ", ".join(f"`{_escape_markdown_text(alias)}`" for alias in aliases)
+
+
+async def _build_command_overview_view(
+    notice: Optional[str] = None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """渲染命令列表及配套按钮。"""
+
+    commands = await COMMAND_SERVICE.list_commands()
+    lines = [
+        "*命令管理*",
+        f"项目：`{_escape_markdown_text(PROJECT_SLUG)}`",
+        f"命令数量：{len(commands)}",
+        "提示：可点击按钮或发送 /别名、!别名 直接执行命令。",
+        "",
+    ]
+    if not commands:
+        lines.append("暂无命令，点击下方“🆕 新增命令”即可录入。")
+    for idx, command in enumerate(commands, start=1):
+        status_badge = "✅ 启用" if command.enabled else "⏸ 已停用"
+        lines.append(f"{idx}. `{_escape_markdown_text(command.name)}` — {status_badge}")
+        lines.append(f"    标题：{_escape_markdown_text(command.title)}")
+        lines.append(f"    指令：`{_escape_markdown_text(command.command)}`")
+        lines.append(f"    超时：{command.timeout}s · 别名：{_command_alias_label(command.aliases)}")
+        if command.description:
+            lines.append(f"    描述：{_escape_markdown_text(command.description)}")
+        lines.append("")
+    if notice:
+        lines.append(f"_提示：{_escape_markdown_text(notice)}_")
+    markup = _build_command_overview_keyboard(commands)
+    return "\n".join(lines).rstrip(), markup
+
+
+def _build_command_overview_keyboard(commands: Sequence[CommandDefinition]) -> InlineKeyboardMarkup:
+    """根据命令数量构造操作面板。"""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    for command in commands[:COMMAND_INLINE_LIMIT]:
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=f"▶️ {command.name}",
+                    callback_data=f"{COMMAND_EXEC_PREFIX}{command.id}",
+                ),
+                InlineKeyboardButton(text="✏️ 编辑", callback_data=f"{COMMAND_EDIT_PREFIX}{command.id}"),
+            ]
+        )
+    inline_keyboard.append([InlineKeyboardButton(text="🆕 新增命令", callback_data=COMMAND_NEW_CALLBACK)])
+    inline_keyboard.append([InlineKeyboardButton(text="🧾 最近执行", callback_data=COMMAND_HISTORY_CALLBACK)])
+    inline_keyboard.append([InlineKeyboardButton(text="🔁 刷新列表", callback_data=COMMAND_REFRESH_CALLBACK)])
+    inline_keyboard.append([InlineKeyboardButton(text="❌ 收起面板", callback_data=COMMAND_CLOSE_CALLBACK)])
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def _build_command_edit_keyboard(command: CommandDefinition) -> InlineKeyboardMarkup:
+    """编辑面板。"""
+
+    toggle_label = "⏸ 停用" if command.enabled else "▶️ 启用"
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="📝 标题", callback_data=f"{COMMAND_FIELD_PREFIX}title:{command.id}"),
+            InlineKeyboardButton(text="💻 指令", callback_data=f"{COMMAND_FIELD_PREFIX}command:{command.id}"),
+        ],
+        [
+            InlineKeyboardButton(text="📛 描述", callback_data=f"{COMMAND_FIELD_PREFIX}description:{command.id}"),
+            InlineKeyboardButton(text="⏱ 超时", callback_data=f"{COMMAND_FIELD_PREFIX}timeout:{command.id}"),
+        ],
+        [InlineKeyboardButton(text="🔁 别名", callback_data=f"{COMMAND_FIELD_PREFIX}aliases:{command.id}")],
+        [InlineKeyboardButton(text=toggle_label, callback_data=f"{COMMAND_TOGGLE_PREFIX}{command.id}")],
+        [InlineKeyboardButton(text="⬅️ 返回列表", callback_data=COMMAND_REFRESH_CALLBACK)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def _is_cancel_text(text: str) -> bool:
+    """判断输入是否代表取消。"""
+
+    normalized = (text or "").strip().lower()
+    return normalized in {"取消", "cancel", "quit", "退出"}
+
+
+def _parse_alias_input(text: str) -> List[str]:
+    """将用户输入解析为别名列表。"""
+
+    sanitized = (text or "").replace("，", ",").strip()
+    if not sanitized or sanitized == "-":
+        return []
+    parts = re.split(r"[,\s]+", sanitized)
+    return [part for part in parts if part]
+
+
+def _extract_command_trigger(prompt: str) -> Optional[str]:
+    """提取以限定前缀开头的触发词。"""
+
+    if not prompt or prompt[0] not in COMMAND_TRIGGER_PREFIXES:
+        return None
+    token = prompt[1:].strip()
+    if not token or " " in token or "\n" in token or "\t" in token:
+        return None
+    return token
+
+
+def _limit_text(text: str, limit: int) -> tuple[str, bool]:
+    """截断文本并返回是否发生截断。"""
+
+    if len(text) <= limit:
+        return text, False
+    return text[:limit].rstrip() + "\n…<截断>", True
+
+
+def _command_actor_meta(user: Optional[User]) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    """抽取执行者的关键信息。"""
+
+    if user is None:
+        return None, None, None
+    username = user.username or None
+    return user.id, username, user.full_name or username
+
+
+def _extract_command_id(data: Optional[str], prefix: str) -> Optional[int]:
+    """从 callback data 中提取命令 ID。"""
+
+    if not data or not data.startswith(prefix):
+        return None
+    suffix = data[len(prefix) :]
+    return int(suffix) if suffix.isdigit() else None
+
+
+class CommandExecutionTimeout(RuntimeError):
+    """命令执行超时。"""
+
+
+def _command_workdir() -> Path:
+    """返回命令执行目录。"""
+
+    return PRIMARY_WORKDIR or ROOT_DIR_PATH
+
+
+async def _run_shell_command(command_text: str, timeout: int) -> tuple[int, str, str, float]:
+    """在受控环境中执行 shell 命令。"""
+
+    workdir = _command_workdir()
+    start = time.monotonic()
+    process = await asyncio.create_subprocess_shell(
+        command_text,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(workdir),
+        env=os.environ.copy(),
+    )
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        process.kill()
+        with suppress(ProcessLookupError):
+            await process.wait()
+        raise CommandExecutionTimeout("命令执行超时") from exc
+    duration = time.monotonic() - start
+    stdout_text = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+    return process.returncode or 0, stdout_text, stderr_text, duration
+
+
+async def _execute_command_definition(
+    *,
+    command: CommandDefinition,
+    reply_message: Optional[Message],
+    trigger: Optional[str],
+    actor_user: Optional[User],
+) -> None:
+    """执行命令并推送结果，记录审计日志。"""
+
+    if not command.enabled:
+        text = f"命令 `{_escape_markdown_text(command.name)}` 已停用，请先在“命令管理”中启用。"
+        await _answer_with_markdown(reply_message, text)
+        return
+
+    actor_id, actor_username, actor_name = _command_actor_meta(actor_user)
+    started_at = shanghai_now_iso()
+    stdout_text = ""
+    stderr_text = ""
+    exit_code: Optional[int] = None
+    duration = 0.0
+    status = "success"
+    try:
+        exit_code, stdout_text, stderr_text, duration = await _run_shell_command(command.command, command.timeout)
+        status = "success" if exit_code == 0 else "failed"
+    except CommandExecutionTimeout:
+        status = "timeout"
+        stderr_text = f"命令在 {command.timeout} 秒内未完成，已强制终止。"
+    except Exception as exc:
+        status = "error"
+        stderr_text = f"执行失败：{exc}"
+        worker_log.exception(
+            "命令执行异常：%s",
+            exc,
+            extra={**_session_extra(), "command": command.name},
+        )
+    finished_at = shanghai_now_iso()
+    await COMMAND_SERVICE.record_history(
+        command.id,
+        trigger=trigger,
+        actor_id=actor_id,
+        actor_username=actor_username,
+        actor_name=actor_name,
+        exit_code=exit_code,
+        status=status,
+        output=stdout_text or None,
+        error=stderr_text or None,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+    status_label = {
+        "success": "✅ 成功",
+        "failed": "⚠️ 失败",
+        "timeout": "⏰ 超时",
+        "error": "❌ 异常",
+    }.get(status, status)
+    lines = [
+        "*命令执行结果*",
+        f"名称：`{_escape_markdown_text(command.name)}`",
+        f"触发：{_escape_markdown_text(trigger or '按钮')}",
+        f"耗时：{duration:.2f}s / 超时：{command.timeout}s",
+        f"状态：{status_label}",
+    ]
+    if exit_code is not None:
+        lines.append(f"退出码：{exit_code}")
+    if stdout_text:
+        truncated_stdout, stdout_truncated = _limit_text(stdout_text.strip(), COMMAND_OUTPUT_MAX_CHARS)
+        stdout_block, _ = _wrap_text_in_code_block(truncated_stdout or "-")
+        lines.append("标准输出：")
+        lines.append(stdout_block)
+        if stdout_truncated:
+            lines.append("_输出已截断_")
+    if stderr_text:
+        truncated_stderr, stderr_truncated = _limit_text(stderr_text.strip(), COMMAND_STDERR_MAX_CHARS)
+        stderr_block, _ = _wrap_text_in_code_block(truncated_stderr or "-")
+        lines.append("标准错误：")
+        lines.append(stderr_block)
+        if stderr_truncated:
+            lines.append("_错误输出已截断_")
+    await _answer_with_markdown(
+        reply_message,
+        "\n".join(lines),
+    )
+
+
+async def _handle_command_trigger_message(message: Message, prompt: str) -> bool:
+    """处理以别名触发的命令执行。"""
+
+    trigger = _extract_command_trigger(prompt)
+    if not trigger:
+        return False
+    if trigger in COMMAND_KEYWORDS:
+        return False
+    command = await COMMAND_SERVICE.resolve_by_trigger(trigger)
+    if command is None:
+        return False
+    if " " in prompt.strip():
+        await message.answer("命令暂不支持附带参数，请仅发送触发词。")
+        return True
+    await _execute_command_definition(
+        command=command,
+        reply_message=message,
+        trigger=trigger,
+        actor_user=message.from_user,
+    )
+    return True
+
+
+async def _send_command_overview(message: Message, notice: Optional[str] = None) -> None:
+    """发送命令列表。"""
+
+    text, markup = await _build_command_overview_view(notice)
+    await _answer_with_markdown(message, text, reply_markup=markup)
+
+
+async def _refresh_command_overview(callback: CallbackQuery, notice: Optional[str] = None) -> None:
+    """在原消息上刷新命令列表。"""
+
+    if callback.message is None:
+        return
+    text, markup = await _build_command_overview_view(notice)
+    parse_mode = _parse_mode_value()
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=markup,
+            parse_mode=parse_mode,
+        )
+    except TelegramBadRequest:
+        await _answer_with_markdown(callback.message, text, reply_markup=markup)
+
+
+async def _build_command_history_text(limit: int = COMMAND_HISTORY_LIMIT) -> str:
+    """渲染最近的执行历史。"""
+
+    records = await COMMAND_SERVICE.list_history(limit=limit)
+    lines = ["*最近命令执行记录*"]
+    if not records:
+        lines.append("暂无历史记录。")
+        return "\n".join(lines)
+    for record in records:
+        status_icon = {
+            "success": "✅",
+            "failed": "⚠️",
+            "timeout": "⏰",
+            "error": "❌",
+        }.get(record.status, "•")
+        lines.append(
+            f"{status_icon} `{_escape_markdown_text(record.command_name)}` "
+            f"- {record.finished_at} (exit={record.exit_code if record.exit_code is not None else '-'})"
+        )
+        if record.trigger:
+            lines.append(f"    触发：{_escape_markdown_text(record.trigger)}")
+        if record.actor_name:
+            lines.append(f"    操作人：{_escape_markdown_text(record.actor_name)}")
+    return "\n".join(lines)
+
 
 
 def _resolve_worker_target_chat_ids() -> List[int]:
@@ -5694,6 +6049,7 @@ async def on_help_command(message: Message) -> None:
         "- /task_show — 查看某个任务详情\n"
         "- /task_update — 快速更新任务字段\n"
         "- /task_note — 添加任务备注\n"
+        "- /commands — 管理自定义命令（新增/执行/编辑）\n"
         "- /task_delete — 归档或恢复任务\n"
         "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
         "提示：大部分操作都提供按钮和多轮对话引导，无需记忆复杂参数。"
@@ -5964,6 +6320,310 @@ async def on_task_list(message: Message) -> None:
 @router.message(F.text == WORKER_MENU_BUTTON_TEXT)
 async def on_task_list_button(message: Message) -> None:
     await _handle_task_list_request(message)
+
+
+@router.message(Command("commands"))
+async def on_commands_command(message: Message) -> None:
+    await _send_command_overview(message)
+
+
+@router.message(F.text == WORKER_COMMANDS_BUTTON_TEXT)
+async def on_commands_button(message: Message) -> None:
+    await _send_command_overview(message)
+
+
+@router.callback_query(F.data == COMMAND_REFRESH_CALLBACK)
+async def on_command_refresh(callback: CallbackQuery) -> None:
+    await _refresh_command_overview(callback)
+    await callback.answer("已刷新")
+
+
+@router.callback_query(F.data == COMMAND_CLOSE_CALLBACK)
+async def on_command_panel_close(callback: CallbackQuery) -> None:
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup()
+        except TelegramBadRequest:
+            pass
+    await callback.answer("已收起")
+
+
+@router.callback_query(F.data == COMMAND_HISTORY_CALLBACK)
+async def on_command_history(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        await callback.answer("已忽略")
+        return
+    history_text = await _build_command_history_text()
+    await _answer_with_markdown(callback.message, history_text)
+    await callback.answer("已发送历史")
+
+
+@router.callback_query(F.data == COMMAND_NEW_CALLBACK)
+async def on_command_new_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(CommandCreateStates.waiting_name)
+    if callback.message:
+        await callback.message.answer(
+            "请输入命令名称（字母开头，可含数字/下划线/短横线），发送“取消”可终止。",
+        )
+    await callback.answer("请输入命令名称")
+
+
+@router.callback_query(F.data.startswith(COMMAND_EXEC_PREFIX))
+async def on_command_execute_callback(callback: CallbackQuery) -> None:
+    command_id = _extract_command_id(callback.data, COMMAND_EXEC_PREFIX)
+    if command_id is None:
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    try:
+        command = await COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("命令不存在", show_alert=True)
+        await _refresh_command_overview(callback, notice="目标命令不存在，列表已刷新。")
+        return
+    await callback.answer("正在执行命令…")
+    await _execute_command_definition(
+        command=command,
+        reply_message=callback.message,
+        trigger="按钮",
+        actor_user=callback.from_user,
+    )
+
+
+@router.callback_query(F.data.startswith(COMMAND_EDIT_PREFIX))
+async def on_command_edit_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    command_id = _extract_command_id(callback.data, COMMAND_EDIT_PREFIX)
+    if command_id is None:
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    try:
+        command = await COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("命令不存在", show_alert=True)
+        await _refresh_command_overview(callback, notice="命令已不存在。")
+        return
+    await state.update_data(command_id=command_id)
+    await state.set_state(CommandEditStates.waiting_choice)
+    if callback.message:
+        await callback.message.answer(
+            f"正在编辑 `{_escape_markdown_text(command.name)}`，请选择要修改的内容：",
+            reply_markup=_build_command_edit_keyboard(command),
+        )
+    await callback.answer("请选择操作")
+
+
+@router.callback_query(F.data.startswith(COMMAND_FIELD_PREFIX))
+async def on_command_field_select(callback: CallbackQuery, state: FSMContext) -> None:
+    data = (callback.data or "")[len(COMMAND_FIELD_PREFIX) :]
+    field, _, raw_id = data.partition(":")
+    if not raw_id.isdigit():
+        await callback.answer("字段标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    prompt_map = {
+        "title": "请输入新的命令标题：",
+        "command": "请输入新的执行指令（可包含参数）：",
+        "description": "请输入新的命令描述（可留空）：",
+        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
+        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
+    }
+    prompt = prompt_map.get(field)
+    if prompt is None:
+        await callback.answer("暂不支持该字段", show_alert=True)
+        return
+    await state.update_data(command_id=command_id, field=field)
+    if field == "aliases":
+        await state.set_state(CommandEditStates.waiting_aliases)
+    else:
+        await state.set_state(CommandEditStates.waiting_value)
+    if callback.message:
+        await callback.message.answer(f"{prompt}\n发送“取消”可终止当前操作。")
+    await callback.answer("请发送新的值")
+
+
+@router.callback_query(F.data.startswith(COMMAND_TOGGLE_PREFIX))
+async def on_command_toggle(callback: CallbackQuery) -> None:
+    command_id = _extract_command_id(callback.data, COMMAND_TOGGLE_PREFIX)
+    if command_id is None:
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    try:
+        command = await COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("命令不存在", show_alert=True)
+        await _refresh_command_overview(callback, notice="命令已不存在。")
+        return
+    updated = await COMMAND_SERVICE.update_command(command_id, enabled=not command.enabled)
+    action_text = "已启用" if updated.enabled else "已停用"
+    await _refresh_command_overview(callback, notice=f"{updated.name} {action_text}")
+    await callback.answer(action_text)
+
+
+@router.message(CommandCreateStates.waiting_name)
+async def on_command_create_name(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
+        return
+    if not CommandService.NAME_PATTERN.match(text):
+        await message.answer("名称需以字母开头，可含数字/下划线/短横线，长度 3-64，请重新输入：")
+        return
+    existing = await COMMAND_SERVICE.resolve_by_trigger(text)
+    if existing:
+        await message.answer("同名命令或别名已存在，请换一个名称：")
+        return
+    await state.update_data(name=text)
+    await state.set_state(CommandCreateStates.waiting_title)
+    await message.answer("请输入命令标题（可留空沿用名称）：")
+
+
+@router.message(CommandCreateStates.waiting_title)
+async def on_command_create_title(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
+        return
+    await state.update_data(title=text)
+    await state.set_state(CommandCreateStates.waiting_shell)
+    await message.answer("请输入需要执行的命令，例如 `./scripts/deploy.sh`：")
+
+
+@router.message(CommandCreateStates.waiting_shell)
+async def on_command_create_shell(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
+        return
+    if not text:
+        await message.answer("命令内容不能为空，请重新输入：")
+        return
+    await state.update_data(shell=text)
+    await state.set_state(CommandCreateStates.waiting_description)
+    await message.answer("请输入命令描述（可留空，发送 - 表示跳过）：")
+
+
+@router.message(CommandCreateStates.waiting_description)
+async def on_command_create_description(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
+        return
+    description = "" if text in {"-", ""} else text
+    await state.update_data(description=description)
+    await state.set_state(CommandCreateStates.waiting_aliases)
+    await message.answer("请输入全部别名（逗号或空格分隔），发送 - 可跳过：")
+
+
+@router.message(CommandCreateStates.waiting_aliases)
+async def on_command_create_aliases(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
+        return
+    data = await state.get_data()
+    name = data.get("name")
+    shell = data.get("shell")
+    if not name or not shell:
+        await state.clear()
+        await message.answer("上下文已失效，请重新点击“🆕 新增命令”。")
+        return
+    title = data.get("title") or name
+    description = data.get("description") or ""
+    aliases = _parse_alias_input(text)
+    try:
+        created = await COMMAND_SERVICE.create_command(
+            name=name,
+            title=title,
+            command=shell,
+            description=description,
+            aliases=aliases,
+        )
+    except (ValueError, CommandAlreadyExistsError, CommandAliasConflictError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(
+        f"命令 `{_escape_markdown_text(created.name)}` 已创建。",
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    await _send_command_overview(message)
+
+
+@router.message(CommandEditStates.waiting_value)
+async def on_command_edit_value(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("命令编辑已取消。", reply_markup=_build_worker_main_keyboard())
+        return
+    data = await state.get_data()
+    command_id = data.get("command_id")
+    field = data.get("field")
+    if not command_id or not field:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择命令。")
+        return
+    updates: dict[str, object] = {}
+    if field == "title":
+        updates["title"] = text
+    elif field == "command":
+        updates["command"] = text
+    elif field == "description":
+        updates["description"] = text
+    elif field == "timeout":
+        try:
+            updates["timeout"] = int(text)
+        except ValueError:
+            await message.answer("超时需为整数秒，请重新输入：")
+            return
+    else:
+        await message.answer("暂不支持该字段。")
+        await state.clear()
+        return
+    try:
+        updated = await COMMAND_SERVICE.update_command(command_id, **updates)
+    except (ValueError, CommandAlreadyExistsError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(
+        f"命令 `{_escape_markdown_text(updated.name)}` 已更新。",
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    await _send_command_overview(message)
+
+
+@router.message(CommandEditStates.waiting_aliases)
+async def on_command_edit_aliases(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("命令编辑已取消。", reply_markup=_build_worker_main_keyboard())
+        return
+    data = await state.get_data()
+    command_id = data.get("command_id")
+    if not command_id:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择命令。")
+        return
+    aliases = _parse_alias_input(text)
+    try:
+        updated_aliases = await COMMAND_SERVICE.replace_aliases(command_id, aliases)
+    except (ValueError, CommandAliasConflictError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    alias_label = _command_alias_label(updated_aliases)
+    await message.answer(
+        f"别名已更新：{alias_label}",
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    await _send_command_overview(message)
 
 
 async def _dispatch_task_new_command(source_message: Message, actor: Optional[User]) -> None:
@@ -7954,6 +8614,8 @@ async def on_text(m: Message):
     if task_id_candidate:
         await _reply_task_detail_message(m, task_id_candidate)
         return
+    if await _handle_command_trigger_message(m, prompt):
+        return
     if prompt.startswith("/"):
         return
     await _handle_prompt_dispatch(m, prompt)
@@ -8044,6 +8706,13 @@ async def main():
         await TASK_SERVICE.initialize()
     except Exception as exc:
         worker_log.error("任务数据库初始化失败：%s", exc, extra=_session_extra())
+        if _bot:
+            await _bot.session.close()
+        raise SystemExit(1)
+    try:
+        await COMMAND_SERVICE.initialize()
+    except Exception as exc:
+        worker_log.error("命令数据库初始化失败：%s", exc, extra=_session_extra())
         if _bot:
             await _bot.session.close()
         raise SystemExit(1)
