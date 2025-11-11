@@ -197,6 +197,22 @@ MASTER_MENU_BUTTON_ALLOWED_NORMALIZED = {
 MASTER_MENU_BUTTON_KEYWORDS: Tuple[str, ...] = ("项目列表", "project", "projects")
 
 
+def _env_flag(name: str, default: bool = True) -> bool:
+    """解析布尔开关环境变量。"""
+
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if not normalized:
+        return default
+    return normalized not in {"0", "false", "off", "no"}
+
+
+MASTER_FORCE_MENU_RESYNC = _env_flag("MASTER_FORCE_MENU_RESYNC", True)
+MASTER_FORCE_COMMAND_RESYNC = _env_flag("MASTER_FORCE_COMMAND_RESYNC", True)
+
+
 def _is_projects_menu_trigger(text: Optional[str]) -> bool:
     """判断消息文本是否可触发项目列表展示。"""
 
@@ -229,20 +245,52 @@ def _build_master_main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+async def _verify_master_menu_button(bot: Bot, expected_text: str) -> bool:
+    """获取 Telegram 端菜单，确认文本与预期一致。"""
+    try:
+        current = await bot.get_chat_menu_button()
+    except TelegramBadRequest as exc:
+        log.warning("获取聊天菜单失败：%s", exc)
+        return False
+    if not isinstance(current, MenuButtonCommands):
+        log.warning(
+            "聊天菜单类型异常",
+            extra={"type": getattr(current, "type", None)},
+        )
+        return False
+    normalized_expected = _normalize_button_text(expected_text)
+    normalized_actual = _normalize_button_text(current.text or "")
+    if normalized_actual != normalized_expected:
+        log.warning(
+            "聊天菜单文本与预期不一致",
+            extra={"expected": expected_text, "actual": current.text},
+        )
+        return False
+    return True
+
+
 async def _ensure_master_menu_button(bot: Bot) -> None:
     """同步 master 端聊天菜单按钮文本，修复旧客户端的缓存问题。"""
+    if not MASTER_FORCE_MENU_RESYNC:
+        log.info("菜单同步已禁用，跳过 set_chat_menu_button。")
+        return
+    button = MenuButtonCommands(text=MASTER_MENU_BUTTON_TEXT)
     try:
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonCommands(text=MASTER_MENU_BUTTON_TEXT),
-        )
+        await bot.set_chat_menu_button(menu_button=button)
     except TelegramBadRequest as exc:
         log.warning("设置聊天菜单失败：%s", exc)
-    else:
+        return
+    if await _verify_master_menu_button(bot, MASTER_MENU_BUTTON_TEXT):
         log.info("聊天菜单已同步", extra={"text": MASTER_MENU_BUTTON_TEXT})
+    else:
+        log.warning("聊天菜单同步后校验失败，将保留现状。")
 
 
 async def _ensure_master_commands(bot: Bot) -> None:
     """同步 master 侧命令列表，确保新增/删除命令立即生效。"""
+    if not MASTER_FORCE_COMMAND_RESYNC:
+        log.info("命令同步已禁用，跳过 set_my_commands。")
+        return
     commands = [BotCommand(command=cmd, description=desc) for cmd, desc in MASTER_BOT_COMMANDS]
     scopes: List[Tuple[Optional[object], str]] = [
         (None, "default"),
@@ -259,7 +307,34 @@ async def _ensure_master_commands(bot: Bot) -> None:
         except TelegramBadRequest as exc:
             log.warning("设置 master 命令失败：%s", exc, extra={"scope": label})
         else:
-            log.info("master 命令已同步", extra={"scope": label})
+            if await _verify_master_commands(bot, commands, scope, label):
+                log.info("master 命令已同步", extra={"scope": label})
+            else:
+                log.warning("master 命令校验失败", extra={"scope": label})
+
+
+async def _verify_master_commands(
+    bot: Bot,
+    expected: Sequence[BotCommand],
+    scope: Optional[object],
+    label: str,
+) -> bool:
+    """读取并校验当前命令列表，确保 scope 内容一致。"""
+    try:
+        current = await bot.get_my_commands() if scope is None else await bot.get_my_commands(scope=scope)
+    except TelegramBadRequest as exc:
+        log.warning("获取 master 命令失败：%s", exc, extra={"scope": label})
+        return False
+
+    expected_pairs = [(cmd.command, cmd.description) for cmd in expected]
+    current_pairs = [(cmd.command, cmd.description) for cmd in current]
+    if current_pairs != expected_pairs:
+        log.warning(
+            "命令验证不一致",
+            extra={"scope": label, "expected": expected_pairs, "actual": current_pairs},
+        )
+        return False
+    return True
 
 
 def _collect_master_broadcast_targets(manager: MasterManager) -> List[int]:
@@ -2030,6 +2105,31 @@ def _read_restart_signal() -> Tuple[Optional[dict], Optional[Path]]:
     return None, None
 
 
+async def _send_restart_project_overview(bot: Bot, chat_ids: Sequence[int]) -> None:
+    """在重启提示后追加一次项目列表推送，保证触发方能立即查看。"""
+
+    if not chat_ids:
+        return
+    try:
+        manager = await _ensure_manager()
+    except RuntimeError as exc:
+        log.error("重启后推送项目列表失败：manager 未就绪", extra={"error": str(exc)})
+        return
+
+    # 留出时间让状态刷新，防止刚启动时全部显示 stopped。
+    await asyncio.sleep(3)
+    delivered: set[int] = set()
+    for chat_id in chat_ids:
+        if chat_id in delivered:
+            continue
+        try:
+            await _send_projects_overview_to_chat(bot, chat_id, manager)
+        except Exception as exc:  # pragma: no cover - 网络异常只记录日志
+            log.error("发送重启项目列表失败: %s", exc, extra={"chat": chat_id})
+        else:
+            delivered.add(chat_id)
+
+
 async def _notify_restart_success(bot: Bot) -> None:
     """在新 master 启动时读取 signal 并通知触发者（改进版：支持超时检测和详细诊断）"""
     restart_expected = os.environ.pop("MASTER_RESTART_EXPECTED", None)
@@ -2082,6 +2182,7 @@ async def _notify_restart_success(bot: Bot) -> None:
                         log.info("兜底重启通知已发送", extra={"chat": chat})
                     except Exception as exc:
                         log.error("发送兜底重启通知失败: %s", exc, extra={"chat": chat})
+                await _send_restart_project_overview(bot, targets)
         else:
             log.info("启动时未检测到重启信号文件，可能是正常启动。")
         return
@@ -2091,6 +2192,7 @@ async def _notify_restart_success(bot: Bot) -> None:
         chat_id = int(chat_id_raw)
     except (TypeError, ValueError):
         log.error("重启信号 chat_id 非法: %s", chat_id_raw)
+        await _send_restart_project_overview(bot, _collect_admin_targets())
         targets = (signal_path, RESTART_SIGNAL_PATH, *LEGACY_RESTART_SIGNAL_PATHS)
         for candidate in targets:
             if candidate is None:
@@ -2153,9 +2255,11 @@ async def _notify_restart_success(bot: Bot) -> None:
         await bot.send_message(chat_id=chat_id, text=text)
     except Exception as exc:
         log.error("发送重启成功通知失败: %s", exc, extra={"chat": chat_id})
+        await _send_restart_project_overview(bot, _collect_admin_targets())
     else:
-        # 重启成功后不再附带项目列表，避免高频重启时产生额外噪音
+        # 重启成功提醒本身仍不附带项目列表，改为单独发送概览，减少消息体积。
         log.info("重启成功通知已发送", extra={"chat": chat_id, "duration": restart_duration})
+        await _send_restart_project_overview(bot, [chat_id])
     finally:
         candidates = (signal_path, RESTART_SIGNAL_PATH, *LEGACY_RESTART_SIGNAL_PATHS)
         for candidate in candidates:
