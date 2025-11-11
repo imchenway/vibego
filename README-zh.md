@@ -1,4 +1,4 @@
-# vibego
+# vibego - 通过 telegram 随时随地的进行 vibe coding
 
 **通过 Telegram 随时随地驱动你的终端 AI CLI（支持 Codex / ClaudeCode）**
 
@@ -11,6 +11,8 @@
 5. 运行期日志和状态文件统一写入本机 ~/.config/vibego/，敏感数据不出终端；
 
 ## 环境依赖
+
+**终端环境安装且登录了 codex/claudeCode**
 
 ```bash
 brew install python@3.11 tmux
@@ -34,11 +36,15 @@ source ~/.config/vibego/runtime/venv/bin/activate
 
 执行该步骤之前，确保您的终端已经安装并登录了 codex /claudeCode，且已经准备好了 telegram bot token。
 
+- 考虑将[AGENTS-zh.md](AGENTS-zh.md)中的内容结合到你的 `$HOME/.codex/AGENTS.md` 或 `$HOME/.claude/CLAUDE.md` 中
+
 ```bash
 pipx install vibego  # 或者 pip install --user vibego
 vibego init          # 初始化配置目录并写入 Master Bot Token
 vibego start         # 启动 master 服务
 ```
+
+然后在 telegram 创建的 bot中点击`/statr`，enjoy it！
 
 ## 目录结构
 

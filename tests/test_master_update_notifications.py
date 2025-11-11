@@ -71,7 +71,7 @@ async def test_ensure_update_state_with_new_version(monkeypatch: pytest.MonkeyPa
     """检测到新版本时重置已通知列表。"""
 
     update_state_path.write_text(
-        json.dumps({"latest_version": "0.2.58", "notified_chat_ids": [1, 2]}, ensure_ascii=False),
+        json.dumps({"latest_version": "1.0.19", "notified_chat_ids": [1, 2]}, ensure_ascii=False),
         encoding="utf-8",
     )
 
