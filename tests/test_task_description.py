@@ -212,10 +212,12 @@ def test_format_task_detail_without_history():
     result = bot._format_task_detail(task, notes=notes)
     lines = result.splitlines()
     assert lines[0] == "📝 标题：" + bot._escape_markdown_text("测试任务")
-    assert lines[1] == "🏷️ 任务编码：/TASK\\_0100"
-    assert lines[2].startswith("⚙️ 状态：")
-    assert lines[3].startswith("🚦 优先级：")
-    assert lines[4] == f"📂 类型：{bot._format_task_type('requirement')}"
+    expected_meta = (
+        f"🏷️ 任务编码：/TASK\\_0100 · "
+        f"⚙️ 状态：{bot._format_status('research')} · "
+        f"📂 类型：{bot._format_task_type('requirement')}"
+    )
+    assert lines[1] == expected_meta
     assert any(line.startswith("🖊️ 描述：") for line in lines)
     assert any(line.startswith("📅 创建时间：") for line in lines)
     assert any(line.startswith("🔁 更新时间：") for line in lines)
@@ -2268,10 +2270,9 @@ def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
     assert message.calls, "应生成列表消息"
     text, parse_mode, markup, _ = message.calls[0]
     lines = text.splitlines()
-    assert lines[:3] == [
+    assert lines[:2] == [
         "*任务列表*",
-        "筛选状态：全部",
-        "分页信息：页码 1/1 · 每页 10 条 · 总数 1",
+        "筛选状态：全部 · 页码 1/1 · 每页 10 条 · 总数 1",
     ]
     assert "- 🛠️ 列表示例" not in text
     assert "- ⚪ 列表示例" not in text

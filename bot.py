@@ -1956,7 +1956,7 @@ def _build_command_overview_keyboard(commands: Sequence[CommandDefinition]) -> I
         inline_keyboard.append(
             [
                 InlineKeyboardButton(
-                    text=f"▶️ {command.name}",
+                    text=f"{command.name} ▶️",
                     callback_data=f"{exec_prefix}{command.id}",
                 ),
                 edit_button,
@@ -3268,12 +3268,14 @@ def _format_task_detail(
         title_text = _escape_markdown_text(title_raw) if title_raw else "-"
 
     task_id_text = _format_task_command(task.id)
+    meta_line = (
+        f"🏷️ 任务编码：{task_id_text}"
+        f" · ⚙️ 状态：{_format_status(task.status)}"
+        f" · 📂 类型：{_format_task_type(task.task_type)}"
+    )
     lines: list[str] = [
         f"📝 标题：{title_text}",
-        f"🏷️ 任务编码：{task_id_text}",
-        f"⚙️ 状态：{_format_status(task.status)}",
-        f"🚦 优先级：{_format_priority(task.priority)}",
-        f"📂 类型：{_format_task_type(task.task_type)}",
+        meta_line,
     ]
 
     # 修复：描述字段智能清理预转义
@@ -6290,15 +6292,13 @@ async def _build_task_list_view(
     )
     display_pages = total_pages or 1
     current_page_display = min(page, display_pages)
+    status_text = _format_status(status) if status else "全部"
     lines = [
         "*任务列表*",
-        f"筛选状态：{_format_status(status) if status else '全部'}",
+        f"筛选状态：{status_text} · 页码 {current_page_display}/{display_pages} · 每页 {limit} 条 · 总数 {total}",
     ]
     if not tasks:
         lines.append("当前没有匹配的任务，可使用上方状态按钮切换。")
-    lines.append(
-        f"分页信息：页码 {current_page_display}/{display_pages} · 每页 {limit} 条 · 总数 {total}"
-    )
     text = "\n".join(lines)
 
     rows: list[list[InlineKeyboardButton]] = []
