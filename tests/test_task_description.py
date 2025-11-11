@@ -213,8 +213,9 @@ def test_format_task_detail_without_history():
     lines = result.splitlines()
     assert lines[0] == "📝 标题：" + bot._escape_markdown_text("测试任务")
     expected_meta = (
-        f"🏷️ 任务编码：/TASK\\_0100 · "
-        f"📂 类型：{bot._format_task_type('requirement')}"
+        f"🏷️ 任务编码：/TASK\\_0100"
+        f" · 📊 状态：{bot._format_status('research')}"
+        f" · 📂 类型：{bot._strip_task_type_emoji(bot._format_task_type('requirement'))}"
     )
     assert lines[1] == expected_meta
     assert any(line.startswith("🖊️ 描述：") for line in lines)
@@ -223,7 +224,9 @@ def test_format_task_detail_without_history():
     assert "💬 备注记录：" not in result
     assert "变更历史" not in result
     assert "第一条备注" not in result
-    assert f"📂 类型：{bot._format_task_type('requirement')}" in result
+    stripped_type = bot._strip_task_type_emoji(bot._format_task_type("requirement"))
+    assert f"📂 类型：{stripped_type}" in result
+    assert f"📊 状态：{bot._format_status('research')}" in result
 
 
 def test_format_task_detail_misc_note_without_label():
