@@ -214,7 +214,6 @@ def test_format_task_detail_without_history():
     assert lines[0] == "📝 标题：" + bot._escape_markdown_text("测试任务")
     expected_meta = (
         f"🏷️ 任务编码：/TASK\\_0100"
-        f" · 📊 状态：{bot._format_status('research')}"
         f" · 📂 类型：{bot._strip_task_type_emoji(bot._format_task_type('requirement'))}"
     )
     assert lines[1] == expected_meta
@@ -226,7 +225,7 @@ def test_format_task_detail_without_history():
     assert "第一条备注" not in result
     stripped_type = bot._strip_task_type_emoji(bot._format_task_type("requirement"))
     assert f"📂 类型：{stripped_type}" in result
-    assert f"📊 状态：{bot._format_status('research')}" in result
+    assert "📊 状态：" not in result
 
 
 def test_format_task_detail_misc_note_without_label():
@@ -450,7 +449,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert "任务编码：/TASK_0001" in payload
         assert "\\_" not in payload
         assert "任务描述：需要调研的事项" in payload
-        assert "任务备注：-" in payload
+        assert "任务备注：" not in payload
         assert "补充任务描述：-" in payload
         assert payload.endswith("以下为任务执行记录，用于辅助回溯任务处理记录： -")
         assert await state.get_state() is None
@@ -550,7 +549,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         lines = payload.splitlines()
         assert lines[0] == bot.VIBE_PHASE_PROMPT
         assert "任务标题：测试任务" in payload
-        assert "任务备注：-" in payload
+        assert "任务备注：" not in payload
         assert "补充任务描述：补充说明内容" in payload
         assert "以下为任务执行记录，用于辅助回溯任务处理记录： -" in payload
         assert "测试阶段补充说明：" not in payload
@@ -1304,7 +1303,7 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
             (
                 ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
                 ("contains", "任务描述：描述A"),
-                ("contains", "任务备注：-"),
+                ("not_contains", "任务备注："),
                 ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
             ),
         ),
@@ -1314,7 +1313,7 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
             (
                 ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
                 ("contains", "任务描述：-"),
-                ("contains", "任务备注：-"),
+                ("not_contains", "任务备注："),
                 ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
             ),
         ),
@@ -1324,7 +1323,7 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
             (
                 ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
                 ("contains", "任务描述：测试说明"),
-                ("contains", "任务备注：-"),
+                ("not_contains", "任务备注："),
                 ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
             ),
         ),
@@ -1334,7 +1333,7 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
             (
                 ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
                 ("contains", "任务描述：-"),
-                ("contains", "任务备注：-"),
+                ("not_contains", "任务备注："),
                 ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
             ),
         ),
@@ -1380,6 +1379,8 @@ def test_build_model_push_payload_cases(status, description, expected_checks):
             assert payload.startswith(expected)
         elif kind == "endswith":
             assert payload.endswith(expected)
+        elif kind == "not_contains":
+            assert expected not in payload
         else:
             raise AssertionError(f"未知断言类型 {kind}")
 
@@ -1412,7 +1413,7 @@ def test_build_model_push_payload_with_supplement():
     assert "任务描述：原始描述" in payload
     assert "任务编码：/TASK_CHECK_SUP" in payload
     assert "\\_" not in payload
-    assert "任务备注：-" in payload
+    assert "任务备注：" not in payload
     assert "补充任务描述：补充内容" in payload
     assert "以下为任务执行记录，用于辅助回溯任务处理记录：" in payload
     assert "2025-01-01T10:00:00+08:00 | 推送到模型（结果=success）" in payload
@@ -1446,7 +1447,7 @@ def test_build_model_push_payload_without_history_formatting():
 
     payload = bot._build_model_push_payload(task)
     assert payload.splitlines()[0] == bot.VIBE_PHASE_PROMPT
-    assert "任务备注：-" in payload
+    assert "任务备注：" not in payload
     assert "以下为任务执行记录，用于辅助回溯任务处理记录： -" in payload
     assert payload.endswith("以下为任务执行记录，用于辅助回溯任务处理记录： -")
     assert "需求调研问题分析阶段" not in payload
@@ -1490,7 +1491,9 @@ def test_build_model_push_payload_with_notes():
     ]
 
     payload = bot._build_model_push_payload(task, notes=notes)
-    assert "任务备注：第一条备注；第二条备注 / 包含换行" in payload
+    assert "第一条备注" not in payload
+    assert "第二条备注" not in payload
+    assert "任务备注：" not in payload
     assert payload.startswith(bot.VIBE_PHASE_PROMPT)
 
 
@@ -1534,7 +1537,8 @@ def test_build_model_push_payload_skips_bug_notes():
     payload = bot._build_model_push_payload(task, notes=notes)
     assert "缺陷详情" not in payload
     assert "需要修复" not in payload
-    assert "任务备注：仍需跟进" in payload
+    assert "仍需跟进" not in payload
+    assert "任务备注：" not in payload
     assert "缺陷记录（最近 3 条）" not in payload
     assert payload.startswith(bot.VIBE_PHASE_PROMPT)
 

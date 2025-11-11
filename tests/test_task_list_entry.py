@@ -551,7 +551,7 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
     assert "修复登录-问题 (v2.0) [紧急]" in detail_text
     assert "登录接口异常! 需要修复 test_case.example" in detail_text
     assert "TASK_0000" in detail_text
-    assert f"📊 状态：{bot._format_status('research')}" in detail_text
+    assert "📊 状态：" not in detail_text
     expected_type = bot._strip_task_type_emoji(bot._format_task_type("defect"))
     assert f"📂 类型：{expected_type}" in detail_text
 
