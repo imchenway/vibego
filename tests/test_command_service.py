@@ -5,6 +5,7 @@ from command_center import (
     CommandService,
     CommandAlreadyExistsError,
     CommandAliasConflictError,
+    CommandHistoryNotFoundError,
 )
 
 
@@ -39,6 +40,7 @@ async def test_create_command_lists_aliases(command_service):
     definition = commands[0]
     assert definition.title == "部署 API"
     assert definition.aliases == ("deploy", "dp")
+    assert definition.scope == "project"
 
 
 @pytest.mark.asyncio
@@ -125,7 +127,7 @@ async def test_record_history_and_list(command_service):
         title="查看版本",
         command="cat VERSION",
     )
-    await command_service.record_history(
+    recorded = await command_service.record_history(
         created.id,
         trigger="/show_version",
         actor_id=100,
@@ -141,3 +143,60 @@ async def test_record_history_and_list(command_service):
     latest = history[0]
     assert latest.command_id == created.id
     assert latest.output == "1.0.0"
+    assert latest.command_title == "查看版本"
+    assert recorded.command_title == "查看版本"
+
+
+@pytest.mark.asyncio
+async def test_get_history_record_returns_detail_and_missing_raises(command_service):
+    created = await command_service.create_command(
+        name="publish",
+        title="发布版本",
+        command="echo ok",
+    )
+    recorded = await command_service.record_history(
+        created.id,
+        trigger="按钮",
+        actor_id=None,
+        actor_username=None,
+        actor_name=None,
+        exit_code=0,
+        status="success",
+        output="done",
+        error="",
+    )
+    fetched = await command_service.get_history_record(recorded.id)
+    assert fetched.command_title == "发布版本"
+    assert fetched.output == "done"
+    assert fetched.command_id == created.id
+    with pytest.raises(CommandHistoryNotFoundError):
+        await command_service.get_history_record(recorded.id + 100)
+
+
+@pytest.mark.asyncio
+async def test_record_history_uses_custom_history_project_slug(tmp_path):
+    service = CommandService(
+        tmp_path / "global.db",
+        "global",
+        scope="global",
+        history_project_slug="demo",
+    )
+    created = await service.create_command(
+        name="shared_cmd",
+        title="通用命令",
+        command="echo shared",
+    )
+    record = await service.record_history(
+        created.id,
+        trigger="按钮",
+        actor_id=None,
+        actor_username=None,
+        actor_name=None,
+        exit_code=0,
+        status="success",
+        output="done",
+        error="",
+    )
+    assert record.project_slug == "demo"
+    history = await service.list_history()
+    assert history[0].project_slug == "demo"

@@ -16,6 +16,7 @@ class CommandDefinition:
     name: str
     title: str
     command: str
+    scope: str = "project"
     description: str = ""
     timeout: int = 120
     enabled: bool = True
@@ -32,6 +33,7 @@ class CommandHistoryRecord:
     command_id: int
     project_slug: str
     command_name: str
+    command_title: Optional[str]
     trigger: Optional[str]
     actor_id: Optional[int]
     actor_username: Optional[str]
