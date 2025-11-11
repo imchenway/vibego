@@ -445,15 +445,6 @@ class TaskService:
                         0,
                     ),
                 )
-                await self._insert_history(
-                    db,
-                    task_id,
-                    "create",
-                    None,
-                    title,
-                    actor,
-                    created_at=now,
-                )
                 await db.commit()
                 return TaskRecord(
                     id=task_id,
@@ -605,10 +596,8 @@ class TaskService:
                     raise ValueError("任务不存在")
                 updates = []
                 params: List[object] = []
-                history_items: List[Tuple[str, Optional[str], Optional[str]]] = []
                 if title is not None and title != row["title"]:
                     updates.append("title = ?")
-                    history_items.append(("title", row["title"], title))
                     params.append(title)
                 if status is not None:
                     normalized_status = self._normalize_status_token(status, context="update")
@@ -624,35 +613,28 @@ class TaskService:
                     status_value = None
                 if status_value is not None and status_value != row["status"]:
                     updates.append("status = ?")
-                    history_items.append(("status", row["status"], status_value))
                     params.append(status_value)
                 if priority is not None and priority != row["priority"]:
                     updates.append("priority = ?")
-                    history_items.append(("priority", str(row["priority"]), str(priority)))
                     params.append(priority)
                 if task_type is not None and task_type != row["task_type"]:
                     updates.append("task_type = ?")
-                    history_items.append(("task_type", row["task_type"], task_type))
                     params.append(task_type)
                 if tags is not None:
                     tags_json = json.dumps(list(tags))
                     if tags_json != row["tags"]:
                         updates.append("tags = ?")
-                        history_items.append(("tags", row["tags"], tags_json))
                         params.append(tags_json)
                 if due_date is not None and due_date != row["due_date"]:
                     updates.append("due_date = ?")
-                    history_items.append(("due_date", row["due_date"], due_date))
                     params.append(due_date)
                 if description is not None and description != row["description"]:
                     updates.append("description = ?")
-                    history_items.append(("description", row["description"], description))
                     params.append(description)
                 if archived is not None:
                     archived_int = 1 if archived else 0
                     if archived_int != row["archived"]:
                         updates.append("archived = ?")
-                        history_items.append(("archived", str(row["archived"]), str(archived_int)))
                         params.append(archived_int)
                 if updates:
                     now = shanghai_now_iso()
@@ -663,16 +645,6 @@ class TaskService:
                         f"UPDATE tasks SET {' , '.join(updates)} WHERE id = ?",
                         params,
                     )
-                    for field, old, new in history_items:
-                        await self._insert_history(
-                            db,
-                            task_id,
-                            field,
-                            old,
-                            new,
-                            actor,
-                            created_at=now,
-                        )
                 await db.commit()
         updated = await self.get_task(task_id)
         if updated is None:
@@ -711,23 +683,6 @@ class TaskService:
                     (task_id, note_type, content, now),
                 )
                 note_id = cursor.lastrowid
-                payload = {
-                    "action": "add_note",
-                    "note_type": note_type,
-                    "note_id": note_id,
-                    "content_length": len(content or ""),
-                }
-                await self._insert_history(
-                    db,
-                    task_id,
-                    "note",
-                    None,
-                    content,
-                    actor,
-                    event_type="task_action",
-                    payload=json.dumps(payload, ensure_ascii=False),
-                    created_at=now,
-                )
                 await db.commit()
         return TaskNoteRecord(
             id=note_id,

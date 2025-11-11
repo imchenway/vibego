@@ -1236,13 +1236,6 @@ async def _push_task_to_model(
     if has_supplement:
         payload["supplement"] = supplement or ""
 
-    await _log_task_action(
-        task.id,
-        action="push_model",
-        actor=actor,
-        new_value=(supplement or "") if has_supplement else None,
-        payload=payload,
-    )
     if not success:
         worker_log.warning(
             "推送到模型失败：未能建立 Codex 会话",
