@@ -16,6 +16,16 @@ async def command_service(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_command_defaults_title_when_missing(command_service):
+    created = await command_service.create_command(
+        name="quick_sync",
+        title="",
+        command="echo sync",
+    )
+    assert created.title == "quick_sync"
+
+
+@pytest.mark.asyncio
 async def test_create_command_lists_aliases(command_service):
     await command_service.create_command(
         name="deploy_api",
