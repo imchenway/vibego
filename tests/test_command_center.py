@@ -12,8 +12,8 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-async def _make_service(tmp_path: Path) -> CommandPresetService:
-    svc = CommandPresetService(tmp_path / "commands.db", "demo")
+async def _make_service(tmp_path: Path, slug: str = "demo") -> CommandPresetService:
+    svc = CommandPresetService(tmp_path / f"{slug}.db", slug)
     await svc.initialize()
     return svc
 
@@ -113,6 +113,7 @@ def test_build_command_list_view_handles_empty_state(monkeypatch, tmp_path):
     async def scenario():
         svc = await _make_service(tmp_path)
         monkeypatch.setattr(bot, "COMMAND_PRESET_SERVICE", svc)
+        monkeypatch.setattr(bot, "GLOBAL_COMMAND_PRESET_SERVICE", svc)
         text, markup = await bot._build_command_list_view(page=1)
         assert "尚未配置命令" in text
         assert markup.inline_keyboard[-1][0].callback_data.startswith("cmd:create")
@@ -121,9 +122,11 @@ def test_build_command_list_view_handles_empty_state(monkeypatch, tmp_path):
 
 def test_build_command_list_view_includes_commands(monkeypatch, tmp_path):
     async def scenario():
-        svc = await _make_service(tmp_path)
-        await svc.create_preset(title="Deploy", command="make deploy", workdir=None, require_confirmation=True)
-        monkeypatch.setattr(bot, "COMMAND_PRESET_SERVICE", svc)
+        project_svc = await _make_service(tmp_path / Path("project_db"), slug="project")
+        global_svc = await _make_service(tmp_path / Path("global_db"), slug="__global__")
+        await project_svc.create_preset(title="Deploy", command="make deploy", workdir=None, require_confirmation=True)
+        monkeypatch.setattr(bot, "COMMAND_PRESET_SERVICE", project_svc)
+        monkeypatch.setattr(bot, "GLOBAL_COMMAND_PRESET_SERVICE", global_svc)
         text, markup = await bot._build_command_list_view(page=1)
         assert "Deploy" in text
         buttons = [button.text for row in markup.inline_keyboard for button in row]
@@ -140,10 +143,29 @@ def test_build_command_detail_view_displays_flags(tmp_path):
             workdir="/repo",
             require_confirmation=False,
         )
-        text, markup = bot._build_command_detail_view(preset, origin_page=1)
+        text, markup = bot._build_command_detail_view(
+            preset,
+            origin_page=1,
+            scope=bot.COMMAND_SCOPE_PROJECT,
+        )
         assert "Sync" in text
         assert "执行前确认" in text
         assert markup.inline_keyboard[0][0].callback_data.startswith("cmd:run")
+    _run(scenario())
+
+
+def test_worker_command_list_includes_global_presets(monkeypatch, tmp_path):
+    async def scenario():
+        project_svc = await _make_service(tmp_path / Path("project"), slug="project")
+        global_svc = await _make_service(tmp_path / Path("global"), slug="__global__")
+        await global_svc.create_preset(title="Master Cmd", command="echo master", workdir=None, require_confirmation=True)
+        await project_svc.create_preset(title="Local Cmd", command="echo local", workdir=None, require_confirmation=False)
+        monkeypatch.setattr(bot, "COMMAND_PRESET_SERVICE", project_svc)
+        monkeypatch.setattr(bot, "GLOBAL_COMMAND_PRESET_SERVICE", global_svc)
+        text, markup = await bot._build_command_list_view(page=1)
+        assert "Master Cmd" in text and "Local Cmd" in text
+        detail_button = markup.inline_keyboard[0][0]
+        assert detail_button.callback_data.startswith("cmd:detail:g:")
     _run(scenario())
 
 

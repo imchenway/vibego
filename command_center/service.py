@@ -60,6 +60,25 @@ class CommandPresetService:
                 rows = await cursor.fetchall()
         return [self._row_to_record(row) for row in rows]
 
+    async def list_all_presets(self) -> List[CommandPresetRecord]:
+        """Return all presets for the current project ordered by update time."""
+
+        await self.initialize()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT id, project_slug, title, command, workdir,
+                       require_confirmation, created_at, updated_at
+                FROM command_presets
+                WHERE project_slug = ?
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (self.project_slug,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [self._row_to_record(row) for row in rows]
+
     async def count_presets(self) -> int:
         """Return the preset count for the current project."""
 

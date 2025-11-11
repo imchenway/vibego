@@ -52,7 +52,14 @@ from aiohttp import BasicAuth, ClientError
 
 from logging_setup import create_logger
 from command_center.fsm import CommandPresetStates
-from command_center.service import CommandPresetRecord, CommandPresetService
+from command_center.models import (
+    CommandPresetRecord,
+    ScopedCommandPreset,
+    COMMAND_SCOPE_GLOBAL,
+    COMMAND_SCOPE_PROJECT,
+    GLOBAL_COMMAND_PROJECT_SLUG,
+)
+from command_center.service import CommandPresetService
 from tasks import TaskHistoryRecord, TaskNoteRecord, TaskRecord, TaskService
 from tasks.commands import parse_simple_kv, parse_structured_text
 from tasks.constants import (
@@ -255,12 +262,12 @@ _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
 }
 
 # Append agents.md metadata to stage prompts to keep audit records consistent.
-AGENTS_PHASE_SUFFIX = ", please execute according to the prompt words of the specified stage, then list the triggered agents.md stage, task name, and task code (e.g., /TASK_0001).the following is the description of this task and the execution history"
+AGENTS_PHASE_SUFFIX = ", please execute according to the prompt words of the specified stage, then list the triggered agents.md stage, task name, and task code (e.g., /TASK_0001).the following is the description of this task and the execution history.\n"
 # Stage prompts sent to models (vibe and test) reuse the unified suffix for consistent output.
 VIBE_PHASE_PROMPT = f"Enter vibe stage{AGENTS_PHASE_SUFFIX}"
 TEST_PHASE_PROMPT = f"Enter test stage{AGENTS_PHASE_SUFFIX}"
 # Dedicated prefix when reporting defects, inserted before the unified stage prompt.
-BUG_REPORT_PREFIX = "Report a defect. please execute according to the prompt words of the specified stage, Refer to the latest defect description at the bottom."
+BUG_REPORT_PREFIX = "Report a defect. please execute according to the prompt words of the specified stage, Refer to the latest defect description at the bottom.\n"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -1500,6 +1507,8 @@ TASK_DB_PATH = DATA_ROOT / f"{PROJECT_SLUG}.db"
 TASK_SERVICE = TaskService(TASK_DB_PATH, PROJECT_SLUG)
 COMMAND_DB_PATH = DATA_ROOT / f"{PROJECT_SLUG}_commands.db"
 COMMAND_PRESET_SERVICE = CommandPresetService(COMMAND_DB_PATH, PROJECT_SLUG)
+GLOBAL_COMMAND_DB_PATH = DATA_ROOT / "master_commands.db"
+GLOBAL_COMMAND_PRESET_SERVICE = CommandPresetService(GLOBAL_COMMAND_DB_PATH, GLOBAL_COMMAND_PROJECT_SLUG)
 COMMAND_LIST_PAGE_SIZE = max(1, min(_env_int("COMMAND_CENTER_PAGE_SIZE", 5), 20))
 COMMAND_LIST_CALLBACK = "cmd:list"
 COMMAND_DETAIL_CALLBACK = "cmd:detail"
@@ -1510,6 +1519,94 @@ COMMAND_RUN_EXECUTE_CALLBACK = "cmd:run_exec"
 COMMAND_DELETE_CALLBACK = "cmd:delete"
 COMMAND_DELETE_EXECUTE_CALLBACK = "cmd:delete_exec"
 COMMAND_TOGGLE_CONFIRM_CALLBACK = "cmd:toggle_confirm"
+COMMAND_SCOPE_TOKENS = {
+    COMMAND_SCOPE_GLOBAL: "g",
+    COMMAND_SCOPE_PROJECT: "p",
+}
+COMMAND_SCOPE_ICONS = {
+    COMMAND_SCOPE_GLOBAL: "🌐",
+    COMMAND_SCOPE_PROJECT: "📁",
+}
+COMMAND_SCOPE_LABELS = {
+    COMMAND_SCOPE_GLOBAL: "Master（全局）",
+    COMMAND_SCOPE_PROJECT: "当前项目",
+}
+
+
+def _command_scope_token(scope: str) -> str:
+    """Return the compact token used in callback data for the given scope."""
+
+    return COMMAND_SCOPE_TOKENS.get(scope, COMMAND_SCOPE_PROJECT)
+
+
+def _command_scope_from_token(token: str) -> str:
+    """Resolve callback data scope tokens back to logical scope strings."""
+
+    for scope, scope_token in COMMAND_SCOPE_TOKENS.items():
+        if token == scope_token:
+            return scope
+    return COMMAND_SCOPE_PROJECT
+
+
+def _command_scope_icon(scope: str) -> str:
+    """Return an emoji prefix describing the command ownership."""
+
+    return COMMAND_SCOPE_ICONS.get(scope, "📁")
+
+
+def _command_scope_label(scope: str) -> str:
+    """Return a human-readable label for the given scope."""
+
+    return COMMAND_SCOPE_LABELS.get(scope, "当前项目")
+
+
+def _command_scope_editable(scope: str) -> bool:
+    """Global commands are read-only from worker sessions."""
+
+    return scope == COMMAND_SCOPE_PROJECT
+
+
+def _command_service_for_scope(scope: str) -> CommandPresetService:
+    """Map command scope to the backing persistence service."""
+
+    if scope == COMMAND_SCOPE_GLOBAL:
+        return GLOBAL_COMMAND_PRESET_SERVICE
+    return COMMAND_PRESET_SERVICE
+
+
+async def _collect_scoped_command_presets() -> list[ScopedCommandPreset]:
+    """Return all command presets across global + project scopes sorted by update time."""
+
+    global_presets = await GLOBAL_COMMAND_PRESET_SERVICE.list_all_presets()
+    project_presets = await COMMAND_PRESET_SERVICE.list_all_presets()
+    combined: list[ScopedCommandPreset] = []
+    combined.extend(ScopedCommandPreset(COMMAND_SCOPE_GLOBAL, record) for record in global_presets)
+    combined.extend(ScopedCommandPreset(COMMAND_SCOPE_PROJECT, record) for record in project_presets)
+    combined.sort(
+        key=lambda item: (item.record.updated_at, item.record.id),
+        reverse=True,
+    )
+    return combined
+
+
+async def _command_paged_presets(page: int, page_size: int) -> tuple[list[ScopedCommandPreset], int, int]:
+    """Return a page of scoped command presets along with total stats."""
+
+    combined = await _collect_scoped_command_presets()
+    total = len(combined)
+    safe_page = max(page, 1)
+    total_pages = max(1, math.ceil(total / page_size)) if total else 1
+    start = (safe_page - 1) * page_size
+    end = start + page_size
+    page_items = combined[start:end] if start < total else []
+    return page_items, total, total_pages
+
+
+async def _get_scoped_command(scope: str, preset_id: int) -> Optional[CommandPresetRecord]:
+    """Fetch a command preset record from the requested scope."""
+
+    service = _command_service_for_scope(scope)
+    return await service.get_preset(preset_id)
 
 ATTACHMENT_STORAGE_ROOT = (DATA_ROOT / "telegram").expanduser()
 ATTACHMENT_STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -2050,6 +2147,11 @@ WORKER_COMMAND_BUTTON_TEXT = WORKER_COMMAND_BUTTON_TEXT_VARIANTS[0]
 WORKER_MENU_BUTTON_TEXT_SET = set(WORKER_MENU_BUTTON_TEXT_VARIANTS)
 WORKER_CREATE_TASK_BUTTON_TEXT_SET = set(WORKER_CREATE_TASK_BUTTON_TEXT_VARIANTS)
 WORKER_COMMAND_BUTTON_TEXT_SET = set(WORKER_COMMAND_BUTTON_TEXT_VARIANTS)
+WORKER_MENU_CONTROL_TEXT_SET = (
+    WORKER_MENU_BUTTON_TEXT_SET
+    | WORKER_CREATE_TASK_BUTTON_TEXT_SET
+    | WORKER_COMMAND_BUTTON_TEXT_SET
+)
 WORKER_KEYBOARD_BROADCAST_TEXT = os.environ.get(
     "WORKER_KEYBOARD_BROADCAST_TEXT",
     "Keyboard refreshed. Use the menu below to view tasks, create tasks, or manage commands.",
@@ -2091,34 +2193,35 @@ def _format_command_preview(command: str) -> str:
 
 
 async def _build_command_list_view(page: int) -> tuple[str, InlineKeyboardMarkup]:
-    """Build the command list text and inline keyboard."""
+    """Build the command list text and inline keyboard (global + project)."""
 
-    total = await COMMAND_PRESET_SERVICE.count_presets()
-    total_pages = max(1, math.ceil(total / COMMAND_LIST_PAGE_SIZE))
+    presets, total, total_pages = await _command_paged_presets(page, COMMAND_LIST_PAGE_SIZE)
     current_page = min(max(1, page), total_pages)
-    presets = await COMMAND_PRESET_SERVICE.list_presets(current_page, COMMAND_LIST_PAGE_SIZE)
     lines = [
         "*命令管理*",
-        f"共 {total} 条命令，页码 {current_page}/{total_pages}，每页 {COMMAND_LIST_PAGE_SIZE} 条。",
+        f"共 {total} 条（全局 + 本项目），页码 {current_page}/{total_pages}，每页 {COMMAND_LIST_PAGE_SIZE} 条。",
     ]
     if not presets:
         lines.append("尚未配置命令，点击“➕ 新建命令”开始。")
     else:
         lines.append("")
         lines.append("当前命令：")
-        for preset in presets:
-            lines.append(f"- {_escape_markdown_text(preset.title)}")
+        for scoped in presets:
+            icon = _command_scope_icon(scoped.scope)
+            lines.append(f"- {icon} {_escape_markdown_text(scoped.record.title)}")
     rows: list[list[InlineKeyboardButton]] = []
-    for preset in presets:
-        preview = _format_command_preview(preset.command)
-        label = f"▶️ {preset.title}"
+    for scoped in presets:
+        preview = _format_command_preview(scoped.record.command)
+        prefix = _command_scope_icon(scoped.scope)
+        label = f"{prefix} {scoped.record.title}"
         if preview:
             label = f"{label} · {preview}"
+        scope_token = _command_scope_token(scoped.scope)
         rows.append(
             [
                 InlineKeyboardButton(
                     text=label[:60],
-                    callback_data=f"{COMMAND_DETAIL_CALLBACK}:{preset.id}:{current_page}",
+                    callback_data=f"{COMMAND_DETAIL_CALLBACK}:{scope_token}:{scoped.record.id}:{current_page}",
                 )
             ]
         )
@@ -2161,12 +2264,15 @@ async def _build_command_list_view(page: int) -> tuple[str, InlineKeyboardMarkup
 def _build_command_detail_view(
     preset: CommandPresetRecord,
     origin_page: int,
+    scope: str,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the detail view for a preset."""
 
+    scope_label = _command_scope_label(scope)
     lines = [
         f"*命令：{_escape_markdown_text(preset.title)}*",
         f"ID: `{preset.id}`",
+        f"命令范围: {scope_label}",
         (
             f"工作目录: `{_escape_markdown_text(preset.workdir)}`"
             if preset.workdir
@@ -2180,26 +2286,27 @@ def _build_command_detail_view(
     lines.append(block_text)
     text = "\n".join(lines)
     confirm_label = "🔐 确认：开" if preset.require_confirmation else "🔓 确认：关"
+    scope_token = _command_scope_token(scope)
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="▶️ 执行",
-                    callback_data=f"{COMMAND_RUN_CALLBACK}:{preset.id}:{origin_page}",
+                    callback_data=f"{COMMAND_RUN_CALLBACK}:{scope_token}:{preset.id}:{origin_page}",
                 ),
                 InlineKeyboardButton(
                     text=confirm_label,
-                    callback_data=f"{COMMAND_TOGGLE_CONFIRM_CALLBACK}:{preset.id}:{origin_page}",
+                    callback_data=f"{COMMAND_TOGGLE_CONFIRM_CALLBACK}:{scope_token}:{preset.id}:{origin_page}",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="✏️ 编辑",
-                    callback_data=f"{COMMAND_EDIT_CALLBACK}:{preset.id}:{origin_page}",
+                    callback_data=f"{COMMAND_EDIT_CALLBACK}:{scope_token}:{preset.id}:{origin_page}",
                 ),
                 InlineKeyboardButton(
                     text="🗑️ 删除",
-                    callback_data=f"{COMMAND_DELETE_CALLBACK}:{preset.id}:{origin_page}",
+                    callback_data=f"{COMMAND_DELETE_CALLBACK}:{scope_token}:{preset.id}:{origin_page}",
                 ),
             ],
             [
@@ -2307,10 +2414,11 @@ async def _render_command_detail_message(
     fallback_message: Message,
     preset: CommandPresetRecord,
     origin_page: int,
+    scope: str,
 ) -> None:
     """Render the command detail view in-place when possible."""
 
-    text, markup = _build_command_detail_view(preset, origin_page)
+    text, markup = _build_command_detail_view(preset, origin_page, scope)
     if target_message and await _try_edit_message(target_message, text, reply_markup=markup):
         return
     await _answer_with_markdown(fallback_message, text, reply_markup=markup)
@@ -2756,7 +2864,12 @@ def _is_cancel_message(value: Optional[str]) -> bool:
 def _is_menu_control_message(value: Optional[str]) -> bool:
     """Return True when the payload represents a generic Skip/Cancel menu action."""
 
-    return _is_skip_message(value) or _is_cancel_message(value)
+    if _is_skip_message(value) or _is_cancel_message(value):
+        return True
+    token = _normalize_choice_token(value)
+    if not token:
+        return False
+    return token in WORKER_MENU_CONTROL_TEXT_SET
 
 
 _MARKDOWN_ESCAPE_RE = re.compile(r"([_*\[\]()~`>#+=|{}.!])")
@@ -6726,16 +6839,17 @@ async def on_command_detail_callback(callback: CallbackQuery) -> None:
         await callback.answer("原始消息不存在", show_alert=True)
         return
     parts = callback.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         await callback.answer("参数错误", show_alert=True)
         return
     try:
-        preset_id = int(parts[2])
-        page = int(parts[3])
+        scope = _command_scope_from_token(parts[2])
+        preset_id = int(parts[3])
+        page = int(parts[4])
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
         return
-    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    preset = await _get_scoped_command(scope, preset_id)
     if preset is None:
         await callback.answer("命令不存在，已回到列表。", show_alert=True)
         await _render_command_list_message(
@@ -6749,6 +6863,7 @@ async def on_command_detail_callback(callback: CallbackQuery) -> None:
         fallback_message=callback.message,
         preset=preset,
         origin_page=page,
+        scope=scope,
     )
     await callback.answer()
 
@@ -6779,16 +6894,20 @@ async def on_command_edit_callback(callback: CallbackQuery, state: FSMContext) -
         await callback.answer("无法进入编辑：缺少消息上下文", show_alert=True)
         return
     parts = callback.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         await callback.answer("参数错误", show_alert=True)
         return
     try:
-        preset_id = int(parts[2])
-        page = int(parts[3])
+        scope = _command_scope_from_token(parts[2])
+        preset_id = int(parts[3])
+        page = int(parts[4])
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
         return
-    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    if not _command_scope_editable(scope):
+        await callback.answer("全局命令请在 Master 中管理。", show_alert=True)
+        return
+    preset = await _get_scoped_command(scope, preset_id)
     if preset is None:
         await callback.answer("命令不存在", show_alert=True)
         return
@@ -6816,16 +6935,21 @@ async def on_command_toggle_confirm(callback: CallbackQuery) -> None:
         await callback.answer("原始消息不存在", show_alert=True)
         return
     parts = callback.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         await callback.answer("参数错误", show_alert=True)
         return
     try:
-        preset_id = int(parts[2])
-        page = int(parts[3])
+        scope = _command_scope_from_token(parts[2])
+        preset_id = int(parts[3])
+        page = int(parts[4])
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
         return
-    preset = await COMMAND_PRESET_SERVICE.toggle_confirmation(preset_id)
+    if not _command_scope_editable(scope):
+        await callback.answer("全局命令需在 Master 中调整执行前确认。", show_alert=True)
+        return
+    service = _command_service_for_scope(scope)
+    preset = await service.toggle_confirmation(preset_id)
     if preset is None:
         await callback.answer("命令不存在", show_alert=True)
         return
@@ -6834,6 +6958,7 @@ async def on_command_toggle_confirm(callback: CallbackQuery) -> None:
         fallback_message=callback.message,
         preset=preset,
         origin_page=page,
+        scope=scope,
     )
     await callback.answer("执行前确认状态已切换")
 
@@ -6844,16 +6969,17 @@ async def on_command_run_callback(callback: CallbackQuery) -> None:
         await callback.answer("原始消息不存在", show_alert=True)
         return
     parts = callback.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         await callback.answer("参数错误", show_alert=True)
         return
     try:
-        preset_id = int(parts[2])
-        page = int(parts[3])
+        scope = _command_scope_from_token(parts[2])
+        preset_id = int(parts[3])
+        page = int(parts[4])
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
         return
-    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    preset = await _get_scoped_command(scope, preset_id)
     if preset is None:
         await callback.answer("命令不存在", show_alert=True)
         return
@@ -6863,11 +6989,11 @@ async def on_command_run_callback(callback: CallbackQuery) -> None:
                 [
                     InlineKeyboardButton(
                         text="✅ 确认执行",
-                        callback_data=f"{COMMAND_RUN_EXECUTE_CALLBACK}:{preset.id}:{page}",
+                        callback_data=f"{COMMAND_RUN_EXECUTE_CALLBACK}:{_command_scope_token(scope)}:{preset.id}:{page}",
                     ),
                     InlineKeyboardButton(
                         text="⬅️ 返回详情",
-                        callback_data=f"{COMMAND_DETAIL_CALLBACK}:{preset.id}:{page}",
+                        callback_data=f"{COMMAND_DETAIL_CALLBACK}:{_command_scope_token(scope)}:{preset.id}:{page}",
                     ),
                 ]
             ]
@@ -6886,15 +7012,16 @@ async def on_command_run_execute(callback: CallbackQuery) -> None:
         await callback.answer("原始消息不存在", show_alert=True)
         return
     parts = callback.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         await callback.answer("参数错误", show_alert=True)
         return
     try:
-        preset_id = int(parts[2])
+        scope = _command_scope_from_token(parts[2])
+        preset_id = int(parts[3])
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
         return
-    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    preset = await _get_scoped_command(scope, preset_id)
     if preset is None:
         await callback.answer("命令不存在", show_alert=True)
         return
@@ -6908,16 +7035,20 @@ async def on_command_delete_callback(callback: CallbackQuery) -> None:
         await callback.answer("原始消息不存在", show_alert=True)
         return
     parts = callback.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         await callback.answer("参数错误", show_alert=True)
         return
     try:
-        preset_id = int(parts[2])
-        page = int(parts[3])
+        scope = _command_scope_from_token(parts[2])
+        preset_id = int(parts[3])
+        page = int(parts[4])
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
         return
-    preset = await COMMAND_PRESET_SERVICE.get_preset(preset_id)
+    if not _command_scope_editable(scope):
+        await callback.answer("全局命令删除需在 Master 中执行。", show_alert=True)
+        return
+    preset = await _get_scoped_command(scope, preset_id)
     if preset is None:
         await callback.answer("命令不存在", show_alert=True)
         return
@@ -6926,11 +7057,11 @@ async def on_command_delete_callback(callback: CallbackQuery) -> None:
             [
                 InlineKeyboardButton(
                     text="✅ 确认删除",
-                    callback_data=f"{COMMAND_DELETE_EXECUTE_CALLBACK}:{preset.id}:{page}",
+                    callback_data=f"{COMMAND_DELETE_EXECUTE_CALLBACK}:{_command_scope_token(scope)}:{preset.id}:{page}",
                 ),
                 InlineKeyboardButton(
                     text="⬅️ 返回详情",
-                    callback_data=f"{COMMAND_DETAIL_CALLBACK}:{preset.id}:{page}",
+                    callback_data=f"{COMMAND_DETAIL_CALLBACK}:{_command_scope_token(scope)}:{preset.id}:{page}",
                 ),
             ]
         ]
@@ -6946,16 +7077,21 @@ async def on_command_delete_execute(callback: CallbackQuery) -> None:
         await callback.answer("原始消息不存在", show_alert=True)
         return
     parts = callback.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         await callback.answer("参数错误", show_alert=True)
         return
     try:
-        preset_id = int(parts[2])
-        page = int(parts[3])
+        scope = _command_scope_from_token(parts[2])
+        preset_id = int(parts[3])
+        page = int(parts[4])
     except ValueError:
         await callback.answer("参数错误", show_alert=True)
         return
-    deleted = await COMMAND_PRESET_SERVICE.delete_preset(preset_id)
+    if not _command_scope_editable(scope):
+        await callback.answer("全局命令请在 Master 中删除。", show_alert=True)
+        return
+    service = _command_service_for_scope(scope)
+    deleted = await service.delete_preset(preset_id)
     if not deleted:
         await callback.answer("命令不存在", show_alert=True)
         return
@@ -7140,7 +7276,7 @@ async def on_command_wizard_confirm(message: Message, state: FSMContext) -> None
         )
     await state.clear()
     await message.answer("命令已保存。", reply_markup=_build_worker_main_keyboard())
-    detail_text, detail_markup = _build_command_detail_view(record, origin_page)
+    detail_text, detail_markup = _build_command_detail_view(record, origin_page, COMMAND_SCOPE_PROJECT)
     await _answer_with_markdown(message, detail_text, reply_markup=detail_markup)
 
 
@@ -9299,6 +9435,13 @@ async def main():
         await COMMAND_PRESET_SERVICE.initialize()
     except Exception as exc:
         worker_log.error("Command preset initialization fail: %s", exc, extra=_session_extra())
+        if _bot:
+            await _bot.session.close()
+        raise SystemExit(1)
+    try:
+        await GLOBAL_COMMAND_PRESET_SERVICE.initialize()
+    except Exception as exc:
+        worker_log.error("Global command preset initialization fail: %s", exc, extra=_session_extra())
         if _bot:
             await _bot.session.close()
         raise SystemExit(1)

@@ -49,6 +49,17 @@ def test_worker_keyboard_button_text():
     assert markup.keyboard[1][0].text == bot.WORKER_COMMAND_BUTTON_TEXT
 
 
+def test_worker_menu_buttons_are_treated_as_menu_controls():
+    for label in (
+        bot.WORKER_MENU_BUTTON_TEXT,
+        bot.WORKER_CREATE_TASK_BUTTON_TEXT,
+        bot.WORKER_COMMAND_BUTTON_TEXT,
+    ):
+        assert bot._is_menu_control_message(label)
+        numbered = f"1. {label}"
+        assert bot._is_menu_control_message(numbered)
+
+
 def test_worker_button_variants_include_translations():
     assert "📋 Task List" in bot.WORKER_MENU_BUTTON_TEXT_VARIANTS
     assert "📋 任务列表" in bot.WORKER_MENU_BUTTON_TEXT_VARIANTS
@@ -83,16 +94,19 @@ def test_master_menu_button_handles_bad_request(caplog):
 def test_master_keyboard_structure():
     markup = master._build_master_main_keyboard()
     assert isinstance(markup, ReplyKeyboardMarkup)
-    assert len(markup.keyboard) == 1
+    assert len(markup.keyboard) == 2
     assert len(markup.keyboard[0]) == 2
+    assert len(markup.keyboard[1]) == 1
     assert isinstance(markup.keyboard[0][0], KeyboardButton)
     assert isinstance(markup.keyboard[0][1], KeyboardButton)
+    assert isinstance(markup.keyboard[1][0], KeyboardButton)
 
 
 def test_master_keyboard_button_text():
     markup = master._build_master_main_keyboard()
     assert markup.keyboard[0][0].text == master.MASTER_MENU_BUTTON_TEXT
     assert markup.keyboard[0][1].text == master.MASTER_MANAGE_BUTTON_TEXT
+    assert markup.keyboard[1][0].text == master.MASTER_COMMAND_BUTTON_TEXT
 
 
 def test_master_keyboard_resize_enabled():
