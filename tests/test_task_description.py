@@ -458,10 +458,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert bot.WORKER_MENU_BUTTON_TEXT in final_buttons
         assert bot.WORKER_CREATE_TASK_BUTTON_TEXT in final_buttons
         assert ack_calls and ack_calls[0][2] is message
-        assert logged_events and logged_events[0][0] == "TASK_0001"
-        event_payload = logged_events[0][1].get("payload") or {}
-        assert event_payload.get("result") == "success"
-        assert event_payload.get("history_items") == 0
+        assert not logged_events
 
     asyncio.run(_scenario())
 
@@ -563,10 +560,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         assert bot.WORKER_CREATE_TASK_BUTTON_TEXT in final_buttons
         assert ack_calls and ack_calls[0][2] is message
         assert message.calls and "已推送到模型" in message.calls[-1][0]
-        assert logged_events
-        payload = logged_events[0][1].get("payload") or {}
-        assert payload.get("result") == "success"
-        assert payload.get("has_supplement") is True
+        assert not logged_events
 
     asyncio.run(_scenario())
 
@@ -645,8 +639,7 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
         assert preview_mode == expected_mode
         assert ack_calls and ack_calls[0][2] is message
         assert await state.get_state() is None
-        assert logged_events
-        assert logged_events[0][1]["payload"].get("result") == "success"
+        assert not logged_events
 
     asyncio.run(_scenario())
 
