@@ -56,6 +56,18 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from logging_setup import create_logger
 from project_repository import ProjectRepository, ProjectRecord
 from tasks.fsm import ProjectDeleteStates
+from command_center import (
+    CommandDefinition,
+    CommandService,
+    CommandCreateStates,
+    CommandEditStates,
+    CommandAliasConflictError,
+    CommandAlreadyExistsError,
+    CommandNotFoundError,
+    GLOBAL_COMMAND_PROJECT_SLUG,
+    GLOBAL_COMMAND_SCOPE,
+    resolve_global_command_db,
+)
 from vibego_cli import __version__
 
 try:
@@ -88,16 +100,24 @@ CONFIG_ROOT = _default_config_root()
 CONFIG_DIR = CONFIG_ROOT / "config"
 STATE_DIR = CONFIG_ROOT / "state"
 LOG_DIR = CONFIG_ROOT / "logs"
+DATA_DIR = CONFIG_ROOT / "data"
 
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = Path(os.environ.get("MASTER_PROJECTS_PATH", CONFIG_DIR / "projects.json"))
 CONFIG_DB_PATH = Path(os.environ.get("MASTER_PROJECTS_DB_PATH", CONFIG_DIR / "master.db"))
 STATE_PATH = Path(os.environ.get("MASTER_STATE_PATH", STATE_DIR / "state.json"))
 RUN_SCRIPT = ROOT_DIR / "scripts/run_bot.sh"
 STOP_SCRIPT = ROOT_DIR / "scripts/stop_bot.sh"
+GLOBAL_COMMAND_DB_PATH = resolve_global_command_db(CONFIG_ROOT)
+GLOBAL_COMMAND_SERVICE = CommandService(
+    GLOBAL_COMMAND_DB_PATH,
+    GLOBAL_COMMAND_PROJECT_SLUG,
+    scope=GLOBAL_COMMAND_SCOPE,
+)
 
 UPDATE_STATE_PATH = STATE_DIR / "update_state.json"
 UPDATE_CHECK_INTERVAL = timedelta(hours=24)
@@ -162,6 +182,7 @@ MASTER_MENU_BUTTON_ALLOWED_TEXTS: Tuple[str, ...] = (
 )
 MASTER_MANAGE_BUTTON_TEXT = "⚙️ 项目管理"
 MASTER_MANAGE_BUTTON_ALLOWED_TEXTS: Tuple[str, ...] = (MASTER_MANAGE_BUTTON_TEXT,)
+MASTER_SETTINGS_BUTTON_TEXT = "🛠 系统设置"
 MASTER_BOT_COMMANDS: List[Tuple[str, str]] = [
     ("start", "启动 master 菜单"),
     ("projects", "查看项目列表"),
@@ -177,6 +198,16 @@ SWITCHABLE_MODELS: Tuple[Tuple[str, str], ...] = (
     ("codex", "⚙️ Codex"),
     ("claudecode", "⚙️ ClaudeCode"),
 )
+SYSTEM_SETTINGS_MENU_CALLBACK = "system:menu"
+SYSTEM_SETTINGS_BACK_CALLBACK = "system:back"
+GLOBAL_COMMAND_MENU_CALLBACK = "system:commands:menu"
+GLOBAL_COMMAND_REFRESH_CALLBACK = "system:commands:refresh"
+GLOBAL_COMMAND_NEW_CALLBACK = "system:commands:new"
+GLOBAL_COMMAND_EDIT_PREFIX = "system:commands:edit:"
+GLOBAL_COMMAND_FIELD_PREFIX = "system:commands:field:"
+GLOBAL_COMMAND_TOGGLE_PREFIX = "system:commands:toggle:"
+GLOBAL_COMMAND_INLINE_LIMIT = 12
+GLOBAL_COMMAND_STATE_KEY = "global_command_flow"
 
 # Telegram 在不同客户端可能插入零宽字符或额外空白，提前归一化按钮文本。
 ZERO_WIDTH_CHARACTERS: Tuple[str, ...] = ("\u200b", "\u200c", "\u200d", "\ufeff")
@@ -239,10 +270,162 @@ def _build_master_main_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text=MASTER_MENU_BUTTON_TEXT),
                 KeyboardButton(text=MASTER_MANAGE_BUTTON_TEXT),
+                KeyboardButton(text=MASTER_SETTINGS_BUTTON_TEXT),
             ]
         ],
         resize_keyboard=True,
     )
+
+
+def _build_system_settings_menu() -> Tuple[str, InlineKeyboardMarkup]:
+    """生成系统设置主菜单。"""
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📟 通用命令配置", callback_data=GLOBAL_COMMAND_MENU_CALLBACK))
+    builder.row(InlineKeyboardButton(text="📂 返回项目列表", callback_data="project:refresh:*"))
+    markup = _ensure_numbered_markup(builder.as_markup())
+    text = "请选择需要调整的系统设置："
+    return text, markup
+
+
+async def _build_global_command_overview_view(
+    notice: Optional[str] = None,
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """渲染通用命令列表。"""
+
+    commands = await GLOBAL_COMMAND_SERVICE.list_commands()
+    lines: List[str] = [
+        "【通用命令配置】",
+        f"当前可用命令：{len(commands)}",
+        "此处的命令将在所有项目的命令管理中合并显示，仅供 master 维护。",
+        "",
+    ]
+    if not commands:
+        lines.append("暂无通用命令，点击“🆕 新增通用命令”开始配置。")
+    else:
+        for command in commands[:GLOBAL_COMMAND_INLINE_LIMIT]:
+            status = "启用" if command.enabled else "停用"
+            lines.append(f"- {command.name}（{status}，超时 {command.timeout}s）")
+    if notice:
+        lines.append(f"\n提示：{notice}")
+    markup = _build_global_command_keyboard(commands)
+    return "\n".join(lines), markup
+
+
+def _build_global_command_keyboard(commands: Sequence[CommandDefinition]) -> InlineKeyboardMarkup:
+    """构造通用命令管理面板。"""
+
+    inline_keyboard: List[List[InlineKeyboardButton]] = []
+    for command in commands[:GLOBAL_COMMAND_INLINE_LIMIT]:
+        toggle_label = "⏸ 停用" if command.enabled else "▶️ 启用"
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(text=f"✏️ 编辑 {command.name}", callback_data=f"{GLOBAL_COMMAND_EDIT_PREFIX}{command.id}"),
+                InlineKeyboardButton(text=toggle_label, callback_data=f"{GLOBAL_COMMAND_TOGGLE_PREFIX}{command.id}"),
+            ]
+        )
+    inline_keyboard.append([InlineKeyboardButton(text="🆕 新增通用命令", callback_data=GLOBAL_COMMAND_NEW_CALLBACK)])
+    inline_keyboard.append([InlineKeyboardButton(text="🔁 刷新", callback_data=GLOBAL_COMMAND_REFRESH_CALLBACK)])
+    inline_keyboard.append([InlineKeyboardButton(text="⬅️ 返回系统设置", callback_data=SYSTEM_SETTINGS_MENU_CALLBACK)])
+    inline_keyboard.append([InlineKeyboardButton(text="📂 返回项目列表", callback_data="project:refresh:*")])
+    return _ensure_numbered_markup(InlineKeyboardMarkup(inline_keyboard=inline_keyboard))
+
+
+def _build_global_command_edit_keyboard(command: CommandDefinition) -> InlineKeyboardMarkup:
+    """编辑通用命令的操作面板。"""
+
+    toggle_label = "⏸ 停用" if command.enabled else "▶️ 启用"
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="📝 标题", callback_data=f"{GLOBAL_COMMAND_FIELD_PREFIX}title:{command.id}"),
+            InlineKeyboardButton(text="💻 指令", callback_data=f"{GLOBAL_COMMAND_FIELD_PREFIX}command:{command.id}"),
+        ],
+        [
+            InlineKeyboardButton(text="📛 描述", callback_data=f"{GLOBAL_COMMAND_FIELD_PREFIX}description:{command.id}"),
+            InlineKeyboardButton(text="⏱ 超时", callback_data=f"{GLOBAL_COMMAND_FIELD_PREFIX}timeout:{command.id}"),
+        ],
+        [InlineKeyboardButton(text="🔁 别名", callback_data=f"{GLOBAL_COMMAND_FIELD_PREFIX}aliases:{command.id}")],
+        [InlineKeyboardButton(text=toggle_label, callback_data=f"{GLOBAL_COMMAND_TOGGLE_PREFIX}{command.id}")],
+        [InlineKeyboardButton(text="⬅️ 返回列表", callback_data=GLOBAL_COMMAND_REFRESH_CALLBACK)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+async def _send_global_command_overview_message(message: Message, notice: Optional[str] = None) -> None:
+    """在聊天中发送最新的通用命令列表。"""
+
+    text, markup = await _build_global_command_overview_view(notice)
+    await message.answer(text, reply_markup=markup)
+
+
+async def _edit_global_command_overview(callback: CallbackQuery, notice: Optional[str] = None) -> None:
+    """在原消息上刷新通用命令列表。"""
+
+    if callback.message is None:
+        return
+    text, markup = await _build_global_command_overview_view(notice)
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=markup)
+
+
+async def _ensure_authorized_callback(callback: CallbackQuery) -> bool:
+    """校验回调属于已授权聊天。"""
+
+    if callback.message is None or callback.message.chat is None:
+        await callback.answer("无法更新此消息", show_alert=True)
+        return False
+    manager = await _ensure_manager()
+    if not manager.is_authorized(callback.message.chat.id):
+        await callback.answer("未授权。", show_alert=True)
+        return False
+    return True
+
+
+def _is_global_command_flow(state_data: Dict[str, Any], expected: str) -> bool:
+    """判断当前 FSM 是否处于指定的通用命令流程。"""
+
+    return state_data.get(GLOBAL_COMMAND_STATE_KEY) == expected
+
+
+def _is_cancel_text(text: str) -> bool:
+    """统一处理“取消”输入。"""
+
+    normalized = (text or "").strip().lower()
+    return normalized in {"取消", "cancel", "quit", "退出"}
+
+
+def _parse_global_alias_input(text: str) -> List[str]:
+    """解析别名输入，兼容中文逗号。"""
+
+    sanitized = (text or "").replace("，", ",").strip()
+    if not sanitized or sanitized == "-":
+        return []
+    parts = re.split(r"[,\s]+", sanitized)
+    return [part for part in parts if part]
+
+
+async def _detect_project_command_conflict(identifiers: Sequence[str]) -> Optional[str]:
+    """检查指定名称或别名是否与任何项目命令冲突。"""
+
+    candidates = [value for value in identifiers if value]
+    if not candidates:
+        return None
+    repository = _ensure_repository()
+    for record in repository.list_projects():
+        slug = record.project_slug
+        if not slug:
+            continue
+        db_path = DATA_DIR / f"{slug}.db"
+        if not db_path.exists():
+            continue
+        service = CommandService(db_path, slug)
+        for candidate in candidates:
+            conflict = await service.resolve_by_trigger(candidate)
+            if conflict:
+                return record.bot_name or slug
+    return None
 
 
 async def _verify_master_menu_button(bot: Bot, expected_text: str) -> bool:
@@ -3109,6 +3292,231 @@ async def on_master_manage_button(message: Message) -> None:
     )
 
 
+@router.message(F.text == MASTER_SETTINGS_BUTTON_TEXT)
+async def on_master_settings_button(message: Message) -> None:
+    """处理系统设置入口。"""
+
+    _log_update(message)
+    manager = await _ensure_manager()
+    if not manager.is_authorized(message.chat.id):
+        await message.answer("未授权。")
+        return
+    text, markup = _build_system_settings_menu()
+    await message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data == SYSTEM_SETTINGS_MENU_CALLBACK)
+async def on_system_settings_menu_callback(callback: CallbackQuery) -> None:
+    """回到系统设置主菜单。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    text, markup = _build_system_settings_menu()
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=markup)
+    await callback.answer("已返回系统设置")
+
+
+@router.callback_query(F.data == GLOBAL_COMMAND_MENU_CALLBACK)
+async def on_global_command_menu(callback: CallbackQuery) -> None:
+    """展示通用命令列表。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    await _edit_global_command_overview(callback)
+    await callback.answer("已加载通用命令")
+
+
+@router.callback_query(F.data == GLOBAL_COMMAND_REFRESH_CALLBACK)
+async def on_global_command_refresh(callback: CallbackQuery) -> None:
+    """刷新通用命令列表。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    await _edit_global_command_overview(callback, notice="列表已刷新。")
+    await callback.answer("已刷新")
+
+
+@router.callback_query(F.data == GLOBAL_COMMAND_NEW_CALLBACK)
+async def on_global_command_new(callback: CallbackQuery, state: FSMContext) -> None:
+    """启动通用命令创建流程。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    await state.clear()
+    await state.update_data({GLOBAL_COMMAND_STATE_KEY: "create"})
+    await state.set_state(CommandCreateStates.waiting_name)
+    if callback.message:
+        await callback.message.answer("请输入通用命令名称（字母开头，可含数字/下划线/短横线），发送“取消”可终止。")
+    await callback.answer("请输入命令名称")
+
+
+@router.callback_query(F.data.startswith(GLOBAL_COMMAND_EDIT_PREFIX))
+async def on_global_command_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    """进入通用命令编辑面板。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    raw_id = (callback.data or "")[len(GLOBAL_COMMAND_EDIT_PREFIX) :]
+    if not raw_id.isdigit():
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    try:
+        command = await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _edit_global_command_overview(callback, notice="目标命令已被删除。")
+        return
+    await state.update_data(
+        {
+            GLOBAL_COMMAND_STATE_KEY: "edit",
+            "command_id": command_id,
+        }
+    )
+    await state.set_state(CommandEditStates.waiting_choice)
+    if callback.message:
+        await callback.message.answer(
+            f"正在编辑 {command.name}，请选择需要修改的字段：",
+            reply_markup=_build_global_command_edit_keyboard(command),
+        )
+    await callback.answer("请选择字段")
+
+
+@router.callback_query(F.data.startswith(GLOBAL_COMMAND_FIELD_PREFIX))
+async def on_global_command_field(callback: CallbackQuery, state: FSMContext) -> None:
+    """提示用户输入新的字段值。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    data = (callback.data or "")[len(GLOBAL_COMMAND_FIELD_PREFIX) :]
+    field, _, raw_id = data.partition(":")
+    if not raw_id.isdigit():
+        await callback.answer("字段标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    try:
+        await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _edit_global_command_overview(callback, notice="目标命令已被删除。")
+        return
+    prompt_map = {
+        "title": "请输入新的命令标题：",
+        "command": "请输入新的执行指令：",
+        "description": "请输入新的命令描述（可留空）：",
+        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
+        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
+    }
+    prompt = prompt_map.get(field)
+    if prompt is None:
+        await callback.answer("暂不支持该字段", show_alert=True)
+        return
+    await state.update_data(
+        {
+            GLOBAL_COMMAND_STATE_KEY: "edit",
+            "command_id": command_id,
+            "field": field,
+        }
+    )
+    if field == "aliases":
+        await state.set_state(CommandEditStates.waiting_aliases)
+    else:
+        await state.set_state(CommandEditStates.waiting_value)
+    if callback.message:
+        await callback.message.answer(f"{prompt}\n发送“取消”可终止当前操作。")
+    await callback.answer("请发送新的值")
+
+
+@router.callback_query(F.data.startswith(GLOBAL_COMMAND_TOGGLE_PREFIX))
+async def on_global_command_toggle(callback: CallbackQuery) -> None:
+    """切换通用命令启用状态。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    raw_id = (callback.data or "")[len(GLOBAL_COMMAND_TOGGLE_PREFIX) :]
+    if not raw_id.isdigit():
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    try:
+        command = await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _edit_global_command_overview(callback, notice="目标命令已被删除。")
+        return
+    updated = await GLOBAL_COMMAND_SERVICE.update_command(command_id, enabled=not command.enabled)
+    action_text = "已启用" if updated.enabled else "已停用"
+    await _edit_global_command_overview(callback, notice=f"{updated.name} {action_text}")
+    await callback.answer(action_text)
+
+
+@router.message(CommandCreateStates.waiting_name)
+async def on_global_command_create_name(message: Message, state: FSMContext) -> None:
+    """处理通用命令名称输入。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "create"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令创建已取消。")
+        return
+    if not CommandService.NAME_PATTERN.match(text):
+        await message.answer("名称需以字母开头，可含数字/下划线/短横线，长度 3-64，请重新输入：")
+        return
+    existing = await GLOBAL_COMMAND_SERVICE.resolve_by_trigger(text)
+    if existing:
+        await message.answer("同名通用命令或别名已存在，请换一个名称：")
+        return
+    conflict_slug = await _detect_project_command_conflict([text])
+    if conflict_slug:
+        await message.answer(f"与项目 {conflict_slug} 的命令冲突，请更换名称。")
+        return
+    await state.update_data(name=text)
+    await state.set_state(CommandCreateStates.waiting_shell)
+    await message.answer("请输入需要执行的命令（例如 ./scripts/deploy.sh）：")
+
+
+@router.message(CommandCreateStates.waiting_shell)
+async def on_global_command_create_shell(message: Message, state: FSMContext) -> None:
+    """处理通用命令的执行脚本输入。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "create"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令创建已取消。")
+        return
+    if not text:
+        await message.answer("命令内容不能为空，请重新输入：")
+        return
+    name = data.get("name")
+    if not name:
+        await state.clear()
+        await message.answer("上下文已失效，请重新点击“🆕 新增通用命令”。")
+        return
+    try:
+        created = await GLOBAL_COMMAND_SERVICE.create_command(
+            name=name,
+            title=name,
+            command=text,
+            description="",
+            aliases=(),
+        )
+    except (ValueError, CommandAlreadyExistsError, CommandAliasConflictError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(f"通用命令 {created.name} 已创建，描述与别名可稍后在编辑面板补齐。")
+    await _send_global_command_overview_message(message, notice="新的通用命令已生效。")
+
+
 @router.message()
 async def cmd_fallback(message: Message) -> None:
     """兜底处理器：尝试继续向导，否则提示可用命令。"""
@@ -3480,3 +3888,85 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("Master 停止")
+@router.message(CommandEditStates.waiting_value)
+async def on_global_command_edit_value(message: Message, state: FSMContext) -> None:
+    """处理通用命令字段更新。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "edit"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令编辑已取消。")
+        return
+    command_id = data.get("command_id")
+    field = data.get("field")
+    if not command_id or not field:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择通用命令。")
+        return
+    updates: Dict[str, object] = {}
+    if field == "title":
+        updates["title"] = text
+    elif field == "command":
+        if not text:
+            await message.answer("命令内容不能为空，请重新输入：")
+            return
+        updates["command"] = text
+    elif field == "description":
+        updates["description"] = text
+    elif field == "timeout":
+        try:
+            updates["timeout"] = int(text)
+        except ValueError:
+            await message.answer("超时需为整数秒，请重新输入：")
+            return
+    else:
+        await message.answer("暂不支持该字段。")
+        await state.clear()
+        return
+    try:
+        updated = await GLOBAL_COMMAND_SERVICE.update_command(command_id, **updates)
+    except (ValueError, CommandAlreadyExistsError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(f"通用命令 {updated.name} 已更新。")
+    await _send_global_command_overview_message(message, notice="通用命令字段已更新。")
+
+
+@router.message(CommandEditStates.waiting_aliases)
+async def on_global_command_edit_aliases(message: Message, state: FSMContext) -> None:
+    """处理通用命令别名更新。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "edit"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令编辑已取消。")
+        return
+    command_id = data.get("command_id")
+    if not command_id:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择通用命令。")
+        return
+    aliases = _parse_global_alias_input(text)
+    conflict_slug = await _detect_project_command_conflict(aliases)
+    if conflict_slug:
+        await message.answer(f"别名与项目 {conflict_slug} 的命令冲突，请重新输入：")
+        return
+    try:
+        updated_aliases = await GLOBAL_COMMAND_SERVICE.replace_aliases(command_id, aliases)
+    except (ValueError, CommandAliasConflictError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    if updated_aliases:
+        alias_text = ", ".join(updated_aliases)
+        await message.answer(f"别名已更新：{alias_text}")
+    else:
+        await message.answer("别名已清空。")
+    await _send_global_command_overview_message(message, notice="别名已同步至通用命令。")

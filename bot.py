@@ -75,10 +75,15 @@ from command_center import (
     CommandCreateStates,
     CommandEditStates,
     CommandDefinition,
+    CommandHistoryRecord,
     CommandService,
     CommandAliasConflictError,
     CommandAlreadyExistsError,
     CommandNotFoundError,
+    CommandHistoryNotFoundError,
+    GLOBAL_COMMAND_PROJECT_SLUG,
+    GLOBAL_COMMAND_SCOPE,
+    resolve_global_command_db,
 )
 # --- 简单 .env 加载 ---
 def load_env(p: str = ".env"):
@@ -1332,6 +1337,14 @@ PROJECT_SLUG = (PROJECT_NAME or "default").replace("/", "-") or "default"
 TASK_DB_PATH = DATA_ROOT / f"{PROJECT_SLUG}.db"
 TASK_SERVICE = TaskService(TASK_DB_PATH, PROJECT_SLUG)
 COMMAND_SERVICE = CommandService(TASK_DB_PATH, PROJECT_SLUG)
+# 通用命令独立存放在全局数据库，worker 只读运行并将执行历史标记到自身项目
+GLOBAL_COMMAND_DB_PATH = resolve_global_command_db(CONFIG_ROOT_PATH)
+GLOBAL_COMMAND_SERVICE = CommandService(
+    GLOBAL_COMMAND_DB_PATH,
+    GLOBAL_COMMAND_PROJECT_SLUG,
+    scope=GLOBAL_COMMAND_SCOPE,
+    history_project_slug=PROJECT_SLUG,
+)
 
 ATTACHMENT_STORAGE_ROOT = (DATA_ROOT / "telegram").expanduser()
 ATTACHMENT_STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1834,13 +1847,16 @@ WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 
 COMMAND_EXEC_PREFIX = "cmd:run:"
+COMMAND_EXEC_GLOBAL_PREFIX = "cmd_global:run:"
 COMMAND_EDIT_PREFIX = "cmd:edit:"
 COMMAND_FIELD_PREFIX = "cmd:field:"
 COMMAND_TOGGLE_PREFIX = "cmd:toggle:"
 COMMAND_NEW_CALLBACK = "cmd:new"
 COMMAND_REFRESH_CALLBACK = "cmd:refresh"
-COMMAND_CLOSE_CALLBACK = "cmd:close"
 COMMAND_HISTORY_CALLBACK = "cmd:history"
+COMMAND_HISTORY_DETAIL_PREFIX = "cmd:history_detail:"
+COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX = "cmd_global:history_detail:"
+COMMAND_READONLY_CALLBACK = "cmd:readonly"
 COMMAND_TRIGGER_PREFIXES = ("/", "!", ".")
 COMMAND_HISTORY_LIMIT = 8
 COMMAND_INLINE_LIMIT = 12
@@ -1864,6 +1880,37 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def _is_global_command(command: CommandDefinition) -> bool:
+    """判断命令是否来源于 master 通用配置。"""
+
+    return (command.scope or "project") == GLOBAL_COMMAND_SCOPE
+
+
+async def _list_combined_commands() -> List[CommandDefinition]:
+    """合并项目命令与通用命令，并按类型+标题排序。"""
+
+    project_commands = await COMMAND_SERVICE.list_commands()
+    global_commands = await GLOBAL_COMMAND_SERVICE.list_commands()
+
+    def _sort_key(item: CommandDefinition) -> tuple[int, str, str]:
+        scope_rank = 1 if _is_global_command(item) else 0
+        title_key = (item.title or item.name or "").casefold()
+        name_key = (item.name or "").casefold()
+        return (scope_rank, title_key, name_key)
+
+    combined = sorted([*project_commands, *global_commands], key=_sort_key)
+    return combined
+
+
+async def _resolve_global_command_conflict(identifier: str) -> Optional[CommandDefinition]:
+    """查询指定名称/别名是否与通用命令冲突。"""
+
+    candidate = (identifier or "").strip()
+    if not candidate:
+        return None
+    return await GLOBAL_COMMAND_SERVICE.resolve_by_trigger(candidate)
+
+
 def _command_alias_label(aliases: Sequence[str]) -> str:
     """格式化别名文本。"""
 
@@ -1877,11 +1924,13 @@ async def _build_command_overview_view(
 ) -> tuple[str, InlineKeyboardMarkup]:
     """渲染命令列表及配套按钮。"""
 
-    commands = await COMMAND_SERVICE.list_commands()
+    commands = await _list_combined_commands()
+    project_count = sum(1 for item in commands if not _is_global_command(item))
+    global_count = len(commands) - project_count
     lines = [
         "*命令管理*",
         f"项目：`{_escape_markdown_text(PROJECT_SLUG)}`",
-        f"命令数量：{len(commands)}",
+        f"命令数量：{len(commands)}（项目 {project_count} / 通用 {global_count}）",
         "可直接点击下方按钮执行或编辑，每条命令详情已隐藏以便快速操作。",
         "",
     ]
@@ -1898,19 +1947,23 @@ def _build_command_overview_keyboard(commands: Sequence[CommandDefinition]) -> I
 
     inline_keyboard: list[list[InlineKeyboardButton]] = []
     for command in commands[:COMMAND_INLINE_LIMIT]:
+        exec_prefix = COMMAND_EXEC_GLOBAL_PREFIX if _is_global_command(command) else COMMAND_EXEC_PREFIX
+        edit_button: InlineKeyboardButton
+        if _is_global_command(command):
+            edit_button = InlineKeyboardButton(text="🔒 仅 master 可改", callback_data=COMMAND_READONLY_CALLBACK)
+        else:
+            edit_button = InlineKeyboardButton(text="✏️ 编辑", callback_data=f"{COMMAND_EDIT_PREFIX}{command.id}")
         inline_keyboard.append(
             [
                 InlineKeyboardButton(
                     text=f"▶️ {command.name}",
-                    callback_data=f"{COMMAND_EXEC_PREFIX}{command.id}",
+                    callback_data=f"{exec_prefix}{command.id}",
                 ),
-                InlineKeyboardButton(text="✏️ 编辑", callback_data=f"{COMMAND_EDIT_PREFIX}{command.id}"),
+                edit_button,
             ]
         )
     inline_keyboard.append([InlineKeyboardButton(text="🆕 新增命令", callback_data=COMMAND_NEW_CALLBACK)])
     inline_keyboard.append([InlineKeyboardButton(text="🧾 最近执行", callback_data=COMMAND_HISTORY_CALLBACK)])
-    inline_keyboard.append([InlineKeyboardButton(text="🔁 刷新列表", callback_data=COMMAND_REFRESH_CALLBACK)])
-    inline_keyboard.append([InlineKeyboardButton(text="❌ 收起面板", callback_data=COMMAND_CLOSE_CALLBACK)])
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
@@ -2029,6 +2082,8 @@ async def _execute_command_definition(
     reply_message: Optional[Message],
     trigger: Optional[str],
     actor_user: Optional[User],
+    service: CommandService,
+    history_detail_prefix: str,
 ) -> None:
     """执行命令并推送结果，记录审计日志。"""
 
@@ -2039,6 +2094,15 @@ async def _execute_command_definition(
 
     actor_id, actor_username, actor_name = _command_actor_meta(actor_user)
     started_at = shanghai_now_iso()
+    display_name = command.title or command.name
+    if reply_message is not None:
+        progress_lines = [
+            "*命令执行中*",
+            f"标题：`{_escape_markdown_text(display_name)}`",
+            f"开始时间：{started_at}",
+            "_执行完成后将自动推送摘要与详情入口_",
+        ]
+        await _answer_with_markdown(reply_message, "\n".join(progress_lines))
     stdout_text = ""
     stderr_text = ""
     exit_code: Optional[int] = None
@@ -2059,7 +2123,7 @@ async def _execute_command_definition(
             extra={**_session_extra(), "command": command.name},
         )
     finished_at = shanghai_now_iso()
-    await COMMAND_SERVICE.record_history(
+    history_record = await service.record_history(
         command.id,
         trigger=trigger,
         actor_id=actor_id,
@@ -2081,8 +2145,10 @@ async def _execute_command_definition(
     }.get(status, status)
     lines = [
         "*命令执行结果*",
-        f"名称：`{_escape_markdown_text(command.name)}`",
+        f"标题：`{_escape_markdown_text(display_name)}`",
         f"触发：{_escape_markdown_text(trigger or '按钮')}",
+        f"开始：{started_at}",
+        f"完成：{finished_at}",
         f"耗时：{duration:.2f}s / 超时：{command.timeout}s",
         f"状态：{status_label}",
     ]
@@ -2091,20 +2157,33 @@ async def _execute_command_definition(
     if stdout_text:
         truncated_stdout, stdout_truncated = _limit_text(stdout_text.strip(), COMMAND_OUTPUT_MAX_CHARS)
         stdout_block, _ = _wrap_text_in_code_block(truncated_stdout or "-")
-        lines.append("标准输出：")
+        lines.append("标准输出摘要：")
         lines.append(stdout_block)
         if stdout_truncated:
             lines.append("_输出已截断_")
     if stderr_text:
         truncated_stderr, stderr_truncated = _limit_text(stderr_text.strip(), COMMAND_STDERR_MAX_CHARS)
         stderr_block, _ = _wrap_text_in_code_block(truncated_stderr or "-")
-        lines.append("标准错误：")
+        lines.append("标准错误摘要：")
         lines.append(stderr_block)
         if stderr_truncated:
             lines.append("_错误输出已截断_")
+    lines.append("_如需完整输出，请点击下方“查询详情”下载 txt 文件。_")
+    summary_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔎 查询详情",
+                    callback_data=f"{history_detail_prefix}{history_record.id}",
+                )
+            ],
+            [InlineKeyboardButton(text="🧾 最近执行", callback_data=COMMAND_HISTORY_CALLBACK)],
+        ]
+    )
     await _answer_with_markdown(
         reply_message,
         "\n".join(lines),
+        reply_markup=summary_markup,
     )
 
 
@@ -2117,8 +2196,14 @@ async def _handle_command_trigger_message(message: Message, prompt: str) -> bool
     if trigger in COMMAND_KEYWORDS:
         return False
     command = await COMMAND_SERVICE.resolve_by_trigger(trigger)
+    service = COMMAND_SERVICE
+    history_prefix = COMMAND_HISTORY_DETAIL_PREFIX
     if command is None:
-        return False
+        command = await GLOBAL_COMMAND_SERVICE.resolve_by_trigger(trigger)
+        if command is None:
+            return False
+        service = GLOBAL_COMMAND_SERVICE
+        history_prefix = COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX
     if " " in prompt.strip():
         await message.answer("命令暂不支持附带参数，请仅发送触发词。")
         return True
@@ -2127,6 +2212,8 @@ async def _handle_command_trigger_message(message: Message, prompt: str) -> bool
         reply_message=message,
         trigger=trigger,
         actor_user=message.from_user,
+        service=service,
+        history_detail_prefix=history_prefix,
     )
     return True
 
@@ -2155,30 +2242,104 @@ async def _refresh_command_overview(callback: CallbackQuery, notice: Optional[st
         await _answer_with_markdown(callback.message, text, reply_markup=markup)
 
 
-async def _build_command_history_text(limit: int = COMMAND_HISTORY_LIMIT) -> str:
-    """渲染最近的执行历史。"""
+async def _build_command_history_view(
+    limit: int = COMMAND_HISTORY_LIMIT,
+) -> tuple[str, Optional[InlineKeyboardMarkup]]:
+    """渲染最近的执行历史，附带详情查询按钮。"""
 
-    records = await COMMAND_SERVICE.list_history(limit=limit)
+    local_records = await COMMAND_SERVICE.list_history(limit=limit)
+    global_records = await GLOBAL_COMMAND_SERVICE.list_history(limit=limit)
+    combined: list[tuple[str, CommandHistoryRecord]] = [
+        ("local", record) for record in local_records
+    ] + [
+        ("global", record) for record in global_records
+    ]
+
+    def _record_sort_key(item: tuple[str, CommandHistoryRecord]) -> str:
+        """按完成时间倒序排列。"""
+
+        _, record = item
+        return (record.finished_at or record.started_at or "")
+
+    combined.sort(key=_record_sort_key, reverse=True)
+    combined = combined[:limit]
+
     lines = ["*最近命令执行记录*"]
-    if not records:
+    if not combined:
         lines.append("暂无历史记录。")
-        return "\n".join(lines)
-    for record in records:
+        return "\n".join(lines), None
+
+    def _shorten_label(text: str, max_length: int = 32) -> str:
+        """压缩按钮标题，防止超出 Telegram 限制。"""
+
+        if len(text) <= max_length:
+            return text
+        return text[: max_length - 1] + "…"
+
+    detail_buttons: list[list[InlineKeyboardButton]] = []
+    for source, record in combined:
+        title = record.command_title or record.command_name
         status_icon = {
             "success": "✅",
             "failed": "⚠️",
             "timeout": "⏰",
             "error": "❌",
         }.get(record.status, "•")
+        finished_at = record.finished_at or record.started_at
+        exit_text = record.exit_code if record.exit_code is not None else "-"
+        source_label = "（通用）" if source == "global" else ""
         lines.append(
-            f"{status_icon} `{_escape_markdown_text(record.command_name)}` "
-            f"- {record.finished_at} (exit={record.exit_code if record.exit_code is not None else '-'})"
+            f"{status_icon} `{_escape_markdown_text(title)}` - {finished_at} (exit={exit_text}){source_label}"
         )
-        if record.trigger:
-            lines.append(f"    触发：{_escape_markdown_text(record.trigger)}")
-        if record.actor_name:
-            lines.append(f"    操作人：{_escape_markdown_text(record.actor_name)}")
-    return "\n".join(lines)
+        prefix = (
+            COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX
+            if source == "global"
+            else COMMAND_HISTORY_DETAIL_PREFIX
+        )
+        detail_buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🔎 {_shorten_label(title)}",
+                    callback_data=f"{prefix}{record.id}",
+                )
+            ]
+        )
+    markup = InlineKeyboardMarkup(inline_keyboard=detail_buttons)
+    return "\n".join(lines), markup
+
+
+def _history_detail_filename(record: CommandHistoryRecord) -> str:
+    """根据记录生成可读的 txt 文件名。"""
+
+    base = re.sub(r"[^a-zA-Z0-9._-]+", "-", record.command_name).strip("-") or "command"
+    timestamp_source = record.finished_at or record.started_at or shanghai_now_iso()
+    sanitized_timestamp = re.sub(r"[^0-9A-Za-z_]", "", timestamp_source.replace(":", "").replace("-", "").replace("T", "_"))
+    return f"{base}-{sanitized_timestamp or 'log'}.txt"
+
+
+def _build_history_detail_document(record: CommandHistoryRecord) -> BufferedInputFile:
+    """将命令历史记录转换为可下载的 txt 文件。"""
+
+    title = record.command_title or record.command_name
+    exit_text = record.exit_code if record.exit_code is not None else "-"
+    lines = [
+        f"命令标题：{title}",
+        f"命令名称：{record.command_name}",
+        f"状态：{record.status} (exit={exit_text})",
+        f"开始时间：{record.started_at}",
+        f"完成时间：{record.finished_at}",
+        "",
+        "=== 标准输出 (stdout) ===",
+        record.output or "(空)",
+        "",
+        "=== 标准错误 (stderr) ===",
+        record.error or "(空)",
+        "",
+        "（由 vibego 自动生成）",
+    ]
+    payload = "\n".join(lines)
+    filename = _history_detail_filename(record)
+    return BufferedInputFile(payload.encode("utf-8"), filename=filename)
 
 
 
@@ -6329,24 +6490,60 @@ async def on_command_refresh(callback: CallbackQuery) -> None:
     await callback.answer("已刷新")
 
 
-@router.callback_query(F.data == COMMAND_CLOSE_CALLBACK)
-async def on_command_panel_close(callback: CallbackQuery) -> None:
-    if callback.message:
-        try:
-            await callback.message.edit_reply_markup()
-        except TelegramBadRequest:
-            pass
-    await callback.answer("已收起")
-
-
 @router.callback_query(F.data == COMMAND_HISTORY_CALLBACK)
 async def on_command_history(callback: CallbackQuery) -> None:
     if callback.message is None:
         await callback.answer("已忽略")
         return
-    history_text = await _build_command_history_text()
-    await _answer_with_markdown(callback.message, history_text)
+    history_text, history_markup = await _build_command_history_view()
+    await _answer_with_markdown(callback.message, history_text, reply_markup=history_markup)
     await callback.answer("已发送历史")
+
+
+@router.callback_query(F.data.startswith(COMMAND_HISTORY_DETAIL_PREFIX))
+async def on_command_history_detail(callback: CallbackQuery) -> None:
+    history_id = _extract_command_id(callback.data, COMMAND_HISTORY_DETAIL_PREFIX)
+    if history_id is None:
+        await callback.answer("记录标识无效", show_alert=True)
+        return
+    await _send_history_detail(callback, history_id, COMMAND_SERVICE)
+
+
+@router.callback_query(F.data.startswith(COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX))
+async def on_global_command_history_detail(callback: CallbackQuery) -> None:
+    """发送通用命令的执行详情。"""
+
+    history_id = _extract_command_id(callback.data, COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX)
+    if history_id is None:
+        await callback.answer("记录标识无效", show_alert=True)
+        return
+    await _send_history_detail(callback, history_id, GLOBAL_COMMAND_SERVICE)
+
+
+async def _send_history_detail(callback: CallbackQuery, history_id: int, service: CommandService) -> None:
+    """发送指定命令执行记录的 txt 详情。"""
+
+    if callback.message is None:
+        await callback.answer("无法发送详情", show_alert=True)
+        return
+    try:
+        record = await service.get_history_record(history_id)
+    except CommandHistoryNotFoundError:
+        await callback.answer("记录不存在或已清理", show_alert=True)
+        return
+    document = _build_history_detail_document(record)
+    caption = f"{record.command_title or record.command_name} 的执行详情"
+    try:
+        await callback.message.answer_document(document, caption=caption)
+    except TelegramBadRequest as exc:
+        worker_log.warning(
+            "发送命令详情失败：%s",
+            exc,
+            extra=_session_extra(key="history_detail_send_failed"),
+        )
+        await callback.answer("发送详情失败", show_alert=True)
+        return
+    await callback.answer("详情已发送")
 
 
 @router.callback_query(F.data == COMMAND_NEW_CALLBACK)
@@ -6378,7 +6575,41 @@ async def on_command_execute_callback(callback: CallbackQuery) -> None:
         reply_message=callback.message,
         trigger="按钮",
         actor_user=callback.from_user,
+        service=COMMAND_SERVICE,
+        history_detail_prefix=COMMAND_HISTORY_DETAIL_PREFIX,
     )
+
+
+@router.callback_query(F.data.startswith(COMMAND_EXEC_GLOBAL_PREFIX))
+async def on_global_command_execute_callback(callback: CallbackQuery) -> None:
+    """执行通用命令，入口由 master 配置。"""
+
+    command_id = _extract_command_id(callback.data, COMMAND_EXEC_GLOBAL_PREFIX)
+    if command_id is None:
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    try:
+        command = await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _refresh_command_overview(callback, notice="通用命令已被 master 移除。")
+        return
+    await callback.answer("正在执行通用命令…")
+    await _execute_command_definition(
+        command=command,
+        reply_message=callback.message,
+        trigger="按钮",
+        actor_user=callback.from_user,
+        service=GLOBAL_COMMAND_SERVICE,
+        history_detail_prefix=COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+    )
+
+
+@router.callback_query(F.data == COMMAND_READONLY_CALLBACK)
+async def on_command_readonly_callback(callback: CallbackQuery) -> None:
+    """提示通用命令只读。"""
+
+    await callback.answer("该命令由 master 统一配置，项目内不可编辑。", show_alert=True)
 
 
 @router.callback_query(F.data.startswith(COMMAND_EDIT_PREFIX))
@@ -6392,6 +6623,9 @@ async def on_command_edit_callback(callback: CallbackQuery, state: FSMContext) -
     except CommandNotFoundError:
         await callback.answer("命令不存在", show_alert=True)
         await _refresh_command_overview(callback, notice="命令已不存在。")
+        return
+    if _is_global_command(command):
+        await callback.answer("该命令为通用命令，请到 master 通用命令配置中维护。", show_alert=True)
         return
     await state.update_data(command_id=command_id)
     await state.set_state(CommandEditStates.waiting_choice)
@@ -6444,6 +6678,9 @@ async def on_command_toggle(callback: CallbackQuery) -> None:
         await callback.answer("命令不存在", show_alert=True)
         await _refresh_command_overview(callback, notice="命令已不存在。")
         return
+    if _is_global_command(command):
+        await callback.answer("该命令由 master 维护，项目内不可停用。", show_alert=True)
+        return
     updated = await COMMAND_SERVICE.update_command(command_id, enabled=not command.enabled)
     action_text = "已启用" if updated.enabled else "已停用"
     await _refresh_command_overview(callback, notice=f"{updated.name} {action_text}")
@@ -6463,6 +6700,10 @@ async def on_command_create_name(message: Message, state: FSMContext) -> None:
     existing = await COMMAND_SERVICE.resolve_by_trigger(text)
     if existing:
         await message.answer("同名命令或别名已存在，请换一个名称：")
+        return
+    global_existing = await _resolve_global_command_conflict(text)
+    if global_existing:
+        await message.answer("该名称已被通用命令占用，请换一个名称：")
         return
     await state.update_data(name=text)
     await state.set_state(CommandCreateStates.waiting_shell)
@@ -6568,6 +6809,11 @@ async def on_command_edit_aliases(message: Message, state: FSMContext) -> None:
         await message.answer("上下文已失效，请重新选择命令。")
         return
     aliases = _parse_alias_input(text)
+    for alias in aliases:
+        conflict = await _resolve_global_command_conflict(alias)
+        if conflict is not None:
+            await message.answer(f"别名 {alias} 已被通用命令占用，请重新输入：")
+            return
     try:
         updated_aliases = await COMMAND_SERVICE.replace_aliases(command_id, aliases)
     except (ValueError, CommandAliasConflictError, CommandNotFoundError) as exc:

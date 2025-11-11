@@ -29,6 +29,10 @@ class CommandNotFoundError(CommandError):
     """命令不存在。"""
 
 
+class CommandHistoryNotFoundError(CommandError):
+    """命令执行历史不存在。"""
+
+
 class CommandService:
     """封装命令定义与执行历史的存取逻辑。"""
 
@@ -41,9 +45,18 @@ class CommandService:
     MIN_TIMEOUT = 5
     MAX_TIMEOUT = 3600
 
-    def __init__(self, db_path: Path, project_slug: str) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        project_slug: str,
+        *,
+        scope: str = "project",
+        history_project_slug: Optional[str] = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.project_slug = project_slug
+        self.scope = (scope or "project").strip() or "project"
+        self.history_project_slug = history_project_slug or project_slug
         self._lock = asyncio.Lock()
         self._initialized = False
 
@@ -110,6 +123,7 @@ class CommandService:
                         """
                         INSERT INTO commands (
                             project_slug,
+                            scope,
                             name,
                             normalized_name,
                             title,
@@ -120,10 +134,11 @@ class CommandService:
                             created_at,
                             updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             self.project_slug,
+                            self.scope,
                             sanitized_name,
                             normalized_name,
                             sanitized_title,
@@ -145,6 +160,7 @@ class CommandService:
         definition = CommandDefinition(
             id=int(command_id),
             project_slug=self.project_slug,
+            scope=self.scope,
             name=sanitized_name,
             title=sanitized_title,
             command=sanitized_command,
@@ -341,7 +357,7 @@ class CommandService:
                 """,
                 (
                     command.id,
-                    self.project_slug,
+                    self.history_project_slug,
                     command.name,
                     trigger,
                     actor_id,
@@ -359,8 +375,9 @@ class CommandService:
         return CommandHistoryRecord(
             id=cursor.lastrowid,
             command_id=command.id,
-            project_slug=self.project_slug,
+            project_slug=self.history_project_slug,
             command_name=command.name,
+            command_title=command.title,
             trigger=trigger,
             actor_id=actor_id,
             actor_username=actor_username,
@@ -381,13 +398,15 @@ class CommandService:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT *
-                FROM command_history
-                WHERE project_slug = ?
-                ORDER BY id DESC
+                SELECT h.*, c.title AS command_title
+                FROM command_history AS h
+                LEFT JOIN commands AS c
+                    ON c.id = h.command_id AND c.project_slug = h.project_slug
+                WHERE h.project_slug = ?
+                ORDER BY h.id DESC
                 LIMIT ?
                 """,
-                (self.project_slug, limit),
+                (self.history_project_slug, limit),
             )
             rows = await cursor.fetchall()
         records = [
@@ -396,6 +415,7 @@ class CommandService:
                 command_id=row["command_id"],
                 project_slug=row["project_slug"],
                 command_name=row["command_name"],
+                command_title=row["command_title"],
                 trigger=row["trigger"],
                 actor_id=row["actor_id"],
                 actor_username=row["actor_username"],
@@ -413,12 +433,53 @@ class CommandService:
             record.ensure_timestamps()
         return records
 
+    async def get_history_record(self, history_id: int) -> CommandHistoryRecord:
+        """按主键返回单条执行记录。"""
+
+        await self.initialize()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT h.*, c.title AS command_title
+                FROM command_history AS h
+                LEFT JOIN commands AS c
+                    ON c.id = h.command_id AND c.project_slug = h.project_slug
+                WHERE h.project_slug = ? AND h.id = ?
+                LIMIT 1
+                """,
+                (self.history_project_slug, history_id),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise CommandHistoryNotFoundError("命令执行记录不存在")
+        record = CommandHistoryRecord(
+            id=row["id"],
+            command_id=row["command_id"],
+            project_slug=row["project_slug"],
+            command_name=row["command_name"],
+            command_title=row["command_title"],
+            trigger=row["trigger"],
+            actor_id=row["actor_id"],
+            actor_username=row["actor_username"],
+            actor_name=row["actor_name"],
+            exit_code=row["exit_code"],
+            status=row["status"],
+            output=row["output"],
+            error=row["error"],
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+        )
+        record.ensure_timestamps()
+        return record
+
     async def _create_tables(self, db: aiosqlite.Connection) -> None:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS commands (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_slug TEXT NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'project',
                 name TEXT NOT NULL,
                 normalized_name TEXT NOT NULL,
                 title TEXT NOT NULL,
@@ -431,6 +492,7 @@ class CommandService:
             )
             """
         )
+        await self._ensure_scope_column(db)
         await db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_unique_name
@@ -490,6 +552,17 @@ class CommandService:
             """
         )
 
+    async def _ensure_scope_column(self, db: aiosqlite.Connection) -> None:
+        """确保 commands 表包含 scope 列，兼容旧版本数据库。"""
+
+        cursor = await db.execute("PRAGMA table_info(commands)")
+        rows = await cursor.fetchall()
+        column_names = {row[1] for row in rows}
+        if "scope" in column_names:
+            return
+        await db.execute("ALTER TABLE commands ADD COLUMN scope TEXT NOT NULL DEFAULT 'project'")
+        await db.execute("UPDATE commands SET scope = 'project' WHERE scope IS NULL OR scope = ''")
+
     async def _fetch_aliases(
         self,
         db: aiosqlite.Connection,
@@ -548,6 +621,7 @@ class CommandService:
         return CommandDefinition(
             id=row["id"],
             project_slug=row["project_slug"],
+            scope=row["scope"] or "project",
             name=row["name"],
             title=row["title"],
             command=row["command"],
@@ -616,4 +690,8 @@ class CommandService:
         return cleaned
 
     def _normalize_identifier(self, value: str) -> str:
+        return self.normalize_identifier(value)
+
+    @staticmethod
+    def normalize_identifier(value: str) -> str:
         return (value or "").strip().casefold()
