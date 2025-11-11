@@ -551,6 +551,9 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
     assert "修复登录-问题 (v2.0) [紧急]" in detail_text
     assert "登录接口异常! 需要修复 test_case.example" in detail_text
     assert "TASK_0000" in detail_text
+    assert f"📊 状态：{bot._format_status('research')}" in detail_text
+    expected_type = bot._strip_task_type_emoji(bot._format_task_type("defect"))
+    assert f"📂 类型：{expected_type}" in detail_text
 
     # 确保没有双重转义（例如 \\- 或 \\( ）
     assert "\\-" not in detail_text  # 避免 \- 再次被转义
@@ -590,6 +593,8 @@ def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
     # _ 和 * 在 _MARKDOWN_ESCAPE_RE 中会被转义
     assert "修复\\_登录问题" in detail_text  # _ 应该被转义为 \_
     assert "测试\\*描述\\*" in detail_text  # * 应该被转义为 \*
+    expected_type = bot._strip_task_type_emoji(bot._format_task_type("task"))
+    assert f"📂 类型：{expected_type}" in detail_text
 
 
 @pytest.mark.parametrize(
@@ -632,3 +637,5 @@ def test_format_task_detail_various_special_chars(monkeypatch, title, status, ta
     # 标题和描述应该保持原样（在 MarkdownV2 模式下）
     assert title in detail_text
     assert description in detail_text
+    expected_type = bot._strip_task_type_emoji(bot._format_task_type(task_type))
+    assert f"📂 类型：{expected_type}" in detail_text

@@ -3138,7 +3138,8 @@ def _strip_task_type_emoji(value: str) -> str:
     """去除前缀的任务类型 emoji，保持其余文本原样。"""
 
     trimmed = value.strip()
-    for emoji in TASK_TYPE_EMOJIS.values():
+    emoji_prefixes = list(TASK_TYPE_EMOJIS.values()) + ["⚪"]
+    for emoji in emoji_prefixes:
         if trimmed.startswith(emoji):
             return trimmed[len(emoji):].strip()
     return trimmed
@@ -3269,10 +3270,15 @@ def _format_task_detail(
         title_text = _escape_markdown_text(title_raw) if title_raw else "-"
 
     task_id_text = _format_task_command(task.id)
-    # 任务详情的元信息仅保留任务编码及类型，避免状态字段造成额外占行
+    status_text = _format_status(task.status) if task.status else "-"
+    type_text = _strip_task_type_emoji(_format_task_type(task.task_type))
+    if not type_text:
+        type_text = "-"
+    # 任务详情的元信息调为单行展示任务编码、状态、类型，并去除类型 emoji
     meta_line = (
         f"🏷️ 任务编码：{task_id_text}"
-        f" · 📂 类型：{_format_task_type(task.task_type)}"
+        f" · 📊 状态：{status_text}"
+        f" · 📂 类型：{type_text}"
     )
     lines: list[str] = [
         f"📝 标题：{title_text}",
