@@ -1,8 +1,8 @@
-# vibego
+# vibego - vibe coding via Telegram anytime, anywhere
 
 **Drive your terminal AI CLI via Telegram anytime and anywhere (supports Codex / ClaudeCode)**
 
-For the Simplified Chinese version, see [README-zh.md](README-zh.md).
+For the Simplified Chinese version, see [中文文档](README-zh.md).
 
 ## Features
 
@@ -14,24 +14,13 @@ For the Simplified Chinese version, see [README-zh.md](README-zh.md).
 
 ## Environment Requirements
 
-- Install the core CLI dependencies with Homebrew to keep scripts aligned:
-  ```bash
-  brew install python@3.11 tmux
-  ```
-  The CLI verifies Python >= 3.11 when you run `vibego start` (see `pyproject.toml` `requires-python` and the Python
-  guard in `vibego_cli/main.py`). Validate with `python3 --version` (must show 3.11+) and `tmux -V`.
-- To run the Codex model you also need the Codex CLI:
-  ```bash
-  brew install codex
-  ```
-  `scripts/run_bot.sh` checks for the `codex` executable before the worker launches. Confirm with `codex --version`.
-- The scripts use the `python3` available on your `PATH` and automatically create `~/.config/vibego/runtime/venv` on
-  first launch to install Python dependencies. If you prefer to bootstrap manually:
-  ```bash
-  python3 -m venv ~/.config/vibego/runtime/venv
-  source ~/.config/vibego/runtime/venv/bin/activate
-  ```
-  Set `VIBEGO_RUNTIME_ROOT` if you need a custom runtime location (pipx users typically do not).
+**The terminal environment has installed and login in codex / claudeCode**
+
+```bash
+brew install python@3.11 tmux
+python3 -m venv ~/.config/vibego/runtime/venv
+source ~/.config/vibego/runtime/venv/bin/activate
+```
 
 ## Quick Start
 
@@ -49,11 +38,16 @@ Use the official Telegram BotFather guide (<https://core.telegram.org/bots#botfa
 Before continuing, make sure Codex / ClaudeCode CLIs are installed and logged in, and that you have a Telegram bot token
 ready.
 
+- Consider merging the contents of [AGENTS-en.md](AGENTS-en.md)￼ into your `$HOME/.codex/AGENTS.md` or
+  `$HOME/.claude/CLAUDE.md`.
+
 ```bash
 pipx install vibego  # or pip install --user vibego
 vibego init          # initialise the config directory and persist the Master Bot Token
 vibego start         # start the master service
 ```
+
+Then click on `/start` in the bot created by Telegram ,Enjoy it!
 
 ## Directory Layout
 
