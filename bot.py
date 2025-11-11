@@ -1882,20 +1882,11 @@ async def _build_command_overview_view(
         "*命令管理*",
         f"项目：`{_escape_markdown_text(PROJECT_SLUG)}`",
         f"命令数量：{len(commands)}",
-        "提示：可点击按钮或发送 /别名、!别名 直接执行命令。",
+        "可直接点击下方按钮执行或编辑，每条命令详情已隐藏以便快速操作。",
         "",
     ]
     if not commands:
         lines.append("暂无命令，点击下方“🆕 新增命令”即可录入。")
-    for idx, command in enumerate(commands, start=1):
-        status_badge = "✅ 启用" if command.enabled else "⏸ 已停用"
-        lines.append(f"{idx}. `{_escape_markdown_text(command.name)}` — {status_badge}")
-        lines.append(f"    标题：{_escape_markdown_text(command.title)}")
-        lines.append(f"    指令：`{_escape_markdown_text(command.command)}`")
-        lines.append(f"    超时：{command.timeout}s · 别名：{_command_alias_label(command.aliases)}")
-        if command.description:
-            lines.append(f"    描述：{_escape_markdown_text(command.description)}")
-        lines.append("")
     if notice:
         lines.append(f"_提示：{_escape_markdown_text(notice)}_")
     markup = _build_command_overview_keyboard(commands)
@@ -6474,18 +6465,6 @@ async def on_command_create_name(message: Message, state: FSMContext) -> None:
         await message.answer("同名命令或别名已存在，请换一个名称：")
         return
     await state.update_data(name=text)
-    await state.set_state(CommandCreateStates.waiting_title)
-    await message.answer("请输入命令标题（可留空沿用名称）：")
-
-
-@router.message(CommandCreateStates.waiting_title)
-async def on_command_create_title(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
-    if _is_cancel_text(text):
-        await state.clear()
-        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
-        return
-    await state.update_data(title=text)
     await state.set_state(CommandCreateStates.waiting_shell)
     await message.answer("请输入需要执行的命令，例如 `./scripts/deploy.sh`：")
 
@@ -6500,46 +6479,20 @@ async def on_command_create_shell(message: Message, state: FSMContext) -> None:
     if not text:
         await message.answer("命令内容不能为空，请重新输入：")
         return
-    await state.update_data(shell=text)
-    await state.set_state(CommandCreateStates.waiting_description)
-    await message.answer("请输入命令描述（可留空，发送 - 表示跳过）：")
-
-
-@router.message(CommandCreateStates.waiting_description)
-async def on_command_create_description(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
-    if _is_cancel_text(text):
-        await state.clear()
-        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
-        return
-    description = "" if text in {"-", ""} else text
-    await state.update_data(description=description)
-    await state.set_state(CommandCreateStates.waiting_aliases)
-    await message.answer("请输入全部别名（逗号或空格分隔），发送 - 可跳过：")
-
-
-@router.message(CommandCreateStates.waiting_aliases)
-async def on_command_create_aliases(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
-    if _is_cancel_text(text):
-        await state.clear()
-        await message.answer("命令创建已取消。", reply_markup=_build_worker_main_keyboard())
-        return
     data = await state.get_data()
     name = data.get("name")
-    shell = data.get("shell")
-    if not name or not shell:
+    if not name:
         await state.clear()
         await message.answer("上下文已失效，请重新点击“🆕 新增命令”。")
         return
-    title = data.get("title") or name
-    description = data.get("description") or ""
-    aliases = _parse_alias_input(text)
+    title = name
+    description = ""
+    aliases: tuple[str, ...] = ()
     try:
         created = await COMMAND_SERVICE.create_command(
             name=name,
             title=title,
-            command=shell,
+            command=text,
             description=description,
             aliases=aliases,
         )
@@ -6548,7 +6501,10 @@ async def on_command_create_aliases(message: Message, state: FSMContext) -> None
         return
     await state.clear()
     await message.answer(
-        f"命令 `{_escape_markdown_text(created.name)}` 已创建。",
+        (
+            f"命令 `{_escape_markdown_text(created.name)}` 已创建，"
+            "标题默认沿用名称，描述与别名可在编辑面板中补齐。"
+        ),
         reply_markup=_build_worker_main_keyboard(),
     )
     await _send_command_overview(message)

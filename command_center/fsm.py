@@ -8,10 +8,7 @@ class CommandCreateStates(StatesGroup):
     """命令创建引导各阶段。"""
 
     waiting_name = State()
-    waiting_title = State()
     waiting_shell = State()
-    waiting_description = State()
-    waiting_aliases = State()
 
 
 class CommandEditStates(StatesGroup):
