@@ -214,7 +214,6 @@ def test_format_task_detail_without_history():
     assert lines[0] == "📝 标题：" + bot._escape_markdown_text("测试任务")
     expected_meta = (
         f"🏷️ 任务编码：/TASK\\_0100 · "
-        f"⚙️ 状态：{bot._format_status('research')} · "
         f"📂 类型：{bot._format_task_type('requirement')}"
     )
     assert lines[1] == expected_meta
