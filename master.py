@@ -154,6 +154,20 @@ LEGACY_RESTART_SIGNAL_PATHS: Tuple[Path, ...] = tuple(
     if path != RESTART_SIGNAL_PATH
 )
 RESTART_SIGNAL_TTL = int(os.environ.get("MASTER_RESTART_SIGNAL_TTL", "1800"))  # 默认 30 分钟
+
+
+def _get_start_signal_path() -> Path:
+    """解析自动 /start 信号文件路径，允许通过环境变量覆盖。"""
+
+    if env_path := os.environ.get("MASTER_START_SIGNAL_PATH"):
+        return Path(env_path)
+    config_root_raw = os.environ.get("MASTER_CONFIG_ROOT") or os.environ.get("VIBEGO_CONFIG_DIR")
+    config_root = Path(config_root_raw).expanduser() if config_root_raw else _default_config_root()
+    return config_root / "state/start_signal.json"
+
+
+START_SIGNAL_PATH = _get_start_signal_path()
+START_SIGNAL_TTL = int(os.environ.get("MASTER_START_SIGNAL_TTL", "600"))
 LOCAL_TZ = ZoneInfo(os.environ.get("MASTER_TIMEZONE", "Asia/Shanghai"))
 JUMP_BUTTON_TEXT_WIDTH = 40
 
@@ -2251,7 +2265,7 @@ def _safe_remove(path: Path, *, retries: int = 3) -> None:
     for attempt in range(retries):
         try:
             path.unlink()
-            log.info("重启信号文件已删除", extra={"path": str(path), "attempt": attempt + 1})
+            log.info("文件已删除", extra={"path": str(path), "attempt": attempt + 1})
             return
         except FileNotFoundError:
             log.debug("文件已被其他进程删除", extra={"path": str(path)})
@@ -2346,6 +2360,60 @@ def _read_restart_signal() -> Tuple[Optional[dict], Optional[Path]]:
         return raw, path
 
     return None, None
+
+
+def _read_start_signal() -> Tuple[Optional[dict], Optional[Path]]:
+    """读取 CLI 写入的自动 /start 信号。"""
+
+    path = START_SIGNAL_PATH
+    if not path.exists():
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("payload 必须是对象")
+    except Exception as exc:
+        log.error("读取启动信号失败: %s", exc, extra={"path": str(path)})
+        _safe_remove(path)
+        return None, None
+
+    raw_ids = payload.get("chat_ids") or []
+    if not isinstance(raw_ids, list):
+        log.warning("启动信号 chat_ids 字段无效，已忽略", extra={"path": str(path)})
+        _safe_remove(path)
+        return None, None
+
+    chat_ids: list[int] = []
+    for item in raw_ids:
+        try:
+            candidate = int(item)
+        except (TypeError, ValueError):
+            continue
+        if candidate not in chat_ids:
+            chat_ids.append(candidate)
+    if not chat_ids:
+        log.info("启动信号未包含有效 chat_id，跳过自动推送", extra={"path": str(path)})
+        _safe_remove(path)
+        return None, None
+    payload["chat_ids"] = chat_ids
+
+    timestamp_raw = payload.get("timestamp")
+    if timestamp_raw:
+        try:
+            ts = datetime.fromisoformat(timestamp_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()
+            if age_seconds > START_SIGNAL_TTL:
+                log.info(
+                    "启动信号已过期，忽略处理",
+                    extra={"path": str(path), "age_seconds": age_seconds, "ttl": START_SIGNAL_TTL},
+                )
+                _safe_remove(path)
+                return None, None
+        except Exception as exc:
+            log.warning("解析启动信号时间戳失败: %s", exc, extra={"path": str(path)})
+    return payload, path
 
 
 async def _send_restart_project_overview(bot: Bot, chat_ids: Sequence[int]) -> None:
@@ -2511,6 +2579,33 @@ async def _notify_restart_success(bot: Bot) -> None:
             _safe_remove(candidate)
 
 
+async def _notify_start_signal(bot: Bot) -> None:
+    """启动后读取 CLI 写入的自动 /start 信号并推送通知。"""
+
+    payload, signal_path = _read_start_signal()
+    if not payload:
+        return
+    chat_ids = payload.get("chat_ids") or []
+    if not chat_ids:
+        return
+    try:
+        manager = await _ensure_manager()
+    except RuntimeError as exc:
+        log.error("自动 /start 通知失败：manager 未就绪", extra={"error": str(exc)})
+        return
+
+    # 等待 bot 完成菜单同步，避免 UI 数据尚未准备好
+    await asyncio.sleep(2)
+    for chat_id in chat_ids:
+        try:
+            await _deliver_master_start_overview(bot, chat_id, manager)
+        except Exception as exc:
+            log.error("发送自动启动通知失败: %s", exc, extra={"chat": chat_id})
+
+    if signal_path:
+        _safe_remove(signal_path)
+
+
 async def _ensure_manager() -> MasterManager:
     """确保 MANAGER 已初始化，未初始化时抛出异常。"""
 
@@ -2579,14 +2674,7 @@ async def cmd_start(message: Message) -> None:
     if not manager.is_authorized(message.chat.id):
         await message.answer("未授权。")
         return
-    manager.refresh_state()
-    await message.answer(
-        f"Master bot 已启动（v{__version__}）。\n"
-        f"已登记项目: {len(manager.configs)} 个。\n"
-        "使用 /projects 查看状态，/run 或 /stop 控制 worker。",
-        reply_markup=_build_master_main_keyboard(),
-    )
-    await _send_projects_overview_to_chat(
+    await _deliver_master_start_overview(
         message.bot,
         message.chat.id,
         manager,
@@ -2637,6 +2725,34 @@ async def _perform_restart(message: Message, start_script: Path) -> None:
         async with lock:
             _restart_in_progress = False
             log.debug("重启执行中，已提前重置状态标记")
+
+
+async def _deliver_master_start_overview(
+    bot: Bot,
+    chat_id: int,
+    manager: MasterManager,
+    *,
+    reply_to_message_id: Optional[int] = None,
+) -> None:
+    """统一推送 /start 内容与项目列表，供手动或自动场景复用。"""
+
+    summary = (
+        f"Master bot 已启动（v{__version__}）。\n"
+        f"已登记项目: {len(manager.configs)} 个。\n"
+        "使用 /projects 查看状态，/run 或 /stop 控制 worker。"
+    )
+    await bot.send_message(
+        chat_id=chat_id,
+        text=summary,
+        reply_markup=_build_master_main_keyboard(),
+        reply_to_message_id=reply_to_message_id,
+    )
+    await _send_projects_overview_to_chat(
+        bot,
+        chat_id,
+        manager,
+        reply_to_message_id=reply_to_message_id,
+    )
 
 
 @router.message(Command("restart"))
@@ -4070,6 +4186,7 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     dp.startup.register(_notify_restart_success)
+    dp.startup.register(_notify_start_signal)
 
     log.info("Master 已启动，监听管理员指令。")
     await _ensure_master_menu_button(bot)

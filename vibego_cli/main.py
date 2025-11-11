@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
+from datetime import datetime, timezone
 import signal
 import subprocess
 import sys
@@ -14,16 +16,38 @@ from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
 from . import config
-from .deps import (
-    check_cli_dependencies,
-    install_requirements,
-    python_version_ok,
+from .deps import check_cli_dependencies, install_requirements, python_version_ok
+from command_center import (
+    CommandAliasConflictError,
+    CommandAlreadyExistsError,
+    CommandService,
+    GLOBAL_COMMAND_PROJECT_SLUG,
+    GLOBAL_COMMAND_SCOPE,
+    resolve_global_command_db,
 )
 from project_repository import ProjectRepository
 
 
 TOKEN_PATTERN = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{20,}$")
 BOTFATHER_URL = "https://core.telegram.org/bots#botfather"
+START_SIGNAL_PATH = config.STATE_DIR / "start_signal.json"
+
+DEFAULT_GLOBAL_COMMANDS: tuple[dict[str, object], ...] = (
+    {
+        "name": "git-fetch",
+        "title": "git-fetch",
+        "command": "git -c core.quotepath=false -c log.showSignature=false fetch origin --recurse-submodules=no --progress --prune",
+        "description": "",
+        "aliases": (),
+    },
+    {
+        "name": "git-fetch-add-commit-push",
+        "title": "git-fetch-add-commit-push",
+        "command": "git -c core.quotepath=false -c log.showSignature=false fetch origin --recurse-submodules=no --progress --prune && git add -A && git commit -m \"commit via telegram\" && git -c core.quotepath=false -c log.showSignature=false push --progress --porcelain origin refs/heads/master:master",
+        "description": "",
+        "aliases": (),
+    },
+)
 
 
 def _find_repo_root() -> Path:
@@ -92,6 +116,87 @@ def _ensure_virtualenv(repo_root: Path) -> Tuple[Path, Path]:
     return python_exec, pip_exec
 
 
+def _collect_auto_start_targets(env_values: Dict[str, str]) -> list[int]:
+    """根据 .env 内容挑选需要推送启动提醒的 chat_id。"""
+
+    targets: list[int] = []
+
+    def _append(value: str) -> None:
+        cleaned = (value or "").strip()
+        if cleaned.isdigit():
+            targets.append(int(cleaned))
+
+    primary = env_values.get("MASTER_CHAT_ID", "")
+    _append(primary)
+
+    candidates = []
+    for key in ("MASTER_ADMIN_IDS", "MASTER_ADMINS", "MASTER_WHITELIST", "ALLOWED_CHAT_ID"):
+        raw = env_values.get(key)
+        if raw:
+            candidates.extend(item.strip() for item in raw.split(","))
+    for item in candidates:
+        _append(item)
+
+    deduped: list[int] = []
+    seen: set[int] = set()
+    for chat_id in targets:
+        if chat_id in seen:
+            continue
+        seen.add(chat_id)
+        deduped.append(chat_id)
+    return deduped
+
+
+def _write_start_signal(chat_ids: Sequence[int]) -> None:
+    """将启动通知请求写入 state 目录，供 master 启动后读取。"""
+
+    payload = {
+        "chat_ids": list(chat_ids),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    START_SIGNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    START_SIGNAL_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _schedule_start_notification(env_values: Dict[str, str]) -> bool:
+    """在成功启动 master 后安排一次自动 /start 推送。"""
+
+    targets = _collect_auto_start_targets(env_values)
+    if not targets:
+        print("提示：未检测到 MASTER_CHAT_ID 或管理员列表，无法自动推送 /start。")
+        return False
+    try:
+        _write_start_signal(targets)
+    except OSError as exc:
+        print("自动推送信号写入失败：", exc)
+        return False
+    print("已安排 master 启动通知，将推送到 chat_id:", ", ".join(str(t) for t in targets))
+    return True
+
+
+async def _seed_default_global_commands() -> None:
+    """写入默认通用命令，避免新环境手动维护。"""
+
+    db_path = resolve_global_command_db(config.CONFIG_ROOT)
+    service = CommandService(
+        db_path,
+        GLOBAL_COMMAND_PROJECT_SLUG,
+        scope=GLOBAL_COMMAND_SCOPE,
+        history_project_slug=GLOBAL_COMMAND_PROJECT_SLUG,
+    )
+    await service.initialize()
+    for payload in DEFAULT_GLOBAL_COMMANDS:
+        name = str(payload["name"])
+        existing = await service.resolve_by_trigger(name)
+        if existing:
+            continue
+        try:
+            await service.create_command(**payload)
+            print(f"已注入通用命令：{name}")
+        except (CommandAlreadyExistsError, CommandAliasConflictError) as exc:
+            print(f"跳过通用命令 {name}：{exc}")
+
+
 def command_init(args: argparse.Namespace) -> None:
     """实现 `vibego init`。"""
 
@@ -121,6 +226,10 @@ def command_init(args: argparse.Namespace) -> None:
 
     config.dump_env_file(config.ENV_FILE, env_values)
     _ensure_projects_assets()
+    try:
+        asyncio.run(_seed_default_global_commands())
+    except Exception as exc:  # noqa: BLE001
+        print("默认通用命令初始化失败：", exc)
 
     print("初始化完成，配置目录：", config.CONFIG_ROOT)
     print("可执行步骤：")
@@ -231,6 +340,7 @@ def command_start(args: argparse.Namespace) -> None:
     print("master 已启动，PID:", process.pid)
     print("日志文件：", log_file)
     print("请在 Telegram 中向 Bot 发送 /start 以完成授权流程。")
+    _schedule_start_notification(env_values)
 
 
 def command_stop(args: argparse.Namespace) -> None:
