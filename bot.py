@@ -2932,18 +2932,7 @@ def _build_model_push_payload(
     supplement_text = (supplement or "").strip()
     segments: list[str] = []
 
-    notes = notes or ()
-    regular_notes: list[str] = []
-
-    for note in notes:
-        content = note.content or ""
-        if not content.strip():
-            continue
-        summarized = _summarize_note_text(content)
-        if note.note_type == "bug":
-            # 缺陷备注不再拼接到推送提示词中，避免与任务执行记录重复
-            continue
-        regular_notes.append(summarized)
+    notes = notes or ()  # 推送阶段暂不展示备注文本，仅保留参数兼容
 
     task_code_plain = f"/{task.id}" if task.id else "-"
 
@@ -2955,14 +2944,12 @@ def _build_model_push_payload(
         title = (task.title or "").strip() or "-"
         description = (task.description or "").strip() or "-"
         supplement_value = supplement_text or "-"
-        note_text = "；".join(regular_notes) if regular_notes else "-"
 
         lines: list[str] = [
             phase_line,
             f"任务标题：{title}",
             f"任务编码：{task_code_plain}",
             f"任务描述：{description}",
-            f"任务备注：{note_text}",
             f"补充任务描述：{supplement_value}",
             "",
         ]
@@ -3270,14 +3257,12 @@ def _format_task_detail(
         title_text = _escape_markdown_text(title_raw) if title_raw else "-"
 
     task_id_text = _format_task_command(task.id)
-    status_text = _format_status(task.status) if task.status else "-"
     type_text = _strip_task_type_emoji(_format_task_type(task.task_type))
     if not type_text:
         type_text = "-"
-    # 任务详情的元信息调为单行展示任务编码、状态、类型，并去除类型 emoji
+    # 任务详情的元信息仅保留任务编码与类型，去除状态字段保持更紧凑展示
     meta_line = (
         f"🏷️ 任务编码：{task_id_text}"
-        f" · 📊 状态：{status_text}"
         f" · 📂 类型：{type_text}"
     )
     lines: list[str] = [
