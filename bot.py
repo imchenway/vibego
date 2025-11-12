@@ -167,12 +167,12 @@ _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
 }
 
 # 阶段提示统一追加 agents.md 信息，确保推送记录要求一致。
-AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。"
+AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。以下是需要执行的任务描述以及其对应的执行历史摘要：\n"
 # 推送到模型的阶段提示（vibe 与测试），合并统一后缀确保输出一致。
 VIBE_PHASE_PROMPT = f"进入vibe阶段{AGENTS_PHASE_SUFFIX}"
 TEST_PHASE_PROMPT = f"进入测试阶段{AGENTS_PHASE_SUFFIX}"
 # 报告缺陷时的专用前缀，插入在统一提示语之前
-BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。"
+BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。\n"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -1854,13 +1854,6 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
 BOT_COMMANDS: list[tuple[str, str]] = [
     ("start", "打开任务概览"),
     ("help", "查看全部命令"),
-    ("tasks", "任务命令清单"),
-    ("task_new", "创建任务"),
-    ("task_list", "查看任务列表"),
-    ("task_show", "查看任务详情"),
-    ("task_update", "更新任务字段"),
-    ("task_note", "添加任务备注"),
-    ("commands", "命令管理入口"),
 ]
 
 COMMAND_KEYWORDS: set[str] = {command for command, _ in BOT_COMMANDS}

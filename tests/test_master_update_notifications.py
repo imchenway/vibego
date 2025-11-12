@@ -17,6 +17,20 @@ def restore_manager():
     master.MANAGER = original
 
 
+@pytest.fixture(autouse=True)
+def reset_upgrade_state():
+    """隔离升级相关的全局锁与任务。"""
+
+    master._UPGRADE_TASK = None
+    master._UPGRADE_STATE_LOCK = asyncio.Lock()
+    yield
+    task = master._UPGRADE_TASK
+    if task and not task.done():
+        task.cancel()
+    master._UPGRADE_TASK = None
+    master._UPGRADE_STATE_LOCK = asyncio.Lock()
+
+
 class DummyBot:
     """简化版 Bot，用于记录发送的消息。"""
 
@@ -27,6 +41,17 @@ class DummyBot:
         self.messages.append((chat_id, text, kwargs))
 
 
+class DummyUpgradeBot(DummyBot):
+    """用于模拟升级过程中的 bot 行为。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.edits = []
+
+    async def edit_message_text(self, chat_id: int, message_id: int, text: str, **kwargs) -> None:
+        self.edits.append((chat_id, message_id, text, kwargs))
+
+
 class DummyMessage:
     """模拟 aiogram Message，仅保留测试所需接口。"""
 
@@ -35,9 +60,12 @@ class DummyMessage:
         self.from_user = SimpleNamespace(id=chat_id, username=None)
         self.text = "/upgrade"
         self.replies = []
+        self.bot = DummyUpgradeBot()
 
-    async def answer(self, text: str, **kwargs) -> None:
+    async def answer(self, text: str, **kwargs):
         self.replies.append((text, kwargs))
+        # 模拟 aiogram 返回的 Message 对象
+        return SimpleNamespace(message_id=len(self.replies))
 
 
 @pytest.fixture
@@ -165,45 +193,22 @@ async def test_notify_update_to_targets(monkeypatch: pytest.MonkeyPatch, update_
     assert len(bot.messages) == 2
 
 
-def test_trigger_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch):
-    """成功触发升级命令时返回 True。"""
-
-    recorded = {}
-
-    class DummyPopen:
-        def __init__(self, args, cwd, stdout, stderr):
-            recorded["args"] = args
-            recorded["cwd"] = cwd
-
-    monkeypatch.setattr(master.subprocess, "Popen", DummyPopen)
-    ok, err = master._trigger_upgrade_pipeline()
-    assert ok is True
-    assert err is None
-    assert recorded["args"][2] == "pipx upgrade vibego && vibego stop && vibego start"
-
-
-def test_trigger_upgrade_pipeline_failure(monkeypatch: pytest.MonkeyPatch):
-    """Popen 抛错时返回 False 并包含错误信息。"""
-
-    def raising(*_args, **_kwargs):
-        raise OSError("boom")
-
-    monkeypatch.setattr(master.subprocess, "Popen", raising)
-    ok, err = master._trigger_upgrade_pipeline()
-    assert ok is False
-    assert "boom" in err
-
-
 @pytest.mark.asyncio
 async def test_cmd_upgrade_authorized(monkeypatch: pytest.MonkeyPatch):
-    """授权用户执行 /upgrade 时发送提示并触发命令。"""
+    """授权用户执行 /upgrade 时会启动后台流水线并发送提示。"""
 
     message = DummyMessage(chat_id=999)
-    monkeypatch.setattr(master, "_trigger_upgrade_pipeline", lambda: (True, None))
+    triggered = asyncio.Event()
+
+    async def fake_pipeline(bot, chat_id, message_id):
+        triggered.set()
+
+    monkeypatch.setattr(master, "_run_upgrade_pipeline", fake_pipeline)
     master.MANAGER = SimpleNamespace(is_authorized=lambda _: True)
     await master.cmd_upgrade(message)
+    await asyncio.wait_for(triggered.wait(), timeout=1)
     assert message.replies, "应至少回复一条消息"
-    assert "pipx upgrade vibego" in message.replies[0][0]
+    assert "已收到升级指令" in message.replies[0][0]
 
 
 @pytest.mark.asyncio
@@ -214,3 +219,64 @@ async def test_cmd_upgrade_unauthorized(monkeypatch: pytest.MonkeyPatch):
     master.MANAGER = SimpleNamespace(is_authorized=lambda _: False)
     await master.cmd_upgrade(message)
     assert message.replies[0][0] == "未授权。"
+
+
+@pytest.mark.asyncio
+async def test_cmd_upgrade_rejects_parallel_requests(monkeypatch: pytest.MonkeyPatch):
+    """并发触发时只有第一个请求会被受理。"""
+
+    message = DummyMessage(chat_id=1)
+    start_event = asyncio.Event()
+    finish_event = asyncio.Event()
+
+    async def fake_pipeline(bot, chat_id, message_id):
+        start_event.set()
+        await finish_event.wait()
+
+    monkeypatch.setattr(master, "_run_upgrade_pipeline", fake_pipeline)
+    master.MANAGER = SimpleNamespace(is_authorized=lambda _: True)
+
+    await master.cmd_upgrade(message)
+    await asyncio.wait_for(start_event.wait(), timeout=1)
+
+    second = DummyMessage(chat_id=1)
+    await master.cmd_upgrade(second)
+    assert "已有升级任务" in second.replies[-1][0]
+
+    finish_event.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_run_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch):
+    """所有步骤成功时应输出完成提示。"""
+
+    bot = DummyUpgradeBot()
+    calls = []
+
+    async def fake_step(*args, **kwargs):
+        calls.append(args)
+        return 0, ["ok"]
+
+    monkeypatch.setattr(master, "_run_single_upgrade_step", fake_step)
+    await master._run_upgrade_pipeline(bot, chat_id=1, message_id=10)
+    assert len(calls) == len(master._UPGRADE_COMMANDS)
+    assert bot.edits, "应至少更新一次状态"
+    assert "升级流程完成" in bot.edits[-1][2]
+
+
+@pytest.mark.asyncio
+async def test_run_upgrade_pipeline_failure(monkeypatch: pytest.MonkeyPatch):
+    """任一步骤返回非零退出码时应推送失败信息。"""
+
+    bot = DummyUpgradeBot()
+
+    async def fake_step(command, description, step_index, total_steps, bot_obj, chat_id, message_id):
+        if step_index == 2:
+            return 9, ["boom"]
+        return 0, [f"{description}-ok"]
+
+    monkeypatch.setattr(master, "_run_single_upgrade_step", fake_step)
+    await master._run_upgrade_pipeline(bot, chat_id=1, message_id=10)
+    assert bot.edits, "应推送失败信息"
+    assert "升级流程失败" in bot.edits[-1][2]
