@@ -78,6 +78,15 @@ def update_state_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return state_path
 
 
+@pytest.fixture
+def upgrade_report_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """隔离升级报告路径，避免污染真实配置目录。"""
+
+    report_path = tmp_path / "upgrade_report.json"
+    monkeypatch.setattr(master, "_UPGRADE_REPORT_PATH", report_path)
+    return report_path
+
+
 @pytest.mark.asyncio
 async def test_ensure_update_state_without_latest(monkeypatch: pytest.MonkeyPatch, update_state_path: Path):
     """无可用版本时仅记录 last_check。"""
@@ -248,8 +257,8 @@ async def test_cmd_upgrade_rejects_parallel_requests(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_run_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch):
-    """所有步骤成功时应输出完成提示。"""
+async def test_run_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch, upgrade_report_path: Path):
+    """pipx 成功后应记录报告并安排自动重启。"""
 
     bot = DummyUpgradeBot()
     calls = []
@@ -258,11 +267,27 @@ async def test_run_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch):
         calls.append(args)
         return 0, ["ok"]
 
+    spawned = {}
+    def fake_spawn(command, delay):
+        spawned["args"] = (command, delay)
+        return SimpleNamespace(pid=123)
+
+    recorded = {}
+    def fake_persist(chat_id, lines, elapsed, command, delay):
+        recorded["args"] = (chat_id, lines, elapsed, command, delay)
+
     monkeypatch.setattr(master, "_run_single_upgrade_step", fake_step)
+    monkeypatch.setattr(master, "_spawn_detached_restart", fake_spawn)
+    monkeypatch.setattr(master, "_persist_upgrade_report", fake_persist)
+    monkeypatch.setattr(master, "_UPGRADE_RESTART_COMMAND", "echo restart")
+    monkeypatch.setattr(master, "_UPGRADE_RESTART_DELAY", 0.1)
+
     await master._run_upgrade_pipeline(bot, chat_id=1, message_id=10)
     assert len(calls) == len(master._UPGRADE_COMMANDS)
     assert bot.edits, "应至少更新一次状态"
     assert "升级流程完成" in bot.edits[-1][2]
+    assert recorded["args"][0] == 1
+    assert spawned["args"][0] == "echo restart"
 
 
 @pytest.mark.asyncio
@@ -272,7 +297,7 @@ async def test_run_upgrade_pipeline_failure(monkeypatch: pytest.MonkeyPatch):
     bot = DummyUpgradeBot()
 
     async def fake_step(command, description, step_index, total_steps, bot_obj, chat_id, message_id):
-        if step_index == 2:
+        if step_index == 1:
             return 9, ["boom"]
         return 0, [f"{description}-ok"]
 
@@ -280,3 +305,48 @@ async def test_run_upgrade_pipeline_failure(monkeypatch: pytest.MonkeyPatch):
     await master._run_upgrade_pipeline(bot, chat_id=1, message_id=10)
     assert bot.edits, "应推送失败信息"
     assert "升级流程失败" in bot.edits[-1][2]
+
+
+@pytest.mark.asyncio
+async def test_run_upgrade_pipeline_without_restart(monkeypatch: pytest.MonkeyPatch):
+    """未配置自动重启命令时，仅提示完成而不写报告。"""
+
+    bot = DummyUpgradeBot()
+
+    async def fake_step(*args, **kwargs):
+        return 0, ["ok"]
+
+    recorded = {}
+
+    def fake_persist(*args, **kwargs):
+        recorded["called"] = True
+
+    monkeypatch.setattr(master, "_run_single_upgrade_step", fake_step)
+    monkeypatch.setattr(master, "_persist_upgrade_report", fake_persist)
+    monkeypatch.setattr(master, "_UPGRADE_RESTART_COMMAND", "")
+
+    await master._run_upgrade_pipeline(bot, chat_id=1, message_id=10)
+    assert bot.edits, "应提示完成"
+    assert "未配置自动重启命令" in bot.edits[-1][2]
+    assert "called" not in recorded
+
+
+@pytest.mark.asyncio
+async def test_notify_upgrade_report(monkeypatch: pytest.MonkeyPatch, upgrade_report_path: Path):
+    """启动时若存在升级报告应推送摘要并清理文件。"""
+
+    payload = {
+        "chat_id": 777,
+        "log_tail": ["line1", "line2"],
+        "elapsed": 3.5,
+        "restart_command": "echo restart",
+        "restart_delay": 1.0,
+        "recorded_at": "2025-11-12T10:00:00+00:00",
+    }
+    upgrade_report_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    bot = DummyBot()
+    await master._notify_upgrade_report(bot)
+    assert bot.messages, "应推送升级摘要"
+    assert "pipx 输出摘要" in bot.messages[0][1]
+    assert not upgrade_report_path.exists()

@@ -7964,7 +7964,7 @@ async def _request_task_summary(
             current_task = updated
             status_changed = True
 
-    history_text, history_count = await _build_history_context_for_model(current_task.id)
+    history_text, _ = await _build_history_context_for_model(current_task.id)
     notes = await TASK_SERVICE.list_notes(current_task.id)
     request_id = uuid.uuid4().hex
     prompt = _build_summary_prompt(
@@ -7994,22 +7994,6 @@ async def _request_task_summary(
             session_path=session_path,
             created_at=time.monotonic(),
         )
-
-    payload: dict[str, Any] = {
-        "request_id": request_id,
-        "model": ACTIVE_MODEL or "",
-        "status_auto_updated": status_changed,
-    }
-    if history_count:
-        payload["history_items"] = history_count
-
-    await _log_task_action(
-        current_task.id,
-        action="summary_request",
-        actor=actor_label,
-        new_value=request_id,
-        payload=payload,
-    )
 
     return request_id, status_changed
 
