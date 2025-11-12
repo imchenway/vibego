@@ -85,6 +85,7 @@ from command_center import (
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
 )
+from command_center.prompts import build_field_prompt_text
 # --- 简单 .env 加载 ---
 def load_env(p: str = ".env"):
     """从指定路径加载 dotenv 格式的键值对到进程环境变量。"""
@@ -1983,7 +1984,7 @@ def _build_command_overview_keyboard(commands: Sequence[CommandDefinition]) -> I
         inline_keyboard.append(
             [
                 InlineKeyboardButton(
-                    text=f"{command.name} ▶️",
+                    text=f"▶️ {command.name}",
                     callback_data=f"{exec_prefix}{command.id}",
                 ),
                 edit_button,
@@ -6718,15 +6719,18 @@ async def on_command_field_select(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("字段标识无效", show_alert=True)
         return
     command_id = int(raw_id)
-    prompt_map = {
-        "title": "请输入新的命令标题：",
-        "command": "请输入新的执行指令（可包含参数）：",
-        "description": "请输入新的命令描述（可留空）：",
-        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
-        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
-    }
-    prompt = prompt_map.get(field)
-    if prompt is None:
+    try:
+        command = await COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("命令不存在", show_alert=True)
+        await _refresh_command_overview(callback, notice="命令已不存在。")
+        return
+    if _is_global_command(command):
+        await callback.answer("该命令由 master 统一配置，项目内不可编辑。", show_alert=True)
+        await _refresh_command_overview(callback)
+        return
+    prompt_text = build_field_prompt_text(command, field)
+    if prompt_text is None:
         await callback.answer("暂不支持该字段", show_alert=True)
         return
     await state.update_data(command_id=command_id, field=field)
@@ -6735,7 +6739,7 @@ async def on_command_field_select(callback: CallbackQuery, state: FSMContext) ->
     else:
         await state.set_state(CommandEditStates.waiting_value)
     if callback.message:
-        await callback.message.answer(f"{prompt}\n发送“取消”可终止当前操作。")
+        await callback.message.answer(prompt_text)
     await callback.answer("请发送新的值")
 
 

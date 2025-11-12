@@ -68,6 +68,7 @@ from command_center import (
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
 )
+from command_center.prompts import build_field_prompt_text
 from vibego_cli import __version__
 
 try:
@@ -224,7 +225,6 @@ GLOBAL_COMMAND_DELETE_PROMPT_PREFIX = "system:commands:delete_prompt:"
 GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX = "system:commands:delete_confirm:"
 GLOBAL_COMMAND_INLINE_LIMIT = 12
 GLOBAL_COMMAND_STATE_KEY = "global_command_flow"
-GLOBAL_COMMAND_PREVIEW_MAX_CHARS = 400
 
 # Telegram 在不同客户端可能插入零宽字符或额外空白，提前归一化按钮文本。
 ZERO_WIDTH_CHARACTERS: Tuple[str, ...] = ("\u200b", "\u200c", "\u200d", "\ufeff")
@@ -371,58 +371,6 @@ def _build_global_command_edit_keyboard(command: CommandDefinition) -> InlineKey
         [InlineKeyboardButton(text="⬅️ 返回列表", callback_data=GLOBAL_COMMAND_REFRESH_CALLBACK)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def _truncate_field_preview(value: str) -> str:
-    """限制字段预览长度，避免刷屏。"""
-
-    text = value.strip()
-    if len(text) <= GLOBAL_COMMAND_PREVIEW_MAX_CHARS:
-        return text
-    return text[: GLOBAL_COMMAND_PREVIEW_MAX_CHARS - 1] + "…"
-
-
-def _build_field_preview_text(field: str, command: CommandDefinition) -> str:
-    """根据字段类型输出当前值提示，便于用户确认。"""
-
-    if field == "command":
-        current = _truncate_field_preview(command.command or "")
-        snippet = current or "（当前为空）"
-        indented = textwrap.indent(snippet, "    ")
-        return f"当前指令：\n{indented}"
-    if field == "title":
-        return f"当前标题：{command.title or '（当前为空）'}"
-    if field == "description":
-        return f"当前描述：{command.description or '（当前为空）'}"
-    if field == "timeout":
-        return f"当前超时：{command.timeout or '-'} 秒"
-    if field == "aliases":
-        alias_text = ", ".join(command.aliases) if command.aliases else "（无别名）"
-        return f"当前别名：{alias_text}"
-    return ""
-
-
-def _build_field_prompt_text(field: str, command: CommandDefinition) -> Optional[str]:
-    """拼装包含当前值与操作提示的文本。"""
-
-    prompt_map = {
-        "title": "请输入新的命令标题：",
-        "command": "请输入新的执行指令：",
-        "description": "请输入新的命令描述（可留空）：",
-        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
-        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
-    }
-    prompt = prompt_map.get(field)
-    if prompt is None:
-        return None
-    preview = _build_field_preview_text(field, command)
-    lines = []
-    if preview:
-        lines.append(preview)
-        lines.append("")
-    lines.append(prompt)
-    lines.append("发送“取消”可终止当前操作。")
-    return "\n".join(lines)
 
 
 async def _send_global_command_overview_message(message: Message, notice: Optional[str] = None) -> None:
@@ -3579,7 +3527,7 @@ async def on_global_command_field(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("通用命令不存在", show_alert=True)
         await _edit_global_command_overview(callback, notice="目标命令已被删除。")
         return
-    prompt_text = _build_field_prompt_text(field, command)
+    prompt_text = build_field_prompt_text(command, field)
     if prompt_text is None:
         await callback.answer("暂不支持该字段", show_alert=True)
         return
