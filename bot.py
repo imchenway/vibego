@@ -1887,6 +1887,7 @@ COMMAND_HISTORY_LIMIT = 8
 COMMAND_INLINE_LIMIT = 12
 COMMAND_OUTPUT_MAX_CHARS = _env_int("COMMAND_OUTPUT_MAX_CHARS", 3500)
 COMMAND_STDERR_MAX_CHARS = _env_int("COMMAND_STDERR_MAX_CHARS", 1200)
+COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 10)
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
@@ -2058,6 +2059,16 @@ def _limit_text(text: str, limit: int) -> tuple[str, bool]:
     return text[:limit].rstrip() + "\n…<截断>", True
 
 
+def _tail_lines(text: str, max_lines: int) -> str:
+    """返回文本末尾指定行数，避免预览过长。"""
+
+    if max_lines <= 0 or not text:
+        return text.strip()
+    lines = text.splitlines()
+    tail = lines[-max_lines:]
+    return "\n".join(tail).strip()
+
+
 def _command_actor_meta(user: Optional[User]) -> tuple[Optional[int], Optional[str], Optional[str]]:
     """抽取执行者的关键信息。"""
 
@@ -2190,16 +2201,18 @@ async def _execute_command_definition(
     if exit_code is not None:
         lines.append(f"退出码：{exit_code}")
     if stdout_text:
-        truncated_stdout, stdout_truncated = _limit_text(stdout_text.strip(), COMMAND_OUTPUT_MAX_CHARS)
+        stdout_preview = _tail_lines(stdout_text.strip(), COMMAND_OUTPUT_PREVIEW_LINES)
+        truncated_stdout, stdout_truncated = _limit_text(stdout_preview, COMMAND_OUTPUT_MAX_CHARS)
         stdout_block, _ = _wrap_text_in_code_block(truncated_stdout or "-")
-        lines.append("标准输出摘要：")
+        lines.append(f"标准输出摘要（末尾 {COMMAND_OUTPUT_PREVIEW_LINES} 行）：")
         lines.append(stdout_block)
         if stdout_truncated:
             lines.append("_输出已截断_")
     if stderr_text:
-        truncated_stderr, stderr_truncated = _limit_text(stderr_text.strip(), COMMAND_STDERR_MAX_CHARS)
+        stderr_preview = _tail_lines(stderr_text.strip(), COMMAND_OUTPUT_PREVIEW_LINES)
+        truncated_stderr, stderr_truncated = _limit_text(stderr_preview, COMMAND_STDERR_MAX_CHARS)
         stderr_block, _ = _wrap_text_in_code_block(truncated_stderr or "-")
-        lines.append("标准错误摘要：")
+        lines.append(f"标准错误摘要（末尾 {COMMAND_OUTPUT_PREVIEW_LINES} 行）：")
         lines.append(stderr_block)
         if stderr_truncated:
             lines.append("_错误输出已截断_")
