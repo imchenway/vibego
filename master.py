@@ -201,10 +201,6 @@ MASTER_SETTINGS_BUTTON_TEXT = "🛠 系统设置"
 MASTER_BOT_COMMANDS: List[Tuple[str, str]] = [
     ("start", "启动 master 菜单"),
     ("projects", "查看项目列表"),
-    ("run", "启动 worker"),
-    ("stop", "停止 worker"),
-    ("switch", "切换 worker 模型"),
-    ("authorize", "登记 chat"),
     ("restart", "重启 master"),
     ("upgrade", "升级 vibego 至最新版"),
 ]
@@ -218,6 +214,18 @@ SYSTEM_SETTINGS_BACK_CALLBACK = "system:back"
 GLOBAL_COMMAND_MENU_CALLBACK = "system:commands:menu"
 GLOBAL_COMMAND_REFRESH_CALLBACK = "system:commands:refresh"
 GLOBAL_COMMAND_NEW_CALLBACK = "system:commands:new"
+
+_UPGRADE_COMMANDS: Tuple[Tuple[str, str], ...] = (
+    ("pipx upgrade vibego", "升级 vibego 包"),
+    ("vibego stop", "停止 master 服务"),
+    ("vibego start", "重新启动 master 服务"),
+)
+_UPGRADE_LOG_TAIL = int(os.environ.get("MASTER_UPGRADE_LOG_TAIL", "20"))
+_UPGRADE_LOG_BUFFER_LIMIT = int(os.environ.get("MASTER_UPGRADE_LOG_BUFFER_LIMIT", "200"))
+_UPGRADE_LINE_LIMIT = int(os.environ.get("MASTER_UPGRADE_LINE_LIMIT", "160"))
+_UPGRADE_STATE_LOCK = asyncio.Lock()
+_UPGRADE_TASK: Optional[asyncio.Task[None]] = None
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 GLOBAL_COMMAND_EDIT_PREFIX = "system:commands:edit:"
 GLOBAL_COMMAND_FIELD_PREFIX = "system:commands:field:"
 GLOBAL_COMMAND_TOGGLE_PREFIX = "system:commands:toggle:"
@@ -1034,22 +1042,199 @@ async def _notify_update_to_targets(bot: Bot, targets: Sequence[int], *, force_c
         log.info("已向 %s 个管理员推送升级提示", sent)
 
 
-def _trigger_upgrade_pipeline() -> Tuple[bool, Optional[str]]:
-    """触发 pipx 升级流程并在后台运行。"""
+def _sanitize_upgrade_line(raw: str) -> str:
+    """去除 ANSI 控制字符并限制单行长度。"""
 
-    command = "pipx upgrade vibego && vibego stop && vibego start"
+    if not raw:
+        return ""
+    text = raw.replace("\r", "")
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    filtered = "".join(ch for ch in text if ch == "\t" or ch == " " or ch.isprintable())
+    cleaned = filtered.strip("\n")
+    if len(cleaned) > _UPGRADE_LINE_LIMIT:
+        return cleaned[: _UPGRADE_LINE_LIMIT - 1] + "…"
+    return cleaned
+
+
+def _render_upgrade_preview(lines: Sequence[str]) -> str:
+    """渲染最近若干行日志，便于推送到 Telegram。"""
+
+    if not lines:
+        return "（暂无输出）"
+    tail = list(lines[-_UPGRADE_LOG_TAIL:])
+    return "\n".join(tail)
+
+
+async def _safe_edit_upgrade_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+) -> None:
+    """安全地更新升级状态消息，忽略不可修改的异常。"""
+
     try:
-        subprocess.Popen(
-            ["/bin/bash", "-lc", command],
-            cwd=str(ROOT_DIR),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            disable_web_page_preview=True,
         )
-        log.info("已触发升级命令：%s", command)
-        return True, None
-    except Exception as exc:
-        log.error("触发升级命令失败: %s", exc)
-        return False, str(exc)
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            log.warning("升级状态消息更新失败: %s", exc)
+    except TelegramForbiddenError as exc:
+        log.warning("升级状态消息已无法访问(chat=%s): %s", chat_id, exc)
+    except Exception as exc:  # pragma: no cover - 捕获不可预期错误，避免任务崩溃
+        log.error("升级状态消息更新遇到异常: %s", exc)
+
+
+async def _run_single_upgrade_step(
+    command: str,
+    description: str,
+    step_index: int,
+    total_steps: int,
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+) -> Tuple[int, List[str]]:
+    """执行单个升级命令并实时推送日志。"""
+
+    process = await asyncio.create_subprocess_shell(
+        command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(ROOT_DIR),
+    )
+    assert process.stdout is not None  # mypy 安心用
+    lines: List[str] = []
+    loop = asyncio.get_running_loop()
+    last_push = 0.0
+
+    async def _push(status: str, *, force: bool = False) -> None:
+        """按节流频率将最新日志写回 Telegram。"""
+
+        nonlocal last_push
+        now = loop.time()
+        if not force and (now - last_push) < 1.0:
+            return
+        last_push = now
+        preview = _render_upgrade_preview(lines)
+        text = (
+            f"升级流水线进行中（步骤 {step_index}/{total_steps}）\n"
+            f"当前动作：{description}\n"
+            f"命令：{command}\n"
+            f"状态：{status}\n\n"
+            f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+        )
+        await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+
+    await _push("准备执行", force=True)
+    while True:
+        chunk = await process.stdout.readline()
+        if not chunk:
+            break
+        sanitized = _sanitize_upgrade_line(chunk.decode(errors="ignore"))
+        if not sanitized:
+            continue
+        lines.append(sanitized)
+        if len(lines) > _UPGRADE_LOG_BUFFER_LIMIT:
+            del lines[0]
+        await _push("执行中", force=False)
+
+    returncode = await process.wait()
+    await _push(f"步骤结束（退出码 {returncode}）", force=True)
+    return returncode, lines
+
+
+async def _notify_upgrade_failure(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    description: str,
+    command: str,
+    lines: Sequence[str],
+    returncode: Optional[int] = None,
+    *,
+    error: Optional[str] = None,
+) -> None:
+    """升级失败后推送详细日志，方便管理员排障。"""
+
+    reason = f"退出码：{returncode}" if returncode is not None else ""
+    if error:
+        reason = f"异常：{error}"
+    preview = _render_upgrade_preview(lines)
+    text = (
+        "升级流程失败 ❌\n"
+        f"失败步骤：{description}\n"
+        f"命令：{command}\n"
+        f"{reason}\n"
+        "请登录服务器手动执行 `pipx upgrade vibego && vibego stop && vibego start` 检查详情。\n\n"
+        f"最近输出：\n{preview}"
+    )
+    await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+
+
+async def _notify_upgrade_success(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    started_at: float,
+) -> None:
+    """升级成功后推送总结信息。"""
+
+    elapsed = time.monotonic() - started_at
+    text = (
+        "升级流程完成 ✅\n"
+        f"总耗时：{elapsed:.1f} 秒。\n"
+        "master 已重新启动，请稍后使用 /start 验证状态。"
+    )
+    await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+
+
+async def _run_upgrade_pipeline(bot: Bot, chat_id: int, message_id: int) -> None:
+    """串行执行 pipx upgrade / stop / start，并实时推送日志。"""
+
+    started_at = time.monotonic()
+    total_steps = len(_UPGRADE_COMMANDS)
+    for index, (command, description) in enumerate(_UPGRADE_COMMANDS, start=1):
+        log.info("升级步骤 %s/%s：%s", index, total_steps, command)
+        try:
+            returncode, lines = await _run_single_upgrade_step(
+                command,
+                description,
+                index,
+                total_steps,
+                bot,
+                chat_id,
+                message_id,
+            )
+        except Exception as exc:  # pragma: no cover - 捕获不可预期异常
+            log.exception("升级步骤 %s 发生异常", description)
+            await _notify_upgrade_failure(
+                bot,
+                chat_id,
+                message_id,
+                description,
+                command,
+                [],
+                error=str(exc),
+            )
+            return
+
+        if returncode != 0:
+            await _notify_upgrade_failure(
+                bot,
+                chat_id,
+                message_id,
+                description,
+                command,
+                lines,
+                returncode,
+            )
+            return
+
+    await _notify_upgrade_success(bot, chat_id, message_id, started_at)
 
 
 async def _periodic_update_check(bot: Bot) -> None:
@@ -2807,15 +2992,49 @@ async def cmd_upgrade(message: Message) -> None:
         await message.answer("未授权。")
         return
 
-    success, error = _trigger_upgrade_pipeline()
-    if success:
-        notice = (
-            "已触发 `pipx upgrade vibego && vibego stop && vibego start`。\n"
-            "升级过程中 master 将短暂重启，请稍后使用 /start 验证状态。"
+    bot = message.bot
+    if bot is None:
+        await message.answer("Bot 实例未就绪，请稍后重试。")
+        return
+
+    async with _UPGRADE_STATE_LOCK:
+        global _UPGRADE_TASK
+        if _UPGRADE_TASK is not None and _UPGRADE_TASK.done():
+            _UPGRADE_TASK = None
+        if _UPGRADE_TASK is not None:
+            await message.answer("已有升级任务在执行，请等待其完成后再试。")
+            return
+
+        status_message = await message.answer(
+            "已收到升级指令，将依次执行 pipx upgrade / vibego stop / vibego start，日志会实时更新，请勿重复点击。",
+            disable_web_page_preview=True,
         )
-        await message.answer(notice, parse_mode="Markdown")
-    else:
-        await message.answer(f"触发升级命令失败：{error}")
+        message_id = getattr(status_message, "message_id", None)
+        if message_id is None:
+            await message.answer("无法追踪状态消息，升级已取消。")
+            return
+
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            _run_upgrade_pipeline(bot, message.chat.id, message_id),
+            name="master-upgrade-pipeline",
+        )
+        _UPGRADE_TASK = task
+
+        async def _clear_reference() -> None:
+            async with _UPGRADE_STATE_LOCK:
+                global _UPGRADE_TASK
+                if _UPGRADE_TASK is task:
+                    _UPGRADE_TASK = None
+
+        def _on_done(completed: asyncio.Task) -> None:
+            try:
+                completed.result()
+            except Exception as exc:  # pragma: no cover - 记录后台异常
+                log.error("升级流水线执行失败: %s", exc)
+            loop.create_task(_clear_reference())
+
+        task.add_done_callback(_on_done)
 
 
 async def _run_and_reply(message: Message, action: str, coro) -> None:
