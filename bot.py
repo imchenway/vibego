@@ -1908,6 +1908,13 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def _build_command_edit_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """命令编辑输入阶段的取消按钮键盘。"""
+
+    rows = [[KeyboardButton(text="取消")]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def _is_global_command(command: CommandDefinition) -> bool:
     """判断命令是否来源于 master 通用配置。"""
 
@@ -6739,7 +6746,10 @@ async def on_command_field_select(callback: CallbackQuery, state: FSMContext) ->
     else:
         await state.set_state(CommandEditStates.waiting_value)
     if callback.message:
-        await callback.message.answer(prompt_text)
+        await callback.message.answer(
+            prompt_text,
+            reply_markup=_build_command_edit_cancel_keyboard(),
+        )
     await callback.answer("请发送新的值")
 
 
