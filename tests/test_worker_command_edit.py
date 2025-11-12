@@ -6,6 +6,7 @@ import pytest
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
+from aiogram.types import ReplyKeyboardMarkup
 
 import bot
 from command_center.models import CommandDefinition
@@ -27,9 +28,12 @@ class _DummyMessage:
 
     def __init__(self):
         self.answers: list[str] = []
+        self.kwargs: list[dict] = []
+        self.text: str | None = None
 
     async def answer(self, text: str, **kwargs):
         self.answers.append(text)
+        self.kwargs.append(kwargs)
 
 
 class _DummyCallback:
@@ -95,5 +99,36 @@ async def test_on_command_field_select_for_aliases_uses_alias_state(monkeypatch)
         await bot.on_command_field_select(callback, state)
         assert await state.get_state() == bot.CommandEditStates.waiting_aliases.state
         assert "当前别名：alpha, beta" in message.answers[-1]
+    finally:
+        await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_on_command_field_select_attaches_cancel_keyboard(monkeypatch):
+    command = _build_command()
+    monkeypatch.setattr(bot, "COMMAND_SERVICE", _StubCommandService(command))
+    storage, state = _make_state()
+    message = _DummyMessage()
+    callback = _DummyCallback(f"{bot.COMMAND_FIELD_PREFIX}title:{command.id}", message)
+    try:
+        await bot.on_command_field_select(callback, state)
+        reply_markup = message.kwargs[-1]["reply_markup"]
+        assert isinstance(reply_markup, ReplyKeyboardMarkup)
+        assert reply_markup.keyboard[0][0].text.strip() == "取消"
+    finally:
+        await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_on_command_edit_value_cancel_via_button():
+    storage, state = _make_state()
+    await state.set_state(bot.CommandEditStates.waiting_value)
+    await state.update_data(command_id=1, field="title")
+    message = _DummyMessage()
+    message.text = "取消"
+    try:
+        await bot.on_command_edit_value(message, state)
+        assert await state.get_state() is None
+        assert message.answers and "命令编辑已取消" in message.answers[-1]
     finally:
         await storage.close()
