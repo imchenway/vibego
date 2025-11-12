@@ -268,6 +268,8 @@ SESSION_POLL_TIMEOUT = float(os.environ.get("SESSION_POLL_TIMEOUT", "2"))
 WATCH_MAX_WAIT = float(os.environ.get("WATCH_MAX_WAIT", "0"))
 WATCH_INTERVAL = float(os.environ.get("WATCH_INTERVAL", "2"))
 SEND_RETRY_ATTEMPTS = int(os.environ.get("SEND_RETRY_ATTEMPTS", "3"))
+TMUX_SNAPSHOT_LINES = _env_int("TMUX_SNAPSHOT_LINES", 10)
+TMUX_SNAPSHOT_MAX_LINES = _env_int("TMUX_SNAPSHOT_MAX_LINES", 500)
 SEND_RETRY_BASE_DELAY = float(os.environ.get("SEND_RETRY_BASE_DELAY", "0.5"))
 SEND_FAILURE_NOTICE_COOLDOWN = float(os.environ.get("SEND_FAILURE_NOTICE_COOLDOWN", "30"))
 SESSION_INITIAL_BACKTRACK_BYTES = int(os.environ.get("SESSION_INITIAL_BACKTRACK_BYTES", "16384"))
@@ -921,6 +923,26 @@ def tmux_send_line(session: str, line: str):
         # Claude Code 会偶尔忽略首个 Enter，额外发送一次确保队列入列
         time.sleep(0.1)
         subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
+
+
+def _capture_tmux_recent_lines(line_count: int) -> str:
+    """截取 tmux 会话尾部指定行数的原始文本。"""
+
+    tmux = tmux_bin()
+    normalized = max(1, min(line_count, TMUX_SNAPSHOT_MAX_LINES))
+    start_arg = f"-{normalized}"
+    return subprocess.check_output(
+        _tmux_cmd(
+            tmux,
+            "capture-pane",
+            "-p",
+            "-t",
+            TMUX_SESSION,
+            "-S",
+            start_arg,
+        ),
+        text=True,
+    )
 
 
 def resolve_path(path: Path | str) -> Path:
@@ -1845,6 +1867,7 @@ COMMAND_KEYWORDS.update({"task_child", "task_children", "task_delete"})
 
 WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
 WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
+WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT = "💻 终端实况"
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 
 COMMAND_EXEC_PREFIX = "cmd:run:"
@@ -1875,6 +1898,9 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text=WORKER_MENU_BUTTON_TEXT),
                 KeyboardButton(text=WORKER_COMMANDS_BUTTON_TEXT),
+            ],
+            [
+                KeyboardButton(text=WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT),
             ]
         ],
         resize_keyboard=True,
@@ -6456,6 +6482,56 @@ async def _handle_task_list_request(message: Message) -> None:
         )
 
 
+async def _handle_terminal_snapshot_request(message: Message) -> None:
+    """处理“终端实况”按钮，抓取 tmux 会话尾部输出。"""
+
+    chat_id = message.chat.id
+    lines = TMUX_SNAPSHOT_LINES
+    try:
+        raw_output = _capture_tmux_recent_lines(lines)
+    except FileNotFoundError as exc:
+        worker_log.warning(
+            "终端实况截取失败，未找到 tmux：%s",
+            exc,
+            extra={"chat": chat_id},
+        )
+        await _reply_to_chat(
+            chat_id,
+            "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
+            reply_to=message,
+        )
+        return
+    except subprocess.CalledProcessError as exc:
+        worker_log.warning(
+            "终端实况截取失败：%s",
+            exc,
+            extra={"chat": chat_id, "tmux_session": TMUX_SESSION},
+        )
+        await _reply_to_chat(
+            chat_id,
+            f"无法读取 tmux 会话 {TMUX_SESSION} 的输出，请确认 worker 已启动。",
+            reply_to=message,
+        )
+        return
+
+    cleaned = postprocess_tmux_output(raw_output)
+    header = f"{WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT}（最近 {lines} 行）"
+    if not cleaned:
+        await _reply_to_chat(
+            chat_id,
+            f"{header}\n\n暂无可展示的输出，请稍后再试。",
+            reply_to=message,
+        )
+        return
+
+    payload = f"{header}\n\n{cleaned}"
+    worker_log.info(
+        "已发送终端实况",
+        extra={"chat": chat_id, "lines": str(lines), "length": str(len(cleaned))},
+    )
+    await reply_large_text(chat_id, payload)
+
+
 @router.message(Command("task_list"))
 async def on_task_list(message: Message) -> None:
     await _handle_task_list_request(message)
@@ -6464,6 +6540,11 @@ async def on_task_list(message: Message) -> None:
 @router.message(F.text == WORKER_MENU_BUTTON_TEXT)
 async def on_task_list_button(message: Message) -> None:
     await _handle_task_list_request(message)
+
+
+@router.message(F.text == WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
+async def on_tmux_snapshot_button(message: Message) -> None:
+    await _handle_terminal_snapshot_request(message)
 
 
 @router.message(Command("commands"))
