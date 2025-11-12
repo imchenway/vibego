@@ -217,14 +217,20 @@ GLOBAL_COMMAND_NEW_CALLBACK = "system:commands:new"
 
 _UPGRADE_COMMANDS: Tuple[Tuple[str, str], ...] = (
     ("pipx upgrade vibego", "升级 vibego 包"),
-    ("vibego stop", "停止 master 服务"),
-    ("vibego start", "重新启动 master 服务"),
 )
 _UPGRADE_LOG_TAIL = int(os.environ.get("MASTER_UPGRADE_LOG_TAIL", "20"))
 _UPGRADE_LOG_BUFFER_LIMIT = int(os.environ.get("MASTER_UPGRADE_LOG_BUFFER_LIMIT", "200"))
 _UPGRADE_LINE_LIMIT = int(os.environ.get("MASTER_UPGRADE_LINE_LIMIT", "160"))
 _UPGRADE_STATE_LOCK = asyncio.Lock()
 _UPGRADE_TASK: Optional[asyncio.Task[None]] = None
+_UPGRADE_RESTART_COMMAND = os.environ.get(
+    "MASTER_UPGRADE_RESTART_COMMAND",
+    "vibego stop && vibego start",
+)
+_UPGRADE_RESTART_DELAY = float(os.environ.get("MASTER_UPGRADE_RESTART_DELAY", "2.0"))
+_UPGRADE_REPORT_PATH = Path(
+    os.environ.get("MASTER_UPGRADE_REPORT_PATH", STATE_DIR / "upgrade_report.json")
+)
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 GLOBAL_COMMAND_EDIT_PREFIX = "system:commands:edit:"
 GLOBAL_COMMAND_FIELD_PREFIX = "system:commands:field:"
@@ -1175,21 +1181,82 @@ async def _notify_upgrade_failure(
     await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
 
 
-async def _notify_upgrade_success(
+def _persist_upgrade_report(
+    chat_id: int,
+    lines: Sequence[str],
+    elapsed: float,
+    restart_command: str,
+    restart_delay: float,
+) -> None:
+    """将 pipx 阶段的输出写入升级报告，供新 master 启动后推送。"""
+
+    payload = {
+        "chat_id": chat_id,
+        "log_tail": list(lines[-_UPGRADE_LOG_TAIL:]),
+        "elapsed": round(elapsed, 3),
+        "restart_command": restart_command,
+        "restart_delay": restart_delay,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "version": __version__,
+    }
+    _UPGRADE_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = _UPGRADE_REPORT_PATH.with_suffix(_UPGRADE_REPORT_PATH.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(_UPGRADE_REPORT_PATH)
+
+
+def _spawn_detached_restart(command: str, delay: float) -> Optional[subprocess.Popen[str]]:
+    """以延迟方式异步执行 stop/start，确保 master 停止后仍能继续。"""
+
+    cleaned = command.strip()
+    if not cleaned:
+        return None
+    safe_delay = max(0.0, delay)
+    shell_command = f"sleep {safe_delay:.3f} && {cleaned}"
+    return subprocess.Popen(
+        ["bash", "-lc", shell_command],
+        cwd=str(ROOT_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+async def _announce_upgrade_completion(
     bot: Bot,
     chat_id: int,
     message_id: int,
+    lines: Sequence[str],
     started_at: float,
 ) -> None:
-    """升级成功后推送总结信息。"""
+    """记录成功结果并提示即将重启或保持在线。"""
 
     elapsed = time.monotonic() - started_at
+    preview = _render_upgrade_preview(lines)
+    restart_command = _UPGRADE_RESTART_COMMAND.strip()
+    if not restart_command:
+        text = (
+            "升级流程完成 ✅\n"
+            f"pipx upgrade 耗时 {elapsed:.1f} 秒。\n"
+            "未配置自动重启命令，请手动执行 `vibego stop && vibego start` 完成切换。\n\n"
+            f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+        )
+        await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+        return
+
+    _persist_upgrade_report(chat_id, lines, elapsed, restart_command, _UPGRADE_RESTART_DELAY)
     text = (
-        "升级流程完成 ✅\n"
-        f"总耗时：{elapsed:.1f} 秒。\n"
-        "master 已重新启动，请稍后使用 /start 验证状态。"
+        "升级流程完成（pipx 阶段） ✅\n"
+        f"pipx upgrade 耗时 {elapsed:.1f} 秒，将在 {_UPGRADE_RESTART_DELAY:.1f} 秒后执行：{restart_command}\n"
+        "master 即将重启并短暂离线，稍后使用 /start 验证状态。\n\n"
+        f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
     )
     await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+    proc = _spawn_detached_restart(restart_command, _UPGRADE_RESTART_DELAY)
+    if proc:
+        log.info("已安排升级后自动重启", extra={"pid": proc.pid, "delay": _UPGRADE_RESTART_DELAY})
+    else:
+        log.warning("升级成功但未能启动自动重启命令", extra={"command": restart_command})
 
 
 async def _run_upgrade_pipeline(bot: Bot, chat_id: int, message_id: int) -> None:
@@ -1197,6 +1264,7 @@ async def _run_upgrade_pipeline(bot: Bot, chat_id: int, message_id: int) -> None
 
     started_at = time.monotonic()
     total_steps = len(_UPGRADE_COMMANDS)
+    last_lines: List[str] = []
     for index, (command, description) in enumerate(_UPGRADE_COMMANDS, start=1):
         log.info("升级步骤 %s/%s：%s", index, total_steps, command)
         try:
@@ -1233,8 +1301,9 @@ async def _run_upgrade_pipeline(bot: Bot, chat_id: int, message_id: int) -> None
                 returncode,
             )
             return
+        last_lines = lines
 
-    await _notify_upgrade_success(bot, chat_id, message_id, started_at)
+    await _announce_upgrade_completion(bot, chat_id, message_id, last_lines, started_at)
 
 
 async def _periodic_update_check(bot: Bot) -> None:
@@ -2737,6 +2806,66 @@ async def _notify_start_signal(bot: Bot) -> None:
 
     if signal_path:
         _safe_remove(signal_path)
+
+
+def _read_upgrade_report() -> Optional[dict]:
+    """读取升级完成报告，供新 master 启动时推送。"""
+
+    path = _UPGRADE_REPORT_PATH
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("upgrade report must be object")
+        return payload
+    except Exception as exc:
+        log.error("读取升级报告失败: %s", exc, extra={"path": str(path)})
+        _safe_remove(path)
+        return None
+
+
+async def _notify_upgrade_report(bot: Bot) -> None:
+    """若存在升级报告，则在 master 启动后向管理员推送摘要。"""
+
+    payload = _read_upgrade_report()
+    if not payload:
+        return
+    chat_id = payload.get("chat_id")
+    if not isinstance(chat_id, int):
+        log.warning("升级报告缺少有效 chat_id，已忽略", extra={"payload": payload})
+        _safe_remove(_UPGRADE_REPORT_PATH)
+        return
+
+    preview_lines = payload.get("log_tail") or []
+    if isinstance(preview_lines, str):
+        preview_lines = [preview_lines]
+    if not isinstance(preview_lines, list):
+        preview_lines = []
+    preview = "\n".join(str(line) for line in preview_lines) if preview_lines else "（暂无输出）"
+
+    elapsed = payload.get("elapsed")
+    restart_command = payload.get("restart_command") or _UPGRADE_RESTART_COMMAND
+    restart_delay = payload.get("restart_delay", _UPGRADE_RESTART_DELAY)
+    recorded_at = payload.get("recorded_at")
+    text_lines = ["升级流程完成 ✅"]
+    if isinstance(elapsed, (int, float)):
+        text_lines.append(f"pipx upgrade 耗时 {elapsed:.1f} 秒。")
+    if restart_command:
+        text_lines.append(f"stop/start 命令：{restart_command}（延迟 {restart_delay:.1f} 秒触发）")
+    if recorded_at:
+        text_lines.append(f"记录时间：{recorded_at}")
+    text_lines.append("master 已重新上线，请使用 /start 校验项目状态。")
+    text_lines.append("")
+    text_lines.append(f"pipx 输出摘要：\n{preview}")
+    text = "\n".join(text_lines)
+
+    try:
+        await bot.send_message(chat_id=chat_id, text=text)
+    except Exception as exc:
+        log.error("发送升级完成通知失败: %s", exc, extra={"chat": chat_id})
+    finally:
+        _safe_remove(_UPGRADE_REPORT_PATH)
 
 
 async def _ensure_manager() -> MasterManager:
@@ -4354,6 +4483,7 @@ async def main() -> None:
     dp.include_router(router)
     dp.startup.register(_notify_restart_success)
     dp.startup.register(_notify_start_signal)
+    dp.startup.register(_notify_upgrade_report)
 
     log.info("Master 已启动，监听管理员指令。")
     await _ensure_master_menu_button(bot)

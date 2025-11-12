@@ -1103,9 +1103,7 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     reply_text, _, _, _ = message.calls[-1]
     assert "任务状态已自动更新为“测试”" in reply_text
     assert bot.PENDING_SUMMARIES, "应记录待落库的摘要上下文"
-    args, kwargs = log_calls[0]
-    payload = kwargs["payload"]
-    assert payload.get("status_auto_updated") is True
+    assert not log_calls, "生成模型摘要的触发动作不应写入任务历史"
     bot.PENDING_SUMMARIES.clear()
 
 
