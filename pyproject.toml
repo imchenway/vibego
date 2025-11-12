@@ -35,7 +35,8 @@ include-package-data = true
 py-modules = ["bot", "master", "logging_setup", "project_repository"]
 
 [tool.setuptools.packages.find]
-include = ["vibego_cli", "tasks", "scripts", "command_center"]
+# 显式包含子包，避免 setuptools 漏掉 vibego_cli.data、scripts.models 等目录
+include = ["vibego_cli", "vibego_cli.*", "tasks", "scripts", "scripts.*", "command_center"]
 
 [tool.setuptools.package-data]
 "vibego_cli" = ["data/*.txt"]
