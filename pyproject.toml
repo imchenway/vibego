@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vibego"
-version = "1.1.11"
+version = "1.1.12"
 description = "vibego CLI：用于初始化与管理 Telegram Master Bot 的工具"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,7 +42,7 @@ include = ["vibego_cli", "tasks", "scripts", "command_center"]
 "scripts" = ["*.sh", "models/*.sh"]
 
 [tool.bumpversion]
-current_version = "1.1.11"
+current_version = "1.1.12"
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 serialize = ["{major}.{minor}.{patch}"]
 search = "{current_version}"
