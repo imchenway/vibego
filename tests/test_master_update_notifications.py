@@ -331,6 +331,25 @@ async def test_run_upgrade_pipeline_without_restart(monkeypatch: pytest.MonkeyPa
     assert "called" not in recorded
 
 
+def test_persist_upgrade_report_records_versions(upgrade_report_path: Path):
+    """写入升级报告时应记录旧/新版本。"""
+
+    lines = [
+        "其他输出",
+        "upgraded package vibego from 1.1.13 to 1.1.14 (location: /Users/david/.local/pipx/venvs/vibego)",
+    ]
+    master._persist_upgrade_report(
+        chat_id=1,
+        lines=lines,
+        elapsed=6.2,
+        restart_command="echo restart",
+        restart_delay=2.0,
+    )
+    payload = json.loads(upgrade_report_path.read_text(encoding="utf-8"))
+    assert payload["old_version"] == "1.1.13"
+    assert payload["new_version"] == "1.1.14"
+
+
 @pytest.mark.asyncio
 async def test_notify_upgrade_report(monkeypatch: pytest.MonkeyPatch, upgrade_report_path: Path):
     """启动时若存在升级报告应推送摘要并清理文件。"""
@@ -342,11 +361,16 @@ async def test_notify_upgrade_report(monkeypatch: pytest.MonkeyPatch, upgrade_re
         "restart_command": "echo restart",
         "restart_delay": 1.0,
         "recorded_at": "2025-11-12T10:00:00+00:00",
+        "old_version": "1.1.13",
+        "new_version": "1.1.14",
     }
     upgrade_report_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     bot = DummyBot()
     await master._notify_upgrade_report(bot)
     assert bot.messages, "应推送升级摘要"
-    assert "pipx 输出摘要" in bot.messages[0][1]
+    lines = bot.messages[0][1].splitlines()
+    assert lines[0].startswith("✅ 升级流程完成")
+    assert lines[1] == "📦 旧版本 1.1.13 -> 新版本 1.1.14"
+    assert lines[2].startswith("🚀 master 已重新上线")
     assert not upgrade_report_path.exists()

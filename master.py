@@ -232,6 +232,10 @@ _UPGRADE_REPORT_PATH = Path(
     os.environ.get("MASTER_UPGRADE_REPORT_PATH", STATE_DIR / "upgrade_report.json")
 )
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_PIPX_VERSION_RE = re.compile(
+    r"upgraded package\s+(?P<name>[\w\-.]+)\s+from\s+(?P<old>[0-9A-Za-z.\-+]+)\s+to\s+(?P<new>[0-9A-Za-z.\-+]+)",
+    re.IGNORECASE,
+)
 GLOBAL_COMMAND_EDIT_PREFIX = "system:commands:edit:"
 GLOBAL_COMMAND_FIELD_PREFIX = "system:commands:field:"
 GLOBAL_COMMAND_TOGGLE_PREFIX = "system:commands:toggle:"
@@ -1071,6 +1075,16 @@ def _render_upgrade_preview(lines: Sequence[str]) -> str:
     return "\n".join(tail)
 
 
+def _extract_upgrade_versions(lines: Sequence[str]) -> Tuple[Optional[str], Optional[str]]:
+    """从 pipx 输出中提取旧/新版本，若未匹配则返回 None。"""
+
+    for line in reversed(lines):
+        match = _PIPX_VERSION_RE.search(line)
+        if match:
+            return match.group("old"), match.group("new")
+    return None, None
+
+
 async def _safe_edit_upgrade_message(
     bot: Bot,
     chat_id: int,
@@ -1190,6 +1204,7 @@ def _persist_upgrade_report(
 ) -> None:
     """将 pipx 阶段的输出写入升级报告，供新 master 启动后推送。"""
 
+    old_version, new_version = _extract_upgrade_versions(lines)
     payload = {
         "chat_id": chat_id,
         "log_tail": list(lines[-_UPGRADE_LOG_TAIL:]),
@@ -1198,6 +1213,8 @@ def _persist_upgrade_report(
         "restart_delay": restart_delay,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "version": __version__,
+        "old_version": old_version,
+        "new_version": new_version,
     }
     _UPGRADE_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = _UPGRADE_REPORT_PATH.with_suffix(_UPGRADE_REPORT_PATH.suffix + ".tmp")
@@ -2837,28 +2854,15 @@ async def _notify_upgrade_report(bot: Bot) -> None:
         _safe_remove(_UPGRADE_REPORT_PATH)
         return
 
-    preview_lines = payload.get("log_tail") or []
-    if isinstance(preview_lines, str):
-        preview_lines = [preview_lines]
-    if not isinstance(preview_lines, list):
-        preview_lines = []
-    preview = "\n".join(str(line) for line in preview_lines) if preview_lines else "（暂无输出）"
-
     elapsed = payload.get("elapsed")
-    restart_command = payload.get("restart_command") or _UPGRADE_RESTART_COMMAND
-    restart_delay = payload.get("restart_delay", _UPGRADE_RESTART_DELAY)
-    recorded_at = payload.get("recorded_at")
-    text_lines = ["升级流程完成 ✅"]
-    if isinstance(elapsed, (int, float)):
-        text_lines.append(f"pipx upgrade 耗时 {elapsed:.1f} 秒。")
-    if restart_command:
-        text_lines.append(f"stop/start 命令：{restart_command}（延迟 {restart_delay:.1f} 秒触发）")
-    if recorded_at:
-        text_lines.append(f"记录时间：{recorded_at}")
-    text_lines.append("master 已重新上线，请使用 /start 校验项目状态。")
-    text_lines.append("")
-    text_lines.append(f"pipx 输出摘要：\n{preview}")
-    text = "\n".join(text_lines)
+    elapsed_text = f"{elapsed:.1f}" if isinstance(elapsed, (int, float)) else "未知"
+    old_version = payload.get("old_version") or payload.get("version") or "未知"
+    new_version = payload.get("new_version") or __version__
+    text = (
+        f"✅ 升级流程完成，执行耗时 {elapsed_text} 秒。\n"
+        f"📦 旧版本 {old_version} -> 新版本 {new_version}\n"
+        "🚀 master 已重新上线，请使用 /start 校验项目状态。"
+    )
 
     try:
         await bot.send_message(chat_id=chat_id, text=text)
