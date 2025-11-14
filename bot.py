@@ -156,6 +156,20 @@ def _env_float(name: str, default: float) -> float:
         worker_log.warning("环境变量 %s=%r 解析为浮点数失败，已使用默认值 %s", name, raw, default)
         return default
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    """读取布尔型环境变量，兼容多种写法。"""
+
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
 _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
     "": None,
     "none": None,
@@ -167,7 +181,7 @@ _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
 }
 
 # 阶段提示统一追加 agents.md 信息，确保推送记录要求一致。
-AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。以下是需要执行的任务描述以及其对应的执行历史摘要：\n"
+AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。以下是需要执行的任务描述以及其对应的执行历史摘要："
 # 推送到模型的阶段提示（vibe 与测试），合并统一后缀确保输出一致。
 VIBE_PHASE_PROMPT = f"进入vibe阶段{AGENTS_PHASE_SUFFIX}"
 TEST_PHASE_PROMPT = f"进入测试阶段{AGENTS_PHASE_SUFFIX}"
@@ -262,6 +276,7 @@ MAX_RETURN_CHARS = int(os.environ.get("MAX_RETURN_CHARS", "200000"))  # 超大�
 TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip()        # 可选代理 URL
 CODEX_WORKDIR = os.environ.get("CODEX_WORKDIR", "").strip()
 CODEX_SESSION_FILE_PATH = os.environ.get("CODEX_SESSION_FILE_PATH", "").strip()
+SESSION_ACTIVE_ID_FILE = os.environ.get("SESSION_ACTIVE_ID_FILE", "").strip()
 CODEX_SESSIONS_ROOT = os.environ.get("CODEX_SESSIONS_ROOT", "").strip()
 MODEL_SESSION_ROOT = os.environ.get("MODEL_SESSION_ROOT", "").strip()
 MODEL_SESSION_GLOB = os.environ.get("MODEL_SESSION_GLOB", "rollout-*.jsonl").strip() or "rollout-*.jsonl"
@@ -276,6 +291,9 @@ SEND_FAILURE_NOTICE_COOLDOWN = float(os.environ.get("SEND_FAILURE_NOTICE_COOLDOW
 SESSION_INITIAL_BACKTRACK_BYTES = int(os.environ.get("SESSION_INITIAL_BACKTRACK_BYTES", "16384"))
 ENABLE_PLAN_PROGRESS = (os.environ.get("ENABLE_PLAN_PROGRESS", "1").strip().lower() not in {"0", "false", "no", "off"})
 AUTO_COMPACT_THRESHOLD = max(_env_int("AUTO_COMPACT_THRESHOLD", 0), 0)
+SESSION_BIND_STRICT = _env_bool("SESSION_BIND_STRICT", True)
+SESSION_BIND_TIMEOUT_SECONDS = max(_env_float("SESSION_BIND_TIMEOUT_SECONDS", 30.0), 0.0)
+SESSION_BIND_POLL_INTERVAL = max(_env_float("SESSION_BIND_POLL_INTERVAL", 0.5), 0.1)
 
 PLAN_STATUS_LABELS = {
     "completed": "✅",
@@ -1096,7 +1114,7 @@ async def _dispatch_prompt_to_model(
         )
 
     target_cwd = CODEX_WORKDIR if CODEX_WORKDIR else None
-    if pointer_path is not None:
+    if pointer_path is not None and not SESSION_BIND_STRICT:
         current_cwd = _read_session_meta_cwd(session_path) if session_path else None
         if session_path is None or (target_cwd and current_cwd != target_cwd):
             latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
@@ -1145,8 +1163,19 @@ async def _dispatch_prompt_to_model(
         return False, None
 
     if needs_session_wait:
-        session_path = await _await_session_path(pointer_path, target_cwd)
-        if session_path is None and pointer_path is not None and _is_claudecode_model():
+        session_path = await _await_session_path(
+            pointer_path,
+            target_cwd,
+            poll=SESSION_BIND_POLL_INTERVAL,
+            strict=SESSION_BIND_STRICT,
+            max_wait=SESSION_BIND_TIMEOUT_SECONDS,
+        )
+        if (
+            session_path is None
+            and pointer_path is not None
+            and _is_claudecode_model()
+            and not SESSION_BIND_STRICT
+        ):
             session_path = _find_latest_claudecode_rollout(pointer_path)
         if session_path is None:
             await _reply_to_chat(
@@ -1857,7 +1886,20 @@ BOT_COMMANDS: list[tuple[str, str]] = [
 ]
 
 COMMAND_KEYWORDS: set[str] = {command for command, _ in BOT_COMMANDS}
-COMMAND_KEYWORDS.update({"task_child", "task_children", "task_delete"})
+COMMAND_KEYWORDS.update(
+    {
+        "task_child",
+        "task_children",
+        "task_delete",
+        "task_show",
+        "task_new",
+        "task_list",
+        "tasks",
+        "commands",
+        "task_note",
+        "task_update",
+    }
+)
 
 WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
 WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
@@ -5357,7 +5399,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 session_path,
                 extra=_session_extra(path=session_path),
             )
-    if session_path is None and pointer_path is not None:
+    if session_path is None and pointer_path is not None and not SESSION_BIND_STRICT:
         latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
         if latest is not None:
             session_path = latest
@@ -5369,7 +5411,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 extra=_session_extra(path=session_path),
             )
 
-    if pointer_path is not None and _is_claudecode_model():
+    if pointer_path is not None and _is_claudecode_model() and not SESSION_BIND_STRICT:
         fallback = _find_latest_claudecode_rollout(pointer_path)
         if fallback is not None and fallback != session_path:
             session_path = fallback
@@ -5382,7 +5424,13 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
             )
 
     if session_path is None and pointer_path is not None:
-        session_path = await _await_session_path(pointer_path, target_cwd)
+        session_path = await _await_session_path(
+            pointer_path,
+            target_cwd,
+            poll=SESSION_BIND_POLL_INTERVAL,
+            strict=SESSION_BIND_STRICT,
+            max_wait=SESSION_BIND_TIMEOUT_SECONDS,
+        )
         if session_path is not None:
             _update_pointer(pointer_path, session_path)
             worker_log.info(
@@ -5391,7 +5439,12 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 session_path,
                 extra=_session_extra(path=session_path),
             )
-    if session_path is None and pointer_path is not None and _is_claudecode_model():
+    if (
+        session_path is None
+        and pointer_path is not None
+        and _is_claudecode_model()
+        and not SESSION_BIND_STRICT
+    ):
         fallback = _find_latest_claudecode_rollout(pointer_path)
         if fallback is not None:
             session_path = fallback
@@ -5986,19 +6039,42 @@ def _find_latest_rollout_for_cwd(pointer: Path, target_cwd: Optional[str]) -> Op
 
 
 async def _await_session_path(
-    pointer: Optional[Path], target_cwd: Optional[str], poll: float = 0.5
+    pointer: Optional[Path],
+    target_cwd: Optional[str],
+    poll: float = 0.5,
+    *,
+    strict: bool = False,
+    max_wait: float = 0.0,
 ) -> Optional[Path]:
-    if pointer:
-        candidate = _read_pointer_path(pointer)
-        if candidate is not None:
-            return candidate
-    await asyncio.sleep(poll)
-    if pointer:
+    """等待 pointer 写入新会话；strict=False 时会回退到旧 session。"""
+
+    if pointer is None:
+        await asyncio.sleep(poll)
+        return None
+
+    candidate = _read_pointer_path(pointer)
+    if candidate is not None:
+        return candidate
+
+    poll_interval = max(poll, 0.1)
+    if not strict:
+        await asyncio.sleep(poll_interval)
         candidate = _read_pointer_path(pointer)
         if candidate is not None:
             return candidate
         return _find_latest_rollout_for_cwd(pointer, target_cwd)
-    return None
+
+    deadline: Optional[float] = None
+    if max_wait and max_wait > 0:
+        deadline = time.monotonic() + max_wait
+
+    while True:
+        await asyncio.sleep(poll_interval)
+        candidate = _read_pointer_path(pointer)
+        if candidate is not None:
+            return candidate
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
 
 
 def _update_pointer(pointer: Path, rollout: Path) -> None:
