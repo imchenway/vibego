@@ -64,6 +64,7 @@ from command_center import (
     CommandAliasConflictError,
     CommandAlreadyExistsError,
     CommandNotFoundError,
+    DEFAULT_GLOBAL_COMMANDS,
     GLOBAL_COMMAND_PROJECT_SLUG,
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
@@ -119,6 +120,60 @@ GLOBAL_COMMAND_SERVICE = CommandService(
     GLOBAL_COMMAND_PROJECT_SLUG,
     scope=GLOBAL_COMMAND_SCOPE,
 )
+
+
+async def _ensure_default_global_commands() -> None:
+    """在 master 启动阶段保证通用命令就绪，并同步最新脚本配置。"""
+
+    try:
+        await GLOBAL_COMMAND_SERVICE.initialize()
+    except Exception as exc:  # noqa: BLE001
+        log.error("通用命令数据库初始化失败：%s", exc)
+        return
+
+    for payload in DEFAULT_GLOBAL_COMMANDS:
+        name = str(payload["name"])
+        desired_aliases = tuple(payload.get("aliases") or ())
+        desired_timeout = payload.get("timeout")
+        try:
+            existing = await GLOBAL_COMMAND_SERVICE.resolve_by_trigger(name)
+        except Exception as exc:  # noqa: BLE001
+            log.error("查询通用命令失败：%s", exc, extra={"command": name})
+            continue
+
+        if existing is None:
+            try:
+                await GLOBAL_COMMAND_SERVICE.create_command(**payload)
+                log.info("已注入通用命令：%s", name)
+            except (CommandAlreadyExistsError, CommandAliasConflictError) as exc:
+                log.warning("通用命令 %s 注入冲突：%s", name, exc)
+            except Exception as exc:  # noqa: BLE001
+                log.error("通用命令 %s 创建失败：%s", name, exc)
+            continue
+
+        updates: dict[str, object] = {}
+        for field in ("title", "command", "description"):
+            value = payload.get(field)
+            if value is not None and getattr(existing, field) != value:
+                updates[field] = value
+        if desired_timeout is not None and existing.timeout != desired_timeout:
+            updates["timeout"] = desired_timeout
+
+        if updates:
+            try:
+                await GLOBAL_COMMAND_SERVICE.update_command(existing.id, **updates)
+                log.info("已更新通用命令：%s 字段=%s", name, ", ".join(updates.keys()))
+            except Exception as exc:  # noqa: BLE001
+                log.error("更新通用命令 %s 失败：%s", name, exc)
+
+        existing_aliases = tuple(existing.aliases or ())
+        if existing_aliases != desired_aliases:
+            try:
+                await GLOBAL_COMMAND_SERVICE.replace_aliases(existing.id, desired_aliases)
+                alias_label = ", ".join(desired_aliases) if desired_aliases else "无"
+                log.info("已重写通用命令别名：%s -> %s", name, alias_label)
+            except Exception as exc:  # noqa: BLE001
+                log.error("更新通用命令 %s 别名失败：%s", name, exc)
 
 UPDATE_STATE_PATH = STATE_DIR / "update_state.json"
 UPDATE_CHECK_INTERVAL = timedelta(hours=24)
@@ -4452,6 +4507,7 @@ async def main() -> None:
     """master.py 的异步入口，完成 bot 启动与调度器绑定。"""
 
     manager = await bootstrap_manager()
+    await _ensure_default_global_commands()
 
     # 诊断日志：记录重启信号文件路径，便于排查问题
     log.info(
