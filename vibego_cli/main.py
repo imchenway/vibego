@@ -21,6 +21,7 @@ from command_center import (
     CommandAliasConflictError,
     CommandAlreadyExistsError,
     CommandService,
+    DEFAULT_GLOBAL_COMMANDS,
     GLOBAL_COMMAND_PROJECT_SLUG,
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
@@ -32,24 +33,6 @@ TOKEN_PATTERN = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{20,}$")
 BOTFATHER_URL = "https://core.telegram.org/bots#botfather"
 START_SIGNAL_PATH = config.STATE_DIR / "start_signal.json"
 TELEGRAM_BOT_LIMITATION_DOC = "https://core.telegram.org/bots/faq#how-can-i-message-a-user"
-
-DEFAULT_GLOBAL_COMMANDS: tuple[dict[str, object], ...] = (
-    {
-        "name": "git-fetch",
-        "title": "git-fetch",
-        "command": "git -c core.quotepath=false -c log.showSignature=false fetch origin --recurse-submodules=no --progress --prune",
-        "description": "",
-        "aliases": (),
-    },
-    {
-        "name": "git-fetch-add-commit-push",
-        "title": "git-fetch-add-commit-push",
-        "command": "git -c core.quotepath=false -c log.showSignature=false fetch origin --recurse-submodules=no --progress --prune && git add -A && git commit -m \"commit via telegram\" && git -c core.quotepath=false -c log.showSignature=false push --progress --porcelain origin refs/heads/master:master",
-        "description": "",
-        "aliases": (),
-    },
-)
-
 
 def _find_repo_root() -> Path:
     """推导当前仓库根目录。"""
@@ -467,6 +450,18 @@ def command_doctor(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
+def command_seed_commands(args: argparse.Namespace) -> None:
+    """实现 `vibego commands-seed`，手动注入默认通用命令。"""
+
+    config.ensure_directories()
+    try:
+        asyncio.run(_seed_default_global_commands())
+    except Exception as exc:  # noqa: BLE001
+        print("默认通用命令注入失败：", exc)
+        return
+    print("默认通用命令注入完成。")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建最外层 argparse 解析器。"""
 
@@ -494,6 +489,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="运行依赖与配置自检")
     doctor_parser.set_defaults(func=command_doctor)
+
+    seed_parser = subparsers.add_parser("commands-seed", help="注入默认通用命令（可重复执行）")
+    seed_parser.set_defaults(func=command_seed_commands)
 
     return parser
 

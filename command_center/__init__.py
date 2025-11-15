@@ -12,6 +12,7 @@ from .service import (
     CommandHistoryNotFoundError,
 )
 from .fsm import CommandCreateStates, CommandEditStates
+from .defaults import DEFAULT_GLOBAL_COMMANDS
 
 GLOBAL_COMMAND_SCOPE = "global"
 GLOBAL_COMMAND_PROJECT_SLUG = "__global__"
@@ -37,6 +38,7 @@ __all__ = [
     "CommandHistoryNotFoundError",
     "CommandCreateStates",
     "CommandEditStates",
+    "DEFAULT_GLOBAL_COMMANDS",
     "GLOBAL_COMMAND_SCOPE",
     "GLOBAL_COMMAND_PROJECT_SLUG",
     "GLOBAL_COMMAND_DB_NAME",
