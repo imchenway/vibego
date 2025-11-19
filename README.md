@@ -18,6 +18,7 @@ For the english version, see [README-en](README-en.md).
 
 ```bash
 brew install python@3.11 tmux
+brew install pipx
 python3 -m venv ~/.config/vibego/runtime/venv
 source ~/.config/vibego/runtime/venv/bin/activate
 ```
