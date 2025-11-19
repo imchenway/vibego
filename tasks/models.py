@@ -1,10 +1,14 @@
 """任务相关的数据模型定义。"""
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+# Python 3.10 之前 dataclass 不支持 slots 参数，这里动态传参保持兼容。
+_DATACLASS_SLOT_KW = {"slots": True} if sys.version_info >= (3, 10) else {}
 
 _SHANGHAI_TZ_NAME = "Asia/Shanghai"
 try:
@@ -42,7 +46,7 @@ def ensure_shanghai_iso(value: Optional[str]) -> Optional[str]:
     return _format_shanghai(parsed)
 
 
-@dataclass(slots=True)
+@dataclass(**_DATACLASS_SLOT_KW)
 class TaskRecord:
     """表示单个任务的核心字段集合。"""
 
@@ -64,7 +68,7 @@ class TaskRecord:
     archived: bool = False
 
 
-@dataclass(slots=True)
+@dataclass(**_DATACLASS_SLOT_KW)
 class TaskNoteRecord:
     """描述附加在任务上的备注信息。"""
 
@@ -75,7 +79,7 @@ class TaskNoteRecord:
     created_at: str = field(default_factory=shanghai_now_iso)
 
 
-@dataclass(slots=True)
+@dataclass(**_DATACLASS_SLOT_KW)
 class TaskHistoryRecord:
     """记录任务字段的历史变更信息。"""
 

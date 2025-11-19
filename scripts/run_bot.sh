@@ -4,6 +4,39 @@ set -euo pipefail
 # shellcheck disable=SC2155
 SOURCE_ROOT="${VIBEGO_PACKAGE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
+pick_python_bin() {
+  if [[ -n "${VIBEGO_PYTHON_BIN:-}" ]]; then
+    printf '%s' "$VIBEGO_PYTHON_BIN"
+    return 0
+  fi
+  local candidate
+  for candidate in python3.11 python3.10 python3.9 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PYTHON_BIN="$(pick_python_bin)" || {
+  echo "[run-bot] 未检测到可用的 python3，请先安装 Python>=3.9" >&2
+  exit 1
+}
+
+PY_VERSION_OUTPUT="$("$PYTHON_BIN" - <<'PY'
+import sys
+print(sys.version_info.major, sys.version_info.minor, sys.version_info.micro)
+PY
+)"
+read -r PY_MAJOR PY_MINOR PY_MICRO <<<"$PY_VERSION_OUTPUT"
+PY_VERSION_STR="${PY_MAJOR}.${PY_MINOR}.${PY_MICRO}"
+if (( PY_MAJOR < 3 || (PY_MAJOR == 3 && PY_MINOR < 9) )); then
+  echo "[run-bot] 当前 Python 版本 $PY_VERSION_STR 不满足 >=3.9 要求" >&2
+  exit 1
+fi
+echo "[run-bot] 使用 Python: $PY_VERSION_STR ($PYTHON_BIN)"
+
 resolve_config_root() {
   local raw=""
   if [[ -n "${MASTER_CONFIG_ROOT:-}" ]]; then
@@ -144,7 +177,7 @@ fi
 mkdir -p "$RUNTIME_ROOT"
 
 if [[ ! -d "$VENV_DIR" ]]; then
-  python3 -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"

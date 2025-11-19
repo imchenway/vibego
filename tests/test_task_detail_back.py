@@ -1,7 +1,11 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc  # Python<3.11 兼容 UTC 常量
 
 import bot
 from tasks.models import TaskRecord, TaskHistoryRecord

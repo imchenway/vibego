@@ -7,7 +7,7 @@ name = "vibego"
 version = "1.0.26"
 description = "vibego CLI：用于初始化与管理 Telegram Master Bot 的工具"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 authors = [
     { name = "Hypha" }
 ]
@@ -20,6 +20,8 @@ dependencies = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Operating System :: MacOS",
     "Intended Audience :: Developers",

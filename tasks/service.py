@@ -35,9 +35,16 @@ class TaskService:
 
         self.db_path = Path(db_path)
         self.project_slug = project_slug
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
         self._initialized = False
         self._valid_statuses = set(TASK_STATUSES)
+
+    def _get_lock(self) -> asyncio.Lock:
+        """惰性初始化内部锁，兼容 Python 3.9 未创建事件循环的场景。"""
+
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def initialize(self) -> None:
         """确保数据库结构存在，并执行必要的迁移逻辑。"""
@@ -407,7 +414,7 @@ class TaskService:
     ) -> TaskRecord:
         """创建顶级任务并写入初始历史记录。"""
 
-        async with self._lock:
+        async with self._get_lock():
             async with aiosqlite.connect(self.db_path) as db:
                 db.row_factory = aiosqlite.Row
                 await db.execute("PRAGMA foreign_keys = ON")
@@ -585,7 +592,7 @@ class TaskService:
         if not canonical_task_id:
             raise ValueError("任务不存在")
         task_id = canonical_task_id
-        async with self._lock:
+        async with self._get_lock():
             async with aiosqlite.connect(self.db_path) as db:
                 db.row_factory = aiosqlite.Row
                 await db.execute("PRAGMA foreign_keys = ON")
@@ -666,7 +673,7 @@ class TaskService:
             raise ValueError("任务不存在")
         task_id = canonical_task_id
         now = shanghai_now_iso()
-        async with self._lock:
+        async with self._get_lock():
             async with aiosqlite.connect(self.db_path) as db:
                 db.row_factory = aiosqlite.Row
                 await db.execute("PRAGMA foreign_keys = ON")
@@ -782,7 +789,7 @@ class TaskService:
             except (TypeError, ValueError) as exc:
                 logger.warning("事件 payload 序列化失败: task_id=%s error=%s", task_id, exc)
                 payload_text = None
-        async with self._lock:
+        async with self._get_lock():
             async with aiosqlite.connect(self.db_path) as db:
                 db.row_factory = aiosqlite.Row
                 await db.execute("PRAGMA foreign_keys = ON")
@@ -867,7 +874,7 @@ class TaskService:
 
         target_path = target_path.expanduser()
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        async with self._lock:
+        async with self._get_lock():
             async with aiosqlite.connect(self.db_path) as source:
                 async with aiosqlite.connect(target_path) as dest:
                     await dest.execute("PRAGMA foreign_keys = OFF")

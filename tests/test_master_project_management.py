@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import sqlite3
@@ -18,10 +20,10 @@ from project_repository import ProjectRecord, ProjectRepository
 @pytest.fixture(autouse=True)
 def reset_wizard_state():
     master.PROJECT_WIZARD_SESSIONS.clear()
-    master.PROJECT_WIZARD_LOCK = asyncio.Lock()
+    master.reset_project_wizard_lock()
     yield
     master.PROJECT_WIZARD_SESSIONS.clear()
-    master.PROJECT_WIZARD_LOCK = asyncio.Lock()
+    master.reset_project_wizard_lock()
     master.PROJECT_REPOSITORY = None
     master.MANAGER = None
 

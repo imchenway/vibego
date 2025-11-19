@@ -22,6 +22,9 @@ python3 -m venv ~/.config/vibego/runtime/venv
 source ~/.config/vibego/runtime/venv/bin/activate
 ```
 
+- Python 3.9+ is required and 3.11+ is recommended. The [official datetime docs](https://docs.python.org/3/library/datetime.html#datetime.UTC) show that `datetime.UTC` exists only from 3.11 onwards, so the codebase now falls back to `timezone.utc` when running on older interpreters.
+- `scripts/run_bot.sh` automatically prefers `python3.11` (override via `VIBEGO_PYTHON_BIN`) and falls back to the system `python3` when it is still at least version 3.9.
+
 ## Quick Start
 
 ### Create and retrieve a Telegram bot token
