@@ -387,11 +387,95 @@ def _stop_all_workers_via_script() -> None:
         pass
 
 
+def _list_vibego_processes() -> List[Tuple[int, str]]:
+    """列出系统中所有与 vibego 相关的 Python 进程。"""
+
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "pid=,args="],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return []
+
+    result: List[Tuple[int, str]] = []
+    for raw in proc.stdout.decode().splitlines():
+        line = raw.strip()
+        if not line or "vibego" not in line:
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        pid_str, cmd = parts
+        if not pid_str.isdigit():
+            continue
+        pid = int(pid_str)
+        if (
+            "bot.py" in cmd
+            or "master.py" in cmd
+            or "session_binder.py" in cmd
+            or "log_writer.py" in cmd
+        ):
+            result.append((pid, cmd))
+    return result
+
+
+def _find_foreign_processes(allowed_root: Path) -> List[Tuple[int, str]]:
+    """查找命令行不包含 allowed_root 的 vibego 进程。"""
+
+    allowed = str(allowed_root)
+    candidates = []
+    for pid, cmd in _list_vibego_processes():
+        if allowed and allowed in cmd:
+            continue
+        candidates.append((pid, cmd))
+    return candidates
+
+
+def _terminate_processes(pids: Sequence[int]) -> None:
+    """对给定 pid 发送 SIGTERM/SIGKILL。"""
+
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            continue
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+        time.sleep(0.5)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def _kill_all_vibego_processes() -> None:
+    """终止系统中所有 vibego 相关进程。"""
+
+    processes = _list_vibego_processes()
+    if not processes:
+        return
+    _terminate_processes([pid for pid, _ in processes])
+
+
 def command_start(args: argparse.Namespace) -> None:
     """实现 `vibego start`。"""
 
     env_values = _load_env_or_fail()
     _ensure_projects_assets()
+
+    foreign_workers = _find_foreign_processes(config.PACKAGE_ROOT)
+    if foreign_workers:
+        print("检测到系统中存在其他 vibego 进程，无法重复启动：")
+        for pid, cmd in foreign_workers:
+            print(f" - pid={pid} cmd={cmd}")
+        print("请先执行 `vibego stop` 或手动终止上述进程后再重试。")
+        return
 
     active_workers = _collect_active_workers()
     if active_workers:
@@ -476,6 +560,7 @@ def command_stop(args: argparse.Namespace) -> None:
 
     print("正在停止所有 worker...")
     _stop_all_workers_via_script()
+    _kill_all_vibego_processes()
     print("停止完成。")
 
 
