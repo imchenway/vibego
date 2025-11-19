@@ -3,6 +3,7 @@ os.environ.setdefault("BOT_TOKEN", "dummy-token")
 
 import asyncio
 import json
+import subprocess
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
@@ -34,16 +35,19 @@ def test_worker_menu_button_handles_bad_request(caplog):
 def test_worker_keyboard_structure():
     markup = bot._build_worker_main_keyboard()
     assert isinstance(markup, ReplyKeyboardMarkup)
-    assert len(markup.keyboard) == 1
+    assert len(markup.keyboard) == 2
     assert len(markup.keyboard[0]) == 2
-    for button in markup.keyboard[0]:
-        assert isinstance(button, KeyboardButton)
+    assert len(markup.keyboard[1]) == 1
+    for row in markup.keyboard:
+        for button in row:
+            assert isinstance(button, KeyboardButton)
 
 
 def test_worker_keyboard_button_text():
     markup = bot._build_worker_main_keyboard()
     assert markup.keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
     assert markup.keyboard[0][1].text == bot.WORKER_COMMANDS_BUTTON_TEXT
+    assert markup.keyboard[1][0].text == bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT
 
 
 def test_worker_keyboard_resize_enabled():
@@ -177,6 +181,46 @@ class _DummyManager:
     def is_authorized(self, chat_id: int) -> bool:
         self.invocations.append(chat_id)
         return True
+
+
+def test_worker_terminal_snapshot_success(monkeypatch):
+    captured_lines = {}
+
+    def fake_capture(lines: int) -> str:
+        captured_lines["value"] = lines
+        return "line-1\nline-2"
+
+    mock_reply_large_text = AsyncMock(return_value="sent")
+
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
+    monkeypatch.setattr(bot, "reply_large_text", mock_reply_large_text)
+
+    message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
+    asyncio.run(bot.on_tmux_snapshot_button(message))
+
+    assert "value" in captured_lines
+    assert captured_lines["value"] == bot.TMUX_SNAPSHOT_LINES
+    assert mock_reply_large_text.await_count == 1
+    sent_text = mock_reply_large_text.await_args.args[1]
+    assert "line-1" in sent_text
+    assert bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT in sent_text
+
+
+def test_worker_terminal_snapshot_handles_tmux_failure(monkeypatch):
+    def fake_capture(_: int) -> str:
+        raise subprocess.CalledProcessError(returncode=1, cmd="tmux", output="err")
+
+    mock_reply = AsyncMock()
+
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
+    monkeypatch.setattr(bot, "_reply_to_chat", mock_reply)
+
+    message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
+    asyncio.run(bot.on_tmux_snapshot_button(message))
+
+    assert mock_reply.await_count == 1
+    call = mock_reply.await_args
+    assert bot.TMUX_SESSION in call.args[1]
 
 
 def test_master_projects_button_accepts_legacy_text(monkeypatch):

@@ -33,6 +33,8 @@ vibe.log
 # Runtime state
 state/
 data/
+!vibego_cli/data/
+!vibego_cli/data/**
 config/master.db
 config/projects.json
 config/projects.json.*.bak

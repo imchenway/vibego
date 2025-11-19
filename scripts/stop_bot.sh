@@ -67,6 +67,7 @@ if [[ -f "$MODEL_SCRIPT" ]]; then
 fi
 
 POINTER_BASENAME="${MODEL_POINTER_BASENAME:-current_session.txt}"
+ACTIVE_SESSION_BASENAME="${MODEL_ACTIVE_SESSION_BASENAME:-active_session_id.txt}"
 
 graceful_shutdown_claudecode() {
   local session="$1"
@@ -133,7 +134,7 @@ kill_tty_sessions() {
 
 clear_session_files() {
   local log_dir="$1"
-  rm -f "$log_dir/$POINTER_BASENAME"
+  rm -f "$log_dir/$POINTER_BASENAME" "$log_dir/$ACTIVE_SESSION_BASENAME"
 }
 
 kill_pid_file() {

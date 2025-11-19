@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
+from datetime import datetime, timezone
 import signal
 import subprocess
 import sys
@@ -14,17 +16,23 @@ from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
 from . import config
-from .deps import (
-    check_cli_dependencies,
-    install_requirements,
-    python_version_ok,
+from .deps import check_cli_dependencies, install_requirements, python_version_ok
+from command_center import (
+    CommandAliasConflictError,
+    CommandAlreadyExistsError,
+    CommandService,
+    DEFAULT_GLOBAL_COMMANDS,
+    GLOBAL_COMMAND_PROJECT_SLUG,
+    GLOBAL_COMMAND_SCOPE,
+    resolve_global_command_db,
 )
 from project_repository import ProjectRepository
 
 
 TOKEN_PATTERN = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{20,}$")
 BOTFATHER_URL = "https://core.telegram.org/bots#botfather"
-
+START_SIGNAL_PATH = config.STATE_DIR / "start_signal.json"
+TELEGRAM_BOT_LIMITATION_DOC = "https://core.telegram.org/bots/faq#how-can-i-message-a-user"
 
 def _find_repo_root() -> Path:
     """推导当前仓库根目录。"""
@@ -92,6 +100,139 @@ def _ensure_virtualenv(repo_root: Path) -> Tuple[Path, Path]:
     return python_exec, pip_exec
 
 
+def _collect_auto_start_targets(env_values: Dict[str, str]) -> list[int]:
+    """根据 .env 内容挑选需要推送启动提醒的 chat_id。"""
+
+    targets: list[int] = []
+
+    def _append(value: str) -> None:
+        cleaned = (value or "").strip()
+        if cleaned.isdigit():
+            targets.append(int(cleaned))
+
+    primary = env_values.get("MASTER_CHAT_ID", "")
+    _append(primary)
+
+    candidates = []
+    for key in ("MASTER_ADMIN_IDS", "MASTER_ADMINS", "MASTER_WHITELIST", "ALLOWED_CHAT_ID"):
+        raw = env_values.get(key)
+        if raw:
+            candidates.extend(item.strip() for item in raw.split(","))
+    for item in candidates:
+        _append(item)
+
+    deduped: list[int] = []
+    seen: set[int] = set()
+    for chat_id in targets:
+        if chat_id in seen:
+            continue
+        seen.add(chat_id)
+        deduped.append(chat_id)
+    return deduped
+
+
+def _load_known_master_chats() -> set[int]:
+    """读取 master_state.json 中记录的 chat_id，用于判断是否已与 Bot 建立会话。"""
+
+    state_path = config.MASTER_STATE
+    if not state_path.exists():
+        return set()
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(raw, dict):
+        return set()
+    chats: set[int] = set()
+    for item in raw.values():
+        if not isinstance(item, dict):
+            continue
+        chat_id = item.get("chat_id")
+        if isinstance(chat_id, int):
+            chats.add(chat_id)
+        elif isinstance(chat_id, str) and chat_id.isdigit():
+            chats.add(int(chat_id))
+    return chats
+
+
+def _write_start_signal(chat_ids: Sequence[int]) -> None:
+    """将启动通知请求写入 state 目录，供 master 启动后读取。"""
+
+    payload = {
+        "chat_ids": list(chat_ids),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    START_SIGNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = START_SIGNAL_PATH.with_suffix(".json.tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp_path, START_SIGNAL_PATH)
+
+
+def _schedule_start_notification(env_values: Dict[str, str]) -> bool:
+    """在成功启动 master 后安排一次自动 /start 推送。"""
+
+    targets = _collect_auto_start_targets(env_values)
+    if not targets:
+        print("提示：未检测到 MASTER_CHAT_ID 或管理员列表，无法自动推送 /start。")
+        return False
+
+    known_chats = _load_known_master_chats()
+    if not known_chats:
+        print(
+            "提示：尚未检测到任何已登记的 chat_id，请先在 Telegram 中对 Bot 发送 /start，"
+            f"否则平台将拒绝主动消息（参考官方限制：{TELEGRAM_BOT_LIMITATION_DOC}）。"
+        )
+        return False
+
+    missing = [str(chat_id) for chat_id in targets if chat_id not in known_chats]
+    if len(missing) == len(targets):
+        print(
+            "提示：自动推送目标尚未与 Bot 建立对话，将不会发送。请先手动 /start 后再执行 `vibego start`。"
+        )
+        print("涉及 chat_id：", ", ".join(missing))
+        print(f"Telegram 限制说明：{TELEGRAM_BOT_LIMITATION_DOC}")
+        return False
+
+    if missing:
+        print(
+            "警告：以下 chat_id 仍未与 Bot 建立对话，自动 /start 推送将跳过："
+            + ", ".join(missing)
+        )
+        print(f"请参考 Telegram 限制：{TELEGRAM_BOT_LIMITATION_DOC}")
+
+    eligible = [chat_id for chat_id in targets if chat_id in known_chats]
+    try:
+        _write_start_signal(eligible)
+    except OSError as exc:
+        print("自动推送信号写入失败：", exc)
+        return False
+    print("已安排 master 启动通知，将推送到 chat_id:", ", ".join(str(t) for t in eligible))
+    return True
+
+
+async def _seed_default_global_commands() -> None:
+    """写入默认通用命令，避免新环境手动维护。"""
+
+    db_path = resolve_global_command_db(config.CONFIG_ROOT)
+    service = CommandService(
+        db_path,
+        GLOBAL_COMMAND_PROJECT_SLUG,
+        scope=GLOBAL_COMMAND_SCOPE,
+        history_project_slug=GLOBAL_COMMAND_PROJECT_SLUG,
+    )
+    await service.initialize()
+    for payload in DEFAULT_GLOBAL_COMMANDS:
+        name = str(payload["name"])
+        existing = await service.resolve_by_trigger(name)
+        if existing:
+            continue
+        try:
+            await service.create_command(**payload)
+            print(f"已注入通用命令：{name}")
+        except (CommandAlreadyExistsError, CommandAliasConflictError) as exc:
+            print(f"跳过通用命令 {name}：{exc}")
+
+
 def command_init(args: argparse.Namespace) -> None:
     """实现 `vibego init`。"""
 
@@ -121,6 +262,10 @@ def command_init(args: argparse.Namespace) -> None:
 
     config.dump_env_file(config.ENV_FILE, env_values)
     _ensure_projects_assets()
+    try:
+        asyncio.run(_seed_default_global_commands())
+    except Exception as exc:  # noqa: BLE001
+        print("默认通用命令初始化失败：", exc)
 
     print("初始化完成，配置目录：", config.CONFIG_ROOT)
     print("可执行步骤：")
@@ -231,6 +376,7 @@ def command_start(args: argparse.Namespace) -> None:
     print("master 已启动，PID:", process.pid)
     print("日志文件：", log_file)
     print("请在 Telegram 中向 Bot 发送 /start 以完成授权流程。")
+    _schedule_start_notification(env_values)
 
 
 def command_stop(args: argparse.Namespace) -> None:
@@ -304,6 +450,18 @@ def command_doctor(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
+def command_seed_commands(args: argparse.Namespace) -> None:
+    """实现 `vibego commands-seed`，手动注入默认通用命令。"""
+
+    config.ensure_directories()
+    try:
+        asyncio.run(_seed_default_global_commands())
+    except Exception as exc:  # noqa: BLE001
+        print("默认通用命令注入失败：", exc)
+        return
+    print("默认通用命令注入完成。")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建最外层 argparse 解析器。"""
 
@@ -331,6 +489,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="运行依赖与配置自检")
     doctor_parser.set_defaults(func=command_doctor)
+
+    seed_parser = subparsers.add_parser("commands-seed", help="注入默认通用命令（可重复执行）")
+    seed_parser.set_defaults(func=command_seed_commands)
 
     return parser
 

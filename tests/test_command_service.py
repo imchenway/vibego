@@ -6,6 +6,7 @@ from command_center import (
     CommandAlreadyExistsError,
     CommandAliasConflictError,
     CommandHistoryNotFoundError,
+    CommandNotFoundError,
 )
 
 
@@ -200,3 +201,29 @@ async def test_record_history_uses_custom_history_project_slug(tmp_path):
     assert record.project_slug == "demo"
     history = await service.list_history()
     assert history[0].project_slug == "demo"
+
+
+@pytest.mark.asyncio
+async def test_delete_command_removes_definition_and_history(command_service):
+    created = await command_service.create_command(
+        name="remove_me",
+        title="待删除命令",
+        command="echo doomed",
+        aliases=["rmme"],
+    )
+    await command_service.record_history(
+        created.id,
+        trigger="/remove_me",
+        actor_id=1,
+        actor_username="tester",
+        actor_name="Tester",
+        exit_code=0,
+        status="success",
+        output="ok",
+        error="",
+    )
+    await command_service.delete_command(created.id)
+    with pytest.raises(CommandNotFoundError):
+        await command_service.get_command(created.id)
+    remaining_history = await command_service.list_history()
+    assert remaining_history == []
