@@ -18,6 +18,11 @@ MODEL_WORKDIR="${MODEL_WORKDIR:-$ROOT_DIR}"
 MODEL_SESSION_ROOT="${MODEL_SESSION_ROOT:-${CODEX_SESSION_ROOT:-$HOME/.codex/sessions}}"
 MODEL_SESSION_GLOB="${MODEL_SESSION_GLOB:-rollout-*.jsonl}"
 SESSION_POINTER_FILE="${SESSION_POINTER_FILE:-$LOG_ROOT/${MODEL_NAME:-codex}/${PROJECT_NAME:-project}/current_session.txt}"
+SESSION_ACTIVE_ID_FILE="${SESSION_ACTIVE_ID_FILE:-$(dirname "${SESSION_POINTER_FILE}")/active_session_id.txt}"
+SESSION_BINDER="${SESSION_BINDER:-$ROOT_DIR/scripts/session_binder.py}"
+SESSION_BINDER_POLL_INTERVAL="${SESSION_BINDER_POLL_INTERVAL:-0.5}"
+SESSION_BINDER_TIMEOUT="${SESSION_BINDER_TIMEOUT:-600}"
+SESSION_BINDER_LOG="${SESSION_BINDER_LOG:-$(dirname "${SESSION_POINTER_FILE}")/session_binder.log}"
 
 # 避免 oh-my-zsh 在非交互环境弹出更新提示
 export DISABLE_UPDATE_PROMPT="${DISABLE_UPDATE_PROMPT:-true}"
@@ -67,6 +72,8 @@ MODEL_SESSION_ROOT=$(expand_path "$MODEL_SESSION_ROOT")
 SESSION_POINTER_FILE=$(expand_path "$SESSION_POINTER_FILE")
 ensure_dir "$(dirname "$LOG_PATH")"
 ensure_dir "$(dirname "$SESSION_POINTER_FILE")"
+ensure_dir "$(dirname "$SESSION_ACTIVE_ID_FILE")"
+ensure_dir "$(dirname "$SESSION_BINDER_LOG")"
 
 run_tmux() {
   if (( DRY_RUN )); then
@@ -143,5 +150,42 @@ if (( DRY_RUN )); then
 fi
 
 : > "$SESSION_POINTER_FILE"
+: > "$SESSION_ACTIVE_ID_FILE"
+
+if [[ -n "$SESSION_BINDER" ]] && [[ -f "$SESSION_BINDER" ]]; then
+  BIND_BOOT_TS="$("$PYTHON_EXEC" - <<'PY'
+import time
+print(int(time.time() * 1000))
+PY
+)"
+  BINDER_CMD=(
+    "$PYTHON_EXEC" "$SESSION_BINDER"
+    --pointer "$SESSION_POINTER_FILE"
+    --glob "$MODEL_SESSION_GLOB"
+    --boot-ts-ms "$BIND_BOOT_TS"
+    --poll-interval "$SESSION_BINDER_POLL_INTERVAL"
+    --timeout "$SESSION_BINDER_TIMEOUT"
+  )
+  if [[ -n "$MODEL_SESSION_ROOT" ]]; then
+    BINDER_CMD+=(--session-root "$MODEL_SESSION_ROOT")
+  fi
+  if [[ -n "${CODEX_SESSION_ROOT:-}" ]]; then
+    BINDER_CMD+=(--session-root "$CODEX_SESSION_ROOT")
+  fi
+  BINDER_CMD+=(--session-root "$(dirname "$SESSION_POINTER_FILE")")
+  BINDER_CMD+=(--session-root "$(dirname "$SESSION_POINTER_FILE")/sessions")
+  if [[ -n "$MODEL_WORKDIR" ]]; then
+    BINDER_CMD+=(--cwd "$MODEL_WORKDIR")
+  fi
+  if [[ -n "$SESSION_ACTIVE_ID_FILE" ]]; then
+    BINDER_CMD+=(--session-id-file "$SESSION_ACTIVE_ID_FILE")
+  fi
+  if [[ -n "$SESSION_BINDER_LOG" ]]; then
+    BINDER_CMD+=(--log "$SESSION_BINDER_LOG")
+  fi
+  nohup "${BINDER_CMD[@]}" >>"$SESSION_BINDER_LOG" 2>&1 &
+else
+  echo "[start-tmux] session binder 未找到：$SESSION_BINDER" >&2
+fi
 
 exit 0

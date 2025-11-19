@@ -162,6 +162,20 @@ def _env_float(name: str, default: float) -> float:
         worker_log.warning("环境变量 %s=%r 解析为浮点数失败，已使用默认值 %s", name, raw, default)
         return default
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    """读取布尔型环境变量，兼容多种写法。"""
+
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
 _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
     "": None,
     "none": None,
@@ -173,12 +187,12 @@ _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
 }
 
 # 阶段提示统一追加 agents.md 信息，确保推送记录要求一致。
-AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。"
+AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。以下是需要执行的任务描述以及其对应的执行历史摘要："
 # 推送到模型的阶段提示（vibe 与测试），合并统一后缀确保输出一致。
 VIBE_PHASE_PROMPT = f"进入vibe阶段{AGENTS_PHASE_SUFFIX}"
 TEST_PHASE_PROMPT = f"进入测试阶段{AGENTS_PHASE_SUFFIX}"
 # 报告缺陷时的专用前缀，插入在统一提示语之前
-BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。"
+BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。\n"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -268,6 +282,7 @@ MAX_RETURN_CHARS = int(os.environ.get("MAX_RETURN_CHARS", "200000"))  # 超大�
 TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip()        # 可选代理 URL
 CODEX_WORKDIR = os.environ.get("CODEX_WORKDIR", "").strip()
 CODEX_SESSION_FILE_PATH = os.environ.get("CODEX_SESSION_FILE_PATH", "").strip()
+SESSION_ACTIVE_ID_FILE = os.environ.get("SESSION_ACTIVE_ID_FILE", "").strip()
 CODEX_SESSIONS_ROOT = os.environ.get("CODEX_SESSIONS_ROOT", "").strip()
 MODEL_SESSION_ROOT = os.environ.get("MODEL_SESSION_ROOT", "").strip()
 MODEL_SESSION_GLOB = os.environ.get("MODEL_SESSION_GLOB", "rollout-*.jsonl").strip() or "rollout-*.jsonl"
@@ -275,11 +290,16 @@ SESSION_POLL_TIMEOUT = float(os.environ.get("SESSION_POLL_TIMEOUT", "2"))
 WATCH_MAX_WAIT = float(os.environ.get("WATCH_MAX_WAIT", "0"))
 WATCH_INTERVAL = float(os.environ.get("WATCH_INTERVAL", "2"))
 SEND_RETRY_ATTEMPTS = int(os.environ.get("SEND_RETRY_ATTEMPTS", "3"))
+TMUX_SNAPSHOT_LINES = _env_int("TMUX_SNAPSHOT_LINES", 5)
+TMUX_SNAPSHOT_MAX_LINES = _env_int("TMUX_SNAPSHOT_MAX_LINES", 500)
 SEND_RETRY_BASE_DELAY = float(os.environ.get("SEND_RETRY_BASE_DELAY", "0.5"))
 SEND_FAILURE_NOTICE_COOLDOWN = float(os.environ.get("SEND_FAILURE_NOTICE_COOLDOWN", "30"))
 SESSION_INITIAL_BACKTRACK_BYTES = int(os.environ.get("SESSION_INITIAL_BACKTRACK_BYTES", "16384"))
 ENABLE_PLAN_PROGRESS = (os.environ.get("ENABLE_PLAN_PROGRESS", "1").strip().lower() not in {"0", "false", "no", "off"})
 AUTO_COMPACT_THRESHOLD = max(_env_int("AUTO_COMPACT_THRESHOLD", 0), 0)
+SESSION_BIND_STRICT = _env_bool("SESSION_BIND_STRICT", True)
+SESSION_BIND_TIMEOUT_SECONDS = max(_env_float("SESSION_BIND_TIMEOUT_SECONDS", 30.0), 0.0)
+SESSION_BIND_POLL_INTERVAL = max(_env_float("SESSION_BIND_POLL_INTERVAL", 0.5), 0.1)
 
 PLAN_STATUS_LABELS = {
     "completed": "✅",
@@ -930,6 +950,26 @@ def tmux_send_line(session: str, line: str):
         subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
 
 
+def _capture_tmux_recent_lines(line_count: int) -> str:
+    """截取 tmux 会话尾部指定行数的原始文本。"""
+
+    tmux = tmux_bin()
+    normalized = max(1, min(line_count, TMUX_SNAPSHOT_MAX_LINES))
+    start_arg = f"-{normalized}"
+    return subprocess.check_output(
+        _tmux_cmd(
+            tmux,
+            "capture-pane",
+            "-p",
+            "-t",
+            TMUX_SESSION,
+            "-S",
+            start_arg,
+        ),
+        text=True,
+    )
+
+
 def resolve_path(path: Path | str) -> Path:
     if isinstance(path, Path):
         return path.expanduser()
@@ -1080,7 +1120,7 @@ async def _dispatch_prompt_to_model(
         )
 
     target_cwd = CODEX_WORKDIR if CODEX_WORKDIR else None
-    if pointer_path is not None:
+    if pointer_path is not None and not SESSION_BIND_STRICT:
         current_cwd = _read_session_meta_cwd(session_path) if session_path else None
         if session_path is None or (target_cwd and current_cwd != target_cwd):
             latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
@@ -1129,8 +1169,19 @@ async def _dispatch_prompt_to_model(
         return False, None
 
     if needs_session_wait:
-        session_path = await _await_session_path(pointer_path, target_cwd)
-        if session_path is None and pointer_path is not None and _is_claudecode_model():
+        session_path = await _await_session_path(
+            pointer_path,
+            target_cwd,
+            poll=SESSION_BIND_POLL_INTERVAL,
+            strict=SESSION_BIND_STRICT,
+            max_wait=SESSION_BIND_TIMEOUT_SECONDS,
+        )
+        if (
+            session_path is None
+            and pointer_path is not None
+            and _is_claudecode_model()
+            and not SESSION_BIND_STRICT
+        ):
             session_path = _find_latest_claudecode_rollout(pointer_path)
         if session_path is None:
             await _reply_to_chat(
@@ -1836,21 +1887,29 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
     await _dispatch_prompt_to_model(message.chat.id, prompt, reply_to=message)
 
 BOT_COMMANDS: list[tuple[str, str]] = [
+    ("start", "打开任务概览"),
     ("help", "查看全部命令"),
-    ("tasks", "任务命令清单"),
-    ("task_new", "创建任务"),
-    ("task_list", "查看任务列表"),
-    ("task_show", "查看任务详情"),
-    ("task_update", "更新任务字段"),
-    ("task_note", "添加任务备注"),
-    ("commands", "命令管理入口"),
 ]
 
 COMMAND_KEYWORDS: set[str] = {command for command, _ in BOT_COMMANDS}
-COMMAND_KEYWORDS.update({"task_child", "task_children", "task_delete"})
+COMMAND_KEYWORDS.update(
+    {
+        "task_child",
+        "task_children",
+        "task_delete",
+        "task_show",
+        "task_new",
+        "task_list",
+        "tasks",
+        "commands",
+        "task_note",
+        "task_update",
+    }
+)
 
 WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
 WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
+WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT = "💻 终端实况"
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 
 COMMAND_EXEC_PREFIX = "cmd:run:"
@@ -1869,6 +1928,7 @@ COMMAND_HISTORY_LIMIT = 8
 COMMAND_INLINE_LIMIT = 12
 COMMAND_OUTPUT_MAX_CHARS = _env_int("COMMAND_OUTPUT_MAX_CHARS", 3500)
 COMMAND_STDERR_MAX_CHARS = _env_int("COMMAND_STDERR_MAX_CHARS", 1200)
+COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 5)
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
@@ -1881,10 +1941,20 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text=WORKER_MENU_BUTTON_TEXT),
                 KeyboardButton(text=WORKER_COMMANDS_BUTTON_TEXT),
+            ],
+            [
+                KeyboardButton(text=WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT),
             ]
         ],
         resize_keyboard=True,
     )
+
+
+def _build_command_edit_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """命令编辑输入阶段的取消按钮键盘。"""
+
+    rows = [[KeyboardButton(text="取消")]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 def _is_global_command(command: CommandDefinition) -> bool:
@@ -1900,7 +1970,7 @@ async def _list_combined_commands() -> List[CommandDefinition]:
     global_commands = await GLOBAL_COMMAND_SERVICE.list_commands()
 
     def _sort_key(item: CommandDefinition) -> tuple[int, str, str]:
-        scope_rank = 1 if _is_global_command(item) else 0
+        scope_rank = 0 if _is_global_command(item) else 1
         title_key = (item.title or item.name or "").casefold()
         name_key = (item.name or "").casefold()
         return (scope_rank, title_key, name_key)
@@ -2028,6 +2098,16 @@ def _limit_text(text: str, limit: int) -> tuple[str, bool]:
     if len(text) <= limit:
         return text, False
     return text[:limit].rstrip() + "\n…<截断>", True
+
+
+def _tail_lines(text: str, max_lines: int) -> str:
+    """返回文本末尾指定行数，避免预览过长。"""
+
+    if max_lines <= 0 or not text:
+        return text.strip()
+    lines = text.splitlines()
+    tail = lines[-max_lines:]
+    return "\n".join(tail).strip()
 
 
 def _command_actor_meta(user: Optional[User]) -> tuple[Optional[int], Optional[str], Optional[str]]:
@@ -2162,16 +2242,18 @@ async def _execute_command_definition(
     if exit_code is not None:
         lines.append(f"退出码：{exit_code}")
     if stdout_text:
-        truncated_stdout, stdout_truncated = _limit_text(stdout_text.strip(), COMMAND_OUTPUT_MAX_CHARS)
+        stdout_preview = _tail_lines(stdout_text.strip(), COMMAND_OUTPUT_PREVIEW_LINES)
+        truncated_stdout, stdout_truncated = _limit_text(stdout_preview, COMMAND_OUTPUT_MAX_CHARS)
         stdout_block, _ = _wrap_text_in_code_block(truncated_stdout or "-")
-        lines.append("标准输出摘要：")
+        lines.append(f"标准输出摘要（末尾 {COMMAND_OUTPUT_PREVIEW_LINES} 行）：")
         lines.append(stdout_block)
         if stdout_truncated:
             lines.append("_输出已截断_")
     if stderr_text:
-        truncated_stderr, stderr_truncated = _limit_text(stderr_text.strip(), COMMAND_STDERR_MAX_CHARS)
+        stderr_preview = _tail_lines(stderr_text.strip(), COMMAND_OUTPUT_PREVIEW_LINES)
+        truncated_stderr, stderr_truncated = _limit_text(stderr_preview, COMMAND_STDERR_MAX_CHARS)
         stderr_block, _ = _wrap_text_in_code_block(truncated_stderr or "-")
-        lines.append("标准错误摘要：")
+        lines.append(f"标准错误摘要（末尾 {COMMAND_OUTPUT_PREVIEW_LINES} 行）：")
         lines.append(stderr_block)
         if stderr_truncated:
             lines.append("_错误输出已截断_")
@@ -2938,18 +3020,7 @@ def _build_model_push_payload(
     supplement_text = (supplement or "").strip()
     segments: list[str] = []
 
-    notes = notes or ()
-    regular_notes: list[str] = []
-
-    for note in notes:
-        content = note.content or ""
-        if not content.strip():
-            continue
-        summarized = _summarize_note_text(content)
-        if note.note_type == "bug":
-            # 缺陷备注不再拼接到推送提示词中，避免与任务执行记录重复
-            continue
-        regular_notes.append(summarized)
+    notes = notes or ()  # 推送阶段暂不展示备注文本，仅保留参数兼容
 
     task_code_plain = f"/{task.id}" if task.id else "-"
 
@@ -2961,14 +3032,12 @@ def _build_model_push_payload(
         title = (task.title or "").strip() or "-"
         description = (task.description or "").strip() or "-"
         supplement_value = supplement_text or "-"
-        note_text = "；".join(regular_notes) if regular_notes else "-"
 
         lines: list[str] = [
             phase_line,
             f"任务标题：{title}",
             f"任务编码：{task_code_plain}",
             f"任务描述：{description}",
-            f"任务备注：{note_text}",
             f"补充任务描述：{supplement_value}",
             "",
         ]
@@ -3144,7 +3213,8 @@ def _strip_task_type_emoji(value: str) -> str:
     """去除前缀的任务类型 emoji，保持其余文本原样。"""
 
     trimmed = value.strip()
-    for emoji in TASK_TYPE_EMOJIS.values():
+    emoji_prefixes = list(TASK_TYPE_EMOJIS.values()) + ["⚪"]
+    for emoji in emoji_prefixes:
         if trimmed.startswith(emoji):
             return trimmed[len(emoji):].strip()
     return trimmed
@@ -3275,12 +3345,17 @@ def _format_task_detail(
         title_text = _escape_markdown_text(title_raw) if title_raw else "-"
 
     task_id_text = _format_task_command(task.id)
+    type_text = _strip_task_type_emoji(_format_task_type(task.task_type))
+    if not type_text:
+        type_text = "-"
+    # 任务详情的元信息仅保留任务编码与类型，去除状态字段保持更紧凑展示
+    meta_line = (
+        f"🏷️ 任务编码：{task_id_text}"
+        f" · 📂 类型：{type_text}"
+    )
     lines: list[str] = [
         f"📝 标题：{title_text}",
-        f"🏷️ 任务编码：{task_id_text}",
-        f"⚙️ 状态：{_format_status(task.status)}",
-        f"🚦 优先级：{_format_priority(task.priority)}",
-        f"📂 类型：{_format_task_type(task.task_type)}",
+        meta_line,
     ]
 
     # 修复：描述字段智能清理预转义
@@ -5330,7 +5405,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 session_path,
                 extra=_session_extra(path=session_path),
             )
-    if session_path is None and pointer_path is not None:
+    if session_path is None and pointer_path is not None and not SESSION_BIND_STRICT:
         latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
         if latest is not None:
             session_path = latest
@@ -5342,7 +5417,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 extra=_session_extra(path=session_path),
             )
 
-    if pointer_path is not None and _is_claudecode_model():
+    if pointer_path is not None and _is_claudecode_model() and not SESSION_BIND_STRICT:
         fallback = _find_latest_claudecode_rollout(pointer_path)
         if fallback is not None and fallback != session_path:
             session_path = fallback
@@ -5355,7 +5430,13 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
             )
 
     if session_path is None and pointer_path is not None:
-        session_path = await _await_session_path(pointer_path, target_cwd)
+        session_path = await _await_session_path(
+            pointer_path,
+            target_cwd,
+            poll=SESSION_BIND_POLL_INTERVAL,
+            strict=SESSION_BIND_STRICT,
+            max_wait=SESSION_BIND_TIMEOUT_SECONDS,
+        )
         if session_path is not None:
             _update_pointer(pointer_path, session_path)
             worker_log.info(
@@ -5364,7 +5445,12 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 session_path,
                 extra=_session_extra(path=session_path),
             )
-    if session_path is None and pointer_path is not None and _is_claudecode_model():
+    if (
+        session_path is None
+        and pointer_path is not None
+        and _is_claudecode_model()
+        and not SESSION_BIND_STRICT
+    ):
         fallback = _find_latest_claudecode_rollout(pointer_path)
         if fallback is not None:
             session_path = fallback
@@ -5959,19 +6045,42 @@ def _find_latest_rollout_for_cwd(pointer: Path, target_cwd: Optional[str]) -> Op
 
 
 async def _await_session_path(
-    pointer: Optional[Path], target_cwd: Optional[str], poll: float = 0.5
+    pointer: Optional[Path],
+    target_cwd: Optional[str],
+    poll: float = 0.5,
+    *,
+    strict: bool = False,
+    max_wait: float = 0.0,
 ) -> Optional[Path]:
-    if pointer:
-        candidate = _read_pointer_path(pointer)
-        if candidate is not None:
-            return candidate
-    await asyncio.sleep(poll)
-    if pointer:
+    """等待 pointer 写入新会话；strict=False 时会回退到旧 session。"""
+
+    if pointer is None:
+        await asyncio.sleep(poll)
+        return None
+
+    candidate = _read_pointer_path(pointer)
+    if candidate is not None:
+        return candidate
+
+    poll_interval = max(poll, 0.1)
+    if not strict:
+        await asyncio.sleep(poll_interval)
         candidate = _read_pointer_path(pointer)
         if candidate is not None:
             return candidate
         return _find_latest_rollout_for_cwd(pointer, target_cwd)
-    return None
+
+    deadline: Optional[float] = None
+    if max_wait and max_wait > 0:
+        deadline = time.monotonic() + max_wait
+
+    while True:
+        await asyncio.sleep(poll_interval)
+        candidate = _read_pointer_path(pointer)
+        if candidate is not None:
+            return candidate
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
 
 
 def _update_pointer(pointer: Path, rollout: Path) -> None:
@@ -6297,15 +6406,13 @@ async def _build_task_list_view(
     )
     display_pages = total_pages or 1
     current_page_display = min(page, display_pages)
+    status_text = _format_status(status) if status else "全部"
     lines = [
         "*任务列表*",
-        f"筛选状态：{_format_status(status) if status else '全部'}",
+        f"筛选状态：{status_text} · 页码 {current_page_display}/{display_pages} · 每页 {limit} 条 · 总数 {total}",
     ]
     if not tasks:
         lines.append("当前没有匹配的任务，可使用上方状态按钮切换。")
-    lines.append(
-        f"分页信息：页码 {current_page_display}/{display_pages} · 每页 {limit} 条 · 总数 {total}"
-    )
     text = "\n".join(lines)
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -6471,6 +6578,56 @@ async def _handle_task_list_request(message: Message) -> None:
         )
 
 
+async def _handle_terminal_snapshot_request(message: Message) -> None:
+    """处理“终端实况”按钮，抓取 tmux 会话尾部输出。"""
+
+    chat_id = message.chat.id
+    lines = TMUX_SNAPSHOT_LINES
+    try:
+        raw_output = _capture_tmux_recent_lines(lines)
+    except FileNotFoundError as exc:
+        worker_log.warning(
+            "终端实况截取失败，未找到 tmux：%s",
+            exc,
+            extra={"chat": chat_id},
+        )
+        await _reply_to_chat(
+            chat_id,
+            "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
+            reply_to=message,
+        )
+        return
+    except subprocess.CalledProcessError as exc:
+        worker_log.warning(
+            "终端实况截取失败：%s",
+            exc,
+            extra={"chat": chat_id, "tmux_session": TMUX_SESSION},
+        )
+        await _reply_to_chat(
+            chat_id,
+            f"无法读取 tmux 会话 {TMUX_SESSION} 的输出，请确认 worker 已启动。",
+            reply_to=message,
+        )
+        return
+
+    cleaned = postprocess_tmux_output(raw_output)
+    header = f"{WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT}（最近 {lines} 行）"
+    if not cleaned:
+        await _reply_to_chat(
+            chat_id,
+            f"{header}\n\n暂无可展示的输出，请稍后再试。",
+            reply_to=message,
+        )
+        return
+
+    payload = f"{header}\n\n{cleaned}"
+    worker_log.info(
+        "已发送终端实况",
+        extra={"chat": chat_id, "lines": str(lines), "length": str(len(cleaned))},
+    )
+    await reply_large_text(chat_id, payload)
+
+
 @router.message(Command("task_list"))
 async def on_task_list(message: Message) -> None:
     await _handle_task_list_request(message)
@@ -6479,6 +6636,11 @@ async def on_task_list(message: Message) -> None:
 @router.message(F.text == WORKER_MENU_BUTTON_TEXT)
 async def on_task_list_button(message: Message) -> None:
     await _handle_task_list_request(message)
+
+
+@router.message(F.text == WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
+async def on_tmux_snapshot_button(message: Message) -> None:
+    await _handle_terminal_snapshot_request(message)
 
 
 @router.message(Command("commands"))
@@ -6652,15 +6814,18 @@ async def on_command_field_select(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("字段标识无效", show_alert=True)
         return
     command_id = int(raw_id)
-    prompt_map = {
-        "title": "请输入新的命令标题：",
-        "command": "请输入新的执行指令（可包含参数）：",
-        "description": "请输入新的命令描述（可留空）：",
-        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
-        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
-    }
-    prompt = prompt_map.get(field)
-    if prompt is None:
+    try:
+        command = await COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("命令不存在", show_alert=True)
+        await _refresh_command_overview(callback, notice="命令已不存在。")
+        return
+    if _is_global_command(command):
+        await callback.answer("该命令由 master 统一配置，项目内不可编辑。", show_alert=True)
+        await _refresh_command_overview(callback)
+        return
+    prompt_text = build_field_prompt_text(command, field)
+    if prompt_text is None:
         await callback.answer("暂不支持该字段", show_alert=True)
         return
     await state.update_data(command_id=command_id, field=field)
@@ -6669,7 +6834,10 @@ async def on_command_field_select(callback: CallbackQuery, state: FSMContext) ->
     else:
         await state.set_state(CommandEditStates.waiting_value)
     if callback.message:
-        await callback.message.answer(f"{prompt}\n发送“取消”可终止当前操作。")
+        await callback.message.answer(
+            prompt_text,
+            reply_markup=_build_command_edit_cancel_keyboard(),
+        )
     await callback.answer("请发送新的值")
 
 
@@ -7878,7 +8046,7 @@ async def _request_task_summary(
             current_task = updated
             status_changed = True
 
-    history_text, history_count = await _build_history_context_for_model(current_task.id)
+    history_text, _ = await _build_history_context_for_model(current_task.id)
     notes = await TASK_SERVICE.list_notes(current_task.id)
     request_id = uuid.uuid4().hex
     prompt = _build_summary_prompt(
@@ -7908,22 +8076,6 @@ async def _request_task_summary(
             session_path=session_path,
             created_at=time.monotonic(),
         )
-
-    payload: dict[str, Any] = {
-        "request_id": request_id,
-        "model": ACTIVE_MODEL or "",
-        "status_auto_updated": status_changed,
-    }
-    if history_count:
-        payload["history_items"] = history_count
-
-    await _log_task_action(
-        current_task.id,
-        action="summary_request",
-        actor=actor_label,
-        new_value=request_id,
-        payload=payload,
-    )
 
     return request_id, status_changed
 

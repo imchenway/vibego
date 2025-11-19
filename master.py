@@ -64,10 +64,12 @@ from command_center import (
     CommandAliasConflictError,
     CommandAlreadyExistsError,
     CommandNotFoundError,
+    DEFAULT_GLOBAL_COMMANDS,
     GLOBAL_COMMAND_PROJECT_SLUG,
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
 )
+from command_center.prompts import build_field_prompt_text
 from vibego_cli import __version__
 
 try:
@@ -119,6 +121,60 @@ GLOBAL_COMMAND_SERVICE = CommandService(
     scope=GLOBAL_COMMAND_SCOPE,
 )
 
+
+async def _ensure_default_global_commands() -> None:
+    """在 master 启动阶段保证通用命令就绪，并同步最新脚本配置。"""
+
+    try:
+        await GLOBAL_COMMAND_SERVICE.initialize()
+    except Exception as exc:  # noqa: BLE001
+        log.error("通用命令数据库初始化失败：%s", exc)
+        return
+
+    for payload in DEFAULT_GLOBAL_COMMANDS:
+        name = str(payload["name"])
+        desired_aliases = tuple(payload.get("aliases") or ())
+        desired_timeout = payload.get("timeout")
+        try:
+            existing = await GLOBAL_COMMAND_SERVICE.resolve_by_trigger(name)
+        except Exception as exc:  # noqa: BLE001
+            log.error("查询通用命令失败：%s", exc, extra={"command": name})
+            continue
+
+        if existing is None:
+            try:
+                await GLOBAL_COMMAND_SERVICE.create_command(**payload)
+                log.info("已注入通用命令：%s", name)
+            except (CommandAlreadyExistsError, CommandAliasConflictError) as exc:
+                log.warning("通用命令 %s 注入冲突：%s", name, exc)
+            except Exception as exc:  # noqa: BLE001
+                log.error("通用命令 %s 创建失败：%s", name, exc)
+            continue
+
+        updates: dict[str, object] = {}
+        for field in ("title", "command", "description"):
+            value = payload.get(field)
+            if value is not None and getattr(existing, field) != value:
+                updates[field] = value
+        if desired_timeout is not None and existing.timeout != desired_timeout:
+            updates["timeout"] = desired_timeout
+
+        if updates:
+            try:
+                await GLOBAL_COMMAND_SERVICE.update_command(existing.id, **updates)
+                log.info("已更新通用命令：%s 字段=%s", name, ", ".join(updates.keys()))
+            except Exception as exc:  # noqa: BLE001
+                log.error("更新通用命令 %s 失败：%s", name, exc)
+
+        existing_aliases = tuple(existing.aliases or ())
+        if existing_aliases != desired_aliases:
+            try:
+                await GLOBAL_COMMAND_SERVICE.replace_aliases(existing.id, desired_aliases)
+                alias_label = ", ".join(desired_aliases) if desired_aliases else "无"
+                log.info("已重写通用命令别名：%s -> %s", name, alias_label)
+            except Exception as exc:  # noqa: BLE001
+                log.error("更新通用命令 %s 别名失败：%s", name, exc)
+
 UPDATE_STATE_PATH = STATE_DIR / "update_state.json"
 UPDATE_CHECK_INTERVAL = timedelta(hours=24)
 _UPDATE_STATE_LOCK = threading.Lock()
@@ -154,6 +210,20 @@ LEGACY_RESTART_SIGNAL_PATHS: Tuple[Path, ...] = tuple(
     if path != RESTART_SIGNAL_PATH
 )
 RESTART_SIGNAL_TTL = int(os.environ.get("MASTER_RESTART_SIGNAL_TTL", "1800"))  # 默认 30 分钟
+
+
+def _get_start_signal_path() -> Path:
+    """解析自动 /start 信号文件路径，允许通过环境变量覆盖。"""
+
+    if env_path := os.environ.get("MASTER_START_SIGNAL_PATH"):
+        return Path(env_path)
+    config_root_raw = os.environ.get("MASTER_CONFIG_ROOT") or os.environ.get("VIBEGO_CONFIG_DIR")
+    config_root = Path(config_root_raw).expanduser() if config_root_raw else _default_config_root()
+    return config_root / "state/start_signal.json"
+
+
+START_SIGNAL_PATH = _get_start_signal_path()
+START_SIGNAL_TTL = int(os.environ.get("MASTER_START_SIGNAL_TTL", "600"))
 LOCAL_TZ = ZoneInfo(os.environ.get("MASTER_TIMEZONE", "Asia/Shanghai"))
 JUMP_BUTTON_TEXT_WIDTH = 40
 
@@ -186,10 +256,6 @@ MASTER_SETTINGS_BUTTON_TEXT = "🛠 系统设置"
 MASTER_BOT_COMMANDS: List[Tuple[str, str]] = [
     ("start", "启动 master 菜单"),
     ("projects", "查看项目列表"),
-    ("run", "启动 worker"),
-    ("stop", "停止 worker"),
-    ("switch", "切换 worker 模型"),
-    ("authorize", "登记 chat"),
     ("restart", "重启 master"),
     ("upgrade", "升级 vibego 至最新版"),
 ]
@@ -203,9 +269,33 @@ SYSTEM_SETTINGS_BACK_CALLBACK = "system:back"
 GLOBAL_COMMAND_MENU_CALLBACK = "system:commands:menu"
 GLOBAL_COMMAND_REFRESH_CALLBACK = "system:commands:refresh"
 GLOBAL_COMMAND_NEW_CALLBACK = "system:commands:new"
+
+_UPGRADE_COMMANDS: Tuple[Tuple[str, str], ...] = (
+    ("pipx upgrade vibego", "升级 vibego 包"),
+)
+_UPGRADE_LOG_TAIL = int(os.environ.get("MASTER_UPGRADE_LOG_TAIL", "20"))
+_UPGRADE_LOG_BUFFER_LIMIT = int(os.environ.get("MASTER_UPGRADE_LOG_BUFFER_LIMIT", "200"))
+_UPGRADE_LINE_LIMIT = int(os.environ.get("MASTER_UPGRADE_LINE_LIMIT", "160"))
+_UPGRADE_STATE_LOCK = asyncio.Lock()
+_UPGRADE_TASK: Optional[asyncio.Task[None]] = None
+_UPGRADE_RESTART_COMMAND = os.environ.get(
+    "MASTER_UPGRADE_RESTART_COMMAND",
+    "vibego stop && vibego start",
+)
+_UPGRADE_RESTART_DELAY = float(os.environ.get("MASTER_UPGRADE_RESTART_DELAY", "2.0"))
+_UPGRADE_REPORT_PATH = Path(
+    os.environ.get("MASTER_UPGRADE_REPORT_PATH", STATE_DIR / "upgrade_report.json")
+)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_PIPX_VERSION_RE = re.compile(
+    r"upgraded package\s+(?P<name>[\w\-.]+)\s+from\s+(?P<old>[0-9A-Za-z.\-+]+)\s+to\s+(?P<new>[0-9A-Za-z.\-+]+)",
+    re.IGNORECASE,
+)
 GLOBAL_COMMAND_EDIT_PREFIX = "system:commands:edit:"
 GLOBAL_COMMAND_FIELD_PREFIX = "system:commands:field:"
 GLOBAL_COMMAND_TOGGLE_PREFIX = "system:commands:toggle:"
+GLOBAL_COMMAND_DELETE_PROMPT_PREFIX = "system:commands:delete_prompt:"
+GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX = "system:commands:delete_confirm:"
 GLOBAL_COMMAND_INLINE_LIMIT = 12
 GLOBAL_COMMAND_STATE_KEY = "global_command_flow"
 
@@ -325,7 +415,6 @@ def _build_global_command_keyboard(commands: Sequence[CommandDefinition]) -> Inl
             ]
         )
     inline_keyboard.append([InlineKeyboardButton(text="🆕 新增通用命令", callback_data=GLOBAL_COMMAND_NEW_CALLBACK)])
-    inline_keyboard.append([InlineKeyboardButton(text="🔁 刷新", callback_data=GLOBAL_COMMAND_REFRESH_CALLBACK)])
     inline_keyboard.append([InlineKeyboardButton(text="⬅️ 返回系统设置", callback_data=SYSTEM_SETTINGS_MENU_CALLBACK)])
     inline_keyboard.append([InlineKeyboardButton(text="📂 返回项目列表", callback_data="project:refresh:*")])
     return _ensure_numbered_markup(InlineKeyboardMarkup(inline_keyboard=inline_keyboard))
@@ -346,6 +435,12 @@ def _build_global_command_edit_keyboard(command: CommandDefinition) -> InlineKey
         ],
         [InlineKeyboardButton(text="🔁 别名", callback_data=f"{GLOBAL_COMMAND_FIELD_PREFIX}aliases:{command.id}")],
         [InlineKeyboardButton(text=toggle_label, callback_data=f"{GLOBAL_COMMAND_TOGGLE_PREFIX}{command.id}")],
+        [
+            InlineKeyboardButton(
+                text="🗑 删除命令",
+                callback_data=f"{GLOBAL_COMMAND_DELETE_PROMPT_PREFIX}{command.id}",
+            )
+        ],
         [InlineKeyboardButton(text="⬅️ 返回列表", callback_data=GLOBAL_COMMAND_REFRESH_CALLBACK)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -1012,22 +1107,275 @@ async def _notify_update_to_targets(bot: Bot, targets: Sequence[int], *, force_c
         log.info("已向 %s 个管理员推送升级提示", sent)
 
 
-def _trigger_upgrade_pipeline() -> Tuple[bool, Optional[str]]:
-    """触发 pipx 升级流程并在后台运行。"""
+def _sanitize_upgrade_line(raw: str) -> str:
+    """去除 ANSI 控制字符并限制单行长度。"""
 
-    command = "pipx upgrade vibego && vibego stop && vibego start"
+    if not raw:
+        return ""
+    text = raw.replace("\r", "")
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    filtered = "".join(ch for ch in text if ch == "\t" or ch == " " or ch.isprintable())
+    cleaned = filtered.strip("\n")
+    if len(cleaned) > _UPGRADE_LINE_LIMIT:
+        return cleaned[: _UPGRADE_LINE_LIMIT - 1] + "…"
+    return cleaned
+
+
+def _render_upgrade_preview(lines: Sequence[str]) -> str:
+    """渲染最近若干行日志，便于推送到 Telegram。"""
+
+    if not lines:
+        return "（暂无输出）"
+    tail = list(lines[-_UPGRADE_LOG_TAIL:])
+    return "\n".join(tail)
+
+
+def _extract_upgrade_versions(lines: Sequence[str]) -> Tuple[Optional[str], Optional[str]]:
+    """从 pipx 输出中提取旧/新版本，若未匹配则返回 None。"""
+
+    for line in reversed(lines):
+        match = _PIPX_VERSION_RE.search(line)
+        if match:
+            return match.group("old"), match.group("new")
+    return None, None
+
+
+async def _safe_edit_upgrade_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+) -> None:
+    """安全地更新升级状态消息，忽略不可修改的异常。"""
+
     try:
-        subprocess.Popen(
-            ["/bin/bash", "-lc", command],
-            cwd=str(ROOT_DIR),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            disable_web_page_preview=True,
         )
-        log.info("已触发升级命令：%s", command)
-        return True, None
-    except Exception as exc:
-        log.error("触发升级命令失败: %s", exc)
-        return False, str(exc)
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            log.warning("升级状态消息更新失败: %s", exc)
+    except TelegramForbiddenError as exc:
+        log.warning("升级状态消息已无法访问(chat=%s): %s", chat_id, exc)
+    except Exception as exc:  # pragma: no cover - 捕获不可预期错误，避免任务崩溃
+        log.error("升级状态消息更新遇到异常: %s", exc)
+
+
+async def _run_single_upgrade_step(
+    command: str,
+    description: str,
+    step_index: int,
+    total_steps: int,
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+) -> Tuple[int, List[str]]:
+    """执行单个升级命令并实时推送日志。"""
+
+    process = await asyncio.create_subprocess_shell(
+        command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(ROOT_DIR),
+    )
+    assert process.stdout is not None  # mypy 安心用
+    lines: List[str] = []
+    loop = asyncio.get_running_loop()
+    last_push = 0.0
+
+    async def _push(status: str, *, force: bool = False) -> None:
+        """按节流频率将最新日志写回 Telegram。"""
+
+        nonlocal last_push
+        now = loop.time()
+        if not force and (now - last_push) < 1.0:
+            return
+        last_push = now
+        preview = _render_upgrade_preview(lines)
+        text = (
+            f"升级流水线进行中（步骤 {step_index}/{total_steps}）\n"
+            f"当前动作：{description}\n"
+            f"命令：{command}\n"
+            f"状态：{status}\n\n"
+            f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+        )
+        await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+
+    await _push("准备执行", force=True)
+    while True:
+        chunk = await process.stdout.readline()
+        if not chunk:
+            break
+        sanitized = _sanitize_upgrade_line(chunk.decode(errors="ignore"))
+        if not sanitized:
+            continue
+        lines.append(sanitized)
+        if len(lines) > _UPGRADE_LOG_BUFFER_LIMIT:
+            del lines[0]
+        await _push("执行中", force=False)
+
+    returncode = await process.wait()
+    await _push(f"步骤结束（退出码 {returncode}）", force=True)
+    return returncode, lines
+
+
+async def _notify_upgrade_failure(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    description: str,
+    command: str,
+    lines: Sequence[str],
+    returncode: Optional[int] = None,
+    *,
+    error: Optional[str] = None,
+) -> None:
+    """升级失败后推送详细日志，方便管理员排障。"""
+
+    reason = f"退出码：{returncode}" if returncode is not None else ""
+    if error:
+        reason = f"异常：{error}"
+    preview = _render_upgrade_preview(lines)
+    text = (
+        "升级流程失败 ❌\n"
+        f"失败步骤：{description}\n"
+        f"命令：{command}\n"
+        f"{reason}\n"
+        "请登录服务器手动执行 `pipx upgrade vibego && vibego stop && vibego start` 检查详情。\n\n"
+        f"最近输出：\n{preview}"
+    )
+    await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+
+
+def _persist_upgrade_report(
+    chat_id: int,
+    lines: Sequence[str],
+    elapsed: float,
+    restart_command: str,
+    restart_delay: float,
+) -> None:
+    """将 pipx 阶段的输出写入升级报告，供新 master 启动后推送。"""
+
+    old_version, new_version = _extract_upgrade_versions(lines)
+    payload = {
+        "chat_id": chat_id,
+        "log_tail": list(lines[-_UPGRADE_LOG_TAIL:]),
+        "elapsed": round(elapsed, 3),
+        "restart_command": restart_command,
+        "restart_delay": restart_delay,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "version": __version__,
+        "old_version": old_version,
+        "new_version": new_version,
+    }
+    _UPGRADE_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = _UPGRADE_REPORT_PATH.with_suffix(_UPGRADE_REPORT_PATH.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(_UPGRADE_REPORT_PATH)
+
+
+def _spawn_detached_restart(command: str, delay: float) -> Optional[subprocess.Popen[str]]:
+    """以延迟方式异步执行 stop/start，确保 master 停止后仍能继续。"""
+
+    cleaned = command.strip()
+    if not cleaned:
+        return None
+    safe_delay = max(0.0, delay)
+    shell_command = f"sleep {safe_delay:.3f} && {cleaned}"
+    return subprocess.Popen(
+        ["bash", "-lc", shell_command],
+        cwd=str(ROOT_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+async def _announce_upgrade_completion(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    lines: Sequence[str],
+    started_at: float,
+) -> None:
+    """记录成功结果并提示即将重启或保持在线。"""
+
+    elapsed = time.monotonic() - started_at
+    preview = _render_upgrade_preview(lines)
+    restart_command = _UPGRADE_RESTART_COMMAND.strip()
+    if not restart_command:
+        text = (
+            "升级流程完成 ✅\n"
+            f"pipx upgrade 耗时 {elapsed:.1f} 秒。\n"
+            "未配置自动重启命令，请手动执行 `vibego stop && vibego start` 完成切换。\n\n"
+            f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+        )
+        await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+        return
+
+    _persist_upgrade_report(chat_id, lines, elapsed, restart_command, _UPGRADE_RESTART_DELAY)
+    text = (
+        "升级流程完成（pipx 阶段） ✅\n"
+        f"pipx upgrade 耗时 {elapsed:.1f} 秒，将在 {_UPGRADE_RESTART_DELAY:.1f} 秒后执行：{restart_command}\n"
+        "master 即将重启并短暂离线，稍后使用 /start 验证状态。\n\n"
+        f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+    )
+    await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
+    proc = _spawn_detached_restart(restart_command, _UPGRADE_RESTART_DELAY)
+    if proc:
+        log.info("已安排升级后自动重启", extra={"pid": proc.pid, "delay": _UPGRADE_RESTART_DELAY})
+    else:
+        log.warning("升级成功但未能启动自动重启命令", extra={"command": restart_command})
+
+
+async def _run_upgrade_pipeline(bot: Bot, chat_id: int, message_id: int) -> None:
+    """串行执行 pipx upgrade / stop / start，并实时推送日志。"""
+
+    started_at = time.monotonic()
+    total_steps = len(_UPGRADE_COMMANDS)
+    last_lines: List[str] = []
+    for index, (command, description) in enumerate(_UPGRADE_COMMANDS, start=1):
+        log.info("升级步骤 %s/%s：%s", index, total_steps, command)
+        try:
+            returncode, lines = await _run_single_upgrade_step(
+                command,
+                description,
+                index,
+                total_steps,
+                bot,
+                chat_id,
+                message_id,
+            )
+        except Exception as exc:  # pragma: no cover - 捕获不可预期异常
+            log.exception("升级步骤 %s 发生异常", description)
+            await _notify_upgrade_failure(
+                bot,
+                chat_id,
+                message_id,
+                description,
+                command,
+                [],
+                error=str(exc),
+            )
+            return
+
+        if returncode != 0:
+            await _notify_upgrade_failure(
+                bot,
+                chat_id,
+                message_id,
+                description,
+                command,
+                lines,
+                returncode,
+            )
+            return
+        last_lines = lines
+
+    await _announce_upgrade_completion(bot, chat_id, message_id, last_lines, started_at)
 
 
 async def _periodic_update_check(bot: Bot) -> None:
@@ -2207,7 +2555,7 @@ def _safe_remove(path: Path, *, retries: int = 3) -> None:
     for attempt in range(retries):
         try:
             path.unlink()
-            log.info("重启信号文件已删除", extra={"path": str(path), "attempt": attempt + 1})
+            log.info("文件已删除", extra={"path": str(path), "attempt": attempt + 1})
             return
         except FileNotFoundError:
             log.debug("文件已被其他进程删除", extra={"path": str(path)})
@@ -2302,6 +2650,60 @@ def _read_restart_signal() -> Tuple[Optional[dict], Optional[Path]]:
         return raw, path
 
     return None, None
+
+
+def _read_start_signal() -> Tuple[Optional[dict], Optional[Path]]:
+    """读取 CLI 写入的自动 /start 信号。"""
+
+    path = START_SIGNAL_PATH
+    if not path.exists():
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("payload 必须是对象")
+    except Exception as exc:
+        log.error("读取启动信号失败: %s", exc, extra={"path": str(path)})
+        _safe_remove(path)
+        return None, None
+
+    raw_ids = payload.get("chat_ids") or []
+    if not isinstance(raw_ids, list):
+        log.warning("启动信号 chat_ids 字段无效，已忽略", extra={"path": str(path)})
+        _safe_remove(path)
+        return None, None
+
+    chat_ids: list[int] = []
+    for item in raw_ids:
+        try:
+            candidate = int(item)
+        except (TypeError, ValueError):
+            continue
+        if candidate not in chat_ids:
+            chat_ids.append(candidate)
+    if not chat_ids:
+        log.info("启动信号未包含有效 chat_id，跳过自动推送", extra={"path": str(path)})
+        _safe_remove(path)
+        return None, None
+    payload["chat_ids"] = chat_ids
+
+    timestamp_raw = payload.get("timestamp")
+    if timestamp_raw:
+        try:
+            ts = datetime.fromisoformat(timestamp_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()
+            if age_seconds > START_SIGNAL_TTL:
+                log.info(
+                    "启动信号已过期，忽略处理",
+                    extra={"path": str(path), "age_seconds": age_seconds, "ttl": START_SIGNAL_TTL},
+                )
+                _safe_remove(path)
+                return None, None
+        except Exception as exc:
+            log.warning("解析启动信号时间戳失败: %s", exc, extra={"path": str(path)})
+    return payload, path
 
 
 async def _send_restart_project_overview(bot: Bot, chat_ids: Sequence[int]) -> None:
@@ -2467,6 +2869,80 @@ async def _notify_restart_success(bot: Bot) -> None:
             _safe_remove(candidate)
 
 
+async def _notify_start_signal(bot: Bot) -> None:
+    """启动后读取 CLI 写入的自动 /start 信号并推送通知。"""
+
+    payload, signal_path = _read_start_signal()
+    if not payload:
+        return
+    chat_ids = payload.get("chat_ids") or []
+    if not chat_ids:
+        return
+    try:
+        manager = await _ensure_manager()
+    except RuntimeError as exc:
+        log.error("自动 /start 通知失败：manager 未就绪", extra={"error": str(exc)})
+        return
+
+    # 等待 bot 完成菜单同步，避免 UI 数据尚未准备好
+    await asyncio.sleep(2)
+    for chat_id in chat_ids:
+        try:
+            await _deliver_master_start_overview(bot, chat_id, manager)
+        except Exception as exc:
+            log.error("发送自动启动通知失败: %s", exc, extra={"chat": chat_id})
+
+    if signal_path:
+        _safe_remove(signal_path)
+
+
+def _read_upgrade_report() -> Optional[dict]:
+    """读取升级完成报告，供新 master 启动时推送。"""
+
+    path = _UPGRADE_REPORT_PATH
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("upgrade report must be object")
+        return payload
+    except Exception as exc:
+        log.error("读取升级报告失败: %s", exc, extra={"path": str(path)})
+        _safe_remove(path)
+        return None
+
+
+async def _notify_upgrade_report(bot: Bot) -> None:
+    """若存在升级报告，则在 master 启动后向管理员推送摘要。"""
+
+    payload = _read_upgrade_report()
+    if not payload:
+        return
+    chat_id = payload.get("chat_id")
+    if not isinstance(chat_id, int):
+        log.warning("升级报告缺少有效 chat_id，已忽略", extra={"payload": payload})
+        _safe_remove(_UPGRADE_REPORT_PATH)
+        return
+
+    elapsed = payload.get("elapsed")
+    elapsed_text = f"{elapsed:.1f}" if isinstance(elapsed, (int, float)) else "未知"
+    old_version = payload.get("old_version") or payload.get("version") or "未知"
+    new_version = payload.get("new_version") or __version__
+    text = (
+        f"✅ 升级流程完成，执行耗时 {elapsed_text} 秒。\n"
+        f"📦 旧版本 {old_version} -> 新版本 {new_version}\n"
+        "🚀 master 已重新上线，请使用 /start 校验项目状态。"
+    )
+
+    try:
+        await bot.send_message(chat_id=chat_id, text=text)
+    except Exception as exc:
+        log.error("发送升级完成通知失败: %s", exc, extra={"chat": chat_id})
+    finally:
+        _safe_remove(_UPGRADE_REPORT_PATH)
+
+
 async def _ensure_manager() -> MasterManager:
     """确保 MANAGER 已初始化，未初始化时抛出异常。"""
 
@@ -2535,14 +3011,7 @@ async def cmd_start(message: Message) -> None:
     if not manager.is_authorized(message.chat.id):
         await message.answer("未授权。")
         return
-    manager.refresh_state()
-    await message.answer(
-        f"Master bot 已启动（v{__version__}）。\n"
-        f"已登记项目: {len(manager.configs)} 个。\n"
-        "使用 /projects 查看状态，/run 或 /stop 控制 worker。",
-        reply_markup=_build_master_main_keyboard(),
-    )
-    await _send_projects_overview_to_chat(
+    await _deliver_master_start_overview(
         message.bot,
         message.chat.id,
         manager,
@@ -2593,6 +3062,34 @@ async def _perform_restart(message: Message, start_script: Path) -> None:
         async with lock:
             _restart_in_progress = False
             log.debug("重启执行中，已提前重置状态标记")
+
+
+async def _deliver_master_start_overview(
+    bot: Bot,
+    chat_id: int,
+    manager: MasterManager,
+    *,
+    reply_to_message_id: Optional[int] = None,
+) -> None:
+    """统一推送 /start 内容与项目列表，供手动或自动场景复用。"""
+
+    summary = (
+        f"Master bot 已启动（v{__version__}）。\n"
+        f"已登记项目: {len(manager.configs)} 个。\n"
+        "使用 /projects 查看状态，/run 或 /stop 控制 worker。"
+    )
+    await bot.send_message(
+        chat_id=chat_id,
+        text=summary,
+        reply_markup=_build_master_main_keyboard(),
+        reply_to_message_id=reply_to_message_id,
+    )
+    await _send_projects_overview_to_chat(
+        bot,
+        chat_id,
+        manager,
+        reply_to_message_id=reply_to_message_id,
+    )
 
 
 @router.message(Command("restart"))
@@ -2699,15 +3196,49 @@ async def cmd_upgrade(message: Message) -> None:
         await message.answer("未授权。")
         return
 
-    success, error = _trigger_upgrade_pipeline()
-    if success:
-        notice = (
-            "已触发 `pipx upgrade vibego && vibego stop && vibego start`。\n"
-            "升级过程中 master 将短暂重启，请稍后使用 /start 验证状态。"
+    bot = message.bot
+    if bot is None:
+        await message.answer("Bot 实例未就绪，请稍后重试。")
+        return
+
+    async with _UPGRADE_STATE_LOCK:
+        global _UPGRADE_TASK
+        if _UPGRADE_TASK is not None and _UPGRADE_TASK.done():
+            _UPGRADE_TASK = None
+        if _UPGRADE_TASK is not None:
+            await message.answer("已有升级任务在执行，请等待其完成后再试。")
+            return
+
+        status_message = await message.answer(
+            "已收到升级指令，将依次执行 pipx upgrade / vibego stop / vibego start，日志会实时更新，请勿重复点击。",
+            disable_web_page_preview=True,
         )
-        await message.answer(notice, parse_mode="Markdown")
-    else:
-        await message.answer(f"触发升级命令失败：{error}")
+        message_id = getattr(status_message, "message_id", None)
+        if message_id is None:
+            await message.answer("无法追踪状态消息，升级已取消。")
+            return
+
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            _run_upgrade_pipeline(bot, message.chat.id, message_id),
+            name="master-upgrade-pipeline",
+        )
+        _UPGRADE_TASK = task
+
+        async def _clear_reference() -> None:
+            async with _UPGRADE_STATE_LOCK:
+                global _UPGRADE_TASK
+                if _UPGRADE_TASK is task:
+                    _UPGRADE_TASK = None
+
+        def _on_done(completed: asyncio.Task) -> None:
+            try:
+                completed.result()
+            except Exception as exc:  # pragma: no cover - 记录后台异常
+                log.error("升级流水线执行失败: %s", exc)
+            loop.create_task(_clear_reference())
+
+        task.add_done_callback(_on_done)
 
 
 async def _run_and_reply(message: Message, action: str, coro) -> None:
@@ -3414,20 +3945,13 @@ async def on_global_command_field(callback: CallbackQuery, state: FSMContext) ->
         return
     command_id = int(raw_id)
     try:
-        await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+        command = await GLOBAL_COMMAND_SERVICE.get_command(command_id)
     except CommandNotFoundError:
         await callback.answer("通用命令不存在", show_alert=True)
         await _edit_global_command_overview(callback, notice="目标命令已被删除。")
         return
-    prompt_map = {
-        "title": "请输入新的命令标题：",
-        "command": "请输入新的执行指令：",
-        "description": "请输入新的命令描述（可留空）：",
-        "timeout": "请输入新的超时时间（单位秒，5-3600）：",
-        "aliases": "请输入全部别名，以逗号或空格分隔，发送 - 可清空：",
-    }
-    prompt = prompt_map.get(field)
-    if prompt is None:
+    prompt_text = build_field_prompt_text(command, field)
+    if prompt_text is None:
         await callback.answer("暂不支持该字段", show_alert=True)
         return
     await state.update_data(
@@ -3442,7 +3966,7 @@ async def on_global_command_field(callback: CallbackQuery, state: FSMContext) ->
     else:
         await state.set_state(CommandEditStates.waiting_value)
     if callback.message:
-        await callback.message.answer(f"{prompt}\n发送“取消”可终止当前操作。")
+        await callback.message.answer(prompt_text)
     await callback.answer("请发送新的值")
 
 
@@ -3467,6 +3991,66 @@ async def on_global_command_toggle(callback: CallbackQuery) -> None:
     action_text = "已启用" if updated.enabled else "已停用"
     await _edit_global_command_overview(callback, notice=f"{updated.name} {action_text}")
     await callback.answer(action_text)
+
+
+@router.callback_query(F.data.startswith(GLOBAL_COMMAND_DELETE_PROMPT_PREFIX))
+async def on_global_command_delete_prompt(callback: CallbackQuery) -> None:
+    """提醒管理员确认删除命令。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    raw_id = (callback.data or "")[len(GLOBAL_COMMAND_DELETE_PROMPT_PREFIX) :]
+    if not raw_id.isdigit():
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    try:
+        command = await GLOBAL_COMMAND_SERVICE.get_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _edit_global_command_overview(callback, notice="目标命令已被删除。")
+        return
+    confirm_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 确认删除",
+                    callback_data=f"{GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX}{command_id}",
+                ),
+                InlineKeyboardButton(
+                    text="取消",
+                    callback_data=f"{GLOBAL_COMMAND_EDIT_PREFIX}{command_id}",
+                ),
+            ]
+        ]
+    )
+    if callback.message:
+        await callback.message.answer(
+            f"确定要删除通用命令 {command.name} 吗？此操作不可恢复。",
+            reply_markup=confirm_markup,
+        )
+    await callback.answer("请确认删除")
+
+
+@router.callback_query(F.data.startswith(GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX))
+async def on_global_command_delete_confirm(callback: CallbackQuery) -> None:
+    """执行命令删除操作。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    raw_id = (callback.data or "")[len(GLOBAL_COMMAND_DELETE_CONFIRM_PREFIX) :]
+    if not raw_id.isdigit():
+        await callback.answer("命令标识无效", show_alert=True)
+        return
+    command_id = int(raw_id)
+    try:
+        await GLOBAL_COMMAND_SERVICE.delete_command(command_id)
+    except CommandNotFoundError:
+        await callback.answer("通用命令不存在", show_alert=True)
+        await _edit_global_command_overview(callback, notice="目标命令已被删除。")
+        return
+    await _edit_global_command_overview(callback, notice="通用命令已彻底删除。")
+    await callback.answer("已删除")
 
 
 @router.message(CommandCreateStates.waiting_name)
@@ -3531,6 +4115,90 @@ async def on_global_command_create_shell(message: Message, state: FSMContext) ->
     await state.clear()
     await message.answer(f"通用命令 {created.name} 已创建，描述与别名可稍后在编辑面板补齐。")
     await _send_global_command_overview_message(message, notice="新的通用命令已生效。")
+
+
+@router.message(CommandEditStates.waiting_value)
+async def on_global_command_edit_value(message: Message, state: FSMContext) -> None:
+    """处理通用命令字段更新。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "edit"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令编辑已取消。")
+        return
+    command_id = data.get("command_id")
+    field = data.get("field")
+    if not command_id or not field:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择通用命令。")
+        return
+    updates: Dict[str, object] = {}
+    if field == "title":
+        updates["title"] = text
+    elif field == "command":
+        if not text:
+            await message.answer("命令内容不能为空，请重新输入：")
+            return
+        updates["command"] = text
+    elif field == "description":
+        updates["description"] = text
+    elif field == "timeout":
+        try:
+            updates["timeout"] = int(text)
+        except ValueError:
+            await message.answer("超时需为整数秒，请重新输入：")
+            return
+    else:
+        await message.answer("暂不支持该字段。")
+        await state.clear()
+        return
+    try:
+        updated = await GLOBAL_COMMAND_SERVICE.update_command(command_id, **updates)
+    except (ValueError, CommandAlreadyExistsError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(f"通用命令 {updated.name} 已更新。")
+    await _send_global_command_overview_message(message, notice="通用命令字段已更新。")
+
+
+@router.message(CommandEditStates.waiting_aliases)
+async def on_global_command_edit_aliases(message: Message, state: FSMContext) -> None:
+    """处理通用命令别名更新。"""
+
+    data = await state.get_data()
+    if not _is_global_command_flow(data, "edit"):
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("通用命令编辑已取消。")
+        return
+    command_id = data.get("command_id")
+    if not command_id:
+        await state.clear()
+        await message.answer("上下文已失效，请重新选择通用命令。")
+        return
+    aliases = _parse_global_alias_input(text)
+    conflict_slug = await _detect_project_command_conflict(aliases)
+    if conflict_slug:
+        await message.answer(f"别名与项目 {conflict_slug} 的命令冲突，请重新输入：")
+        return
+    try:
+        updated_aliases = await GLOBAL_COMMAND_SERVICE.replace_aliases(command_id, aliases)
+    except (ValueError, CommandAliasConflictError, CommandNotFoundError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    if updated_aliases:
+        alias_text = ", ".join(updated_aliases)
+        await message.answer(f"别名已更新：{alias_text}")
+    else:
+        await message.answer("别名已清空。")
+    await _send_global_command_overview_message(message, notice="别名已同步至通用命令。")
 
 
 @router.message()
@@ -3855,6 +4523,7 @@ async def main() -> None:
     """master.py 的异步入口，完成 bot 启动与调度器绑定。"""
 
     manager = await bootstrap_manager()
+    await _ensure_default_global_commands()
 
     # 诊断日志：记录重启信号文件路径，便于排查问题
     log.info(
@@ -3889,6 +4558,8 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     dp.startup.register(_notify_restart_success)
+    dp.startup.register(_notify_start_signal)
+    dp.startup.register(_notify_upgrade_report)
 
     log.info("Master 已启动，监听管理员指令。")
     await _ensure_master_menu_button(bot)
@@ -3904,85 +4575,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("Master 停止")
-@router.message(CommandEditStates.waiting_value)
-async def on_global_command_edit_value(message: Message, state: FSMContext) -> None:
-    """处理通用命令字段更新。"""
-
-    data = await state.get_data()
-    if not _is_global_command_flow(data, "edit"):
-        return
-    text = (message.text or "").strip()
-    if _is_cancel_text(text):
-        await state.clear()
-        await message.answer("通用命令编辑已取消。")
-        return
-    command_id = data.get("command_id")
-    field = data.get("field")
-    if not command_id or not field:
-        await state.clear()
-        await message.answer("上下文已失效，请重新选择通用命令。")
-        return
-    updates: Dict[str, object] = {}
-    if field == "title":
-        updates["title"] = text
-    elif field == "command":
-        if not text:
-            await message.answer("命令内容不能为空，请重新输入：")
-            return
-        updates["command"] = text
-    elif field == "description":
-        updates["description"] = text
-    elif field == "timeout":
-        try:
-            updates["timeout"] = int(text)
-        except ValueError:
-            await message.answer("超时需为整数秒，请重新输入：")
-            return
-    else:
-        await message.answer("暂不支持该字段。")
-        await state.clear()
-        return
-    try:
-        updated = await GLOBAL_COMMAND_SERVICE.update_command(command_id, **updates)
-    except (ValueError, CommandAlreadyExistsError, CommandNotFoundError) as exc:
-        await message.answer(str(exc))
-        return
-    await state.clear()
-    await message.answer(f"通用命令 {updated.name} 已更新。")
-    await _send_global_command_overview_message(message, notice="通用命令字段已更新。")
-
-
-@router.message(CommandEditStates.waiting_aliases)
-async def on_global_command_edit_aliases(message: Message, state: FSMContext) -> None:
-    """处理通用命令别名更新。"""
-
-    data = await state.get_data()
-    if not _is_global_command_flow(data, "edit"):
-        return
-    text = (message.text or "").strip()
-    if _is_cancel_text(text):
-        await state.clear()
-        await message.answer("通用命令编辑已取消。")
-        return
-    command_id = data.get("command_id")
-    if not command_id:
-        await state.clear()
-        await message.answer("上下文已失效，请重新选择通用命令。")
-        return
-    aliases = _parse_global_alias_input(text)
-    conflict_slug = await _detect_project_command_conflict(aliases)
-    if conflict_slug:
-        await message.answer(f"别名与项目 {conflict_slug} 的命令冲突，请重新输入：")
-        return
-    try:
-        updated_aliases = await GLOBAL_COMMAND_SERVICE.replace_aliases(command_id, aliases)
-    except (ValueError, CommandAliasConflictError, CommandNotFoundError) as exc:
-        await message.answer(str(exc))
-        return
-    await state.clear()
-    if updated_aliases:
-        alias_text = ", ".join(updated_aliases)
-        await message.answer(f"别名已更新：{alias_text}")
-    else:
-        await message.answer("别名已清空。")
-    await _send_global_command_overview_message(message, notice="别名已同步至通用命令。")
