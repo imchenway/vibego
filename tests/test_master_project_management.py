@@ -557,6 +557,17 @@ def test_projects_overview_hides_create_button(repo: ProjectRepository, tmp_path
         assert "(" in label and label.endswith(")"), "运行/停止按钮应展示当前模型"
 
 
+def test_projects_overview_uses_actual_username(repo: ProjectRepository, tmp_path: Path):
+    manager = _build_manager(repo, tmp_path)
+    state = manager.state_store.data["sample"]
+    state.actual_username = "RealTelegramBot"
+    text, markup = master._projects_overview(manager)
+    assert text == "请选择操作："
+    assert markup is not None
+    first_button = markup.inline_keyboard[0][0]
+    assert first_button.url.endswith("/RealTelegramBot")
+
+
 def test_manage_action_sends_inline_menu(repo: ProjectRepository, tmp_path: Path, monkeypatch):
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager

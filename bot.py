@@ -2605,6 +2605,101 @@ def _auto_record_chat_id(chat_id: int) -> None:
             pass
 
 
+def _record_worker_identity(username: Optional[str], user_id: Optional[int]) -> None:
+    """在 worker 启动时记录实际的 Telegram 用户名，便于 master 侧展示跳转链接。"""
+
+    if not username:
+        return
+
+    state_file_env = os.environ.get("STATE_FILE")
+    if not state_file_env:
+        return
+
+    state_path = Path(state_file_env).expanduser()
+    if not state_path.exists():
+        worker_log.debug(
+            "STATE_FILE 不存在，跳过记录实际 username",
+            extra={**_session_extra(), "path": str(state_path)},
+        )
+        return
+
+    lock_path = state_path.with_suffix(state_path.suffix + ".lock")
+    import fcntl
+
+    try:
+        with open(lock_path, "w", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+                if not isinstance(raw_state, dict):
+                    worker_log.warning(
+                        "STATE_FILE 结构异常，跳过记录 username",
+                        extra=_session_extra(),
+                    )
+                    return
+                project_key = PROJECT_SLUG or PROJECT_NAME
+                if not project_key:
+                    worker_log.warning(
+                        "PROJECT_SLUG 与 PROJECT_NAME 均为空，无法记录 username",
+                        extra=_session_extra(),
+                    )
+                    return
+                project_state = raw_state.get(project_key)
+                if not isinstance(project_state, dict):
+                    project_state = {}
+                    raw_state[project_key] = project_state
+                changed = False
+                if project_state.get("actual_username") != username:
+                    project_state["actual_username"] = username
+                    changed = True
+                if user_id is not None and project_state.get("telegram_user_id") != user_id:
+                    project_state["telegram_user_id"] = user_id
+                    changed = True
+                if changed:
+                    tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
+                    tmp_path.write_text(
+                        json.dumps(raw_state, ensure_ascii=False, indent=4),
+                        encoding="utf-8",
+                    )
+                    tmp_path.replace(state_path)
+                    worker_log.info(
+                        "已记录实际 username=%s",
+                        username,
+                        extra={**_session_extra(), "project": project_key},
+                    )
+                else:
+                    worker_log.debug(
+                        "实际 username 未变化，跳过 state 更新",
+                        extra={**_session_extra(), "username": username},
+                    )
+            except json.JSONDecodeError as exc:
+                worker_log.error(
+                    "STATE_FILE 解析失败，跳过记录 username：%s",
+                    exc,
+                    extra=_session_extra(),
+                )
+            except Exception as exc:
+                worker_log.error(
+                    "记录实际 username 失败：%s",
+                    exc,
+                    extra=_session_extra(),
+                )
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception as exc:
+        worker_log.error(
+            "记录实际 username 失败：%s",
+            exc,
+            extra=_session_extra(),
+        )
+    finally:
+        try:
+            if lock_path.exists():
+                lock_path.unlink()
+        except Exception:
+            pass
+
+
 async def _broadcast_worker_keyboard(bot: Bot) -> None:
     """启动时主动推送菜单，确保 Telegram 键盘同步。"""
     targets = _resolve_worker_target_chat_ids()
@@ -9003,6 +9098,7 @@ async def ensure_telegram_connectivity(bot: Bot, timeout: float = 30.0):
             me.id,
             extra=_session_extra(),
         )
+        _record_worker_identity(me.username, me.id)
         return me
 
 
