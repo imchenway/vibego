@@ -163,8 +163,11 @@ fi
 
 ensure_dir "$LOG_DIR"
 
-exec {RUN_BOT_LOCK_FD}>"$LOCK_FILE"
-if ! flock -n "$RUN_BOT_LOCK_FD"; then
+if ! exec 200>"$LOCK_FILE"; then
+  echo "[run-bot] 无法创建锁文件 $LOCK_FILE" >&2
+  exit 1
+fi
+if ! flock -n 200; then
   echo "[run-bot] 项目 $PROJECT_NAME 已有 worker 在运行（锁文件：$LOCK_FILE）。如需重启，请先执行 ./scripts/stop_bot.sh --model $MODEL --project $PROJECT_NAME 或 vibego stop。" >&2
   exit 1
 fi
