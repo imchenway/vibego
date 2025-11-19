@@ -1101,12 +1101,31 @@ async def _dispatch_prompt_to_model(
     pointer_path: Optional[Path] = None
     if CODEX_SESSION_FILE_PATH:
         pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
+    pointer_target = _read_pointer_path(pointer_path) if pointer_path is not None else None
+    pointer_switched = False
 
-    if pointer_path is not None and session_path is None:
-        session_path = _read_pointer_path(pointer_path)
-        if session_path is not None:
+    if pointer_target is not None:
+        if session_path is None:
+            session_path = pointer_target
             worker_log.info(
                 "[session-map] chat=%s pointer -> %s",
+                chat_id,
+                session_path,
+                extra=_session_extra(path=session_path),
+            )
+        elif session_path != pointer_target:
+            previous_key = CHAT_SESSION_MAP.get(chat_id)
+            if previous_key:
+                _reset_delivered_hashes(chat_id, previous_key)
+                _reset_delivered_offsets(chat_id, previous_key)
+                SESSION_OFFSETS.pop(previous_key, None)
+            else:
+                _reset_delivered_hashes(chat_id)
+                _reset_delivered_offsets(chat_id)
+            session_path = pointer_target
+            pointer_switched = True
+            worker_log.info(
+                "[session-map] chat=%s pointer switched -> %s",
                 chat_id,
                 session_path,
                 extra=_session_extra(path=session_path),
@@ -1236,7 +1255,7 @@ async def _dispatch_prompt_to_model(
         extra=_session_extra(key=session_key),
     )
 
-    if ack_immediately:
+    if ack_immediately or pointer_switched:
         await _send_session_ack(chat_id, session_path, reply_to=reply_to)
 
     if SESSION_POLL_TIMEOUT > 0:
