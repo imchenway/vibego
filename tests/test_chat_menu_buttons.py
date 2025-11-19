@@ -76,15 +76,16 @@ def test_master_keyboard_structure():
     markup = master._build_master_main_keyboard()
     assert isinstance(markup, ReplyKeyboardMarkup)
     assert len(markup.keyboard) == 1
-    assert len(markup.keyboard[0]) == 2
-    assert isinstance(markup.keyboard[0][0], KeyboardButton)
-    assert isinstance(markup.keyboard[0][1], KeyboardButton)
+    assert len(markup.keyboard[0]) == 3
+    for button in markup.keyboard[0]:
+        assert isinstance(button, KeyboardButton)
 
 
 def test_master_keyboard_button_text():
     markup = master._build_master_main_keyboard()
     assert markup.keyboard[0][0].text == master.MASTER_MENU_BUTTON_TEXT
     assert markup.keyboard[0][1].text == master.MASTER_MANAGE_BUTTON_TEXT
+    assert markup.keyboard[0][2].text == master.MASTER_SETTINGS_BUTTON_TEXT
 
 
 def test_master_keyboard_resize_enabled():
@@ -348,6 +349,8 @@ def test_worker_broadcast_pushes_to_targets(tmp_path, monkeypatch):
     monkeypatch.setenv("MASTER_PROJECTS_PATH", str(projects_file))
     monkeypatch.delenv("ALLOWED_CHAT_ID", raising=False)
     monkeypatch.delenv("WORKER_CHAT_ID", raising=False)
+    fake_task_view = AsyncMock(return_value=("任务列表", None))
+    monkeypatch.setattr(bot, "_build_task_list_view", fake_task_view)
 
     mock_bot = AsyncMock()
     asyncio.run(bot._broadcast_worker_keyboard(mock_bot))
@@ -357,3 +360,15 @@ def test_worker_broadcast_pushes_to_targets(tmp_path, monkeypatch):
 
     monkeypatch.delenv("STATE_FILE", raising=False)
     monkeypatch.delenv("MASTER_PROJECTS_PATH", raising=False)
+
+
+def test_worker_identity_record_updates_state(tmp_path, monkeypatch):
+    slug = bot.PROJECT_SLUG
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({slug: {"chat_id": 555}}), encoding="utf-8")
+    monkeypatch.setenv("STATE_FILE", str(state_file))
+    bot._record_worker_identity("ActualTelegramBot", 123456789)
+    updated = json.loads(state_file.read_text(encoding="utf-8"))
+    assert updated[slug]["actual_username"] == "ActualTelegramBot"
+    assert updated[slug]["telegram_user_id"] == 123456789
+    monkeypatch.delenv("STATE_FILE", raising=False)

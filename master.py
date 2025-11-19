@@ -871,6 +871,13 @@ def _format_project_line(cfg: "ProjectConfig", state: Optional[ProjectState]) ->
     )
 
 
+def _project_jump_url(cfg: "ProjectConfig", state: Optional[ProjectState]) -> str:
+    """优先使用 worker 上报的实际 username 构建跳转链接。"""
+
+    username = state.actual_username if state and state.actual_username else cfg.bot_name
+    return f"https://t.me/{username}"
+
+
 def _projects_overview(manager: MasterManager) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
     """根据当前项目状态生成概览文本与操作按钮。"""
 
@@ -882,11 +889,12 @@ def _projects_overview(manager: MasterManager) -> Tuple[str, Optional[InlineKeyb
         status = state.status if state else "stopped"
         current_model = (state.model if state else cfg.default_model).lower()
         current_model_label = model_name_map.get(current_model, current_model)
+        jump_url = _project_jump_url(cfg, state)
         if status == "running":
             builder.row(
                 InlineKeyboardButton(
                     text=f"{cfg.display_name}",
-                    url=cfg.jump_url,
+                    url=jump_url,
                 ),
                 InlineKeyboardButton(
                     text=f"⛔️ 停止 ({current_model_label})",
@@ -897,7 +905,7 @@ def _projects_overview(manager: MasterManager) -> Tuple[str, Optional[InlineKeyb
             builder.row(
                 InlineKeyboardButton(
                     text=f"{cfg.display_name}",
-                    url=cfg.jump_url,
+                    url=jump_url,
                 ),
                 InlineKeyboardButton(
                     text=f"▶️ 启动 ({current_model_label})",
@@ -1500,6 +1508,7 @@ class ProjectState:
     model: str
     status: str = "stopped"
     chat_id: Optional[int] = None
+    actual_username: Optional[str] = None
 
 
 class StateStore:
@@ -1561,7 +1570,15 @@ class StateStore:
             chat_id_value = item.get("chat_id", cfg.allowed_chat_id)
             if isinstance(chat_id_value, str) and chat_id_value.isdigit():
                 chat_id_value = int(chat_id_value)
-            self.data[slug] = ProjectState(model=model, status=status, chat_id=chat_id_value)
+            username = item.get("actual_username")
+            if isinstance(username, str):
+                username = username.strip() or None
+            self.data[slug] = ProjectState(
+                model=model,
+                status=status,
+                chat_id=chat_id_value,
+                actual_username=username,
+            )
 
     def save(self) -> None:
         """将当前内存状态写入磁盘文件。"""
@@ -1572,6 +1589,11 @@ class StateStore:
                 "model": state.model,
                 "status": state.status,
                 "chat_id": state.chat_id,
+                **(
+                    {"actual_username": state.actual_username}
+                    if state.actual_username
+                    else {}
+                ),
             }
             for slug, state in self.data.items()
         }
@@ -1584,6 +1606,7 @@ class StateStore:
         model: Optional[str] = None,
         status: Optional[str] = None,
         chat_id: Optional[int] = None,
+        actual_username: Optional[str] = None,
     ) -> None:
         """更新指定项目的状态并立即持久化。"""
 
@@ -1594,6 +1617,9 @@ class StateStore:
             state.status = status
         if chat_id is not None:
             state.chat_id = chat_id
+        if actual_username is not None:
+            cleaned = actual_username.strip() if isinstance(actual_username, str) else actual_username
+            state.actual_username = cleaned or None
         self.save()
 
 
