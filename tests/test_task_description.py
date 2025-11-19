@@ -1294,6 +1294,95 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
     bot.CHAT_DELIVERED_OFFSETS.clear()
 
 
+def test_dispatch_prompt_rebinds_when_pointer_updates(monkeypatch, tmp_path: Path):
+    pointer = tmp_path / "pointer.txt"
+    old_session = tmp_path / "old.jsonl"
+    new_session = tmp_path / "new.jsonl"
+    old_session.write_text("", encoding="utf-8")
+    new_session.write_text("", encoding="utf-8")
+    pointer.write_text(str(old_session), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    chat_id = 555
+    bot.CHAT_SESSION_MAP[chat_id] = str(old_session)
+    pointer.write_text(str(new_session), encoding="utf-8")
+
+    ack_records: list[str] = []
+
+    async def fake_reply(chat_id: int, text: str, **kwargs):
+        ack_records.append(text)
+        class Dummy:
+            message_id = 1
+        return Dummy()
+
+    async def fake_deliver(chat_id: int, session_path: Path) -> bool:
+        return False
+
+    async def fake_watch(*args, **kwargs) -> Optional[Path]:
+        return None
+
+    def fake_tmux_send_line(_session: str, _prompt: str) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+    monkeypatch.setattr(bot, "_deliver_pending_messages", fake_deliver)
+    monkeypatch.setattr(bot, "_await_session_path", fake_watch)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+        def done(self) -> bool:
+            return self._done
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        await bot._dispatch_prompt_to_model(chat_id, "pwd", reply_to=None, ack_immediately=True)
+
+    asyncio.run(scenario())
+    assert bot.CHAT_SESSION_MAP[chat_id] == str(new_session)
+    assert ack_records, "应发送新的 sessionId 提示"
+    assert new_session.stem in ack_records[-1]
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
 @pytest.mark.parametrize(
     "status,description,expected_checks",
     [
