@@ -23,6 +23,7 @@ import re
 import threading
 import unicodedata
 import urllib.request
+from urllib.error import URLError
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass, field
@@ -108,6 +109,8 @@ CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+TELEGRAM_API_ROOT = (os.environ.get("MASTER_TELEGRAM_API_ROOT") or "https://api.telegram.org").rstrip("/")
 
 CONFIG_PATH = Path(os.environ.get("MASTER_PROJECTS_PATH", CONFIG_DIR / "projects.json"))
 CONFIG_DB_PATH = Path(os.environ.get("MASTER_PROJECTS_DB_PATH", CONFIG_DIR / "master.db"))
@@ -1509,6 +1512,7 @@ class ProjectState:
     status: str = "stopped"
     chat_id: Optional[int] = None
     actual_username: Optional[str] = None
+    telegram_user_id: Optional[int] = None
 
 
 class StateStore:
@@ -1530,10 +1534,12 @@ class StateStore:
     ) -> None:
         """更新配置映射，新增项目时写入默认状态，删除项目时移除记录。"""
         self.configs = configs
+        dirty = False
         # 移除已删除项目的状态
         for slug in list(self.data.keys()):
             if slug not in configs:
                 del self.data[slug]
+                dirty = True
         # 为新增项目补充默认状态
         for slug, cfg in configs.items():
             if slug not in self.data:
@@ -1542,9 +1548,14 @@ class StateStore:
                     status="stopped",
                     chat_id=cfg.allowed_chat_id,
                 )
+                dirty = True
+            if self._sync_bot_identity(slug):
+                dirty = True
         if preserve:
             self.data.update(preserve)
-        self.save()
+            dirty = True
+        if dirty or not self.path.exists():
+            self.save()
 
     def refresh(self) -> None:
         """从 state 文件重新加载所有项目状态。"""
@@ -1557,6 +1568,7 @@ class StateStore:
                 raw = {}
         else:
             raw = {}
+        dirty = False
         for slug, cfg in self.configs.items():
             item = (
                 raw.get(slug)
@@ -1573,12 +1585,22 @@ class StateStore:
             username = item.get("actual_username")
             if isinstance(username, str):
                 username = username.strip() or None
+            telegram_user_id = item.get("telegram_user_id")
+            if isinstance(telegram_user_id, str) and telegram_user_id.isdigit():
+                telegram_user_id = int(telegram_user_id)
+            elif not isinstance(telegram_user_id, int):
+                telegram_user_id = None
             self.data[slug] = ProjectState(
                 model=model,
                 status=status,
                 chat_id=chat_id_value,
                 actual_username=username,
+                telegram_user_id=telegram_user_id,
             )
+            if self._sync_bot_identity(slug):
+                dirty = True
+        if dirty:
+            self.save()
 
     def save(self) -> None:
         """将当前内存状态写入磁盘文件。"""
@@ -1594,6 +1616,11 @@ class StateStore:
                     if state.actual_username
                     else {}
                 ),
+                **(
+                    {"telegram_user_id": state.telegram_user_id}
+                    if state.telegram_user_id is not None
+                    else {}
+                ),
             }
             for slug, state in self.data.items()
         }
@@ -1607,6 +1634,7 @@ class StateStore:
         status: Optional[str] = None,
         chat_id: Optional[int] = None,
         actual_username: Optional[str] = None,
+        telegram_user_id: Optional[int] = None,
     ) -> None:
         """更新指定项目的状态并立即持久化。"""
 
@@ -1620,7 +1648,74 @@ class StateStore:
         if actual_username is not None:
             cleaned = actual_username.strip() if isinstance(actual_username, str) else actual_username
             state.actual_username = cleaned or None
+        if telegram_user_id is not None:
+            state.telegram_user_id = telegram_user_id
         self.save()
+
+    def _sync_bot_identity(self, slug: str) -> bool:
+        """根据 bot token 自动补全 Telegram username。"""
+
+        cfg = self.configs.get(slug)
+        state = self.data.get(slug)
+        if not cfg or not state or state.actual_username:
+            return False
+        try:
+            username, telegram_user_id = _fetch_bot_identity(cfg.bot_token)
+        except BotIdentityError as exc:
+            log.debug(
+                "自动解析 %s username 失败：%s",
+                cfg.display_name,
+                exc,
+                extra={"project": slug},
+            )
+            return False
+        state.actual_username = username
+        if telegram_user_id is not None:
+            state.telegram_user_id = telegram_user_id
+        log.info(
+            "已自动写入 %s 的 username=%s",
+            cfg.display_name,
+            username,
+            extra={"project": slug},
+        )
+        return True
+
+
+class BotIdentityError(Exception):
+    """表示从 Telegram Bot API 拉取身份信息失败。"""
+
+
+def _fetch_bot_identity(bot_token: str) -> Tuple[str, Optional[int]]:
+    """调用 Telegram getMe 接口获取 username/id。"""
+
+    token = bot_token.strip()
+    if not token:
+        raise BotIdentityError("bot_token 为空")
+    url = f"{TELEGRAM_API_ROOT}/bot{token}/getMe"
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            raw = response.read().decode("utf-8")
+    except URLError as exc:
+        raise BotIdentityError(f"网络请求失败：{exc}") from exc
+    except OSError as exc:
+        raise BotIdentityError(f"请求 Telegram API 失败：{exc}") from exc
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise BotIdentityError("无法解析 getMe 响应为 JSON") from exc
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise BotIdentityError(f"getMe 返回异常：{payload}")
+    result = payload.get("result") or {}
+    username = result.get("username")
+    if not isinstance(username, str) or not username.strip():
+        raise BotIdentityError("getMe 响应缺少 username")
+    user_id = result.get("id")
+    if isinstance(user_id, str) and user_id.isdigit():
+        user_id = int(user_id)
+    elif not isinstance(user_id, int):
+        user_id = None
+    return username.strip(), user_id
 
 
 class MasterManager:
