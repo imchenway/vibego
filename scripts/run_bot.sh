@@ -161,6 +161,36 @@ if [[ -n "$MODEL_CMD" ]]; then
   fi
 fi
 
+detect_foreign_vibego_processes() {
+  if ! command -v ps >/dev/null 2>&1; then
+    return
+  fi
+  local self_root="$SOURCE_ROOT"
+  local matches=()
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    local pid="${entry%% *}"
+    local cmd="${entry#* }"
+    [[ "$cmd" == *"bot.py"* || "$cmd" == *"master.py"* || "$cmd" == *"session_binder.py"* ]] || continue
+    if [[ "$cmd" == *"$self_root/"* ]]; then
+      continue
+    fi
+    matches+=("$pid|$cmd")
+  done < <(ps -Ao pid=,args= 2>/dev/null | grep -i "vibego" || true)
+  if (( ${#matches[@]} )); then
+    echo "[run-bot] 检测到其他 vibego 进程正在运行，启动已被阻止，请先停止以下进程：" >&2
+    for item in "${matches[@]}"; do
+      local pid="${item%%|*}"
+      local cmd="${item#*|}"
+      echo "  - pid=${pid} cmd=${cmd}" >&2
+    done
+    echo "可使用 'vibego stop' 或 ./scripts/stop_bot.sh 清理所有进程后重试。" >&2
+    exit 1
+  fi
+}
+
+detect_foreign_vibego_processes
+
 ensure_dir "$LOG_DIR"
 
 if command -v flock >/dev/null 2>&1; then

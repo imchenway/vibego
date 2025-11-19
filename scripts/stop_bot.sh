@@ -70,6 +70,31 @@ POINTER_BASENAME="${MODEL_POINTER_BASENAME:-current_session.txt}"
 ACTIVE_SESSION_BASENAME="${MODEL_ACTIVE_SESSION_BASENAME:-active_session_id.txt}"
 LOCK_BASENAME="${MODEL_LOCK_BASENAME:-worker.lock}"
 
+kill_all_vibego_processes() {
+  if ! command -v ps >/dev/null 2>&1; then
+    return
+  fi
+  local targets=()
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    local pid="${entry%% *}"
+    local cmd="${entry#* }"
+    [[ "$cmd" == *"vibego"* ]] || continue
+    if [[ "$cmd" == *"bot.py"* || "$cmd" == *"master.py"* || "$cmd" == *"session_binder.py"* || "$cmd" == *"log_writer.py"* ]]; then
+      targets+=("$pid")
+    fi
+  done < <(ps -Ao pid=,args= 2>/dev/null || true)
+  for pid in "${targets[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+  for pid in "${targets[@]}"; do
+    if ps -p "$pid" >/dev/null 2>&1; then
+      sleep 0.5
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 graceful_shutdown_claudecode() {
   local session="$1"
   local timeout="${2:-10}"
@@ -222,6 +247,6 @@ else
   fi
 fi
 
-# 已通过 pid 文件与 tmux 会话按项目停止进程，无需额外全局 pkill，避免误杀其它项目
+kill_all_vibego_processes
 
 exit 0
