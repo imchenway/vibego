@@ -1,5 +1,9 @@
 import asyncio
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc  # Python<3.11 兼容 UTC 常量
 from types import MethodType, SimpleNamespace
 import pytest
 import bot

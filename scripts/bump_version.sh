@@ -18,12 +18,33 @@ MASTER_CONFIG_ROOT="${MASTER_CONFIG_ROOT:-$HOME/.config/vibego}"
 RUNTIME_DIR="${VIBEGO_RUNTIME_ROOT:-$MASTER_CONFIG_ROOT/runtime}"
 BUMP_CMD="$RUNTIME_DIR/.venv/bin/bump-my-version"
 
-# 检查 bump-my-version 是否存在
-if [ ! -f "$BUMP_CMD" ]; then
-    echo "错误：找不到 bump-my-version"
-    echo "请先安装：pip install bump-my-version"
-    exit 1
+# pipx fallback 标记
+USE_PIPEX=false
+
+# 依次尝试运行时虚拟环境、pipx 安装目录以及 PATH 中的可执行文件
+if [ ! -x "$BUMP_CMD" ]; then
+    # 优先尝试 pipx 默认的 ~/.local/bin
+    if [ -x "$HOME/.local/bin/bump-my-version" ]; then
+        BUMP_CMD="$HOME/.local/bin/bump-my-version"
+    elif command -v bump-my-version >/dev/null 2>&1; then
+        BUMP_CMD="$(command -v bump-my-version)"
+    elif command -v pipx >/dev/null 2>&1; then
+        USE_PIPEX=true
+    else
+        echo "错误：找不到 bump-my-version"
+        echo "请先执行：pipx install bump-my-version"
+        exit 1
+    fi
 fi
+
+# 封装执行逻辑，pipx 模式下使用 pipx run 避免重复安装
+run_bump_my_version() {
+    if [ "$USE_PIPEX" = true ]; then
+        pipx run bump-my-version "$@"
+    else
+        "$BUMP_CMD" "$@"
+    fi
+}
 
 # 如果没有参数，显示帮助
 if [ $# -eq 0 ]; then
@@ -50,13 +71,13 @@ fi
 
 # 处理 show 命令
 if [ "$1" = "show" ]; then
-    "$BUMP_CMD" show current_version
+    run_bump_my_version show current_version
     exit 0
 fi
 
 # 处理 --help
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    "$BUMP_CMD" --help
+    run_bump_my_version --help
     exit 0
 fi
 
@@ -97,12 +118,12 @@ get_commit_message() {
 COMMIT_MSG=$(get_commit_message "$VERSION_TYPE")
 if [ -z "$COMMIT_MSG" ]; then
     # 如果不是有效的版本类型，直接传递给 bump-my-version
-    "$BUMP_CMD" bump "$@"
+    run_bump_my_version bump "$@"
     exit 0
 fi
 
 # 显示当前版本
-echo "📦 当前版本：$("$BUMP_CMD" show current_version)"
+echo "📦 当前版本：$(run_bump_my_version show current_version)"
 echo ""
 
 # 检查是否有未提交的修改
@@ -135,7 +156,7 @@ fi
 echo "🚀 开始递增版本..."
 echo ""
 
-"$BUMP_CMD" bump "$@"
+run_bump_my_version bump "$@"
 
 echo ""
 echo "✅ 版本管理完成！"

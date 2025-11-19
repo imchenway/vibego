@@ -23,6 +23,9 @@ python3 -m venv ~/.config/vibego/runtime/venv
 source ~/.config/vibego/runtime/venv/bin/activate
 ```
 
+- 最低需要 Python 3.9，推荐 3.11+；根据 [datetime 官方文档](https://docs.python.org/3/library/datetime.html#datetime.UTC)，`datetime.UTC` 仅在 3.11+ 中提供，本仓库已通过 `timezone.utc` 兜底兼容更早版本。
+- `scripts/run_bot.sh` 会在启动时自动优先选择可用的 `python3.11`（可通过 `VIBEGO_PYTHON_BIN` 覆盖），并在找不到 3.11 时回退到系统 `python3` 但确保版本 ≥3.9。
+
 ## 快速开始
 
 ### 创建并获取 telegram bot token

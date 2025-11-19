@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes
 from contextlib import suppress
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover - 仅 Python3.10 及更早版本会触发
+    UTC = timezone.utc  # Python<3.11 没有 datetime.UTC，用 timezone.utc 兜底
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal
 from dataclasses import dataclass
@@ -85,6 +89,9 @@ from command_center import (
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
 )
+
+# Python 3.10 才支持 dataclass slots，这里动态传参以兼容旧版本。
+_DATACLASS_SLOT_KW = {"slots": True} if sys.version_info >= (3, 10) else {}
 # --- 简单 .env 加载 ---
 def load_env(p: str = ".env"):
     """从指定路径加载 dotenv 格式的键值对到进程环境变量。"""
@@ -4170,7 +4177,7 @@ async def _render_task_detail(task_id: str) -> tuple[str, InlineKeyboardMarkup]:
     return detail_text, _build_task_actions(task)
 
 
-@dataclass(slots=True)
+@dataclass(**_DATACLASS_SLOT_KW)
 class _HistoryViewPage:
     """历史分页渲染所需的文本切片。"""
 
@@ -4468,7 +4475,7 @@ CHAT_LONG_POLL_LOCK: Optional[asyncio.Lock] = None  # 在事件循环启动后�
 SUMMARY_REQUEST_TIMEOUT_SECONDS = 300.0
 
 
-@dataclass(slots=True)
+@dataclass(**_DATACLASS_SLOT_KW)
 class PendingSummary:
     """记录待落库的模型摘要请求。"""
 

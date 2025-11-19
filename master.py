@@ -1723,7 +1723,7 @@ PROJECT_WIZARD_FIELDS_EDIT: Tuple[ProjectField, ...] = (
 PROJECT_WIZARD_OPTIONAL_FIELDS: Tuple[ProjectField, ...] = ("workdir", "allowed_chat_id")
 PROJECT_MODEL_CHOICES: Tuple[str, ...] = ("codex", "claudecode", "gemini")
 PROJECT_WIZARD_SESSIONS: Dict[int, ProjectWizardSession] = {}
-PROJECT_WIZARD_LOCK = asyncio.Lock()
+PROJECT_WIZARD_LOCK: Optional[asyncio.Lock] = None
 PROJECT_FIELD_PROMPTS_CREATE: Dict[ProjectField, str] = {
     "bot_name": "请输入 bot 名称（不含 @，仅字母、数字、下划线或点）：",
     "bot_token": "请输入 Telegram Bot Token（格式类似 123456:ABCdef）：",
@@ -1740,6 +1740,22 @@ PROJECT_FIELD_PROMPTS_EDIT: Dict[ProjectField, str] = {
     "workdir": "请输入新的工作目录（发送 - 保持当前值：{current}，可留空改为未设置）：",
     "allowed_chat_id": "请输入新的 chat_id（发送 - 保持当前值：{current}，留空表示取消预设）：",
 }
+
+
+def get_project_wizard_lock() -> asyncio.Lock:
+    """惰性创建项目向导锁，兼容 Python 3.9 未初始化事件循环的场景。"""
+
+    global PROJECT_WIZARD_LOCK
+    if PROJECT_WIZARD_LOCK is None:
+        PROJECT_WIZARD_LOCK = asyncio.Lock()
+    return PROJECT_WIZARD_LOCK
+
+
+def reset_project_wizard_lock() -> None:
+    """测试或重启 master 时调用，强制下次请求重新创建锁。"""
+
+    global PROJECT_WIZARD_LOCK
+    PROJECT_WIZARD_LOCK = None
 
 
 def _ensure_repository() -> ProjectRepository:
@@ -1952,7 +1968,7 @@ async def _advance_wizard_session(
 
     if not session.fields:
         await message.answer("流程配置异常，请重新开始。")
-        async with PROJECT_WIZARD_LOCK:
+        async with get_project_wizard_lock():
             PROJECT_WIZARD_SESSIONS.pop(message.chat.id, None)
         return True
 
@@ -1982,7 +1998,7 @@ async def _advance_wizard_session(
 
     # 所有字段已填写，执行写入
     success = await _commit_wizard_session(session, manager, message)
-    async with PROJECT_WIZARD_LOCK:
+    async with get_project_wizard_lock():
         PROJECT_WIZARD_SESSIONS.pop(message.chat.id, None)
 
     if success:
@@ -1996,7 +2012,7 @@ async def _start_project_create(callback: CallbackQuery, manager: MasterManager)
         return
     chat_id = callback.message.chat.id
     user_id = callback.from_user.id
-    async with PROJECT_WIZARD_LOCK:
+    async with get_project_wizard_lock():
         if chat_id in PROJECT_WIZARD_SESSIONS:
             await callback.answer("当前会话已有流程进行中，请先完成或发送“取消”。", show_alert=True)
             return
@@ -2030,7 +2046,7 @@ async def _start_project_edit(
         return
     chat_id = callback.message.chat.id
     user_id = callback.from_user.id
-    async with PROJECT_WIZARD_LOCK:
+    async with get_project_wizard_lock():
         if chat_id in PROJECT_WIZARD_SESSIONS:
             await callback.answer("当前会话已有流程进行中，请先完成或发送“取消”。", show_alert=True)
             return
@@ -2129,7 +2145,7 @@ async def _handle_wizard_message(
     if message.chat is None or message.from_user is None:
         return False
     chat_id = message.chat.id
-    async with PROJECT_WIZARD_LOCK:
+    async with get_project_wizard_lock():
         session = PROJECT_WIZARD_SESSIONS.get(chat_id)
     if session is None:
         return False
@@ -2138,7 +2154,7 @@ async def _handle_wizard_message(
         return True
     text = (message.text or "").strip()
     if text.lower() in {"取消", "cancel", "/cancel"}:
-        async with PROJECT_WIZARD_LOCK:
+        async with get_project_wizard_lock():
             PROJECT_WIZARD_SESSIONS.pop(chat_id, None)
         await message.answer("已取消项目管理流程。")
         return True
@@ -3197,7 +3213,7 @@ async def on_project_wizard_skip(callback: CallbackQuery) -> None:
     if callback.message is None or callback.message.chat is None:
         return
     chat_id = callback.message.chat.id
-    async with PROJECT_WIZARD_LOCK:
+    async with get_project_wizard_lock():
         session = PROJECT_WIZARD_SESSIONS.get(chat_id)
     if session is None:
         await callback.answer("当前没有进行中的项目流程。", show_alert=True)

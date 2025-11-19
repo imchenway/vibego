@@ -1,13 +1,17 @@
 """命令管理相关的数据模型。"""
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from tasks.models import shanghai_now_iso, ensure_shanghai_iso
 
+# Python 3.10 之前 dataclass 没有 slots 参数，动态传参兼容旧版本。
+_DATACLASS_SLOT_KW = {"slots": True} if sys.version_info >= (3, 10) else {}
 
-@dataclass(slots=True)
+
+@dataclass(**_DATACLASS_SLOT_KW)
 class CommandDefinition:
     """记录单条命令的元数据。"""
 
@@ -25,7 +29,7 @@ class CommandDefinition:
     aliases: Tuple[str, ...] = ()
 
 
-@dataclass(slots=True)
+@dataclass(**_DATACLASS_SLOT_KW)
 class CommandHistoryRecord:
     """描述命令执行的审计记录。"""
 

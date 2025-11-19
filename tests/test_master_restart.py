@@ -5,6 +5,8 @@
 2. 重启请求应该被正确处理
 3. 其他按钮仍然应该刷新项目列表
 """
+from __future__ import annotations
+
 import asyncio
 import json
 from datetime import datetime
@@ -22,10 +24,10 @@ from project_repository import ProjectRepository
 def reset_state():
     """重置全局状态"""
     master.PROJECT_WIZARD_SESSIONS.clear()
-    master.PROJECT_WIZARD_LOCK = asyncio.Lock()
+    master.reset_project_wizard_lock()
     yield
     master.PROJECT_WIZARD_SESSIONS.clear()
-    master.PROJECT_WIZARD_LOCK = asyncio.Lock()
+    master.reset_project_wizard_lock()
     master.PROJECT_REPOSITORY = None
     master.MANAGER = None
 
