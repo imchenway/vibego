@@ -568,6 +568,24 @@ def test_projects_overview_uses_actual_username(repo: ProjectRepository, tmp_pat
     assert first_button.url.endswith("/RealTelegramBot")
 
 
+def test_state_store_fetches_username_when_missing(repo: ProjectRepository, tmp_path: Path, monkeypatch):
+    calls: list[str] = []
+
+    def _fake_fetch(token: str):
+        calls.append(token)
+        return "FetchedName", 987654321
+
+    monkeypatch.setattr(master, "_fetch_bot_identity", _fake_fetch)
+    manager = _build_manager(repo, tmp_path)
+    state = manager.state_store.data["sample"]
+    assert state.actual_username == "FetchedName"
+    assert state.telegram_user_id == 987654321
+    assert calls == ["123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"]
+    calls.clear()
+    manager.refresh_state()
+    assert calls == []
+
+
 def test_manage_action_sends_inline_menu(repo: ProjectRepository, tmp_path: Path, monkeypatch):
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager

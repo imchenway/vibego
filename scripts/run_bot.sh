@@ -124,6 +124,8 @@ MODEL_LOG="$LOG_DIR/model.log"
 RUN_LOG="$LOG_DIR/run_bot.log"
 POINTER_FILE="$LOG_DIR/${MODEL_POINTER_BASENAME:-current_session.txt}"
 TMUX_SESSION="$(tmux_session_for "$PROJECT_NAME")"
+PID_FILE="$LOG_DIR/bot.pid"
+LOCK_FILE="$LOG_DIR/${MODEL_LOCK_BASENAME:-worker.lock}"
 
 expand_model_workdir() {
   local path="$1"
@@ -160,6 +162,21 @@ if [[ -n "$MODEL_CMD" ]]; then
 fi
 
 ensure_dir "$LOG_DIR"
+
+exec {RUN_BOT_LOCK_FD}>"$LOCK_FILE"
+if ! flock -n "$RUN_BOT_LOCK_FD"; then
+  echo "[run-bot] 项目 $PROJECT_NAME 已有 worker 在运行（锁文件：$LOCK_FILE）。如需重启，请先执行 ./scripts/stop_bot.sh --model $MODEL --project $PROJECT_NAME 或 vibego stop。" >&2
+  exit 1
+fi
+
+if [[ -f "$PID_FILE" ]]; then
+  existing_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if [[ -n "$existing_pid" ]] && ps -p "$existing_pid" >/dev/null 2>&1; then
+    echo "[run-bot] 检测到项目 $PROJECT_NAME 现有 worker (pid=$existing_pid)。请先执行 ./scripts/stop_bot.sh --model $MODEL --project $PROJECT_NAME 或 vibego stop 再重试。" >&2
+    exit 1
+  fi
+  rm -f "$PID_FILE"
+fi
 
 if (( FOREGROUND == 0 )); then
   mkdir -p "$LOG_DIR"
@@ -220,5 +237,5 @@ fi
 
 "$SOURCE_ROOT/scripts/start_tmux_codex.sh" --kill >/dev/null
 
-echo $$ > "$LOG_DIR/bot.pid"
+echo $$ > "$PID_FILE"
 exec python "$SOURCE_ROOT/bot.py"

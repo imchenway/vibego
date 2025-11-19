@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import config
 from .deps import check_cli_dependencies, install_requirements, python_version_ok
@@ -323,11 +323,83 @@ def _read_pid() -> Optional[int]:
     return int(raw) if raw.isdigit() else None
 
 
+def _pid_alive(pid: int) -> bool:
+    """检查进程是否仍在运行。"""
+
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _collect_active_workers() -> List[Tuple[int, Path]]:
+    """扫描日志目录下的 bot.pid，返回仍在运行的 worker。"""
+
+    active: List[Tuple[int, Path]] = []
+    if not config.LOG_DIR.exists():
+        return active
+    for pid_file in config.LOG_DIR.rglob("bot.pid"):
+        try:
+            raw = pid_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not raw.isdigit():
+            continue
+        pid = int(raw)
+        if pid <= 0:
+            continue
+        if _pid_alive(pid):
+            active.append((pid, pid_file))
+        else:
+            pid_file.unlink(missing_ok=True)
+    return active
+
+
+def _format_worker_label(pid: int, pid_path: Path) -> str:
+    """格式化输出 worker 所属项目。"""
+
+    try:
+        relative = pid_path.parent.relative_to(config.LOG_DIR)
+    except ValueError:
+        relative = pid_path.parent
+    return f"{relative} (pid={pid})"
+
+
+def _stop_all_workers_via_script() -> None:
+    """调用 scripts/stop_bot.sh 清理残余 worker。"""
+
+    script_path = _find_repo_root() / "scripts/stop_bot.sh"
+    if not script_path.exists():
+        return
+    env = os.environ.copy()
+    env.setdefault("MASTER_CONFIG_ROOT", str(config.CONFIG_ROOT))
+    env.setdefault("VIBEGO_CONFIG_DIR", str(config.CONFIG_ROOT))
+    try:
+        subprocess.run(
+            [str(script_path)],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        pass
+
+
 def command_start(args: argparse.Namespace) -> None:
     """实现 `vibego start`。"""
 
     env_values = _load_env_or_fail()
     _ensure_projects_assets()
+
+    active_workers = _collect_active_workers()
+    if active_workers:
+        print("检测到以下 worker 仍在运行，无法重复启动：")
+        for pid, pid_path in active_workers:
+            print(" -", _format_worker_label(pid, pid_path))
+        print("请执行 `vibego stop` 或运行 scripts/stop_bot.sh 清理后再尝试。")
+        return
 
     if not python_version_ok():
         raise RuntimeError(
@@ -384,24 +456,26 @@ def command_stop(args: argparse.Namespace) -> None:
 
     pid = _read_pid()
     if not pid:
-        print("未检测到正在运行的 master。")
-        return
-
-    print("正在停止 master（PID =", pid, ")...")
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        print("进程不存在，视为已停止。")
+        print("未检测到正在运行的 master。仍将尝试清理遗留 worker。")
     else:
-        for _ in range(20):
-            time.sleep(0.5)
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
+        print("正在停止 master（PID =", pid, ")...")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            print("进程不存在，视为已停止。")
         else:
-            print("master 未在预期时间内退出，如仍存在请手动检查。")
-    config.MASTER_PID_FILE.unlink(missing_ok=True)
+            for _ in range(20):
+                time.sleep(0.5)
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+            else:
+                print("master 未在预期时间内退出，如仍存在请手动检查。")
+        config.MASTER_PID_FILE.unlink(missing_ok=True)
+
+    print("正在停止所有 worker...")
+    _stop_all_workers_via_script()
     print("停止完成。")
 
 
