@@ -42,7 +42,7 @@ source ~/.config/vibego/runtime/venv/bin/activate
 
 执行该步骤之前，确保您的终端已经安装并登录了 codex /claudeCode，且已经准备好了 telegram bot token。
 
-- 考虑将[AGENTS-zh.md](AGENTS-zh.md)中的内容结合到你的 `$HOME/.codex/AGENTS.md` 或 `$HOME/.claude/CLAUDE.md` 中
+- `demo` 启动脚本会在运行前自动把仓库根目录的 [AGENTS.md](AGENTS.md) 写入 `$HOME/.codex/AGENTS.md` / `$HOME/.claude/CLAUDE.md` 的 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` 区块；若文件原本不存在会直接创建，存在则保留你已有内容并备份为 `.vibego.bak`，方便进一步自定义
 
 ```bash
 pipx install vibego  # 或者 pip install --user vibego

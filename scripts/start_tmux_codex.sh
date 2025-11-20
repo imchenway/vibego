@@ -75,6 +75,20 @@ ensure_dir "$(dirname "$SESSION_POINTER_FILE")"
 ensure_dir "$(dirname "$SESSION_ACTIVE_ID_FILE")"
 ensure_dir "$(dirname "$SESSION_BINDER_LOG")"
 
+if [[ "${VIBEGO_AGENTS_SYNCED:-0}" != "1" ]]; then
+  AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$ROOT_DIR/AGENTS.md}"
+  if [[ ! -f "$AGENTS_TEMPLATE_FILE" ]]; then
+    echo "[start-tmux] 未找到 AGENTS 模板文件: $AGENTS_TEMPLATE_FILE" >&2
+    exit 1
+  fi
+  if ! sync_vibego_agents_for_model "${MODEL_NAME:-codex}" "$AGENTS_TEMPLATE_FILE"; then
+    echo "[start-tmux] 同步 AGENTS 模板失败。" >&2
+    exit 1
+  fi
+  export VIBEGO_AGENTS_SYNCED=1
+  export VIBEGO_AGENTS_TEMPLATE="$AGENTS_TEMPLATE_FILE"
+fi
+
 run_tmux() {
   if (( DRY_RUN )); then
     printf '[dry-run] tmux -u %s\n' "$*"

@@ -41,8 +41,10 @@ Use the official Telegram BotFather guide (<https://core.telegram.org/bots#botfa
 Before continuing, make sure Codex / ClaudeCode CLIs are installed and logged in, and that you have a Telegram bot token
 ready.
 
-- Consider merging the contents of [AGENTS-en.md](AGENTS-en.md)￼ into your `$HOME/.codex/AGENTS.md` or
-  `$HOME/.claude/CLAUDE.md`.
+- The startup scripts automatically inject the repository-level [AGENTS.md](AGENTS.md) into `$HOME/.codex/AGENTS.md`
+  and `$HOME/.claude/CLAUDE.md` between `<!-- vibego-agents:start -->` / `<!-- vibego-agents:end -->`; if the target
+  file is missing it is created, otherwise your custom content stays outside the markers and a `.vibego.bak` backup is
+  kept for safety.
 
 ```bash
 pipx install vibego  # or pip install --user vibego

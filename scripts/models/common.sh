@@ -30,6 +30,8 @@ resolve_config_root() {
 CONFIG_ROOT="${CONFIG_ROOT:-$(resolve_config_root)}"
 LOG_ROOT="${LOG_ROOT:-$CONFIG_ROOT/logs}"
 TMUX_SESSION_PREFIX="${TMUX_SESSION_PREFIX:-vibe}"
+VIBEGO_AGENTS_MARKER_START="<!-- vibego-agents:start -->"
+VIBEGO_AGENTS_MARKER_END="<!-- vibego-agents:end -->"
 
 # 将任意路径/名称转换为 tmux/session 等安全的 slug
 sanitize_slug() {
@@ -105,4 +107,108 @@ find_latest_with_pattern() {
     fi
   done < <(find "$root" -type f -name "$pattern" -print0 2>/dev/null)
   [[ -n "$latest" ]] && printf '%s\n' "$latest"
+}
+
+_vibego_python_bin() {
+  if [[ -n "${PYTHON_EXEC:-}" ]] && command -v "$PYTHON_EXEC" >/dev/null 2>&1; then
+    printf '%s' "$PYTHON_EXEC"
+    return 0
+  fi
+  if [[ -n "${PYTHON_BIN:-}" ]] && command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    printf '%s' "$PYTHON_BIN"
+    return 0
+  fi
+  printf '%s' "python3"
+}
+
+sync_agents_block() {
+  local target_file="$1" template_file="$2"
+  local marker_start="${3:-$VIBEGO_AGENTS_MARKER_START}"
+  local marker_end="${4:-$VIBEGO_AGENTS_MARKER_END}"
+  if [[ -z "$target_file" || -z "$template_file" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$template_file" ]]; then
+    echo "[agents-sync] 模板不存在: $template_file" >&2
+    return 1
+  fi
+  ensure_dir "$(dirname "$target_file")"
+  local py_bin
+  py_bin="$(_vibego_python_bin)"
+  "$py_bin" - "$target_file" "$template_file" "$marker_start" "$marker_end" <<'PY'
+import sys, shutil, datetime
+from pathlib import Path
+
+target = Path(sys.argv[1]).expanduser()
+template = Path(sys.argv[2]).expanduser()
+marker_start = sys.argv[3]
+marker_end = sys.argv[4]
+timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+body = template.read_text(encoding="utf-8").rstrip()
+block_lines = [
+    marker_start,
+    f"<!-- vibego-source: {template} -->",
+    f"<!-- vibego-synced-at-utc: {timestamp} -->",
+    "",
+    body,
+    marker_end,
+    "",
+]
+block = "\n".join(block_lines)
+target.parent.mkdir(parents=True, exist_ok=True)
+status = ""
+backup_path = None
+if target.exists():
+    text = target.read_text(encoding="utf-8")
+    import re
+    pattern = re.compile(
+        re.escape(marker_start) + r".*?" + re.escape(marker_end),
+        re.DOTALL,
+    )
+    match = pattern.search(text)
+    if match:
+        new_text = text[:match.start()] + block + text[match.end():]
+        if not new_text.endswith("\n"):
+            new_text += "\n"
+        target.write_text(new_text, encoding="utf-8")
+        status = "updated"
+    else:
+        backup_path = Path(str(target) + ".vibego.bak")
+        if not backup_path.exists():
+            shutil.copy2(target, backup_path)
+        append_text = text.rstrip() + "\n\n" + block if text.strip() else block
+        target.write_text(append_text, encoding="utf-8")
+        status = "appended"
+else:
+    target.write_text(block, encoding="utf-8")
+    status = "created"
+
+msg = f"[agents-sync] {status} {target}"
+if backup_path:
+    msg += f" (backup={backup_path})"
+print(msg)
+PY
+}
+
+sync_vibego_agents_for_model() {
+  local model_key="${1:-}"
+  local template="${2:-$ROOT_DIR/AGENTS.md}"
+  if [[ -z "$model_key" ]]; then
+    return 0
+  fi
+  local lower_model
+  lower_model="$(printf '%s' "$model_key" | tr '[:upper:]' '[:lower:]')"
+  local target=""
+  case "$lower_model" in
+    codex)
+      target="${CODEX_AGENTS_FILE:-$HOME/.codex/AGENTS.md}"
+      ;;
+    claudecode|claude|claude-code|claudecodex)
+      target="${CLAUDE_AGENTS_FILE:-$HOME/.claude/CLAUDE.md}"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  sync_agents_block "$target" "$template"
 }

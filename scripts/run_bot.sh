@@ -148,6 +148,18 @@ if [[ ! -d "$MODEL_WORKDIR" ]]; then
   exit 1
 fi
 
+AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$SOURCE_ROOT/AGENTS.md}"
+if [[ ! -f "$AGENTS_TEMPLATE_FILE" ]]; then
+  echo "[run-bot] 未找到 AGENTS 模板文件: $AGENTS_TEMPLATE_FILE" >&2
+  exit 1
+fi
+if ! sync_vibego_agents_for_model "$MODEL" "$AGENTS_TEMPLATE_FILE"; then
+  echo "[run-bot] 同步 AGENTS 模板失败，已终止启动。" >&2
+  exit 1
+fi
+export VIBEGO_AGENTS_SYNCED=1
+export VIBEGO_AGENTS_TEMPLATE="$AGENTS_TEMPLATE_FILE"
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "[run-bot] 未检测到 tmux，可通过 'brew install tmux' 安装" >&2
   exit 1
