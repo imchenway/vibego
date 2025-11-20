@@ -89,6 +89,7 @@ from command_center import (
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
 )
+from command_center.prompts import build_field_prompt_text
 
 # Python 3.10 才支持 dataclass slots，这里动态传参以兼容旧版本。
 _DATACLASS_SLOT_KW = {"slots": True} if sys.version_info >= (3, 10) else {}

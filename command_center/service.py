@@ -40,7 +40,7 @@ class CommandService:
     ALIAS_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{1,63}$")
     MAX_TITLE_LENGTH = 80
     MAX_DESCRIPTION_LENGTH = 400
-    MAX_COMMAND_LENGTH = 2048
+    MAX_COMMAND_LENGTH = 1024
     MAX_ALIAS_COUNT = 10
     MIN_TIMEOUT = 5
     MAX_TIMEOUT = 3600
