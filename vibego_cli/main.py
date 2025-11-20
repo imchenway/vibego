@@ -22,6 +22,7 @@ from command_center import (
     CommandAlreadyExistsError,
     CommandService,
     DEFAULT_GLOBAL_COMMANDS,
+    REMOVED_GLOBAL_COMMAND_NAMES,
     GLOBAL_COMMAND_PROJECT_SLUG,
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
@@ -221,6 +222,20 @@ async def _seed_default_global_commands() -> None:
         history_project_slug=GLOBAL_COMMAND_PROJECT_SLUG,
     )
     await service.initialize()
+    for legacy_name in REMOVED_GLOBAL_COMMAND_NAMES:
+        try:
+            existing = await service.resolve_by_trigger(legacy_name)
+        except Exception as exc:  # noqa: BLE001
+            print(f"查询废弃通用命令 {legacy_name} 失败：{exc}")
+            continue
+        if existing is None:
+            continue
+        try:
+            await service.delete_command(existing.id)
+            print(f"已删除废弃通用命令：{legacy_name}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"删除废弃通用命令 {legacy_name} 失败：{exc}")
+
     for payload in DEFAULT_GLOBAL_COMMANDS:
         name = str(payload["name"])
         existing = await service.resolve_by_trigger(name)
