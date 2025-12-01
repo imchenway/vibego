@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 一键执行 pull-all.sh 与 push-all.sh，支持常用参数透传，并汇总结果。
+# 一键执行 git_pull_all.sh 与 git_push_all.sh，支持常用参数透传，并汇总结果。
 
 set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PULL_SCRIPT="$SCRIPT_DIR/pull-all.sh"
-PUSH_SCRIPT="$SCRIPT_DIR/push-all.sh"
+PULL_SCRIPT="$SCRIPT_DIR/git_pull_all.sh"
+PUSH_SCRIPT="$SCRIPT_DIR/git_push_all.sh"
 DEFAULT_BASE_DIR="/Users/david/hypha" # 默认扫描根目录
 KEEP_LOG_ALWAYS=${SYNC_ALL_KEEP_LOG:-0}
 declare -a ALL_REPOS=()
@@ -14,17 +14,17 @@ print_usage() {
   cat <<'USAGE'
 用法: sync-all.sh [--dir 目录] [--max-depth 层级] [--dry-run] [--parallel 并行数] [--help]
 
-脚本会先执行 pull-all.sh，再执行 push-all.sh，参数会分别传递给对应脚本，并在结束时输出仓库同步清单。
+脚本会先执行 git_pull_all.sh，再执行 git_push_all.sh，参数会分别传递给对应脚本，并在结束时输出仓库同步清单。
 USAGE
 }
 
 if [[ ! -x "$PULL_SCRIPT" ]]; then
-  echo "[ERROR] 找不到可执行的 pull-all.sh ($PULL_SCRIPT)" >&2
+  echo "[ERROR] 找不到可执行的 git_pull_all.sh ($PULL_SCRIPT)" >&2
   exit 1
 fi
 
 if [[ ! -x "$PUSH_SCRIPT" ]]; then
-  echo "[ERROR] 找不到可执行的 push-all.sh ($PUSH_SCRIPT)" >&2
+  echo "[ERROR] 找不到可执行的 git_push_all.sh ($PUSH_SCRIPT)" >&2
   exit 1
 fi
 
