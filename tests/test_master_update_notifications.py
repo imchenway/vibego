@@ -331,6 +331,65 @@ async def test_run_upgrade_pipeline_without_restart(monkeypatch: pytest.MonkeyPa
     assert "called" not in recorded
 
 
+@pytest.mark.asyncio
+async def test_run_single_upgrade_step_uses_devnull_stdin(monkeypatch: pytest.MonkeyPatch):
+    """升级子进程 stdin 应显式连接 /dev/null，避免后台环境描述符缺失。"""
+
+    recorded = {}
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = [b"line1\n", b"line2\n"]
+
+        async def readline(self):
+            return self._lines.pop(0) if self._lines else b""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStdout()
+
+        async def wait(self):
+            return 0
+
+    async def fake_create(command, **kwargs):  # type: ignore[override]
+        recorded.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_create)
+    bot = DummyUpgradeBot()
+    returncode, lines = await master._run_single_upgrade_step(
+        "echo 1",
+        "升级 vibego 包",
+        1,
+        1,
+        bot,
+        1,
+        1,
+    )
+    assert returncode == 0
+    assert lines == ["line1", "line2"]
+    assert recorded["stdin"] is asyncio.subprocess.DEVNULL
+    assert recorded["stdout"] is asyncio.subprocess.PIPE
+    assert recorded["stderr"] is asyncio.subprocess.STDOUT
+
+
+def test_spawn_detached_restart_uses_devnull(monkeypatch: pytest.MonkeyPatch):
+    """后台重启命令同样需要绑定 /dev/null。"""
+
+    captured = {}
+
+    def fake_popen(args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(pid=222)
+
+    monkeypatch.setattr(master.subprocess, "Popen", fake_popen)
+    proc = master._spawn_detached_restart("echo hi", 0.1)
+    assert proc.pid == 222
+    assert captured["stdin"] is master.subprocess.DEVNULL
+    assert captured["stdout"] is master.subprocess.DEVNULL
+    assert captured["stderr"] is master.subprocess.DEVNULL
+
+
 def test_persist_upgrade_report_records_versions(upgrade_report_path: Path):
     """写入升级报告时应记录旧/新版本。"""
 

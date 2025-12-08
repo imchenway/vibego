@@ -1190,6 +1190,7 @@ async def _run_single_upgrade_step(
         command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        stdin=asyncio.subprocess.DEVNULL,  # 升级流程走后台运行，显式接管 /dev/null 防止 stdin 失效
         cwd=str(ROOT_DIR),
     )
     assert process.stdout is not None  # mypy 安心用
@@ -1299,6 +1300,7 @@ def _spawn_detached_restart(command: str, delay: float) -> Optional[subprocess.P
     return subprocess.Popen(
         ["bash", "-lc", shell_command],
         cwd=str(ROOT_DIR),
+        stdin=subprocess.DEVNULL,  # 重启命令也在后台执行，stdin 绑定 /dev/null 避免描述符被关闭
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,

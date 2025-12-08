@@ -1,6 +1,7 @@
 # Global User Configuration
 
 Do not use any git commands that modify files—commit, push, merge, revert, etc.—unless the user explicitly requests it.
+Before starting any manual modification, the user must be allowed to enter the development stage with explicit permission, and after the modification is completed, it will automatically fall back to the vibe stage, and it is forbidden to start modifications directly without confirmation in the development stage.
 
 ## Language Preferences
 
