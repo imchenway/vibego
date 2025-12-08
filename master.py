@@ -66,6 +66,7 @@ from command_center import (
     CommandAlreadyExistsError,
     CommandNotFoundError,
     DEFAULT_GLOBAL_COMMANDS,
+    REMOVED_GLOBAL_COMMAND_NAMES,
     GLOBAL_COMMAND_PROJECT_SLUG,
     GLOBAL_COMMAND_SCOPE,
     resolve_global_command_db,
@@ -133,6 +134,21 @@ async def _ensure_default_global_commands() -> None:
     except Exception as exc:  # noqa: BLE001
         log.error("通用命令数据库初始化失败：%s", exc)
         return
+
+    # 启动时主动删除废弃的通用命令，避免旧环境残留
+    for legacy_name in REMOVED_GLOBAL_COMMAND_NAMES:
+        try:
+            existing = await GLOBAL_COMMAND_SERVICE.resolve_by_trigger(legacy_name)
+        except Exception as exc:  # noqa: BLE001
+            log.error("查询废弃通用命令失败：%s", exc, extra={"command": legacy_name})
+            continue
+        if existing is None:
+            continue
+        try:
+            await GLOBAL_COMMAND_SERVICE.delete_command(existing.id)
+            log.info("已清理废弃通用命令：%s", legacy_name)
+        except Exception as exc:  # noqa: BLE001
+            log.error("删除废弃通用命令 %s 失败：%s", legacy_name, exc)
 
     for payload in DEFAULT_GLOBAL_COMMANDS:
         name = str(payload["name"])
