@@ -3,22 +3,14 @@ from __future__ import annotations
 
 from typing import Tuple, Dict
 
+# 需要清理的废弃通用命令名称，启动/初始化时会主动删除，避免旧数据残留
+REMOVED_GLOBAL_COMMAND_NAMES: Tuple[str, ...] = (
+    "git-fetch",
+    "git-fetch-add-commit-push",
+)
+
 # 为了简化引用，统一使用 Tuple[dict, ...] 描述默认命令
 DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
-    {
-        "name": "git-fetch",
-        "title": "git-fetch",
-        "command": "git -c core.quotepath=false -c log.showSignature=false fetch origin --recurse-submodules=no --progress --prune",
-        "description": "",
-        "aliases": (),
-    },
-    {
-        "name": "git-fetch-add-commit-push",
-        "title": "git-fetch-add-commit-push",
-        "command": 'git -c core.quotepath=false -c log.showSignature=false fetch origin --recurse-submodules=no --progress --prune && git add -A && git commit -m "commit via telegram" && git -c core.quotepath=false -c log.showSignature=false push --progress --porcelain origin refs/heads/master:master',
-        "description": "",
-        "aliases": (),
-    },
     {
         "name": "git-pull-all",
         "title": "git pull 所有仓库",
@@ -46,4 +38,4 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
 )
 
 
-__all__ = ["DEFAULT_GLOBAL_COMMANDS"]
+__all__ = ["DEFAULT_GLOBAL_COMMANDS", "REMOVED_GLOBAL_COMMAND_NAMES"]
