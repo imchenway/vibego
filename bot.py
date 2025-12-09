@@ -42,6 +42,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
     Update,
     User,
+    FSInputFile,
 )
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
@@ -55,7 +56,7 @@ from aiogram.exceptions import (
 from aiohttp import BasicAuth, ClientError
 
 from logging_setup import create_logger
-from tasks import TaskHistoryRecord, TaskNoteRecord, TaskRecord, TaskService
+from tasks import TaskHistoryRecord, TaskNoteRecord, TaskRecord, TaskAttachmentRecord, TaskService
 from tasks.commands import parse_simple_kv, parse_structured_text
 from tasks.models import shanghai_now_iso
 from tasks.constants import (
@@ -70,6 +71,7 @@ from tasks.fsm import (
     TaskBugReportStates,
     TaskCreateStates,
     TaskDescriptionStates,
+    TaskAttachmentStates,
     TaskEditStates,
     TaskListSearchStates,
     TaskNoteStates,
@@ -1304,11 +1306,13 @@ async def _push_task_to_model(
 
     history_text, history_count = await _build_history_context_for_model(task.id)
     notes = await TASK_SERVICE.list_notes(task.id)
+    attachments = await TASK_SERVICE.list_attachments(task.id)
     prompt = _build_model_push_payload(
         task,
         supplement=supplement,
         history=history_text,
         notes=notes,
+        attachments=attachments,
         is_bug_report=is_bug_report,
     )
     success, session_path = await _dispatch_prompt_to_model(
@@ -1924,6 +1928,7 @@ COMMAND_KEYWORDS.update(
         "commands",
         "task_note",
         "task_update",
+        "attach",
     }
 )
 
@@ -2215,6 +2220,8 @@ async def _execute_command_definition(
     exit_code: Optional[int] = None
     duration = 0.0
     status = "success"
+    photo_sent = False
+    photo_note: Optional[str] = None
     try:
         exit_code, stdout_text, stderr_text, duration = await _run_shell_command(command.command, command.timeout)
         status = "success" if exit_code == 0 else "failed"
@@ -2244,6 +2251,32 @@ async def _execute_command_definition(
         finished_at=finished_at,
     )
 
+    # 额外处理：若命令输出标记了图片文件，则尝试直接发送到 Telegram。
+    if reply_message is not None and stdout_text:
+        photo_path = None
+        photo_match = re.search(r"^TG_PHOTO_FILE:\s*(.+)$", stdout_text, flags=re.MULTILINE)
+        if photo_match:
+            candidate = Path(photo_match.group(1).strip())
+            if candidate.is_file():
+                photo_path = candidate
+        if photo_path is not None:
+            try:
+                bot = current_bot()
+                await _send_with_retry(
+                    lambda: bot.send_photo(
+                        chat_id=reply_message.chat.id,
+                        photo=FSInputFile(str(photo_path)),
+                        caption=f"{display_name} 的预览二维码",
+                    )
+                )
+                photo_sent = True
+                photo_note = f"二维码图片已发送：{photo_path}"
+            except Exception as exc:  # noqa: BLE001
+                worker_log.warning(
+                    "命令输出图片发送失败",
+                    extra={"error": str(exc), **_session_extra(), "photo": str(photo_path)},
+                )
+
     status_label = {
         "success": "✅ 成功",
         "failed": "⚠️ 失败",
@@ -2259,6 +2292,8 @@ async def _execute_command_definition(
         f"耗时：{duration:.2f}s / 超时：{command.timeout}s",
         f"状态：{status_label}",
     ]
+    if photo_note:
+        lines.append(photo_note)
     if exit_code is not None:
         lines.append(f"退出码：{exit_code}")
     if stdout_text:
@@ -3102,6 +3137,7 @@ def _build_model_push_payload(
     supplement: Optional[str] = None,
     history: Optional[str] = None,
     notes: Optional[Sequence[TaskNoteRecord]] = None,
+    attachments: Optional[Sequence[TaskAttachmentRecord]] = None,
     is_bug_report: bool = False,
 ) -> str:
     """根据任务状态构造推送到 tmux 的指令。
@@ -3136,6 +3172,7 @@ def _build_model_push_payload(
     segments: list[str] = []
 
     notes = notes or ()  # 推送阶段暂不展示备注文本，仅保留参数兼容
+    attachments = attachments or ()
 
     task_code_plain = f"/{task.id}" if task.id else "-"
 
@@ -3156,6 +3193,17 @@ def _build_model_push_payload(
             f"补充任务描述：{supplement_value}",
             "",
         ]
+        if attachments:
+            lines.append("附件列表：")
+            limit = TASK_ATTACHMENT_PREVIEW_LIMIT
+            for idx, item in enumerate(attachments[:limit], 1):
+                lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
+            if len(attachments) > limit:
+                lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开")
+            lines.append("")
+        else:
+            lines.append("附件列表：-")
+            lines.append("")
         history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
         if history_block:
             lines.append(history_intro)
@@ -3186,6 +3234,18 @@ def _build_model_push_payload(
                 info_lines.append("")
             info_lines.append("任务执行记录：")
             info_lines.append(history_block)
+
+        if attachments:
+            if info_lines and info_lines[-1].strip():
+                info_lines.append("")
+            info_lines.append("附件列表：")
+            limit = TASK_ATTACHMENT_PREVIEW_LIMIT
+            for idx, item in enumerate(attachments[:limit], 1):
+                info_lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
+            if len(attachments) > limit:
+                info_lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开")
+        elif include_task:
+            info_lines.append("附件列表：-")
 
         if info_lines:
             info_segment = "\n".join(info_lines)
@@ -3444,10 +3504,14 @@ def _compose_task_button_label(task: TaskRecord, *, max_length: int = 60) -> str
     return label
 
 
+TASK_ATTACHMENT_PREVIEW_LIMIT = 5
+
+
 def _format_task_detail(
         task: TaskRecord,
         *,
         notes: Sequence[TaskNoteRecord],
+        attachments: Sequence[TaskAttachmentRecord] = (),
     ) -> str:
     # 修复：智能处理预转义文本
     # - MarkdownV2 模式：先清理可能的预转义，再由 _prepare_model_payload() 统一处理
@@ -3493,6 +3557,20 @@ def _format_task_detail(
         else:
             parent_text = _escape_markdown_text(task.parent_id)
         lines.append(f"👪 父任务：{parent_text}")
+
+    # 附件预览
+    if attachments:
+        lines.append("📎 附件：")
+        limit = TASK_ATTACHMENT_PREVIEW_LIMIT
+        for idx, item in enumerate(attachments[:limit], 1):
+            display = _escape_markdown_text(item.display_name)
+            mime = _escape_markdown_text(item.mime_type)
+            path_text = _escape_markdown_text(item.path)
+            lines.append(f"{idx}. {display}（{mime}）→ {path_text}")
+        if len(attachments) > limit:
+            lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开，可继续使用 /attach {task.id} 查看/追加")
+    else:
+        lines.append("📎 附件：-")
 
     return "\n".join(lines)
 
@@ -3877,6 +3955,14 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
                 text="🕘 查看历史",
                 callback_data=f"task:history:{task.id}",
             ),
+        ]
+    )
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                text="📎 添加附件",
+                callback_data=f"task:attach:{task.id}",
+            )
         ]
     )
     if task.status in MODEL_PUSH_ELIGIBLE_STATUSES:
@@ -4363,7 +4449,8 @@ async def _load_task_context(
 
 async def _render_task_detail(task_id: str) -> tuple[str, InlineKeyboardMarkup]:
     task, notes, _ = await _load_task_context(task_id)
-    detail_text = _format_task_detail(task, notes=notes)
+    attachments = await TASK_SERVICE.list_attachments(task_id)
+    detail_text = _format_task_detail(task, notes=notes, attachments=attachments)
     return detail_text, _build_task_actions(task)
 
 
@@ -6432,6 +6519,7 @@ async def on_help_command(message: Message) -> None:
         "- /task_show — 查看某个任务详情\n"
         "- /task_update — 快速更新任务字段\n"
         "- /task_note — 添加任务备注\n"
+        "- /attach TASK_0001 — 为任务上传附件\n"
         "- /commands — 管理自定义命令（新增/执行/编辑）\n"
         "- /task_delete — 归档或恢复任务\n"
         "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
@@ -6449,6 +6537,7 @@ async def on_tasks_help(message: Message) -> None:
         "- /task_show TASK_0001 — 查看详情\n"
         "- /task_update TASK_0001 status=test | priority=2 | type=缺陷 — 更新字段\n"
         "- /task_note TASK_0001 备注内容 | type=research — 添加备注\n"
+        "- /attach TASK_0001 — 上传附件并绑定\n"
         "- /task_delete TASK_0001 — 归档任务（再次执行可恢复）\n"
         "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
         "建议：使用 `/task_new`、`/task_show` 等命令触发后按按钮完成后续步骤。"
@@ -8270,6 +8359,122 @@ async def on_note_content(message: Message, state: FSMContext) -> None:
     await state.clear()
     detail_text, markup = await _render_task_detail(task_id)
     await _answer_with_markdown(message, f"备注已添加：\n{detail_text}", reply_markup=markup)
+
+
+def _build_attachment_prompt(task_id: str) -> str:
+    return (
+        "请发送要绑定的附件（图片/文件/视频等），将自动落地并关联到任务。\n"
+        "- 输入“取消”可退出\n"
+        f"- 当前任务：{task_id}\n"
+        "- 支持多种类型，发送后会返回本地相对路径以便模型读取"
+    )
+
+
+async def _start_attachment_collection(
+    message: Message,
+    state: FSMContext,
+    task_id: str,
+) -> None:
+    await state.clear()
+    await state.update_data(task_id=task_id)
+    await state.set_state(TaskAttachmentStates.waiting_files)
+    await _answer_with_markdown(message, _build_attachment_prompt(task_id), reply_markup=_build_worker_main_keyboard())
+
+
+@router.message(Command("attach"))
+async def on_attach_command(message: Message, state: FSMContext) -> None:
+    args = _extract_command_args(message.text)
+    if not args:
+        await _answer_with_markdown(message, "请提供任务 ID，例如：/attach TASK_0001")
+        return
+    normalized_task_id = _normalize_task_id(args)
+    if not normalized_task_id:
+        await _answer_with_markdown(message, TASK_ID_USAGE_TIP)
+        return
+    task = await TASK_SERVICE.get_task(normalized_task_id)
+    if task is None:
+        await _answer_with_markdown(message, "任务不存在，请检查任务编码。")
+        return
+    await _start_attachment_collection(message, state, task.id)
+
+
+@router.callback_query(F.data.startswith("task:attach:"))
+async def on_task_attach_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("回调参数错误", show_alert=True)
+        return
+    _, _, task_id = parts
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await callback.answer("任务不存在", show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    await _start_attachment_collection(callback.message, state, task.id)
+    await callback.answer()
+
+
+@router.message(TaskAttachmentStates.waiting_files)
+async def on_task_attach_files(message: Message, state: FSMContext) -> None:
+    raw_text = (message.text or "").strip()
+    if raw_text == "取消":
+        await state.clear()
+        await message.answer("已取消附件绑定。", reply_markup=_build_worker_main_keyboard())
+        return
+    data = await state.get_data()
+    task_id = data.get("task_id")
+    if not task_id:
+        await state.clear()
+        await message.answer("任务上下文丢失，请重新执行 /attach。", reply_markup=_build_worker_main_keyboard())
+        return
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await state.clear()
+        await message.answer("任务不存在，请重新执行 /attach。", reply_markup=_build_worker_main_keyboard())
+        return
+    attachment_dir = _attachment_dir_for_message(message)
+    saved = await _collect_saved_attachments(message, attachment_dir)
+    if not saved:
+        await message.answer("未检测到附件，请发送图片/文件等，或输入“取消”退出。")
+        return
+    actor = _actor_from_message(message)
+    bound: list[TaskAttachmentRecord] = []
+    for item in saved:
+        record = await TASK_SERVICE.add_attachment(
+            task.id,
+            display_name=item.display_name,
+            mime_type=item.mime_type,
+            path=item.relative_path,
+            kind=item.kind,
+        )
+        bound.append(record)
+    try:
+        await TASK_SERVICE.log_task_event(
+            task.id,
+            event_type="attachment_added",
+            actor=actor,
+            field="attachment",
+            payload={"files": [r.path for r in bound]},
+        )
+    except ValueError:
+        # 任务不存在等异常忽略，已在前面校验
+        pass
+    await state.clear()
+    detail_text, markup = await _render_task_detail(task.id)
+    lines = ["附件已绑定到任务：", f"- 任务：{task.id}"]
+    for idx, item in enumerate(bound, 1):
+        display = _escape_markdown_text(item.display_name)
+        mime = _escape_markdown_text(item.mime_type)
+        path_text = _escape_markdown_text(item.path)
+        lines.append(f"{idx}. {display}（{mime}）→ {path_text}")
+    lines.append("如需继续添加，可再次使用 /attach <task_id>。")
+    await _answer_with_markdown(
+        message,
+        "\n".join(lines) + f"\n\n{detail_text}",
+        reply_markup=markup,
+    )
 
 
 @router.message(Command("task_update"))
