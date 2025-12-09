@@ -1,12 +1,18 @@
 import asyncio
+import os
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+
+os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
 import bot
 from tasks.fsm import TaskCreateStates
 
 from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
 
 class DummyState:
@@ -43,6 +49,16 @@ class DummyMessage:
         self.from_user = SimpleNamespace(id=1, full_name="Tester")
         self.calls = []
         self.edits = []
+        self.bot = SimpleNamespace(username="tester_bot")
+        self.date = datetime.now(bot.UTC)
+        self.photo = []
+        self.document = None
+        self.voice = None
+        self.video = None
+        self.audio = None
+        self.animation = None
+        self.video_note = None
+        self.caption = None
 
     async def answer(self, text, parse_mode=None, reply_markup=None, **kwargs):
         self.calls.append(
@@ -261,6 +277,93 @@ def test_task_create_description_cancel_keyboard_aborts():
     assert state.state is None
     assert message.calls
     assert message.calls[-1]["text"] == "已取消创建任务。"
+
+
+def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
+    state = DummyState(
+        data={
+            "title": "测试标题",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "task",
+        },
+        state=TaskCreateStates.waiting_description,
+    )
+    message = DummyMessage("任务描述")
+    message.bot = SimpleNamespace(username="tester_bot")
+    message.date = datetime.now(bot.UTC)
+
+    saved = [
+        bot.TelegramSavedAttachment(
+            kind="document",
+            display_name="log.txt",
+            mime_type="text/plain",
+            absolute_path=tmp_path / "log.txt",
+            relative_path="./data/log.txt",
+        )
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return saved
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    asyncio.run(bot.on_task_create_description(message, state))
+
+    assert state.state == TaskCreateStates.waiting_confirm
+    assert state.data.get("pending_attachments")
+    assert state.data["pending_attachments"][0]["path"] == "./data/log.txt"
+
+    created_task = bot.TaskRecord(
+        id="TASK_1234",
+        project_slug="demo",
+        title="测试标题",
+        status="research",
+        priority=3,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="任务描述",
+        parent_id=None,
+        root_id="TASK_1234",
+        depth=0,
+        lineage="0001",
+        archived=False,
+    )
+
+    async def fake_create_root_task(**_kwargs):
+        return created_task
+
+    added_paths = []
+
+    async def fake_add_attachment(task_id, display_name, mime_type, path, kind):
+        added_paths.append(path)
+        return bot.TaskAttachmentRecord(
+            id=1,
+            task_id=task_id,
+            display_name=display_name,
+            mime_type=mime_type,
+            path=path,
+            kind=kind,
+        )
+
+    async def fake_log_task_event(task_id, **_kwargs):
+        return None
+
+    async def fake_render(task_id: str):
+        return "detail", ReplyKeyboardMarkup(keyboard=[])
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "add_attachment", fake_add_attachment)
+    monkeypatch.setattr(bot.TASK_SERVICE, "log_task_event", fake_log_task_event)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+
+    confirm_message = DummyMessage("✅ 确认创建")
+    confirm_message.bot = message.bot
+    confirm_message.date = message.date
+    asyncio.run(bot.on_task_create_confirm(confirm_message, state))
+
+    assert added_paths == ["./data/log.txt"]
 
 
 def test_task_create_confirm_uses_default_priority(monkeypatch):

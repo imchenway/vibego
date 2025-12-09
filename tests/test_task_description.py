@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -37,6 +38,16 @@ class DummyMessage:
         self.from_user = SimpleNamespace(id=1, full_name="Tester")
         self.message_id = 100
         self.sent_messages = []
+        self.bot = SimpleNamespace(username="tester_bot")
+        self.date = datetime.now(bot.UTC)
+        self.photo = []
+        self.document = None
+        self.voice = None
+        self.video = None
+        self.audio = None
+        self.animation = None
+        self.video_note = None
+        self.caption = None
 
     async def answer(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
         self.calls.append((text, parse_mode, reply_markup, kwargs))
@@ -468,6 +479,80 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
     asyncio.run(_scenario())
 
 
+def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=1)
+    message.from_user = SimpleNamespace(id=1, full_name="Tester")
+    message.text = "补充描述"
+    message.bot = SimpleNamespace(username="tester_bot")
+    message.date = datetime.now(bot.UTC)
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.TaskPushStates.waiting_supplement))
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_0001",
+            actor="Tester",
+            chat_id=message.chat.id,
+            origin_message=None,
+        )
+    )
+
+    task = _make_task(
+        task_id="TASK_0001",
+        title="调研任务",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == task.id
+        return task
+
+    saved = [
+        bot.TelegramSavedAttachment(
+            kind="document",
+            display_name="log.txt",
+            mime_type="text/plain",
+            absolute_path=tmp_path / "log.txt",
+            relative_path="./data/log.txt",
+        )
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return saved
+
+    bound_calls: list[tuple[str, list[dict], str]] = []
+
+    async def fake_bind(task_arg, attachments, actor):
+        bound_calls.append((task_arg.id, list(attachments), actor))
+        return []
+
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+        return True, "PROMPT", None
+
+    async def fake_reply_to_chat(chat_id, text, reply_to=None, parse_mode=None, reply_markup=None):
+        return None
+
+    async def fake_send_session_ack(chat_id, session_path, *, reply_to):
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_bind_serialized_attachments", fake_bind)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply_to_chat)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
+
+    asyncio.run(bot.on_task_push_model_supplement(message, state))
+
+    assert bound_calls
+    task_id, attachments, actor = bound_calls[0]
+    assert task_id == task.id
+    assert attachments and attachments[0]["path"] == "./data/log.txt"
+    assert actor == "Tester"
+
+
 def test_push_model_test_push(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     callback = DummyCallback("task:push_model:TASK_0002", message)
@@ -703,6 +788,61 @@ def test_build_bug_report_intro_plain_task_id():
     assert "\\_" not in intro
 
 
+def test_bug_report_description_binds_attachments(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=321)
+    message.from_user = SimpleNamespace(id=321, full_name="Reporter")
+    message.text = "缺陷描述文本"
+    message.bot = SimpleNamespace(username="tester_bot")
+    message.date = datetime.now(bot.UTC)
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_description))
+    asyncio.run(state.update_data(task_id="TASK_0001", reporter="Reporter"))
+
+    task = _make_task(
+        task_id="TASK_0001",
+        title="缺陷任务",
+        status="research",
+        task_type="defect",
+    )
+
+    async def fake_get_task(task_id: str):
+        return task
+
+    saved = [
+        bot.TelegramSavedAttachment(
+            kind="document",
+            display_name="log.txt",
+            mime_type="text/plain",
+            absolute_path=tmp_path / "log.txt",
+            relative_path="./data/log.txt",
+        )
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return saved
+
+    bound_calls: list[tuple[str, list[dict], str]] = []
+
+    async def fake_bind(task_arg, attachments, actor):
+        bound_calls.append((task_arg.id, list(attachments), actor))
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_bind_serialized_attachments", fake_bind)
+
+    asyncio.run(bot.on_task_bug_description(message, state))
+
+    assert bound_calls
+    task_id, attachments, actor = bound_calls[0]
+    assert task_id == task.id
+    assert attachments and attachments[0]["path"] == "./data/log.txt"
+    assert actor == "Reporter"
+    assert asyncio.run(state.get_state()) == bot.TaskBugReportStates.waiting_reproduction.state
+
+
 def test_build_bug_preview_plain_task_id():
     task = _make_task(task_id="TASK_0055", title="编辑描述任务", status="test")
     preview = bot._build_bug_preview_text(
@@ -714,6 +854,68 @@ def test_build_bug_preview_plain_task_id():
     )
     assert "任务编码：/TASK_0055" in preview
     assert "\\_" not in preview
+
+
+def test_bug_report_logs_binds_attachments(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=321)
+    message.from_user = SimpleNamespace(id=321, full_name="Reporter")
+    message.text = "日志内容"
+    message.bot = SimpleNamespace(username="tester_bot")
+    message.date = datetime.now(bot.UTC)
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_logs))
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_0001",
+            description="缺陷描述",
+            reproduction="步骤",
+            reporter="Reporter",
+        )
+    )
+
+    task = _make_task(
+        task_id="TASK_0001",
+        title="缺陷任务",
+        status="research",
+        task_type="defect",
+    )
+
+    async def fake_get_task(task_id: str):
+        return task
+
+    saved = [
+        bot.TelegramSavedAttachment(
+            kind="photo",
+            display_name="photo.jpg",
+            mime_type="image/jpeg",
+            absolute_path=tmp_path / "photo.jpg",
+            relative_path="./data/photo.jpg",
+        )
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return saved
+
+    bound_calls: list[tuple[str, list[dict], str]] = []
+
+    async def fake_bind(task_arg, attachments, actor):
+        bound_calls.append((task_arg.id, list(attachments), actor))
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_bind_serialized_attachments", fake_bind)
+
+    asyncio.run(bot.on_task_bug_logs(message, state))
+
+    assert bound_calls
+    task_id, attachments, actor = bound_calls[0]
+    assert task_id == task.id
+    assert attachments and attachments[0]["path"] == "./data/photo.jpg"
+    assert actor == "Reporter"
+    assert asyncio.run(state.get_state()) == bot.TaskBugReportStates.waiting_confirm.state
 
 
 def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):

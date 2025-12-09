@@ -15,7 +15,7 @@ try:
 except ImportError:  # pragma: no cover - 仅 Python3.10 及更早版本会触发
     UTC = timezone.utc  # Python<3.11 没有 datetime.UTC，用 timezone.utc 兜底
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal
+from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal, Mapping
 from dataclasses import dataclass
 from urllib.parse import urlparse, quote, unquote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -76,6 +76,7 @@ from tasks.fsm import (
     TaskListSearchStates,
     TaskNoteStates,
     TaskPushStates,
+    WxConfigStates,
 )
 from command_center import (
     CommandCreateStates,
@@ -1772,6 +1773,50 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
     return saved
 
 
+def _serialize_saved_attachment(item: TelegramSavedAttachment) -> dict[str, str]:
+    """将附件对象转为可持久化在 FSM 中的简易字典。"""
+
+    return {
+        "kind": item.kind,
+        "display_name": item.display_name,
+        "mime_type": item.mime_type,
+        "path": item.relative_path,
+    }
+
+
+async def _bind_serialized_attachments(
+    task: TaskRecord,
+    attachments: Sequence[Mapping[str, str]],
+    *,
+    actor: str,
+) -> list[TaskAttachmentRecord]:
+    """将序列化附件绑定到任务并记录事件日志。"""
+
+    bound: list[TaskAttachmentRecord] = []
+    for item in attachments:
+        record = await TASK_SERVICE.add_attachment(
+            task.id,
+            display_name=item.get("display_name") or "attachment",
+            mime_type=item.get("mime_type") or "application/octet-stream",
+            path=item.get("path") or "",
+            kind=item.get("kind") or "document",
+        )
+        bound.append(record)
+    if bound:
+        try:
+            await TASK_SERVICE.log_task_event(
+                task.id,
+                event_type="attachment_added",
+                actor=actor,
+                field="attachment",
+                payload={"files": [r.path for r in bound]},
+            )
+        except ValueError:
+            # 任务不存在等异常忽略，调用方已做校验
+            pass
+    return bound
+
+
 def _build_prompt_with_attachments(
     text_part: Optional[str],
     attachments: Sequence[TelegramSavedAttachment],
@@ -1982,10 +2027,119 @@ def _build_command_edit_cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
+def _build_wx_confirm_keyboard() -> ReplyKeyboardMarkup:
+    """微信配置确认键盘。"""
+
+    rows = [
+        [KeyboardButton(text="✅ 确认配置")],
+        [KeyboardButton(text="❌ 取消")],
+    ]
+    _number_reply_buttons(rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def _is_global_command(command: CommandDefinition) -> bool:
     """判断命令是否来源于 master 通用配置。"""
 
     return (command.scope or "project") == GLOBAL_COMMAND_SCOPE
+
+
+def _wx_config_root() -> Path:
+    """计算微信 CI 配置根目录，保持与脚本一致。"""
+
+    if os.environ.get("MASTER_CONFIG_ROOT"):
+        return Path(os.environ["MASTER_CONFIG_ROOT"]).expanduser()
+    if os.environ.get("VIBEGO_CONFIG_DIR"):
+        return Path(os.environ["VIBEGO_CONFIG_DIR"]).expanduser()
+    xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return (Path(xdg) / "vibego").expanduser()
+
+
+def _wx_project_slug() -> str:
+    """生成项目 slug，避免路径穿越。"""
+
+    raw = PROJECT_NAME or PROJECT_SLUG or "default"
+    return raw.replace("/", "-") or "default"
+
+
+def _wx_env_file() -> Path:
+    """返回当前项目的 wx 配置文件路径。"""
+
+    return _wx_config_root() / "wx_ci" / f"{_wx_project_slug()}.env"
+
+
+def _wx_effective_config() -> dict[str, str]:
+    """读取 wx 配置文件并融合环境变量，便于缺失检测。"""
+
+    env_path = _wx_env_file()
+    file_config: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            file_config[k.strip()] = v.strip()
+    appid = os.environ.get("WX_APPID") or file_config.get("WX_APPID", "")
+    pkp = os.environ.get("WX_PKP") or file_config.get("WX_PKP", "")
+    project_path = os.environ.get("PROJECT_PATH") or file_config.get("PROJECT_PATH", "")
+    return {"appid": appid, "pkp_path": pkp, "project_path": project_path, "env_file": str(env_path)}
+
+
+def _wx_missing_reasons(conf: dict[str, str]) -> list[str]:
+    """根据当前配置生成缺失原因列表。"""
+
+    reasons: list[str] = []
+    appid = (conf.get("appid") or "").strip()
+    pkp_path = Path((conf.get("pkp_path") or "").strip()).expanduser()
+    if not appid:
+        reasons.append("缺少 WX_APPID")
+    if not pkp_path:
+        reasons.append("缺少 WX_PKP（私钥路径）")
+    elif not pkp_path.is_file():
+        reasons.append(f"WX_PKP 文件不存在：{pkp_path}")
+    return reasons
+
+
+def _write_wx_env_file(appid: str, pkp_path: str, project_path: str) -> Path:
+    """写入 wx 配置文件，权限限制为 600。"""
+
+    env_path = _wx_env_file()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    content = [
+        f"WX_APPID={appid}",
+        f"WX_PKP={pkp_path}",
+    ]
+    if project_path:
+        content.append(f"PROJECT_PATH={project_path}")
+    env_path.write_text("\n".join(content) + "\n", encoding="utf-8")
+    try:
+        env_path.chmod(0o600)
+    except Exception:
+        pass
+    return env_path
+
+
+async def _save_wx_private_key(message: Message, *, preferred_name: Optional[str] = None) -> Path:
+    """将用户发送的私钥文件落盘到安全目录，返回绝对路径。"""
+
+    if not message.document:
+        raise ValueError("未检测到可保存的私钥文件")
+    target_dir = _wx_config_root() / "wx_ci" / "keys" / _wx_project_slug()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    doc = message.document
+    file_name = preferred_name or (doc.file_name if doc else "private.key")
+    path = await _download_telegram_file(
+        message,
+        file_id=doc.file_id,
+        file_name_hint=file_name,
+        mime_type=doc.mime_type if doc else "application/octet-stream",
+        target_dir=target_dir,
+    )
+    try:
+        path.chmod(0o600)
+    except Exception:
+        pass
+    return path
 
 
 async def _list_combined_commands() -> List[CommandDefinition]:
@@ -2196,8 +2350,21 @@ async def _execute_command_definition(
     actor_user: Optional[User],
     service: CommandService,
     history_detail_prefix: str,
+    fsm_state: Optional[FSMContext] = None,
 ) -> None:
     """执行命令并推送结果，记录审计日志。"""
+
+    if fsm_state is not None and command.name in {"wx-setup", "wx-preview"}:
+        handled = await _maybe_prompt_wx_config(
+            command=command,
+            reply_message=reply_message,
+            actor_user=actor_user,
+            service=service,
+            history_detail_prefix=history_detail_prefix,
+            fsm_state=fsm_state,
+        )
+        if handled:
+            return
 
     if not command.enabled:
         text = f"命令 `{_escape_markdown_text(command.name)}` 已停用，请先在“命令管理”中启用。"
@@ -2331,6 +2498,42 @@ async def _execute_command_definition(
     )
 
 
+async def _maybe_prompt_wx_config(
+    *,
+    command: CommandDefinition,
+    reply_message: Optional[Message],
+    actor_user: Optional[User],
+    service: CommandService,
+    history_detail_prefix: str,
+    fsm_state: Optional[FSMContext],
+) -> bool:
+    """缺少微信配置时启动交互引导，返回是否已接管流程。"""
+
+    if fsm_state is None:
+        return False
+    conf = _wx_effective_config()
+    missing = _wx_missing_reasons(conf)
+    if not missing:
+        return False
+    await fsm_state.clear()
+    await fsm_state.update_data(
+        wx_command_id=command.id,
+        wx_is_global=_is_global_command(command),
+        wx_history_prefix=history_detail_prefix,
+    )
+    lines = ["⚠️ 检测到微信小程序配置缺失："]
+    lines.extend(f"- {item}" for item in missing)
+    lines.append("请输入 WX_APPID（必填），发送“取消”可终止配置。")
+    await fsm_state.set_state(WxConfigStates.waiting_appid)
+    target = reply_message
+    if target is None and actor_user:
+        bot = current_bot()
+        target = await bot.send_message(actor_user.id, "微信配置缺失，请补全。")
+    if target:
+        await target.answer("\n".join(lines), reply_markup=_build_command_edit_cancel_keyboard())
+    return True
+
+
 async def _handle_command_trigger_message(message: Message, prompt: str) -> bool:
     """处理以别名触发的命令执行。"""
 
@@ -2358,8 +2561,41 @@ async def _handle_command_trigger_message(message: Message, prompt: str) -> bool
         actor_user=message.from_user,
         service=service,
         history_detail_prefix=history_prefix,
+        fsm_state=None,
     )
     return True
+
+
+async def _resolve_wx_pkp_path_from_message(message: Message) -> Optional[str]:
+    """解析用户输入的 PKP 路径，支持文件上传或文本路径。"""
+
+    if message.document:
+        path = await _save_wx_private_key(message)
+        return str(path)
+    raw = (message.text or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = (ROOT_DIR_PATH / candidate).resolve()
+    if not candidate.is_file():
+        await message.answer(f"私钥文件不存在：{candidate}，请重新输入或上传文件。", reply_markup=_build_command_edit_cancel_keyboard())
+        return None
+    return candidate.as_posix()
+
+
+def _normalize_project_path(raw: str) -> Optional[str]:
+    """校验项目目录输入，返回绝对路径或空值。"""
+
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return ""
+    candidate = Path(cleaned).expanduser()
+    if not candidate.is_absolute():
+        candidate = (ROOT_DIR_PATH / candidate).resolve()
+    if not candidate.is_dir():
+        return None
+    return candidate.as_posix()
 
 
 async def _send_command_overview(message: Message, notice: Optional[str] = None) -> None:
@@ -4292,7 +4528,7 @@ def _build_bug_report_intro(task: TaskRecord) -> str:
     title = task.title or "-"
     return (
         f"正在为任务 {task_code}（{title}）记录缺陷。\n"
-        "请先描述缺陷现象（必填），例如发生了什么、期待的行为是什么。"
+        "请先描述缺陷现象（必填），例如发生了什么、期待的行为是什么，可直接发送图片/文件作为附件。"
     )
 
 
@@ -4311,7 +4547,7 @@ def _build_bug_log_prompt() -> str:
     """生成日志信息提示。"""
 
     return (
-        "请提供错误日志、截图或相关附件。\n"
+        "请提供错误日志、截图或相关附件，可直接发送图片/文件作为附件。\n"
         "若无额外信息，可发送“跳过”，发送“取消”结束流程。"
     )
 
@@ -4393,7 +4629,7 @@ def _build_summary_prompt(
 
 def _build_push_supplement_prompt() -> str:
     return (
-        "请输入补充任务描述，建议说明任务背景与期望结果。\n"
+        "请输入补充任务描述，建议说明任务背景与期望结果，支持直接发送图片/文件作为附件。\n"
         "若暂时没有可点击“跳过”按钮或直接发送空消息，发送“取消”可终止。"
     )
 
@@ -6931,7 +7167,7 @@ async def on_command_new_callback(callback: CallbackQuery, state: FSMContext) ->
 
 
 @router.callback_query(F.data.startswith(COMMAND_EXEC_PREFIX))
-async def on_command_execute_callback(callback: CallbackQuery) -> None:
+async def on_command_execute_callback(callback: CallbackQuery, state: FSMContext) -> None:
     command_id = _extract_command_id(callback.data, COMMAND_EXEC_PREFIX)
     if command_id is None:
         await callback.answer("命令标识无效", show_alert=True)
@@ -6950,11 +7186,12 @@ async def on_command_execute_callback(callback: CallbackQuery) -> None:
         actor_user=callback.from_user,
         service=COMMAND_SERVICE,
         history_detail_prefix=COMMAND_HISTORY_DETAIL_PREFIX,
+        fsm_state=state,
     )
 
 
 @router.callback_query(F.data.startswith(COMMAND_EXEC_GLOBAL_PREFIX))
-async def on_global_command_execute_callback(callback: CallbackQuery) -> None:
+async def on_global_command_execute_callback(callback: CallbackQuery, state: FSMContext) -> None:
     """执行通用命令，入口由 master 配置。"""
 
     command_id = _extract_command_id(callback.data, COMMAND_EXEC_GLOBAL_PREFIX)
@@ -6975,9 +7212,127 @@ async def on_global_command_execute_callback(callback: CallbackQuery) -> None:
         actor_user=callback.from_user,
         service=GLOBAL_COMMAND_SERVICE,
         history_detail_prefix=COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=state,
     )
 
 
+@router.message(WxConfigStates.waiting_appid)
+async def on_wx_config_appid(message: Message, state: FSMContext) -> None:
+    """收集 WX_APPID。"""
+
+    if _is_cancel_message(message.text):
+        await state.clear()
+        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
+        return
+    appid = (message.text or "").strip()
+    if not appid:
+        await message.answer("WX_APPID 不能为空，请重新输入，或发送“取消”退出。")
+        return
+    await state.update_data(wx_appid=appid)
+    await state.set_state(WxConfigStates.waiting_pkp)
+    await message.answer(
+        "请发送 WX_PKP 私钥文件（推荐）或回复绝对路径，路径需指向可读取的 private.key。\n发送“取消”可退出。",
+        reply_markup=_build_command_edit_cancel_keyboard(),
+    )
+
+
+@router.message(WxConfigStates.waiting_pkp)
+async def on_wx_config_pkp(message: Message, state: FSMContext) -> None:
+    """收集 WX_PKP（文件或路径）。"""
+
+    if _is_cancel_message(message.text):
+        await state.clear()
+        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
+        return
+    pkp_path = await _resolve_wx_pkp_path_from_message(message)
+    if not pkp_path:
+        return
+    await state.update_data(wx_pkp_path=pkp_path)
+    await state.set_state(WxConfigStates.waiting_project_path)
+    await message.answer(
+        "请输入小程序项目目录（可选），需包含 project.config.json。发送“跳过”或留空表示使用当前工作目录，发送“取消”退出。",
+        reply_markup=_build_description_keyboard(),
+    )
+
+
+@router.message(WxConfigStates.waiting_project_path)
+async def on_wx_config_project_path(message: Message, state: FSMContext) -> None:
+    """收集项目目录路径。"""
+
+    if _is_cancel_message(message.text):
+        await state.clear()
+        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
+        return
+    raw_text = message.text or ""
+    resolved = _resolve_reply_choice(raw_text, options=[SKIP_TEXT, "取消"])
+    project_path_raw = raw_text if resolved not in {SKIP_TEXT, "取消"} else ""
+    project_path = _normalize_project_path(project_path_raw)
+    if project_path is None:
+        await message.answer("项目目录不存在或不可访问，请重新输入有效路径，或发送“跳过”使用默认工作目录。")
+        return
+    await state.update_data(wx_project_path=project_path or "")
+    env_path = _wx_env_file()
+    data = await state.get_data()
+    summary_lines = [
+        "请确认微信小程序 CI 配置：",
+        f"- WX_APPID：{data.get('wx_appid')}",
+        f"- WX_PKP：{data.get('wx_pkp_path')}",
+        f"- PROJECT_PATH：{project_path or '默认（当前工作目录）'}",
+        f"- 配置文件：{env_path}",
+    ]
+    await state.set_state(WxConfigStates.waiting_confirm)
+    await message.answer("\n".join(summary_lines), reply_markup=_build_wx_confirm_keyboard())
+
+
+@router.message(WxConfigStates.waiting_confirm)
+async def on_wx_config_confirm(message: Message, state: FSMContext) -> None:
+    """确认配置并落盘，随后自动执行原命令。"""
+
+    if _is_cancel_message(message.text):
+        await state.clear()
+        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
+        return
+    options = ["✅ 确认配置", "❌ 取消"]
+    resolved = _resolve_reply_choice(message.text or "", options=options)
+    if resolved in {"❌ 取消"}:
+        await state.clear()
+        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
+        return
+    if resolved not in {"✅ 确认配置"}:
+        await message.answer("请回复“确认配置”或“取消”。", reply_markup=_build_wx_confirm_keyboard())
+        return
+    data = await state.get_data()
+    appid = (data.get("wx_appid") or "").strip()
+    pkp_path = (data.get("wx_pkp_path") or "").strip()
+    project_path = data.get("wx_project_path") or ""
+    command_id = data.get("wx_command_id")
+    is_global = bool(data.get("wx_is_global"))
+    history_prefix = data.get("wx_history_prefix") or COMMAND_HISTORY_DETAIL_PREFIX
+    if not appid or not pkp_path:
+        await message.answer("配置数据缺失，请重新开始。", reply_markup=_build_worker_main_keyboard())
+        await state.clear()
+        return
+    env_path = _write_wx_env_file(appid, pkp_path, project_path)
+    await message.answer(
+        f"配置已保存：{env_path}\nAPPID: {appid}\nPKP: {pkp_path}\n项目目录：{project_path or '默认（当前工作目录）'}",
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    await state.clear()
+    service: CommandService = GLOBAL_COMMAND_SERVICE if is_global else COMMAND_SERVICE
+    try:
+        command = await service.get_command(command_id)
+    except CommandNotFoundError:
+        await message.answer("原命令已不存在，请重新在命令列表中执行。")
+        return
+    await _execute_command_definition(
+        command=command,
+        reply_message=message,
+        trigger="配置向导",
+        actor_user=message.from_user,
+        service=service,
+        history_detail_prefix=history_prefix,
+        fsm_state=None,
+    )
 @router.callback_query(F.data == COMMAND_READONLY_CALLBACK)
 async def on_command_readonly_callback(callback: CallbackQuery) -> None:
     """提示通用命令只读。"""
@@ -7586,7 +7941,7 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
     await state.set_state(TaskCreateStates.waiting_description)
     await message.answer(
         (
-            "请输入任务描述，建议说明业务背景与预期结果。\n"
+            "请输入任务描述，建议说明业务背景与预期结果，支持直接发送图片/文件作为附件。\n"
             "若暂时没有可点击“跳过”按钮或直接发送空消息，发送“取消”可终止。"
         ),
         reply_markup=_build_description_keyboard(),
@@ -7595,6 +7950,13 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
 
 @router.message(TaskCreateStates.waiting_description)
 async def on_task_create_description(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    attachment_dir = _attachment_dir_for_message(message)
+    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    if saved_attachments:
+        pending = list(data.get("pending_attachments") or [])
+        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
+        await state.update_data(pending_attachments=pending)
     raw_text = message.text or ""
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "取消"]
@@ -7683,6 +8045,9 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
         description=data.get("description"),
         actor=actor,
     )
+    pending_attachments = data.get("pending_attachments") or []
+    if pending_attachments:
+        await _bind_serialized_attachments(task, pending_attachments, actor=actor)
     await state.clear()
     detail_text, markup = await _render_task_detail(task.id)
     await message.answer("任务已创建。", reply_markup=_build_worker_main_keyboard())
@@ -8073,6 +8438,11 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     chat_id = data.get("chat_id") or message.chat.id
     origin_message = data.get("origin_message")
     actor = data.get("actor") or _actor_from_message(message)
+    attachment_dir = _attachment_dir_for_message(message)
+    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    if saved_attachments:
+        serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
+        await _bind_serialized_attachments(task, serialized, actor=actor)
     try:
         success, prompt, session_path = await _push_task_to_model(
             task,
@@ -8744,6 +9114,23 @@ async def on_task_bug_description(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
         return
+    data = await state.get_data()
+    task_id = data.get("task_id")
+    if not task_id:
+        await state.clear()
+        await message.answer("任务信息缺失，流程已终止。", reply_markup=_build_worker_main_keyboard())
+        return
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await state.clear()
+        await message.answer("任务不存在，已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        return
+    actor = data.get("reporter") or _actor_from_message(message)
+    attachment_dir = _attachment_dir_for_message(message)
+    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    if saved_attachments:
+        serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
+        await _bind_serialized_attachments(task, serialized, actor=actor)
     content = _collect_message_payload(message)
     if not content:
         await message.answer(
@@ -8801,9 +9188,15 @@ async def on_task_bug_logs(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("任务不存在，已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
         return
+    actor = data.get("reporter") or _actor_from_message(message)
+    attachment_dir = _attachment_dir_for_message(message)
+    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    if saved_attachments:
+        serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
+        await _bind_serialized_attachments(task, serialized, actor=actor)
     description = data.get("description", "")
     reproduction = data.get("reproduction", "")
-    reporter = data.get("reporter") or _actor_from_message(message)
+    reporter = actor
     await state.update_data(logs=logs)
     preview = _build_bug_preview_text(
         task=task,
