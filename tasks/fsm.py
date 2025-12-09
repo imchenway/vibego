@@ -53,6 +53,12 @@ class TaskPushStates(StatesGroup):
     waiting_supplement = State()
 
 
+class TaskAttachmentStates(StatesGroup):
+    """任务附件绑定流程状态。"""
+
+    waiting_files = State()
+
+
 class TaskListSearchStates(StatesGroup):
     """任务列表搜索流程的状态集。"""
 

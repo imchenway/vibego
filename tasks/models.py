@@ -92,3 +92,16 @@ class TaskHistoryRecord:
     event_type: str
     payload: Optional[str]
     created_at: str = field(default_factory=shanghai_now_iso)
+
+
+@dataclass(**_DATACLASS_SLOT_KW)
+class TaskAttachmentRecord:
+    """描述绑定到任务的附件信息。"""
+
+    id: int
+    task_id: str
+    display_name: str
+    mime_type: str
+    path: str
+    kind: str = "document"
+    created_at: str = field(default_factory=shanghai_now_iso)

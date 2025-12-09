@@ -16,6 +16,7 @@ from .models import (
     TaskHistoryRecord,
     TaskNoteRecord,
     TaskRecord,
+    TaskAttachmentRecord,
     ensure_shanghai_iso,
     shanghai_now_iso,
 )
@@ -104,6 +105,20 @@ class TaskService:
         )
         await db.execute(
             """
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'document',
+                display_name TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                path TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            )
+            """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS task_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
@@ -168,6 +183,12 @@ class TaskService:
             ON task_history(task_id, event_type, created_at)
             """
         )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_task
+            ON task_attachments(task_id, created_at)
+            """
+        )
         try:
             await db.execute("ALTER TABLE tasks ADD COLUMN description TEXT")
         except aiosqlite.OperationalError as exc:
@@ -205,6 +226,7 @@ class TaskService:
             ("tasks", "id", ("created_at", "updated_at")),
             ("task_notes", "id", ("created_at",)),
             ("task_history", "id", ("created_at",)),
+            ("task_attachments", "id", ("created_at",)),
         )
         for table, pk, columns in tables:
             column_list = ", ".join(columns)
@@ -699,6 +721,56 @@ class TaskService:
             created_at=now,
         )
 
+    async def add_attachment(
+        self,
+        task_id: str,
+        *,
+        display_name: str,
+        mime_type: str,
+        path: str,
+        kind: str = "document",
+    ) -> TaskAttachmentRecord:
+        """为任务追加附件记录。"""
+
+        canonical_task_id = self._canonical_task_id(task_id)
+        if not canonical_task_id:
+            raise ValueError("任务不存在")
+        task_id = canonical_task_id
+        name = (display_name or "").strip() or Path(path).name
+        mime = (mime_type or "application/octet-stream").strip() or "application/octet-stream"
+        kind_token = (kind or "document").strip() or "document"
+        path_text = (path or "").strip()
+        if not path_text:
+            raise ValueError("附件路径不能为空")
+        now = shanghai_now_iso()
+        async with self._get_lock():
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                await db.execute("PRAGMA foreign_keys = ON")
+                await db.execute("BEGIN IMMEDIATE")
+                row = await self._fetch_task_row(db, task_id)
+                if row is None:
+                    await db.execute("ROLLBACK")
+                    raise ValueError("任务不存在")
+                cursor = await db.execute(
+                    """
+                    INSERT INTO task_attachments(task_id, kind, display_name, mime_type, path, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (task_id, kind_token, name, mime, path_text, now),
+                )
+                attach_id = cursor.lastrowid
+                await db.commit()
+        return TaskAttachmentRecord(
+            id=attach_id,
+            task_id=task_id,
+            display_name=name,
+            mime_type=mime,
+            path=path_text,
+            kind=kind_token,
+            created_at=now,
+        )
+
     async def list_notes(self, task_id: str) -> List[TaskNoteRecord]:
         """列出指定任务的所有备注，按时间升序排列。"""
 
@@ -722,6 +794,38 @@ class TaskService:
                 task_id=row["task_id"],
                 note_type=row["note_type"],
                 content=row["content"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    async def list_attachments(self, task_id: str) -> List[TaskAttachmentRecord]:
+        """列出任务附件，按时间倒序返回。"""
+
+        canonical_task_id = self._canonical_task_id(task_id)
+        if not canonical_task_id:
+            return []
+        task_id = canonical_task_id
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            async with db.execute(
+                """
+                SELECT * FROM task_attachments
+                WHERE task_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (task_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [
+            TaskAttachmentRecord(
+                id=row["id"],
+                task_id=row["task_id"],
+                display_name=row["display_name"],
+                mime_type=row["mime_type"],
+                path=row["path"],
+                kind=row["kind"],
                 created_at=row["created_at"],
             )
             for row in rows

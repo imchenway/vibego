@@ -35,6 +35,22 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
         "aliases": ("sync-all",),
         "timeout": 1500,
     },
+    {
+        "name": "wx-setup",
+        "title": "配置微信小程序 CI",
+        "command": 'WX_APPID=${WX_APPID:-} WX_PKP=${WX_PKP:-} PROJECT_PATH=${PROJECT_PATH:-} bash "$ROOT_DIR/scripts/wx_setup.sh"',
+        "description": "写入当前项目的 WX_APPID/WX_PKP 等配置，保存于 ~/.config/vibego/wx_ci/<project>.env。",
+        "aliases": ("wx-init",),
+        "timeout": 120,
+    },
+    {
+        "name": "wx-preview",
+        "title": "生成小程序预览二维码",
+        "command": 'PROJECT_PATH=${PROJECT_PATH:-} DESC=${DESC:-} bash "$ROOT_DIR/scripts/wx_preview.sh"',
+        "description": "使用 miniprogram-ci 生成预览二维码并回传，首次需先执行 wx-setup 写入 APPID/私钥路径。",
+        "aliases": ("wxqr",),
+        "timeout": 180,
+    },
 )
 
 
