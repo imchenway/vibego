@@ -33,11 +33,17 @@ usage() {
 用法：${0##*/} [--model 名称] [--project 名称]
   --model    目标模型，默认 $MODEL_DEFAULT
   --project  项目别名；未指定时尝试使用当前目录配置
+  --all      显式全局清理（包含 kill_all_vibego_processes）
 USAGE
 }
 
 MODEL="$MODEL_DEFAULT"
 PROJECT_OVERRIDE="$PROJECT_DEFAULT"
+FORCE_KILL_ALL=0
+# 允许通过环境变量强制全局清理（兼容旧版兜底行为）
+if [[ "${VIBEGO_FORCE_KILL_ALL:-0}" == "1" ]]; then
+  FORCE_KILL_ALL=1
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,6 +51,8 @@ while [[ $# -gt 0 ]]; do
       MODEL="$2"; shift 2 ;;
     --project)
       PROJECT_OVERRIDE="$2"; shift 2 ;;
+    --all)
+      FORCE_KILL_ALL=1; shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -241,12 +249,16 @@ if [[ -n "$PROJECT_OVERRIDE" ]]; then
   PROJECT_NAME="$(sanitize_slug "$PROJECT_OVERRIDE")"
   stop_single_worker "$PROJECT_NAME" "$MODEL"
 else
+  # 未指定项目时，执行逐项目停止；如需彻底清场需显式 --all 或环境变量开启
   if ! stop_all_workers; then
     # fallback:默认 project 名称
     stop_single_worker "project" "$MODEL"
   fi
 fi
 
-kill_all_vibego_processes
+# 仅在显式请求时执行全局兜底清理，避免误杀其他项目的 worker/master
+if (( FORCE_KILL_ALL )); then
+  kill_all_vibego_processes
+fi
 
 exit 0
