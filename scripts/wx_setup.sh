@@ -27,16 +27,43 @@ project_slug() {
   printf '%s' "${raw//\//-}"
 }
 
+# 读取已存在的 env 文件，并用调用时的环境变量覆盖，便于按钮重复执行时复用配置。
+load_project_env() {
+  local env_file="$1"
+  local caller_appid caller_pkp caller_path
+
+  caller_appid="${WX_APPID:-}"
+  caller_pkp="${WX_PKP:-}"
+  caller_path="${PROJECT_PATH:-}"
+
+  if [[ -f "$env_file" ]]; then
+    # shellcheck disable=SC1090
+    source "$env_file"
+  fi
+
+  WX_APPID="${caller_appid:-${WX_APPID:-}}"
+  WX_PKP="${caller_pkp:-${WX_PKP:-}}"
+  PROJECT_PATH="${caller_path:-${PROJECT_PATH:-}}"
+}
+
 main() {
   local appid pkp project_path slug root env_dir env_file
+
+  slug="$(project_slug)"
+  root="$(config_root)"
+  env_dir="$root/wx_ci"
+  env_file="$env_dir/${slug}.env"
+
+  load_project_env "$env_file"
 
   appid="${WX_APPID:-}"
   pkp="${WX_PKP:-}"
   project_path="${PROJECT_PATH:-}"
 
   if [[ -z "$appid" || -z "$pkp" ]]; then
-    echo "[错误] WX_APPID 或 WX_PKP 未提供，请在命令前添加环境变量，例如：" >&2
-    echo "  WX_APPID=xxx WX_PKP=/abs/path/private.key PROJECT_PATH=./miniapp bash \"$0\"" >&2
+    echo "[错误] WX_APPID 或 WX_PKP 未提供，请在命令前添加环境变量，或先通过机器人交互补全配置后再点击按钮。" >&2
+    echo "  示例：WX_APPID=xxx WX_PKP=/abs/path/private.key PROJECT_PATH=./miniapp bash \"$0\"" >&2
+    echo "  也可先写入文件：$env_file" >&2
     exit 1
   fi
 
@@ -45,10 +72,20 @@ main() {
     exit 1
   fi
 
-  slug="$(project_slug)"
-  root="$(config_root)"
-  env_dir="$root/wx_ci"
-  env_file="$env_dir/${slug}.env"
+  # 确保 PKP 路径为绝对路径，避免调用目录变化导致找不到文件。
+  if [[ "$pkp" != /* ]]; then
+    pkp="$(cd "$(dirname "$pkp")" && pwd)/$(basename "$pkp")"
+  fi
+
+  # 若传入相对路径则转为绝对路径，避免后续 wx_preview 解析错误。
+  if [[ -n "$project_path" && "$project_path" != /* ]]; then
+    project_path="$(cd "$project_path" && pwd)"
+  fi
+
+  if [[ -n "$project_path" && ! -d "$project_path" ]]; then
+    echo "[错误] 项目目录不存在：$project_path" >&2
+    exit 1
+  fi
 
   mkdir -p "$env_dir"
 
