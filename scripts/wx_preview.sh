@@ -121,7 +121,7 @@ main() {
     --desc "$desc" \
     --upload-version "$version" \
     --qrcode-format base64 \
-    --qrcode-output "$base64_file" \
+    --qrcode-output-dest "$base64_file" \
     >/dev/null
 
   write_png_from_base64 "$base64_file" "$png_file"
