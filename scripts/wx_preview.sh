@@ -62,7 +62,7 @@ PY
 }
 
 main() {
-  local slug root env_file appid pkp project_path desc tmp_dir base64_file png_file
+  local slug root env_file appid pkp project_path desc version tmp_dir base64_file png_file
 
   if ! command -v node >/dev/null 2>&1; then
     echo "[错误] 未检测到 node，请先安装 Node.js 16+。" >&2
@@ -83,6 +83,8 @@ main() {
   pkp="${WX_PKP:-}"
   project_path="${PROJECT_PATH:-}" 
   desc="${DESC:-${WX_DESC:-tg-preview}}"
+  # 版本号必填：默认使用时间戳，可通过 WX_VERSION/UPLOAD_VERSION 覆盖
+  version="${WX_VERSION:-${UPLOAD_VERSION:-$(date +%Y%m%d%H%M%S)}}"
 
   if [[ -z "$appid" || -z "$pkp" ]]; then
     echo "[错误] 未找到 WX_APPID 或 WX_PKP，请先执行 wx-setup 配置（或在命令前传入环境变量）。" >&2
@@ -117,6 +119,7 @@ main() {
     --pkp "$pkp" \
     --appid "$appid" \
     --desc "$desc" \
+    --upload-version "$version" \
     --qrcode-format base64 \
     --qrcode-output "$base64_file" \
     >/dev/null
