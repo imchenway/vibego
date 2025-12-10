@@ -922,6 +922,69 @@ def test_bug_report_logs_binds_attachments(monkeypatch, tmp_path: Path):
     assert asyncio.run(state.get_state()) == bot.TaskBugReportStates.waiting_confirm.state
 
 
+def test_bug_report_reproduction_binds_attachments(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=321)
+    message.from_user = SimpleNamespace(id=321, full_name="Reporter")
+    message.text = "复现步骤"
+    message.bot = SimpleNamespace(username="tester_bot")
+    message.date = datetime.now(bot.UTC)
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_reproduction))
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_0002",
+            description="缺陷描述",
+            reporter="Reporter",
+        )
+    )
+
+    task = _make_task(
+        task_id="TASK_0002",
+        title="缺陷任务",
+        status="research",
+        task_type="defect",
+    )
+
+    async def fake_get_task(task_id: str):
+        return task
+
+    saved = [
+        bot.TelegramSavedAttachment(
+            kind="photo",
+            display_name="photo.jpg",
+            mime_type="image/jpeg",
+            absolute_path=tmp_path / "photo.jpg",
+            relative_path="./data/photo.jpg",
+        )
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return saved
+
+    bound_calls: list[tuple[str, list[dict], str]] = []
+
+    async def fake_bind(task_arg, attachments, actor):
+        bound_calls.append((task_arg.id, list(attachments), actor))
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_bind_serialized_attachments", fake_bind)
+
+    asyncio.run(bot.on_task_bug_reproduction(message, state))
+
+    assert bound_calls
+    task_id, attachments, actor = bound_calls[0]
+    assert task_id == task.id
+    assert attachments and attachments[0]["path"] == "./data/photo.jpg"
+    assert actor == "Reporter"
+    data_after = asyncio.run(state.get_data())
+    assert "reproduction" in data_after and "./data/photo.jpg" in data_after["reproduction"]
+    assert asyncio.run(state.get_state()) == bot.TaskBugReportStates.waiting_logs.state
+
+
 def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=321)
@@ -1028,6 +1091,111 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
     assert push_mode == expected_mode
     assert isinstance(push_markup, ReplyKeyboardMarkup)
     assert push_kwargs.get("disable_notification") is False
+
+
+def test_bug_report_confirm_accepts_extra_attachments(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=321)
+    message.from_user = SimpleNamespace(id=321, full_name="Reporter")
+    message.text = ""
+    message.bot = SimpleNamespace(username="tester_bot")
+    message.date = datetime.now(bot.UTC)
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_confirm))
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_CONFIRM",
+            description="缺陷描述",
+            reproduction="步骤",
+            logs="日志",
+            reporter="Reporter",
+        )
+    )
+
+    task = _make_task(
+        task_id="TASK_CONFIRM",
+        title="缺陷任务",
+        status="research",
+        task_type="defect",
+    )
+
+    async def fake_get_task(task_id: str):
+        return task
+
+    queue = [
+        [
+            bot.TelegramSavedAttachment(
+                kind="photo",
+                display_name="photo.jpg",
+                mime_type="image/jpeg",
+                absolute_path=tmp_path / "photo.jpg",
+                relative_path="./data/photo.jpg",
+            )
+        ],
+        [],
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return queue.pop(0)
+
+    bound_calls: list[tuple[str, list[dict], str]] = []
+
+    async def fake_bind(task_arg, attachments, actor):
+        bound_calls.append((task_arg.id, list(attachments), actor))
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_bind_serialized_attachments", fake_bind)
+
+    asyncio.run(bot.on_task_bug_confirm(message, state))
+
+    assert bound_calls and bound_calls[0][0] == task.id
+    assert bound_calls[0][1][0]["path"] == "./data/photo.jpg"
+    # 仍处于确认阶段，等待用户最终确认
+    assert asyncio.run(state.get_state()) == bot.TaskBugReportStates.waiting_confirm.state
+    assert message.calls and "已记录补充的附件/日志" in message.calls[-1][0]
+
+    # 再次确认应成功通过，无额外附件
+    confirm_msg = DummyMessage()
+    confirm_msg.text = "✅ 确认提交"
+    confirm_msg.chat = message.chat
+    confirm_msg.from_user = message.from_user
+    confirm_msg.bot = message.bot
+    confirm_msg.date = message.date
+
+    push_calls: list[tuple[int, Optional[str], Optional[str]]] = []
+
+    async def fake_push(
+        target_task: TaskRecord,
+        *,
+        chat_id: int,
+        reply_to,
+        supplement: Optional[str],
+        actor: Optional[str],
+        is_bug_report: bool | None = None,
+    ):
+        push_calls.append((chat_id, supplement, actor))
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        return None
+
+    async def fake_render_detail(task_id: str):
+        return "任务详情", ReplyKeyboardMarkup(keyboard=[])
+
+    async def fake_log_task_action(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render_detail)
+    monkeypatch.setattr(bot, "_log_task_action", fake_log_task_action)
+
+    asyncio.run(bot.on_task_bug_confirm(confirm_msg, state))
+
+    assert push_calls and push_calls[0][0] == message.chat.id
 
 
 def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp_path: Path):
