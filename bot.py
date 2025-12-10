@@ -4492,24 +4492,37 @@ def _build_bug_confirm_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
-def _collect_message_payload(message: Message) -> str:
-    """提取消息中的文字与附件信息，方便写入缺陷记录。"""
+def _collect_message_payload(
+    message: Message,
+    attachments: Sequence[TelegramSavedAttachment] | None = None,
+) -> str:
+    """提取消息中的文字与附件信息，优先输出已落地的本地路径。"""
 
     parts: list[str] = []
     text = _normalize_choice_token(message.text or message.caption)
     if text:
         parts.append(text)
-    if message.photo:
-        file_id = message.photo[-1].file_id
-        parts.append(f"[图片:{file_id}]")
-    if message.document:
-        doc = message.document
-        name = doc.file_name or doc.file_id
-        parts.append(f"[文件:{name}]")
-    if message.voice:
-        parts.append(f"[语音:{message.voice.file_id}]")
-    if message.video:
-        parts.append(f"[视频:{message.video.file_id}]")
+
+    # 若调用方已经下载附件，优先输出本地路径，避免仅展示 file_id
+    attachments = tuple(attachments or ())
+    if attachments:
+        for item in attachments:
+            path_hint = item.relative_path or item.display_name or item.kind
+            parts.append(f"[附件:{path_hint}]")
+    else:
+        # 兼容未传入附件的场景，回退到 Telegram file_id 标识
+        if message.photo:
+            file_id = message.photo[-1].file_id
+            parts.append(f"[图片:{file_id}]")
+        if message.document:
+            doc = message.document
+            name = doc.file_name or doc.file_id
+            parts.append(f"[文件:{name}]")
+        if message.voice:
+            parts.append(f"[语音:{message.voice.file_id}]")
+        if message.video:
+            parts.append(f"[视频:{message.video.file_id}]")
+
     return "\n".join(parts).strip()
 
 
@@ -9131,7 +9144,7 @@ async def on_task_bug_description(message: Message, state: FSMContext) -> None:
     if saved_attachments:
         serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
         await _bind_serialized_attachments(task, serialized, actor=actor)
-    content = _collect_message_payload(message)
+    content = _collect_message_payload(message, saved_attachments)
     if not content:
         await message.answer(
             "缺陷描述不能为空，请重新输入：",
@@ -9174,9 +9187,6 @@ async def on_task_bug_logs(message: Message, state: FSMContext) -> None:
         return
     options = [SKIP_TEXT, "取消"]
     resolved = _resolve_reply_choice(message.text or "", options=options)
-    logs = ""
-    if resolved not in {SKIP_TEXT, "取消"}:
-        logs = _collect_message_payload(message)
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
@@ -9191,6 +9201,9 @@ async def on_task_bug_logs(message: Message, state: FSMContext) -> None:
     actor = data.get("reporter") or _actor_from_message(message)
     attachment_dir = _attachment_dir_for_message(message)
     saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    logs = ""
+    if resolved not in {SKIP_TEXT, "取消"}:
+        logs = _collect_message_payload(message, saved_attachments)
     if saved_attachments:
         serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
         await _bind_serialized_attachments(task, serialized, actor=actor)

@@ -840,6 +840,8 @@ def test_bug_report_description_binds_attachments(monkeypatch, tmp_path: Path):
     assert task_id == task.id
     assert attachments and attachments[0]["path"] == "./data/log.txt"
     assert actor == "Reporter"
+    data_after = asyncio.run(state.get_data())
+    assert "description" in data_after and "./data/log.txt" in data_after["description"]
     assert asyncio.run(state.get_state()) == bot.TaskBugReportStates.waiting_reproduction.state
 
 
@@ -915,6 +917,8 @@ def test_bug_report_logs_binds_attachments(monkeypatch, tmp_path: Path):
     assert task_id == task.id
     assert attachments and attachments[0]["path"] == "./data/photo.jpg"
     assert actor == "Reporter"
+    data_after = asyncio.run(state.get_data())
+    assert "logs" in data_after and "./data/photo.jpg" in data_after["logs"]
     assert asyncio.run(state.get_state()) == bot.TaskBugReportStates.waiting_confirm.state
 
 
