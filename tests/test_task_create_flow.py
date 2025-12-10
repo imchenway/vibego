@@ -302,8 +302,10 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
         )
     ]
 
+    collect_queue = [saved, []]
+
     async def fake_collect(msg, target_dir):
-        return saved
+        return collect_queue.pop(0)
 
     monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
     monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
@@ -366,6 +368,106 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
     assert added_paths == ["./data/log.txt"]
 
 
+def test_task_create_album_keeps_text_and_collects_followup_attachments(monkeypatch, tmp_path):
+    state = DummyState(
+        data={
+            "title": "测试标题",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "task",
+        },
+        state=TaskCreateStates.waiting_description,
+    )
+    queue = [
+        [
+            bot.TelegramSavedAttachment(
+                kind="photo",
+                display_name="a1.jpg",
+                mime_type="image/jpeg",
+                absolute_path=tmp_path / "a1.jpg",
+                relative_path="./data/a1.jpg",
+            )
+        ],
+        [
+            bot.TelegramSavedAttachment(
+                kind="photo",
+                display_name="a2.jpg",
+                mime_type="image/jpeg",
+                absolute_path=tmp_path / "a2.jpg",
+                relative_path="./data/a2.jpg",
+            )
+        ],
+        [],
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return queue.pop(0)
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    message = DummyMessage("描述文本")
+    asyncio.run(bot.on_task_create_description(message, state))
+
+    # 媒体组后续消息到达确认阶段时继续补充附件
+    followup = DummyMessage("")
+    asyncio.run(bot.on_task_create_confirm(followup, state))
+
+    assert state.state == TaskCreateStates.waiting_confirm
+    assert state.data.get("description") == "描述文本"
+    assert len(state.data.get("pending_attachments", [])) == 2
+
+    created_task = bot.TaskRecord(
+        id="TASK_5678",
+        project_slug="demo",
+        title="测试标题",
+        status="research",
+        priority=3,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="描述文本",
+        parent_id=None,
+        root_id="TASK_5678",
+        depth=0,
+        lineage="0001",
+        archived=False,
+    )
+
+    async def fake_create_root_task(**_kwargs):
+        return created_task
+
+    added_paths = []
+
+    async def fake_add_attachment(task_id, display_name, mime_type, path, kind):
+        added_paths.append(path)
+        return bot.TaskAttachmentRecord(
+            id=len(added_paths),
+            task_id=task_id,
+            display_name=display_name,
+            mime_type=mime_type,
+            path=path,
+            kind=kind,
+        )
+
+    async def fake_log_task_event(task_id, **_kwargs):
+        return None
+
+    async def fake_render(task_id: str):
+        return "detail", ReplyKeyboardMarkup(keyboard=[])
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "add_attachment", fake_add_attachment)
+    monkeypatch.setattr(bot.TASK_SERVICE, "log_task_event", fake_log_task_event)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+
+    confirm = DummyMessage("✅ 确认创建")
+    confirm.bot = message.bot
+    confirm.date = message.date
+    asyncio.run(bot.on_task_create_confirm(confirm, state))
+
+    assert added_paths == ["./data/a1.jpg", "./data/a2.jpg"]
+
+
 def test_task_create_confirm_uses_default_priority(monkeypatch):
     state = DummyState(
         data={
@@ -419,7 +521,7 @@ def test_task_create_confirm_invalid_prompts_again():
 
     assert state.state == TaskCreateStates.waiting_confirm
     assert message.calls
-    assert "请选择“确认创建”或“取消”" in message.calls[-1]["text"]
+    assert "已记录补充的描述/附件" in message.calls[-1]["text"]
     assert isinstance(message.calls[-1]["reply_markup"], ReplyKeyboardMarkup)
 
 

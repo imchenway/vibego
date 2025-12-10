@@ -7984,7 +7984,7 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
             reply_markup=_build_description_keyboard(),
         )
         return
-    description: str = ""
+    description: str = data.get("description", "")
     if trimmed and resolved != SKIP_TEXT:
         description = raw_text.strip()
     await state.update_data(description=description)
@@ -8011,13 +8011,34 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
 async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
     options = ["✅ 确认创建", "❌ 取消"]
     resolved = _resolve_reply_choice(message.text, options=options)
-    stripped = _strip_number_prefix((message.text or "").strip()).lower()
-    if resolved == options[1] or stripped in {"取消"}:
+    stripped_token = _strip_number_prefix((message.text or "").strip())
+    lowered = stripped_token.lower()
+    # 先处理附件追加场景，支持媒体组后续消息继续补充
+    attachment_dir = _attachment_dir_for_message(message)
+    extra_attachments = await _collect_saved_attachments(message, attachment_dir)
+    data = await state.get_data()
+    extra_text = _normalize_choice_token(message.text or "")
+    is_cancel = resolved == options[1] or lowered == "取消"
+    is_confirm = resolved == options[0] or lowered in {"确认", "确认创建"}
+    if extra_attachments or (extra_text and not is_cancel and not is_confirm):
+        pending = list(data.get("pending_attachments") or [])
+        if extra_attachments:
+            pending.extend(_serialize_saved_attachment(item) for item in extra_attachments)
+        description = data.get("description") or ""
+        if extra_text and not is_confirm and not is_cancel:
+            description = f"{description}\n{extra_text}" if description else extra_text
+        await state.update_data(pending_attachments=pending, description=description)
+        await message.answer(
+            "已记录补充的描述/附件，请继续选择“确认创建”或“取消”。",
+            reply_markup=_build_confirm_keyboard(),
+        )
+        return
+    if is_cancel:
         await state.clear()
         await message.answer("已取消创建任务。", reply_markup=ReplyKeyboardRemove())
         await message.answer("已返回主菜单。", reply_markup=_build_worker_main_keyboard())
         return
-    if resolved != options[0] and stripped not in {"确认", "确认创建"}:
+    if not is_confirm:
         await message.answer(
             "请选择“确认创建”或“取消”，可直接输入编号或点击键盘按钮：",
             reply_markup=_build_confirm_keyboard(),
@@ -9170,8 +9191,18 @@ async def on_task_bug_reproduction(message: Message, state: FSMContext) -> None:
     options = [SKIP_TEXT, "取消"]
     resolved = _resolve_reply_choice(message.text or "", options=options)
     reproduction = ""
+    data = await state.get_data()
+    task_id = data.get("task_id")
+    attachment_dir = _attachment_dir_for_message(message)
+    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    if saved_attachments and task_id:
+        task = await TASK_SERVICE.get_task(task_id)
+        if task:
+            actor = data.get("reporter") or _actor_from_message(message)
+            serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
+            await _bind_serialized_attachments(task, serialized, actor=actor)
     if resolved not in {SKIP_TEXT, "取消"}:
-        reproduction = _collect_message_payload(message)
+        reproduction = _collect_message_payload(message, saved_attachments)
     await state.update_data(reproduction=reproduction)
     await state.set_state(TaskBugReportStates.waiting_logs)
     await message.answer(_build_bug_log_prompt(), reply_markup=_build_description_keyboard())
@@ -9234,13 +9265,9 @@ async def on_task_bug_confirm(message: Message, state: FSMContext) -> None:
         await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
         return
     resolved = _resolve_reply_choice(message.text or "", options=["✅ 确认提交", "❌ 取消"])
-    if resolved == "❌ 取消":
-        await state.clear()
-        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
-        return
-    if resolved not in {"✅ 确认提交"}:
-        await message.answer("请回复“✅ 确认提交”或输入“取消”。", reply_markup=_build_bug_confirm_keyboard())
-        return
+    normalized = _normalize_choice_token(message.text or "")
+    is_cancel = resolved == "❌ 取消" or normalized == "取消"
+    is_confirm = resolved == "✅ 确认提交"
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
@@ -9250,12 +9277,44 @@ async def on_task_bug_confirm(message: Message, state: FSMContext) -> None:
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
-        await message.answer("任务不存在，已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        return
+    attachment_dir = _attachment_dir_for_message(message)
+    extra_attachments = await _collect_saved_attachments(message, attachment_dir)
+    reporter = data.get("reporter") or _actor_from_message(message)
+    if extra_attachments:
+        serialized = [_serialize_saved_attachment(item) for item in extra_attachments]
+        await _bind_serialized_attachments(task, serialized, actor=reporter)
+    if is_cancel:
+        await state.clear()
+        await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
+        return
+    if extra_attachments or (normalized and not is_confirm):
+        # 用户继续补充附件或文字，刷新预览后等待确认
+        updated_logs = data.get("logs", "")
+        if normalized and not is_confirm:
+            updated_logs = f"{updated_logs}\n{normalized}" if updated_logs else normalized
+        await state.update_data(logs=updated_logs)
+        description = data.get("description", "")
+        reproduction = data.get("reproduction", "")
+        preview = _build_bug_preview_text(
+            task=task,
+            description=description,
+            reproduction=reproduction,
+            logs=updated_logs,
+            reporter=reporter,
+        )
+        await message.answer(
+            f"已记录补充的附件/日志，请再次确认：\n{preview}",
+            reply_markup=_build_bug_confirm_keyboard(),
+        )
+        return
+    if not is_confirm:
+        await message.answer("请回复“✅ 确认提交”或输入“取消”。", reply_markup=_build_bug_confirm_keyboard())
         return
     description = data.get("description", "")
     reproduction = data.get("reproduction", "")
     logs = data.get("logs", "")
-    reporter = data.get("reporter") or _actor_from_message(message)
     payload = {
         "action": "bug_report",
         "description_length": len(description),
