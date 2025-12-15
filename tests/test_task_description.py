@@ -17,6 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+from aiogram.exceptions import TelegramBadRequest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -551,6 +552,82 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
     assert task_id == task.id
     assert attachments and attachments[0]["path"] == "./data/log.txt"
     assert actor == "Tester"
+
+
+def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_0001", message)
+    message.chat = SimpleNamespace(id=1)
+    message.from_user = SimpleNamespace(id=1)
+    state, _storage = make_state(message)
+
+    task = _make_task(
+        task_id="TASK_0001",
+        title="调研任务",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        return task
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    async def fake_list_history(task_id: str):
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    async def fake_collect(msg, target_dir):
+        return []
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+
+    reply_calls: list[tuple[str, Optional[str], Optional[ReplyKeyboardMarkup]]] = []
+
+    async def fake_reply_to_chat(chat_id, text, reply_to=None, parse_mode=None, reply_markup=None):
+        reply_calls.append((text, parse_mode, reply_markup))
+        if len(reply_calls) == 1:
+            raise TelegramBadRequest(method="sendMessage", message="Bad Request: message is too long")
+        return None
+
+    fallback_calls: list[tuple[int, str, Optional[str], bool]] = []
+
+    async def fake_reply_large_text(chat_id, text, *, parse_mode=None, preformatted=False):
+        fallback_calls.append((chat_id, text, parse_mode, preformatted))
+        return text
+
+    async def fake_send_session_ack(chat_id: int, session_path: Path, *, reply_to):
+        return None
+
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply_to_chat)
+    monkeypatch.setattr(bot, "reply_large_text", fake_reply_large_text)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
+
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+        long_prompt = "A" * (bot.TELEGRAM_MESSAGE_LIMIT + 100)
+        return True, long_prompt, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push)
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+        skip_message = DummyMessage()
+        skip_message.text = "补充"
+        await bot.on_task_push_model_supplement(skip_message, state)
+
+    asyncio.run(_scenario())
+
+    assert fallback_calls
+    sent_text = fallback_calls[0][1]
+    assert sent_text.startswith("已推送到模型：")
+    assert "附件形式发送" in reply_calls[-1][0]
 
 
 def test_push_model_test_push(monkeypatch, tmp_path: Path):

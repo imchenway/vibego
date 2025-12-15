@@ -900,6 +900,46 @@ async def reply_large_text(
 
     return delivered_summary
 
+
+async def _send_model_push_preview(
+    chat_id: int,
+    preview_block: str,
+    *,
+    reply_to: Optional[Message],
+    parse_mode: Optional[str],
+    reply_markup: Optional[Any],
+) -> None:
+    """发送推送预览，超长时自动转附件并提示。"""
+
+    text = f"已推送到模型：\n{preview_block}"
+    try:
+        await _reply_to_chat(
+            chat_id,
+            text,
+            reply_to=reply_to,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return
+    except TelegramBadRequest as exc:
+        reason = _extract_bad_request_message(exc).lower()
+        if "message is too long" not in reason:
+            raise
+        worker_log.warning(
+            "推送预览超出 Telegram 限制，已降级为附件发送",
+            extra={"chat": chat_id, "length": str(len(text))},
+        )
+
+    await reply_large_text(chat_id, text, parse_mode=parse_mode, preformatted=True)
+    if reply_markup:
+        await _reply_to_chat(
+            chat_id,
+            "预览内容较长，已以附件形式发送，请查收。",
+            reply_to=reply_to,
+            parse_mode=None,
+            reply_markup=reply_markup,
+        )
+
 def run_subprocess_capture(cmd: str, input_text: str = "") -> Tuple[int, str]:
     # 同步执行 CLI，stdin 喂 prompt，捕获 stdout+stderr
     p = subprocess.Popen(
@@ -1572,6 +1612,38 @@ def _guess_extension(mime_type: Optional[str], fallback: str = ".bin") -> str:
     return fallback
 
 
+def _build_obfuscated_filename(
+    file_name_hint: str,
+    mime_type: Optional[str],
+    *,
+    salt: str,
+    now: Optional[datetime] = None,
+    monotonic_ns: Optional[int] = None,
+) -> str:
+    """生成混淆后的文件名，避免暴露源文件名。"""
+
+    current = now or datetime.now(UTC)
+    timestamp = current.strftime("%Y%m%d_%H%M%S%f")[:-3]  # 精确到毫秒
+    monotonic_value = monotonic_ns if monotonic_ns is not None else time.monotonic_ns()
+    hasher = hashlib.sha256()
+    for part in (salt, file_name_hint, str(monotonic_value)):
+        hasher.update(str(part).encode("utf-8", errors="ignore"))
+
+    digest = hasher.hexdigest()[:12]
+
+    raw_suffix = Path(file_name_hint).suffix
+    if raw_suffix and not re.fullmatch(r"\.[A-Za-z0-9]+", raw_suffix):
+        raw_suffix = ""
+    extension = raw_suffix or _guess_extension(mime_type, ".bin")
+    if not extension.startswith("."):
+        extension = f".{extension}"
+
+    safe_suffix = re.sub(r"[^A-Za-z0-9]", "", extension.lstrip("."))
+    extension = f".{safe_suffix or 'bin'}"
+
+    return f"{timestamp}-{digest}{extension}"
+
+
 def _attachment_dir_for_message(message: Message, media_group_id: Optional[str] = None) -> Path:
     """为当前消息生成附件目录，按项目标识 + 日期归档，便于模型定位。"""
 
@@ -1610,15 +1682,21 @@ async def _download_telegram_file(
 
     bot = message.bot or current_bot()
     telegram_file = await bot.get_file(file_id)
-    stem = _sanitize_fs_component(Path(file_name_hint).stem, "file")
-    extension = Path(file_name_hint).suffix or _guess_extension(mime_type, ".bin")
-    if not extension.startswith("."):
-        extension = f".{extension}"
-    filename = f"{stem}{extension}"
+    salt = f"{file_id}:{getattr(message, 'message_id', '')}:{getattr(message.chat, 'id', '')}:{uuid.uuid4().hex}"
+    filename = _build_obfuscated_filename(
+        file_name_hint,
+        mime_type,
+        salt=salt,
+    )
     destination = target_dir / filename
     counter = 1
     while destination.exists():
-        destination = target_dir / f"{stem}_{counter}{extension}"
+        filename = _build_obfuscated_filename(
+            file_name_hint,
+            mime_type,
+            salt=f"{salt}:{counter}",
+        )
+        destination = target_dir / filename
         counter += 1
     await bot.download_file(telegram_file.file_path, destination=destination)
     return destination
@@ -1661,7 +1739,7 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
         saved.append(
             TelegramSavedAttachment(
                 kind="document",
-                display_name=file_name,
+                display_name=path.name,
                 mime_type=document.mime_type or "application/octet-stream",
                 absolute_path=path,
                 relative_path=_format_relative_path(path),
@@ -1681,7 +1759,7 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
         saved.append(
             TelegramSavedAttachment(
                 kind="video",
-                display_name=file_name,
+                display_name=path.name,
                 mime_type=video.mime_type or "video/mp4",
                 absolute_path=path,
                 relative_path=_format_relative_path(path),
@@ -1701,7 +1779,7 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
         saved.append(
             TelegramSavedAttachment(
                 kind="audio",
-                display_name=file_name,
+                display_name=path.name,
                 mime_type=audio.mime_type or "audio/mpeg",
                 absolute_path=path,
                 relative_path=_format_relative_path(path),
@@ -1721,7 +1799,7 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
         saved.append(
             TelegramSavedAttachment(
                 kind="voice",
-                display_name=file_name,
+                display_name=path.name,
                 mime_type=voice.mime_type or "audio/ogg",
                 absolute_path=path,
                 relative_path=_format_relative_path(path),
@@ -1741,7 +1819,7 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
         saved.append(
             TelegramSavedAttachment(
                 kind="animation",
-                display_name=file_name,
+                display_name=path.name,
                 mime_type=animation.mime_type or "video/mp4",
                 absolute_path=path,
                 relative_path=_format_relative_path(path),
@@ -1761,7 +1839,7 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
         saved.append(
             TelegramSavedAttachment(
                 kind="video_note",
-                display_name=file_name,
+                display_name=path.name,
                 mime_type=video_note.mime_type or "video/mp4",
                 absolute_path=path,
                 relative_path=_format_relative_path(path),
@@ -1802,18 +1880,6 @@ async def _bind_serialized_attachments(
             kind=item.get("kind") or "document",
         )
         bound.append(record)
-    if bound:
-        try:
-            await TASK_SERVICE.log_task_event(
-                task.id,
-                event_type="attachment_added",
-                actor=actor,
-                field="attachment",
-                payload={"files": [r.path for r in bound]},
-            )
-        except ValueError:
-            # 任务不存在等异常忽略，调用方已做校验
-            pass
     return bound
 
 
@@ -3836,6 +3902,19 @@ def _trim_history_value(value: Optional[str], limit: int = HISTORY_DISPLAY_VALUE
     return text
 
 
+def _filter_history_records(records: Sequence[TaskHistoryRecord]) -> list[TaskHistoryRecord]:
+    """过滤掉无需展示的历史记录，例如附件绑定事件。"""
+
+    filtered: list[TaskHistoryRecord] = []
+    for item in records:
+        event = (item.event_type or "").strip().lower()
+        field = (item.field or "").strip().lower()
+        if event == "attachment_added" or field == "attachment":
+            continue
+        filtered.append(item)
+    return filtered
+
+
 def _history_field_label(field: Optional[str]) -> str:
     """返回历史字段的中文标签。"""
 
@@ -4045,7 +4124,7 @@ def _trim_history_lines_for_limit(lines: list[str], limit: int) -> list[str]:
 
 
 async def _build_history_context_for_model(task_id: str) -> tuple[str, int]:
-    history = await TASK_SERVICE.list_history(task_id)
+    history = _filter_history_records(await TASK_SERVICE.list_history(task_id))
     if not history:
         return "", 0
     selected = history[-MODEL_HISTORY_MAX_ITEMS:]
@@ -4690,7 +4769,7 @@ async def _load_task_context(
     notes = await TASK_SERVICE.list_notes(task_id)
     history: Sequence[TaskHistoryRecord]
     if include_history:
-        history = await TASK_SERVICE.list_history(task_id)
+        history = _filter_history_records(await TASK_SERVICE.list_history(task_id))
     else:
         history = ()
     return task, notes, history
@@ -8352,11 +8431,12 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
         return
     await callback.answer("已推送到模型")
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-    await _reply_to_chat(
+    await _send_model_push_preview(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        preview_block,
         reply_to=callback.message,
         parse_mode=preview_parse_mode,
+        reply_markup=_build_worker_main_keyboard(),
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=callback.message)
@@ -8404,11 +8484,12 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
         return
     await callback.answer("已推送到模型")
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-    await _reply_to_chat(
+    await _send_model_push_preview(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        preview_block,
         reply_to=origin_message,
         parse_mode=preview_parse_mode,
+        reply_markup=_build_worker_main_keyboard(),
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
@@ -8499,9 +8580,9 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
         return
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-    await _reply_to_chat(
+    await _send_model_push_preview(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        preview_block,
         reply_to=origin_message,
         parse_mode=preview_parse_mode,
         reply_markup=_build_worker_main_keyboard(),
@@ -8854,17 +8935,6 @@ async def on_task_attach_files(message: Message, state: FSMContext) -> None:
             kind=item.kind,
         )
         bound.append(record)
-    try:
-        await TASK_SERVICE.log_task_event(
-            task.id,
-            event_type="attachment_added",
-            actor=actor,
-            field="attachment",
-            payload={"files": [r.path for r in bound]},
-        )
-    except ValueError:
-        # 任务不存在等异常忽略，已在前面校验
-        pass
     await state.clear()
     detail_text, markup = await _render_task_detail(task.id)
     lines = ["附件已绑定到任务：", f"- 任务：{task.id}"]
