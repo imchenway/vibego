@@ -76,7 +76,6 @@ from tasks.fsm import (
     TaskListSearchStates,
     TaskNoteStates,
     TaskPushStates,
-    WxConfigStates,
 )
 from command_center import (
     CommandCreateStates,
@@ -652,6 +651,16 @@ def _unescape_if_already_escaped(text: str) -> str:
     if not _is_already_escaped(text):
         return text
     return _force_unescape_markdown(text)
+
+
+def _clean_user_text(text: Optional[str]) -> str:
+    """清理用户输入中可能存在的预转义反斜杠，保持后续渲染一致。"""
+    if text is None:
+        return ""
+    value = str(text)
+    if not value:
+        return ""
+    return _unescape_if_already_escaped(value)
 
 
 def _prepare_model_payload(text: str) -> str:
@@ -2093,119 +2102,10 @@ def _build_command_edit_cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
-def _build_wx_confirm_keyboard() -> ReplyKeyboardMarkup:
-    """微信配置确认键盘。"""
-
-    rows = [
-        [KeyboardButton(text="✅ 确认配置")],
-        [KeyboardButton(text="❌ 取消")],
-    ]
-    _number_reply_buttons(rows)
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
-
-
 def _is_global_command(command: CommandDefinition) -> bool:
     """判断命令是否来源于 master 通用配置。"""
 
     return (command.scope or "project") == GLOBAL_COMMAND_SCOPE
-
-
-def _wx_config_root() -> Path:
-    """计算微信 CI 配置根目录，保持与脚本一致。"""
-
-    if os.environ.get("MASTER_CONFIG_ROOT"):
-        return Path(os.environ["MASTER_CONFIG_ROOT"]).expanduser()
-    if os.environ.get("VIBEGO_CONFIG_DIR"):
-        return Path(os.environ["VIBEGO_CONFIG_DIR"]).expanduser()
-    xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return (Path(xdg) / "vibego").expanduser()
-
-
-def _wx_project_slug() -> str:
-    """生成项目 slug，避免路径穿越。"""
-
-    raw = PROJECT_NAME or PROJECT_SLUG or "default"
-    return raw.replace("/", "-") or "default"
-
-
-def _wx_env_file() -> Path:
-    """返回当前项目的 wx 配置文件路径。"""
-
-    return _wx_config_root() / "wx_ci" / f"{_wx_project_slug()}.env"
-
-
-def _wx_effective_config() -> dict[str, str]:
-    """读取 wx 配置文件并融合环境变量，便于缺失检测。"""
-
-    env_path = _wx_env_file()
-    file_config: dict[str, str] = {}
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            file_config[k.strip()] = v.strip()
-    appid = os.environ.get("WX_APPID") or file_config.get("WX_APPID", "")
-    pkp = os.environ.get("WX_PKP") or file_config.get("WX_PKP", "")
-    project_path = os.environ.get("PROJECT_PATH") or file_config.get("PROJECT_PATH", "")
-    return {"appid": appid, "pkp_path": pkp, "project_path": project_path, "env_file": str(env_path)}
-
-
-def _wx_missing_reasons(conf: dict[str, str]) -> list[str]:
-    """根据当前配置生成缺失原因列表。"""
-
-    reasons: list[str] = []
-    appid = (conf.get("appid") or "").strip()
-    pkp_path = Path((conf.get("pkp_path") or "").strip()).expanduser()
-    if not appid:
-        reasons.append("缺少 WX_APPID")
-    if not pkp_path:
-        reasons.append("缺少 WX_PKP（私钥路径）")
-    elif not pkp_path.is_file():
-        reasons.append(f"WX_PKP 文件不存在：{pkp_path}")
-    return reasons
-
-
-def _write_wx_env_file(appid: str, pkp_path: str, project_path: str) -> Path:
-    """写入 wx 配置文件，权限限制为 600。"""
-
-    env_path = _wx_env_file()
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    content = [
-        f"WX_APPID={appid}",
-        f"WX_PKP={pkp_path}",
-    ]
-    if project_path:
-        content.append(f"PROJECT_PATH={project_path}")
-    env_path.write_text("\n".join(content) + "\n", encoding="utf-8")
-    try:
-        env_path.chmod(0o600)
-    except Exception:
-        pass
-    return env_path
-
-
-async def _save_wx_private_key(message: Message, *, preferred_name: Optional[str] = None) -> Path:
-    """将用户发送的私钥文件落盘到安全目录，返回绝对路径。"""
-
-    if not message.document:
-        raise ValueError("未检测到可保存的私钥文件")
-    target_dir = _wx_config_root() / "wx_ci" / "keys" / _wx_project_slug()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    doc = message.document
-    file_name = preferred_name or (doc.file_name if doc else "private.key")
-    path = await _download_telegram_file(
-        message,
-        file_id=doc.file_id,
-        file_name_hint=file_name,
-        mime_type=doc.mime_type if doc else "application/octet-stream",
-        target_dir=target_dir,
-    )
-    try:
-        path.chmod(0o600)
-    except Exception:
-        pass
-    return path
 
 
 async def _list_combined_commands() -> List[CommandDefinition]:
@@ -2420,18 +2320,6 @@ async def _execute_command_definition(
 ) -> None:
     """执行命令并推送结果，记录审计日志。"""
 
-    if fsm_state is not None and command.name in {"wx-setup", "wx-preview"}:
-        handled = await _maybe_prompt_wx_config(
-            command=command,
-            reply_message=reply_message,
-            actor_user=actor_user,
-            service=service,
-            history_detail_prefix=history_detail_prefix,
-            fsm_state=fsm_state,
-        )
-        if handled:
-            return
-
     if not command.enabled:
         text = f"命令 `{_escape_markdown_text(command.name)}` 已停用，请先在“命令管理”中启用。"
         await _answer_with_markdown(reply_message, text)
@@ -2564,42 +2452,6 @@ async def _execute_command_definition(
     )
 
 
-async def _maybe_prompt_wx_config(
-    *,
-    command: CommandDefinition,
-    reply_message: Optional[Message],
-    actor_user: Optional[User],
-    service: CommandService,
-    history_detail_prefix: str,
-    fsm_state: Optional[FSMContext],
-) -> bool:
-    """缺少微信配置时启动交互引导，返回是否已接管流程。"""
-
-    if fsm_state is None:
-        return False
-    conf = _wx_effective_config()
-    missing = _wx_missing_reasons(conf)
-    if not missing:
-        return False
-    await fsm_state.clear()
-    await fsm_state.update_data(
-        wx_command_id=command.id,
-        wx_is_global=_is_global_command(command),
-        wx_history_prefix=history_detail_prefix,
-    )
-    lines = ["⚠️ 检测到微信小程序配置缺失："]
-    lines.extend(f"- {item}" for item in missing)
-    lines.append("请输入 WX_APPID（必填），发送“取消”可终止配置。")
-    await fsm_state.set_state(WxConfigStates.waiting_appid)
-    target = reply_message
-    if target is None and actor_user:
-        bot = current_bot()
-        target = await bot.send_message(actor_user.id, "微信配置缺失，请补全。")
-    if target:
-        await target.answer("\n".join(lines), reply_markup=_build_command_edit_cancel_keyboard())
-    return True
-
-
 async def _handle_command_trigger_message(message: Message, prompt: str) -> bool:
     """处理以别名触发的命令执行。"""
 
@@ -2630,38 +2482,6 @@ async def _handle_command_trigger_message(message: Message, prompt: str) -> bool
         fsm_state=None,
     )
     return True
-
-
-async def _resolve_wx_pkp_path_from_message(message: Message) -> Optional[str]:
-    """解析用户输入的 PKP 路径，支持文件上传或文本路径。"""
-
-    if message.document:
-        path = await _save_wx_private_key(message)
-        return str(path)
-    raw = (message.text or "").strip()
-    if not raw:
-        return None
-    candidate = Path(raw).expanduser()
-    if not candidate.is_absolute():
-        candidate = (ROOT_DIR_PATH / candidate).resolve()
-    if not candidate.is_file():
-        await message.answer(f"私钥文件不存在：{candidate}，请重新输入或上传文件。", reply_markup=_build_command_edit_cancel_keyboard())
-        return None
-    return candidate.as_posix()
-
-
-def _normalize_project_path(raw: str) -> Optional[str]:
-    """校验项目目录输入，返回绝对路径或空值。"""
-
-    cleaned = (raw or "").strip()
-    if not cleaned:
-        return ""
-    candidate = Path(cleaned).expanduser()
-    if not candidate.is_absolute():
-        candidate = (ROOT_DIR_PATH / candidate).resolve()
-    if not candidate.is_dir():
-        return None
-    return candidate.as_posix()
 
 
 async def _send_command_overview(message: Message, notice: Optional[str] = None) -> None:
@@ -3841,11 +3661,12 @@ def _format_task_detail(
 
     # 修复：描述字段智能清理预转义
     description_raw = task.description or "暂无"
+    description_cleaned = _clean_user_text(description_raw)
     if _IS_MARKDOWN_V2:
         # 智能清理预转义文本（保护代码块）
-        description_text = _unescape_if_already_escaped(description_raw)
+        description_text = description_cleaned
     else:
-        description_text = _escape_markdown_text(description_raw)
+        description_text = _escape_markdown_text(description_cleaned)
 
     lines.append(f"🖊️ 描述：{description_text}")
     lines.append(f"📅 创建时间：{_format_local_time(task.created_at)}")
@@ -3865,9 +3686,17 @@ def _format_task_detail(
         lines.append("📎 附件：")
         limit = TASK_ATTACHMENT_PREVIEW_LIMIT
         for idx, item in enumerate(attachments[:limit], 1):
-            display = _escape_markdown_text(item.display_name)
-            mime = _escape_markdown_text(item.mime_type)
-            path_text = _escape_markdown_text(item.path)
+            display_raw = _clean_user_text(item.display_name or "-")
+            mime_raw = _clean_user_text(item.mime_type or "-")
+            path_raw = _clean_user_text(item.path or "-")
+            if _IS_MARKDOWN_V2:
+                display = display_raw
+                mime = mime_raw
+                path_text = path_raw
+            else:
+                display = _escape_markdown_text(display_raw)
+                mime = _escape_markdown_text(mime_raw)
+                path_text = _escape_markdown_text(path_raw)
             lines.append(f"{idx}. {display}（{mime}）→ {path_text}")
         if len(attachments) > limit:
             lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开，可继续使用 /attach {task.id} 查看/追加")
@@ -4040,12 +3869,12 @@ def _format_history_description(item: TaskHistoryRecord) -> str:
             if supplement_raw is None and payload.get("has_supplement"):
                 supplement_raw = item.new_value
             if supplement_raw is not None:
-                supplement_text = _trim_history_value(str(supplement_raw))
+                supplement_text = _clean_user_text(_trim_history_value(str(supplement_raw)))
             detail_text = "；".join(details) if details else "已触发"
             if supplement_text and supplement_text != "-":
                 return f"{detail_text}\n补充描述：{supplement_text}"
             if payload.get("has_supplement") and (item.new_value or "").strip():
-                supplement_fallback = _trim_history_value(item.new_value)
+                supplement_fallback = _clean_user_text(_trim_history_value(item.new_value))
                 if supplement_fallback != "-":
                     return f"{detail_text}\n补充描述：{supplement_fallback}"
             return detail_text
@@ -7308,123 +7137,6 @@ async def on_global_command_execute_callback(callback: CallbackQuery, state: FSM
     )
 
 
-@router.message(WxConfigStates.waiting_appid)
-async def on_wx_config_appid(message: Message, state: FSMContext) -> None:
-    """收集 WX_APPID。"""
-
-    if _is_cancel_message(message.text):
-        await state.clear()
-        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
-        return
-    appid = (message.text or "").strip()
-    if not appid:
-        await message.answer("WX_APPID 不能为空，请重新输入，或发送“取消”退出。")
-        return
-    await state.update_data(wx_appid=appid)
-    await state.set_state(WxConfigStates.waiting_pkp)
-    await message.answer(
-        "请发送 WX_PKP 私钥文件（推荐）或回复绝对路径，路径需指向可读取的 private.key。\n发送“取消”可退出。",
-        reply_markup=_build_command_edit_cancel_keyboard(),
-    )
-
-
-@router.message(WxConfigStates.waiting_pkp)
-async def on_wx_config_pkp(message: Message, state: FSMContext) -> None:
-    """收集 WX_PKP（文件或路径）。"""
-
-    if _is_cancel_message(message.text):
-        await state.clear()
-        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
-        return
-    pkp_path = await _resolve_wx_pkp_path_from_message(message)
-    if not pkp_path:
-        return
-    await state.update_data(wx_pkp_path=pkp_path)
-    await state.set_state(WxConfigStates.waiting_project_path)
-    await message.answer(
-        "请输入小程序项目目录（可选），需包含 project.config.json。发送“跳过”或留空表示使用当前工作目录，发送“取消”退出。",
-        reply_markup=_build_description_keyboard(),
-    )
-
-
-@router.message(WxConfigStates.waiting_project_path)
-async def on_wx_config_project_path(message: Message, state: FSMContext) -> None:
-    """收集项目目录路径。"""
-
-    if _is_cancel_message(message.text):
-        await state.clear()
-        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
-        return
-    raw_text = message.text or ""
-    resolved = _resolve_reply_choice(raw_text, options=[SKIP_TEXT, "取消"])
-    project_path_raw = raw_text if resolved not in {SKIP_TEXT, "取消"} else ""
-    project_path = _normalize_project_path(project_path_raw)
-    if project_path is None:
-        await message.answer("项目目录不存在或不可访问，请重新输入有效路径，或发送“跳过”使用默认工作目录。")
-        return
-    await state.update_data(wx_project_path=project_path or "")
-    env_path = _wx_env_file()
-    data = await state.get_data()
-    summary_lines = [
-        "请确认微信小程序 CI 配置：",
-        f"- WX_APPID：{data.get('wx_appid')}",
-        f"- WX_PKP：{data.get('wx_pkp_path')}",
-        f"- PROJECT_PATH：{project_path or '默认（当前工作目录）'}",
-        f"- 配置文件：{env_path}",
-    ]
-    await state.set_state(WxConfigStates.waiting_confirm)
-    await message.answer("\n".join(summary_lines), reply_markup=_build_wx_confirm_keyboard())
-
-
-@router.message(WxConfigStates.waiting_confirm)
-async def on_wx_config_confirm(message: Message, state: FSMContext) -> None:
-    """确认配置并落盘，随后自动执行原命令。"""
-
-    if _is_cancel_message(message.text):
-        await state.clear()
-        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
-        return
-    options = ["✅ 确认配置", "❌ 取消"]
-    resolved = _resolve_reply_choice(message.text or "", options=options)
-    if resolved in {"❌ 取消"}:
-        await state.clear()
-        await message.answer("已取消配置。", reply_markup=_build_worker_main_keyboard())
-        return
-    if resolved not in {"✅ 确认配置"}:
-        await message.answer("请回复“确认配置”或“取消”。", reply_markup=_build_wx_confirm_keyboard())
-        return
-    data = await state.get_data()
-    appid = (data.get("wx_appid") or "").strip()
-    pkp_path = (data.get("wx_pkp_path") or "").strip()
-    project_path = data.get("wx_project_path") or ""
-    command_id = data.get("wx_command_id")
-    is_global = bool(data.get("wx_is_global"))
-    history_prefix = data.get("wx_history_prefix") or COMMAND_HISTORY_DETAIL_PREFIX
-    if not appid or not pkp_path:
-        await message.answer("配置数据缺失，请重新开始。", reply_markup=_build_worker_main_keyboard())
-        await state.clear()
-        return
-    env_path = _write_wx_env_file(appid, pkp_path, project_path)
-    await message.answer(
-        f"配置已保存：{env_path}\nAPPID: {appid}\nPKP: {pkp_path}\n项目目录：{project_path or '默认（当前工作目录）'}",
-        reply_markup=_build_worker_main_keyboard(),
-    )
-    await state.clear()
-    service: CommandService = GLOBAL_COMMAND_SERVICE if is_global else COMMAND_SERVICE
-    try:
-        command = await service.get_command(command_id)
-    except CommandNotFoundError:
-        await message.answer("原命令已不存在，请重新在命令列表中执行。")
-        return
-    await _execute_command_definition(
-        command=command,
-        reply_message=message,
-        trigger="配置向导",
-        actor_user=message.from_user,
-        service=service,
-        history_detail_prefix=history_prefix,
-        fsm_state=None,
-    )
 @router.callback_query(F.data == COMMAND_READONLY_CALLBACK)
 async def on_command_readonly_callback(callback: CallbackQuery) -> None:
     """提示通用命令只读。"""
