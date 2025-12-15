@@ -1,133 +1,38 @@
 #!/usr/bin/env bash
-# 微信小程序预览二维码生成脚本：读取项目级配置，调用 miniprogram-ci 输出图片并提示给 Telegram。
+# 基于微信开发者工具 CLI 生成预览二维码，默认输出到 ~/Downloads/wx-preview.jpg。
+set -eo pipefail
 
-set -euo pipefail
+CLI_BIN="/Applications/wechatwebdevtools.app/Contents/MacOS/cli"
+PROJECT_PATH="${PROJECT_PATH:-$(pwd)}"
+OUTPUT_QR="${OUTPUT_QR:-$HOME/Downloads/wx-preview.jpg}"
+PORT="${PORT:-12605}"
 
-# 解析配置根目录。
-config_root() {
-  local base
-  if [[ -n "${MASTER_CONFIG_ROOT:-}" ]]; then
-    base="$MASTER_CONFIG_ROOT"
-  elif [[ -n "${VIBEGO_CONFIG_DIR:-}" ]]; then
-    base="$VIBEGO_CONFIG_DIR"
-  else
-    local xdg_base
-    xdg_base="${XDG_CONFIG_HOME:-$HOME/.config}"
-    base="$xdg_base/vibego"
-  fi
-  printf '%s' "${base/#\~/$HOME}"
-}
+if [[ ! -x "$CLI_BIN" ]]; then
+  echo "[错误] 未找到微信开发者工具 CLI：$CLI_BIN" >&2
+  exit 1
+fi
 
-# 项目名 -> slug，避免路径穿越。
-project_slug() {
-  local raw
-  raw="${PROJECT_NAME:-${PROJECT_SLUG:-default}}"
-  raw="${raw:-default}"
-  printf '%s' "${raw//\//-}"
-}
+if [[ ! -d "$PROJECT_PATH" ]]; then
+  echo "[错误] 项目目录不存在：$PROJECT_PATH" >&2
+  exit 1
+fi
 
-# 从 env 文件加载默认值，再用调用时的环境变量覆盖。
-load_project_env() {
-  local env_file="$1"
-  local caller_appid caller_pkp caller_path
-  caller_appid="${WX_APPID:-}"
-  caller_pkp="${WX_PKP:-}"
-  caller_path="${PROJECT_PATH:-}"
+mkdir -p "$(dirname "$OUTPUT_QR")"
 
-  if [[ -f "$env_file" ]]; then
-    # shellcheck disable=SC1090
-    source "$env_file"
-  fi
+# 清理代理，避免请求走代理
+export http_proxy= https_proxy= all_proxy=
+export no_proxy="servicewechat.com,.weixin.qq.com"
 
-  WX_APPID="${caller_appid:-${WX_APPID:-}}"
-  WX_PKP="${caller_pkp:-${WX_PKP:-}}"
-  PROJECT_PATH="${caller_path:-${PROJECT_PATH:-}}"
-}
+VERSION="$(date +%Y%m%d%H%M%S)"
+echo "[信息] 生成预览，项目：$PROJECT_PATH，版本：$VERSION，输出：$OUTPUT_QR"
 
-# 将 base64 写为 PNG 文件。
-write_png_from_base64() {
-  local base64_path="$1"
-  local png_path="$2"
-  python - "$base64_path" "$png_path" <<'PY'
-import base64, pathlib, sys
+"$CLI_BIN" preview \
+  --project "$PROJECT_PATH" \
+  --upload-version "$VERSION" \
+  --qr-format image \
+  --qr-output "$OUTPUT_QR" \
+  --compile-condition '{}' \
+  --robot 1 \
+  --port "$PORT"
 
-src = pathlib.Path(sys.argv[1])
-dst = pathlib.Path(sys.argv[2])
-raw = src.read_text(encoding="utf-8").strip()
-if raw.startswith("data:image"):
-    raw = raw.split(",", 1)[1]
-dst.write_bytes(base64.b64decode(raw))
-print(dst)
-PY
-}
-
-main() {
-  local slug root env_file appid pkp project_path desc version tmp_dir base64_file png_file
-
-  if ! command -v node >/dev/null 2>&1; then
-    echo "[错误] 未检测到 node，请先安装 Node.js 16+。" >&2
-    exit 1
-  fi
-  if ! command -v npx >/dev/null 2>&1; then
-    echo "[错误] 未检测到 npx，请检查 npm/Node.js 安装。" >&2
-    exit 1
-  fi
-
-  slug="$(project_slug)"
-  root="$(config_root)"
-  env_file="$root/wx_ci/${slug}.env"
-
-  load_project_env "$env_file"
-
-  appid="${WX_APPID:-}"
-  pkp="${WX_PKP:-}"
-  project_path="${PROJECT_PATH:-}" 
-  desc="${DESC:-${WX_DESC:-tg-preview}}"
-  # 版本号必填：默认使用时间戳，可通过 WX_VERSION/UPLOAD_VERSION 覆盖
-  version="${WX_VERSION:-${UPLOAD_VERSION:-$(date +%Y%m%d%H%M%S)}}"
-
-  if [[ -z "$appid" || -z "$pkp" ]]; then
-    echo "[错误] 未找到 WX_APPID 或 WX_PKP，请先执行 wx-setup 配置（或在命令前传入环境变量）。" >&2
-    exit 1
-  fi
-  if [[ ! -f "$pkp" ]]; then
-    echo "[错误] WX_PKP 指向的文件不存在：$pkp" >&2
-    exit 1
-  fi
-
-  if [[ -z "$project_path" ]]; then
-    project_path="$(pwd)"
-  elif [[ "$project_path" != /* ]]; then
-    project_path="$(cd "$project_path" && pwd)"
-  fi
-
-  if [[ ! -d "$project_path" ]]; then
-    echo "[错误] 项目目录不存在：$project_path" >&2
-    exit 1
-  fi
-
-  tmp_dir="${TMPDIR:-/tmp}/vibego-wx/${slug}"
-  mkdir -p "$tmp_dir"
-  base64_file="$tmp_dir/preview.b64"
-  png_file="$tmp_dir/preview.png"
-
-  echo "[信息] 使用项目目录：$project_path"
-  echo "[信息] 生成预览二维码..."
-
-  npx miniprogram-ci preview \
-    --project-path "$project_path" \
-    --pkp "$pkp" \
-    --appid "$appid" \
-    --desc "$desc" \
-    --upload-version "$version" \
-    --qrcode-format base64 \
-    --qrcode-output-dest "$base64_file" \
-    >/dev/null
-
-  write_png_from_base64 "$base64_file" "$png_file"
-
-  echo "[完成] 预览二维码已生成：$png_file"
-  echo "TG_PHOTO_FILE: $png_file"
-}
-
-main "$@"
+echo "[完成] 预览二维码已生成：$OUTPUT_QR"

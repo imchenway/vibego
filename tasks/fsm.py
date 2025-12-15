@@ -69,12 +69,3 @@ class ProjectDeleteStates(StatesGroup):
     """Master 项目删除确认流程的状态定义。"""
 
     confirming = State()
-
-
-class WxConfigStates(StatesGroup):
-    """微信小程序 CI 配置引导流程的状态集。"""
-
-    waiting_appid = State()
-    waiting_pkp = State()
-    waiting_project_path = State()
-    waiting_confirm = State()
