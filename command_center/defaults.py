@@ -37,6 +37,14 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
         "aliases": ("sync-all",),
         "timeout": 1500,
     },
+    {
+        "name": "wx-dev-preview",
+        "title": "生成微信开发预览二维码",
+        "command": 'bash "$ROOT_DIR/scripts/gen_preview.sh"',
+        "description": "调用微信开发者工具 CLI，在当前工作目录生成预览二维码并回传 Telegram（需本机已登录 IDE 并开启服务端口）。",
+        "aliases": (),
+        "timeout": 600,
+    },
 )
 
 
