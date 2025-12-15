@@ -4,9 +4,11 @@ set -eo pipefail
 
 # 可通过环境变量覆盖 CLI 路径、项目目录、输出文件和端口
 CLI_BIN="${CLI_BIN:-/Applications/wechatwebdevtools.app/Contents/MacOS/cli}"
-PROJECT_PATH="${PROJECT_PATH:-$PWD}"
+# 优先使用模型工作目录，退回当前目录，避免机器人执行时项目路径为空
+PROJECT_PATH="${PROJECT_PATH:-${MODEL_WORKDIR:-$PWD}}"
 VERSION="${VERSION:-$(date +%Y%m%d%H%M%S)}"
-OUTPUT_QR="${OUTPUT_QR:-/tmp/wx-preview-${VERSION}.jpg}"
+# 默认输出到用户下载目录，避免 /tmp 目录权限或清理导致生成失败
+OUTPUT_QR="${OUTPUT_QR:-${HOME:-/tmp}/Downloads/wx-preview-${VERSION}.jpg}"
 PORT="${PORT:-12605}"
 
 # 基础校验
@@ -20,6 +22,7 @@ if [[ ! -d "$PROJECT_PATH" ]]; then
   exit 1
 fi
 
+# 确保输出目录存在
 mkdir -p "$(dirname "$OUTPUT_QR")"
 
 # 清理代理，避免请求走代理失败
