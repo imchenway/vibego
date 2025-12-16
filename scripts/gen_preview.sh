@@ -6,7 +6,8 @@ CLI_BIN="${CLI_BIN:-/Applications/wechatwebdevtools.app/Contents/MacOS/cli}"  # 
 PROJECT_PATH="${PROJECT_PATH:-}"                                              # 允许外部显式指定，未指定时后续自动探测
 VERSION="${VERSION:-$(date +%Y%m%d%H%M%S)}"
 PORT="${PORT:-12605}"
-PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-4}"                             # 自动探测目录的最大深度
+PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-6}"                             # 自动探测目录的最大深度（默认提升为 6，覆盖深层项目）
+PROJECT_BASE="${PROJECT_BASE:-${MODEL_WORKDIR:-$PWD}}"                        # 探测起始目录，可显式设置
 
 # 取得默认的下载目录，HOME 不存在时回退到 /tmp/Downloads
 _default_download_dir() {
@@ -19,10 +20,34 @@ _default_download_dir() {
 
 # 根据当前/模型工作目录自动探测小程序根目录（含 app.json 或 project.config.json）
 _resolve_project_path() {
-  local base="${MODEL_WORKDIR:-$PWD}"
+  local base="$PROJECT_BASE"
   local hint="${PROJECT_HINT:-}"
   local depth="$PROJECT_SEARCH_DEPTH"
   local candidates=()
+  local config_candidates=()
+
+  # 起始目录必须存在
+  if [[ -z "$base" || ! -d "$base" ]]; then
+    echo "[错误] 搜索基准目录不存在或不可读：$base" >&2
+    return 1
+  fi
+
+  # 解析 project.config.json 中的 miniprogramRoot，返回绝对路径（若存在且有效）
+  _extract_miniprogram_root() {
+    local cfg="$1"
+    python - <<'PY' "$cfg" 2>/dev/null
+import json, sys, os
+cfg_path = sys.argv[1]
+try:
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    root = data.get("miniprogramRoot") or ""
+    if isinstance(root, str) and root.strip():
+        print(root.strip())
+except Exception:
+    pass
+PY
+  }
 
   # 已显式传入且目录存在，直接使用
   if [[ -n "$PROJECT_PATH" && -d "$PROJECT_PATH" ]]; then
@@ -36,24 +61,44 @@ _resolve_project_path() {
       candidates+=( "$(dirname "$line")" )
     done < <(rg --files -g 'app.json' --max-depth "$depth" "$base" 2>/dev/null)
     while IFS= read -r line; do
-      candidates+=( "$(dirname "$line")" )
+      config_candidates+=( "$line" )
     done < <(rg --files -g 'project.config.json' --max-depth "$depth" "$base" 2>/dev/null)
   else
     while IFS= read -r line; do
       candidates+=( "$(dirname "$line")" )
-    done < <(find "$base" -maxdepth "$depth" -type f \( -name app.json -o -name project.config.json \) 2>/dev/null)
+    done < <(find "$base" -maxdepth "$depth" -type f -name app.json 2>/dev/null)
+    while IFS= read -r line; do
+      config_candidates+=( "$line" )
+    done < <(find "$base" -maxdepth "$depth" -type f -name project.config.json 2>/dev/null)
   fi
+
+  # 补充 project.config.json 对应的 miniprogramRoot 目录
+  for cfg in "${config_candidates[@]}"; do
+    [[ -z "$cfg" || ! -f "$cfg" ]] && continue
+    local cfg_dir
+    cfg_dir="$(dirname "$cfg")"
+    candidates+=( "$cfg_dir" )
+    local mini_root
+    mini_root="$(_extract_miniprogram_root "$cfg")"
+    if [[ -n "$mini_root" ]]; then
+      local resolved_root
+      resolved_root="$(cd "$cfg_dir" && cd "$mini_root" 2>/dev/null && pwd || true)"
+      [[ -n "$resolved_root" ]] && candidates+=( "$resolved_root" )
+    fi
+  done
 
   # 去重并挑选最佳匹配：优先包含 hint，其次路径最短
   if [[ ${#candidates[@]} -gt 0 ]]; then
     declare -A seen=()
     local best="" best_len=0
+    local listed=()
     for p in "${candidates[@]}"; do
       [[ -z "$p" || ! -d "$p" ]] && continue
       if [[ -n "${seen[$p]:-}" ]]; then
         continue
       fi
       seen["$p"]=1
+      listed+=( "$p" )
       local preferred=0
       if [[ -n "$hint" && "$p" == *"$hint"* ]]; then
         preferred=1
@@ -69,6 +114,13 @@ _resolve_project_path() {
         fi
       fi
     done
+    # 输出候选列表，便于排查
+    if [[ ${#listed[@]} -gt 1 ]]; then
+      echo "[提示] 检测到多个小程序候选目录（优先命中 PROJECT_HINT 其余按路径最短）：" >&2
+      for c in "${listed[@]}"; do
+        echo "  - $c" >&2
+      done
+    fi
     if [[ -n "$best" ]]; then
       echo "$best"
       return 0
@@ -87,7 +139,7 @@ fi
 # 解析项目目录：显式指定优先，未指定则自动探测
 RESOLVED_PROJECT_PATH="$(_resolve_project_path)" || true
 if [[ -z "$RESOLVED_PROJECT_PATH" ]]; then
-  echo "[错误] 未找到小程序项目目录，请在当前目录下提供 app.json 或 project.config.json，或显式设置 PROJECT_PATH/PROJECT_HINT。" >&2
+  echo "[错误] 未找到小程序项目目录，请在当前目录下提供 app.json 或 project.config.json，或显式设置 PROJECT_BASE/PROJECT_PATH/PROJECT_HINT。搜索基准：$PROJECT_BASE，深度：$PROJECT_SEARCH_DEPTH" >&2
   exit 1
 fi
 
