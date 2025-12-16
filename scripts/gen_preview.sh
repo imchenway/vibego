@@ -9,6 +9,23 @@ PORT="${PORT:-12605}"
 PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-6}"                             # 自动探测目录的最大深度（默认提升为 6，覆盖深层项目）
 PROJECT_BASE="${PROJECT_BASE:-${MODEL_WORKDIR:-$PWD}}"                        # 探测起始目录，可显式设置
 
+# 解析 project.config.json 中的 miniprogramRoot，返回绝对路径（若存在且有效）
+_extract_miniprogram_root() {
+  local cfg="$1"
+  python - <<'PY' "$cfg" 2>/dev/null
+import json, sys, os
+cfg_path = sys.argv[1]
+try:
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    root = data.get("miniprogramRoot") or ""
+    if isinstance(root, str) and root.strip():
+        print(root.strip())
+except Exception:
+    pass
+PY
+}
+
 # 取得默认的下载目录，HOME 不存在时回退到 /tmp/Downloads
 _default_download_dir() {
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
@@ -31,23 +48,6 @@ _resolve_project_path() {
     echo "[错误] 搜索基准目录不存在或不可读：$base" >&2
     return 1
   fi
-
-  # 解析 project.config.json 中的 miniprogramRoot，返回绝对路径（若存在且有效）
-  _extract_miniprogram_root() {
-    local cfg="$1"
-    python - <<'PY' "$cfg" 2>/dev/null
-import json, sys, os
-cfg_path = sys.argv[1]
-try:
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    root = data.get("miniprogramRoot") or ""
-    if isinstance(root, str) and root.strip():
-        print(root.strip())
-except Exception:
-    pass
-PY
-  }
 
   # 已显式传入且目录存在，直接使用
   if [[ -n "$PROJECT_PATH" && -d "$PROJECT_PATH" ]]; then
@@ -130,6 +130,31 @@ PY
   return 1
 }
 
+# 校验小程序目录是否可用：要求存在 app.json，或 project.config.json 指向的 miniprogramRoot 下存在 app.json
+_validate_project_root() {
+  local root="$1"
+  [[ -d "$root" ]] || { echo "[错误] 小程序目录不存在：$root" >&2; return 1; }
+
+  if [[ -f "$root/app.json" ]]; then
+    return 0
+  fi
+
+  local cfg="$root/project.config.json"
+  if [[ -f "$cfg" ]]; then
+    local mini_root resolved
+    mini_root="$(_extract_miniprogram_root "$cfg")"
+    if [[ -n "$mini_root" ]]; then
+      resolved="$(cd "$root" && cd "$mini_root" 2>/dev/null && pwd || true)"
+      if [[ -n "$resolved" && -f "$resolved/app.json" ]]; then
+        return 0
+      fi
+    fi
+  fi
+
+  echo "[错误] 目录缺少 app.json，且 project.config.json 未指向有效 miniprogramRoot：$root" >&2
+  return 1
+}
+
 # 基础校验
 if [[ ! -x "$CLI_BIN" ]]; then
   echo "[错误] 未找到微信开发者工具 CLI：$CLI_BIN" >&2
@@ -142,6 +167,7 @@ if [[ -z "$RESOLVED_PROJECT_PATH" ]]; then
   echo "[错误] 未找到小程序项目目录，请在当前目录下提供 app.json 或 project.config.json，或显式设置 PROJECT_BASE/PROJECT_PATH/PROJECT_HINT。搜索基准：$PROJECT_BASE，深度：$PROJECT_SEARCH_DEPTH" >&2
   exit 1
 fi
+_validate_project_root "$RESOLVED_PROJECT_PATH"
 
 # 设置输出路径，确保目录存在
 DEFAULT_DOWNLOAD_DIR="$(_default_download_dir)"
@@ -157,8 +183,9 @@ export no_proxy="servicewechat.com,.weixin.qq.com"
 echo "[信息] 生成预览，项目：$RESOLVED_PROJECT_PATH，版本：$VERSION，输出：$OUTPUT_QR"
 
 # 捕获 CLI 输出以便失败时回显
-CLI_LOG="$(mktemp /tmp/wx-preview-cli-XXXX.log)"
+CLI_LOG="$(mktemp -t wx-preview-cli)"
 set +e
+pushd "$RESOLVED_PROJECT_PATH" >/dev/null
 "$CLI_BIN" preview \
   --project "$RESOLVED_PROJECT_PATH" \
   --upload-version "$VERSION" \
@@ -168,6 +195,7 @@ set +e
   --robot 1 \
   --port "$PORT" >"$CLI_LOG" 2>&1
 CLI_STATUS=$?
+popd >/dev/null
 set -e
 
 if [[ $CLI_STATUS -ne 0 ]]; then
