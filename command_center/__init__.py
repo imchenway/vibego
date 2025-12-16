@@ -11,7 +11,7 @@ from .service import (
     CommandAliasConflictError,
     CommandHistoryNotFoundError,
 )
-from .fsm import CommandCreateStates, CommandEditStates
+from .fsm import CommandCreateStates, CommandEditStates, WxPreviewStates
 from .defaults import DEFAULT_GLOBAL_COMMANDS, REMOVED_GLOBAL_COMMAND_NAMES
 
 GLOBAL_COMMAND_SCOPE = "global"
@@ -38,6 +38,7 @@ __all__ = [
     "CommandHistoryNotFoundError",
     "CommandCreateStates",
     "CommandEditStates",
+    "WxPreviewStates",
     "DEFAULT_GLOBAL_COMMANDS",
     "REMOVED_GLOBAL_COMMAND_NAMES",
     "GLOBAL_COMMAND_SCOPE",

@@ -17,3 +17,9 @@ class CommandEditStates(StatesGroup):
     waiting_choice = State()
     waiting_value = State()
     waiting_aliases = State()
+
+
+class WxPreviewStates(StatesGroup):
+    """wx-dev-preview 交互流程。"""
+
+    waiting_choice = State()

@@ -80,6 +80,7 @@ from tasks.fsm import (
 from command_center import (
     CommandCreateStates,
     CommandEditStates,
+    WxPreviewStates,
     CommandDefinition,
     CommandHistoryRecord,
     CommandService,
@@ -2074,6 +2075,18 @@ COMMAND_INLINE_LIMIT = 12
 COMMAND_OUTPUT_MAX_CHARS = _env_int("COMMAND_OUTPUT_MAX_CHARS", 3500)
 COMMAND_STDERR_MAX_CHARS = _env_int("COMMAND_STDERR_MAX_CHARS", 1200)
 COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 5)
+WX_PREVIEW_COMMAND_NAME = "wx-dev-preview"
+WX_PREVIEW_CHOICE_PREFIX = "wxpreview:choose:"
+WX_PREVIEW_CANCEL = "wxpreview:cancel"
+
+
+@dataclass
+class WxPreviewCandidate:
+    """描述扫描到的可用小程序目录。"""
+
+    project_root: Path
+    app_dir: Path
+    source: Literal["current", "child"]
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
@@ -2209,6 +2222,146 @@ def _build_command_edit_keyboard(command: CommandDefinition) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def _read_miniprogram_root_from_config(config_path: Path) -> Optional[Path]:
+    """读取 project.config.json 中的 miniprogramRoot 并验证 app.json 存在。"""
+
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    root = data.get("miniprogramRoot")
+    if not isinstance(root, str) or not root.strip():
+        return None
+    candidate = (config_path.parent / root.strip()).resolve()
+    app_json = candidate / "app.json"
+    if candidate.is_dir() and app_json.is_file():
+        return candidate
+    return None
+
+
+def _resolve_miniprogram_app_dir(project_root: Path) -> Optional[Path]:
+    """判断目录是否为有效小程序根（含 app.json 或有效 miniprogramRoot）。"""
+
+    app_json = project_root / "app.json"
+    if app_json.is_file():
+        return app_json.parent
+    config_path = project_root / "project.config.json"
+    if config_path.is_file():
+        resolved = _read_miniprogram_root_from_config(config_path)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _detect_wx_preview_candidates(base: Path) -> List[WxPreviewCandidate]:
+    """扫描当前目录与一层子目录，找出包含 app.json 的项目根。"""
+
+    candidates: List[WxPreviewCandidate] = []
+    seen: set[str] = set()
+    owned_app_dirs: set[str] = set()
+    base_resolved = base.resolve()
+
+    def _add(project_root: Path, app_dir: Path, source: Literal["current", "child"]) -> None:
+        key = str(project_root.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(
+            WxPreviewCandidate(
+                project_root=project_root.resolve(),
+                app_dir=app_dir.resolve(),
+                source=source,
+            )
+        )
+
+    app_dir = _resolve_miniprogram_app_dir(base_resolved)
+    if app_dir:
+        owned_app_dirs.add(str(app_dir.resolve()))
+        _add(base_resolved, app_dir, "current")
+
+    with suppress(FileNotFoundError, PermissionError):
+        for child in sorted(base_resolved.iterdir()):
+            if not child.is_dir():
+                continue
+            app_dir = _resolve_miniprogram_app_dir(child)
+            if app_dir:
+                if str(app_dir.resolve()) in owned_app_dirs:
+                    continue
+                _add(child, app_dir, "child")
+
+    return candidates
+
+
+def _default_wx_preview_output_dir() -> Path:
+    """匹配脚本逻辑的默认输出目录。"""
+
+    home = os.environ.get("HOME")
+    if home and Path(home).is_dir():
+        return Path(home) / "Downloads"
+    return Path("/tmp/Downloads")
+
+
+def _build_wx_preview_prompt(base: Path, candidates: Sequence[WxPreviewCandidate]) -> str:
+    """渲染候选目录提示文案。"""
+
+    output_dir = _default_wx_preview_output_dir()
+    sample_file = output_dir / f"wx-preview-{int(time.time())}.jpg"
+    lines = [
+        "*请选择要生成预览的小程序目录*",
+        f"扫描范围：当前目录及一层子目录（基准：`{_escape_markdown_text(str(base))}`）",
+        f"默认输出目录：`{_escape_markdown_text(str(output_dir))}`",
+        f"输出文件示例：`{_escape_markdown_text(str(sample_file))}`",
+        "",
+        "候选目录：",
+    ]
+    for idx, candidate in enumerate(candidates, start=1):
+        label = "当前目录" if candidate.source == "current" else candidate.project_root.name
+        lines.append(
+            f"{idx}. {label} → `{_escape_markdown_text(str(candidate.project_root))}`"
+            f"（app.json：`{_escape_markdown_text(str(candidate.app_dir))}`）"
+        )
+    lines.append("_请选择其一或取消。_")
+    return "\n".join(lines)
+
+
+def _build_wx_preview_keyboard(candidates: Sequence[WxPreviewCandidate]) -> InlineKeyboardMarkup:
+    """为 wx-dev-preview 生成目录选择按钮。"""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    for idx, candidate in enumerate(candidates, start=1):
+        label = "当前目录" if candidate.source == "current" else candidate.project_root.name
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{idx}. {label}",
+                    callback_data=f"{WX_PREVIEW_CHOICE_PREFIX}{idx - 1}",
+                )
+            ]
+        )
+    inline_keyboard.append([InlineKeyboardButton(text="❌ 取消", callback_data=WX_PREVIEW_CANCEL)])
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def _wrap_wx_preview_command(command: CommandDefinition, project_root: Path) -> CommandDefinition:
+    """为 wx-dev-preview 注入 PROJECT_PATH/PROJECT_BASE。"""
+
+    quoted_root = shlex.quote(str(project_root))
+    return CommandDefinition(
+        id=command.id,
+        project_slug=command.project_slug,
+        name=command.name,
+        title=command.title,
+        command=f"PROJECT_PATH={quoted_root} PROJECT_BASE={quoted_root} {command.command}",
+        scope=command.scope,
+        description=command.description,
+        timeout=command.timeout,
+        enabled=command.enabled,
+        created_at=command.created_at,
+        updated_at=command.updated_at,
+        aliases=command.aliases,
+    )
+
+
 def _is_cancel_text(text: str) -> bool:
     """判断输入是否代表取消。"""
 
@@ -2306,6 +2459,59 @@ async def _run_shell_command(command_text: str, timeout: int) -> tuple[int, str,
     stdout_text = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
     stderr_text = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
     return process.returncode or 0, stdout_text, stderr_text, duration
+
+
+async def _maybe_handle_wx_preview(
+    *,
+    command: CommandDefinition,
+    reply_message: Optional[Message],
+    trigger: Optional[str],
+    actor_user: Optional[User],
+    service: CommandService,
+    history_detail_prefix: str,
+    fsm_state: Optional[FSMContext],
+) -> bool:
+    """对 wx-dev-preview 进行目录扫描与 FSM 选择。"""
+
+    if command.name != WX_PREVIEW_COMMAND_NAME:
+        return False
+    if fsm_state is None or reply_message is None:
+        return False
+
+    base_dir = _command_workdir()
+    candidates = _detect_wx_preview_candidates(base_dir)
+    if not candidates:
+        text = (
+            "未在当前目录或一层子目录发现包含 app.json 的小程序项目。\n"
+            f"基准目录：`{_escape_markdown_text(str(base_dir))}`\n"
+            "请切换到正确目录，或手动设置 PROJECT_PATH/PROJECT_HINT 后重试。"
+        )
+        await _answer_with_markdown(reply_message, text)
+        return True
+
+    await fsm_state.clear()
+    await fsm_state.set_state(WxPreviewStates.waiting_choice)
+    await fsm_state.update_data(
+        wx_preview={
+            "command_id": command.id,
+            "scope": command.scope,
+            "history_prefix": history_detail_prefix,
+            "trigger": trigger,
+            "candidates": [
+                {
+                    "project_root": str(item.project_root),
+                    "app_dir": str(item.app_dir),
+                    "source": item.source,
+                }
+                for item in candidates
+            ],
+        }
+    )
+
+    prompt = _build_wx_preview_prompt(base_dir, candidates)
+    markup = _build_wx_preview_keyboard(candidates)
+    await _answer_with_markdown(reply_message, prompt, reply_markup=markup)
+    return True
 
 
 async def _execute_command_definition(
@@ -2452,7 +2658,7 @@ async def _execute_command_definition(
     )
 
 
-async def _handle_command_trigger_message(message: Message, prompt: str) -> bool:
+async def _handle_command_trigger_message(message: Message, prompt: str, state: Optional[FSMContext]) -> bool:
     """处理以别名触发的命令执行。"""
 
     trigger = _extract_command_trigger(prompt)
@@ -2472,6 +2678,16 @@ async def _handle_command_trigger_message(message: Message, prompt: str) -> bool
     if " " in prompt.strip():
         await message.answer("命令暂不支持附带参数，请仅发送触发词。")
         return True
+    if await _maybe_handle_wx_preview(
+        command=command,
+        reply_message=message,
+        trigger=trigger,
+        actor_user=message.from_user,
+        service=service,
+        history_detail_prefix=history_prefix,
+        fsm_state=state,
+    ):
+        return True
     await _execute_command_definition(
         command=command,
         reply_message=message,
@@ -2479,7 +2695,7 @@ async def _handle_command_trigger_message(message: Message, prompt: str) -> bool
         actor_user=message.from_user,
         service=service,
         history_detail_prefix=history_prefix,
-        fsm_state=None,
+        fsm_state=state,
     )
     return True
 
@@ -7099,6 +7315,17 @@ async def on_command_execute_callback(callback: CallbackQuery, state: FSMContext
         await callback.answer("命令不存在", show_alert=True)
         await _refresh_command_overview(callback, notice="目标命令不存在，列表已刷新。")
         return
+    if await _maybe_handle_wx_preview(
+        command=command,
+        reply_message=callback.message,
+        trigger="按钮",
+        actor_user=callback.from_user,
+        service=COMMAND_SERVICE,
+        history_detail_prefix=COMMAND_HISTORY_DETAIL_PREFIX,
+        fsm_state=state,
+    ):
+        await callback.answer("请选择小程序目录")
+        return
     await callback.answer("正在执行命令…")
     await _execute_command_definition(
         command=command,
@@ -7125,6 +7352,17 @@ async def on_global_command_execute_callback(callback: CallbackQuery, state: FSM
         await callback.answer("通用命令不存在", show_alert=True)
         await _refresh_command_overview(callback, notice="通用命令已被 master 移除。")
         return
+    if await _maybe_handle_wx_preview(
+        command=command,
+        reply_message=callback.message,
+        trigger="按钮",
+        actor_user=callback.from_user,
+        service=GLOBAL_COMMAND_SERVICE,
+        history_detail_prefix=COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=state,
+    ):
+        await callback.answer("请选择小程序目录")
+        return
     await callback.answer("正在执行通用命令…")
     await _execute_command_definition(
         command=command,
@@ -7135,6 +7373,78 @@ async def on_global_command_execute_callback(callback: CallbackQuery, state: FSM
         history_detail_prefix=COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
         fsm_state=state,
     )
+
+
+@router.callback_query(F.data.startswith(WX_PREVIEW_CHOICE_PREFIX))
+async def on_wx_preview_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    """处理 wx-dev-preview 目录选择。"""
+
+    data = await state.get_data()
+    context = data.get("wx_preview") or {}
+    raw_idx = (callback.data or "")[len(WX_PREVIEW_CHOICE_PREFIX) :]
+    if not raw_idx.isdigit():
+        await callback.answer("选择无效", show_alert=True)
+        return
+    idx = int(raw_idx)
+    candidates_data = context.get("candidates") or []
+    if idx < 0 or idx >= len(candidates_data):
+        await callback.answer("候选不存在", show_alert=True)
+        return
+
+    command_id = context.get("command_id")
+    scope = context.get("scope") or "project"
+    service = GLOBAL_COMMAND_SERVICE if scope == GLOBAL_COMMAND_SCOPE else COMMAND_SERVICE
+    history_prefix = context.get("history_prefix") or COMMAND_HISTORY_DETAIL_PREFIX
+    trigger = context.get("trigger") or "按钮"
+
+    try:
+        command = await service.get_command(int(command_id))
+    except (TypeError, ValueError, CommandNotFoundError):
+        await state.clear()
+        await callback.answer("命令不存在，请刷新后重试。", show_alert=True)
+        return
+
+    candidate_data = candidates_data[idx]
+    project_root = Path(candidate_data.get("project_root", "")).expanduser()
+    if not project_root.is_dir():
+        await state.clear()
+        await callback.answer("目录已不存在，请重新触发命令。", show_alert=True)
+        if callback.message:
+            await callback.message.answer("所选目录不存在，请重新执行 wx-dev-preview。")
+        return
+    app_dir = _resolve_miniprogram_app_dir(project_root)
+    if app_dir is None:
+        await state.clear()
+        await callback.answer("目录缺少有效 app.json，请重新选择。", show_alert=True)
+        if callback.message:
+            await callback.message.answer(
+                f"目录 `{_escape_markdown_text(str(project_root))}` 缺少 app.json，已终止本次操作。",
+                parse_mode=_parse_mode_value(),
+            )
+        return
+
+    command_override = _wrap_wx_preview_command(command, project_root)
+    await state.clear()
+    await callback.answer("开始生成预览…")
+    await _execute_command_definition(
+        command=command_override,
+        reply_message=callback.message,
+        trigger=trigger,
+        actor_user=callback.from_user,
+        service=service,
+        history_detail_prefix=history_prefix,
+        fsm_state=state,
+    )
+
+
+@router.callback_query(F.data == WX_PREVIEW_CANCEL)
+async def on_wx_preview_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """取消 wx-dev-preview 交互。"""
+
+    await state.clear()
+    if callback.message:
+        await callback.message.answer("已取消 wx-dev-preview 执行。")
+    await callback.answer("已取消")
 
 
 @router.callback_query(F.data == COMMAND_READONLY_CALLBACK)
@@ -9531,7 +9841,7 @@ async def on_start(m: Message):
         await m.answer(_format_env_issue_message())
 
 @router.message(F.text)
-async def on_text(m: Message):
+async def on_text(m: Message, state: FSMContext):
     # 首次收到消息时自动记录 chat_id 到 state 文件
     _auto_record_chat_id(m.chat.id)
 
@@ -9542,7 +9852,7 @@ async def on_text(m: Message):
     if task_id_candidate:
         await _reply_task_detail_message(m, task_id_candidate)
         return
-    if await _handle_command_trigger_message(m, prompt):
+    if await _handle_command_trigger_message(m, prompt, state):
         return
     if prompt.startswith("/"):
         return
