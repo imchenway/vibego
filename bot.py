@@ -1512,6 +1512,23 @@ class PendingMediaGroupState:
 MEDIA_GROUP_STATE: dict[str, PendingMediaGroupState] = {}
 MEDIA_GROUP_LOCK = asyncio.Lock()
 
+
+@dataclass
+class PendingBugMediaGroupState:
+    """缺陷/任务流程中用于媒体组聚合的临时缓存。"""
+
+    chat_id: int
+    attachment_dir: Path
+    attachments: list[TelegramSavedAttachment]
+    captions: list[str]
+    waiters: list[asyncio.Future]
+    finalize_task: Optional[asyncio.Task] = None
+
+
+BUG_MEDIA_GROUP_STATE: dict[str, PendingBugMediaGroupState] = {}
+BUG_MEDIA_GROUP_LOCK = asyncio.Lock()
+BUG_MEDIA_GROUP_PROCESSED: set[str] = set()
+
 ATTACHMENT_USAGE_HINT = (
     "请按需读取附件：图片可使用 Codex 的 view_image 功能或 Claude Code 的文件引用能力；"
     "文本/日志可直接通过 @<路径> 打开；若需其他处理请说明。"
@@ -1859,6 +1876,132 @@ async def _collect_saved_attachments(message: Message, target_dir: Path) -> list
     if saved:
         _cleanup_attachment_storage()
     return saved
+
+
+async def _finalize_bug_media_group(media_group_id: str) -> None:
+    """在延迟后统一返回媒体组聚合结果，唤醒所有等待者。"""
+
+    try:
+        await asyncio.sleep(MEDIA_GROUP_AGGREGATION_DELAY)
+    except asyncio.CancelledError:
+        return
+
+    async with BUG_MEDIA_GROUP_LOCK:
+        state = BUG_MEDIA_GROUP_STATE.pop(media_group_id, None)
+
+    if state is None:
+        return
+
+    caption = "\n".join(state.captions).strip()
+    attachments = list(state.attachments)
+    for waiter in state.waiters:
+        if waiter.done():
+            continue
+        try:
+            waiter.set_result((attachments, caption))
+        except Exception:
+            continue
+
+
+async def _collect_bug_media_group(
+    message: Message,
+    attachment_dir: Path,
+) -> tuple[list[TelegramSavedAttachment], str]:
+    """收集媒体组内的全部附件与合并文本，用于缺陷/任务流程。
+
+    设计要点：
+    - 媒体组内的每条消息都会加入同一聚合缓存，等待短暂延迟后一次性返回；
+    - 返回的文本为媒体组所有 caption/text 合并结果，附件为整组去重后的列表；
+    - 防止同一媒体组被重复处理时遗漏图片或重复绑定。
+    """
+
+    media_group_id = message.media_group_id
+    text_part = (message.caption or message.text or "").strip()
+
+    if not media_group_id:
+        attachments = await _collect_saved_attachments(message, attachment_dir)
+        return attachments, text_part
+
+    async with BUG_MEDIA_GROUP_LOCK:
+        state = BUG_MEDIA_GROUP_STATE.get(media_group_id)
+        if state is None:
+            state = PendingBugMediaGroupState(
+                chat_id=message.chat.id,
+                attachment_dir=attachment_dir,
+                attachments=[],
+                captions=[],
+                waiters=[],
+            )
+            BUG_MEDIA_GROUP_STATE[media_group_id] = state
+        loop = asyncio.get_event_loop()
+        waiter: asyncio.Future = loop.create_future()
+        state.waiters.append(waiter)
+
+    attachments = await _collect_saved_attachments(message, state.attachment_dir)
+
+    async with BUG_MEDIA_GROUP_LOCK:
+        state = BUG_MEDIA_GROUP_STATE.get(media_group_id)
+        if state is None:
+            # 理论上不会发生，若被清理则直接返回当前消息结果
+            return attachments, text_part
+        state.attachments.extend(attachments)
+        if text_part:
+            state.captions.append(text_part)
+        if state.finalize_task and not state.finalize_task.done():
+            state.finalize_task.cancel()
+        state.finalize_task = asyncio.create_task(_finalize_bug_media_group(media_group_id))
+
+    all_attachments, merged_caption = await waiter
+    return all_attachments, merged_caption
+
+
+async def _collect_generic_media_group(
+    message: Message,
+    attachment_dir: Path,
+    *,
+    processed: set[str],
+) -> tuple[list[TelegramSavedAttachment], str, set[str]]:
+    """通用媒体组聚合助手，供任务创建/描述补充等流程使用。"""
+
+    media_group_id = message.media_group_id
+    text_part = (message.caption or message.text or "").strip()
+
+    if not media_group_id:
+        attachments = await _collect_saved_attachments(message, attachment_dir)
+        return attachments, text_part, processed
+
+    async with BUG_MEDIA_GROUP_LOCK:
+        state = BUG_MEDIA_GROUP_STATE.get(media_group_id)
+        if state is None:
+            state = PendingBugMediaGroupState(
+                chat_id=message.chat.id,
+                attachment_dir=attachment_dir,
+                attachments=[],
+                captions=[],
+                waiters=[],
+            )
+            BUG_MEDIA_GROUP_STATE[media_group_id] = state
+        loop = asyncio.get_event_loop()
+        waiter: asyncio.Future = loop.create_future()
+        state.waiters.append(waiter)
+
+    attachments = await _collect_saved_attachments(message, state.attachment_dir)
+
+    async with BUG_MEDIA_GROUP_LOCK:
+        state = BUG_MEDIA_GROUP_STATE.get(media_group_id)
+        if state is None:
+            return attachments, text_part, processed
+        state.attachments.extend(attachments)
+        if text_part:
+            state.captions.append(text_part)
+        if state.finalize_task and not state.finalize_task.done():
+            state.finalize_task.cancel()
+        state.finalize_task = asyncio.create_task(_finalize_bug_media_group(media_group_id))
+
+    all_attachments, merged_caption = await waiter
+    if media_group_id not in processed:
+        processed.add(media_group_id)
+    return all_attachments, merged_caption, processed
 
 
 def _serialize_saved_attachment(item: TelegramSavedAttachment) -> dict[str, str]:
@@ -4619,11 +4762,13 @@ def _build_bug_confirm_keyboard() -> ReplyKeyboardMarkup:
 def _collect_message_payload(
     message: Message,
     attachments: Sequence[TelegramSavedAttachment] | None = None,
+    *,
+    text_override: Optional[str] = None,
 ) -> str:
     """提取消息中的文字与附件信息，优先输出已落地的本地路径。"""
 
     parts: list[str] = []
-    text = _normalize_choice_token(message.text or message.caption)
+    text = _normalize_choice_token(text_override if text_override is not None else (message.text or message.caption))
     if text:
         parts.append(text)
 
@@ -8052,6 +8197,7 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(task_type=task_type)
+    await state.update_data(processed_media_groups=[])
     await state.set_state(TaskCreateStates.waiting_description)
     await message.answer(
         (
@@ -8066,12 +8212,19 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
 async def on_task_create_description(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     attachment_dir = _attachment_dir_for_message(message)
-    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    processed_groups = set(data.get("processed_media_groups") or [])
+    saved_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
     if saved_attachments:
         pending = list(data.get("pending_attachments") or [])
         pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
         await state.update_data(pending_attachments=pending)
-    raw_text = message.text or ""
+    raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "取消"]
     resolved = _resolve_reply_choice(raw_text, options=options)
@@ -8087,7 +8240,7 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
         return
     description: str = data.get("description", "")
     if trimmed and resolved != SKIP_TEXT:
-        description = raw_text.strip()
+        description = trimmed
     await state.update_data(description=description)
     await state.set_state(TaskCreateStates.waiting_confirm)
     data = await state.get_data()
@@ -8116,9 +8269,16 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
     lowered = stripped_token.lower()
     # 先处理附件追加场景，支持媒体组后续消息继续补充
     attachment_dir = _attachment_dir_for_message(message)
-    extra_attachments = await _collect_saved_attachments(message, attachment_dir)
     data = await state.get_data()
-    extra_text = _normalize_choice_token(message.text or "")
+    processed_groups = set(data.get("processed_media_groups") or [])
+    extra_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
+    extra_text = _normalize_choice_token(text_part or message.text or "")
     is_cancel = resolved == options[1] or lowered == "取消"
     is_confirm = resolved == options[0] or lowered in {"确认", "确认创建"}
     if extra_attachments or (extra_text and not is_cancel and not is_confirm):
@@ -8883,7 +9043,7 @@ async def _start_attachment_collection(
     task_id: str,
 ) -> None:
     await state.clear()
-    await state.update_data(task_id=task_id)
+    await state.update_data(task_id=task_id, processed_media_groups=[])
     await state.set_state(TaskAttachmentStates.waiting_files)
     await _answer_with_markdown(message, _build_attachment_prompt(task_id), reply_markup=_build_worker_main_keyboard())
 
@@ -8942,7 +9102,14 @@ async def on_task_attach_files(message: Message, state: FSMContext) -> None:
         await message.answer("任务不存在，请重新执行 /attach。", reply_markup=_build_worker_main_keyboard())
         return
     attachment_dir = _attachment_dir_for_message(message)
-    saved = await _collect_saved_attachments(message, attachment_dir)
+    processed_groups = set(data.get("processed_media_groups") or [])
+    saved, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
     if not saved:
         await message.answer("未检测到附件，请发送图片/文件等，或输入“取消”退出。")
         return
@@ -9222,6 +9389,7 @@ async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None
         description="",
         reproduction="",
         logs="",
+        processed_media_groups=[],
     )
     await state.set_state(TaskBugReportStates.waiting_description)
     await callback.answer("请描述缺陷")
@@ -9241,6 +9409,7 @@ async def on_task_bug_description(message: Message, state: FSMContext) -> None:
         await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
         return
     data = await state.get_data()
+    processed_groups = set(data.get("processed_media_groups") or [])
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
@@ -9253,11 +9422,19 @@ async def on_task_bug_description(message: Message, state: FSMContext) -> None:
         return
     actor = data.get("reporter") or _actor_from_message(message)
     attachment_dir = _attachment_dir_for_message(message)
-    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    saved_attachments, text_part = await _collect_bug_media_group(message, attachment_dir)
+    media_group_id = message.media_group_id
+    if media_group_id:
+        async with BUG_MEDIA_GROUP_LOCK:
+            if media_group_id in BUG_MEDIA_GROUP_PROCESSED:
+                return
+            BUG_MEDIA_GROUP_PROCESSED.add(media_group_id)
+        processed_groups.add(media_group_id)
+        await state.update_data(processed_media_groups=list(processed_groups))
     if saved_attachments:
         serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
         await _bind_serialized_attachments(task, serialized, actor=actor)
-    content = _collect_message_payload(message, saved_attachments)
+    content = _collect_message_payload(message, saved_attachments, text_override=text_part)
     if not content:
         await message.answer(
             "缺陷描述不能为空，请重新输入：",
@@ -9266,7 +9443,7 @@ async def on_task_bug_description(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(
         description=content,
-        reporter=_actor_from_message(message),
+        reporter=actor,
     )
     await state.set_state(TaskBugReportStates.waiting_reproduction)
     await message.answer(_build_bug_repro_prompt(), reply_markup=_build_description_keyboard())
@@ -9284,9 +9461,18 @@ async def on_task_bug_reproduction(message: Message, state: FSMContext) -> None:
     resolved = _resolve_reply_choice(message.text or "", options=options)
     reproduction = ""
     data = await state.get_data()
+    processed_groups = set(data.get("processed_media_groups") or [])
     task_id = data.get("task_id")
     attachment_dir = _attachment_dir_for_message(message)
-    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    saved_attachments, text_part = await _collect_bug_media_group(message, attachment_dir)
+    media_group_id = message.media_group_id
+    if media_group_id:
+        async with BUG_MEDIA_GROUP_LOCK:
+            if media_group_id in BUG_MEDIA_GROUP_PROCESSED:
+                return
+            BUG_MEDIA_GROUP_PROCESSED.add(media_group_id)
+        processed_groups.add(media_group_id)
+        await state.update_data(processed_media_groups=list(processed_groups))
     if saved_attachments and task_id:
         task = await TASK_SERVICE.get_task(task_id)
         if task:
@@ -9294,7 +9480,7 @@ async def on_task_bug_reproduction(message: Message, state: FSMContext) -> None:
             serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
             await _bind_serialized_attachments(task, serialized, actor=actor)
     if resolved not in {SKIP_TEXT, "取消"}:
-        reproduction = _collect_message_payload(message, saved_attachments)
+        reproduction = _collect_message_payload(message, saved_attachments, text_override=text_part)
     await state.update_data(reproduction=reproduction)
     await state.set_state(TaskBugReportStates.waiting_logs)
     await message.answer(_build_bug_log_prompt(), reply_markup=_build_description_keyboard())
@@ -9311,6 +9497,7 @@ async def on_task_bug_logs(message: Message, state: FSMContext) -> None:
     options = [SKIP_TEXT, "取消"]
     resolved = _resolve_reply_choice(message.text or "", options=options)
     data = await state.get_data()
+    processed_groups = set(data.get("processed_media_groups") or [])
     task_id = data.get("task_id")
     if not task_id:
         await state.clear()
@@ -9323,10 +9510,18 @@ async def on_task_bug_logs(message: Message, state: FSMContext) -> None:
         return
     actor = data.get("reporter") or _actor_from_message(message)
     attachment_dir = _attachment_dir_for_message(message)
-    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+    saved_attachments, text_part = await _collect_bug_media_group(message, attachment_dir)
+    media_group_id = message.media_group_id
+    if media_group_id:
+        async with BUG_MEDIA_GROUP_LOCK:
+            if media_group_id in BUG_MEDIA_GROUP_PROCESSED:
+                return
+            BUG_MEDIA_GROUP_PROCESSED.add(media_group_id)
+        processed_groups.add(media_group_id)
+        await state.update_data(processed_media_groups=list(processed_groups))
     logs = ""
     if resolved not in {SKIP_TEXT, "取消"}:
-        logs = _collect_message_payload(message, saved_attachments)
+        logs = _collect_message_payload(message, saved_attachments, text_override=text_part)
     if saved_attachments:
         serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
         await _bind_serialized_attachments(task, serialized, actor=actor)
@@ -9372,7 +9567,16 @@ async def on_task_bug_confirm(message: Message, state: FSMContext) -> None:
         await message.answer("已取消缺陷上报。", reply_markup=_build_worker_main_keyboard())
         return
     attachment_dir = _attachment_dir_for_message(message)
-    extra_attachments = await _collect_saved_attachments(message, attachment_dir)
+    processed_groups = set(data.get("processed_media_groups") or [])
+    extra_attachments, text_part = await _collect_bug_media_group(message, attachment_dir)
+    media_group_id = message.media_group_id
+    if media_group_id:
+        async with BUG_MEDIA_GROUP_LOCK:
+            if media_group_id in BUG_MEDIA_GROUP_PROCESSED:
+                return
+            BUG_MEDIA_GROUP_PROCESSED.add(media_group_id)
+        processed_groups.add(media_group_id)
+        await state.update_data(processed_media_groups=list(processed_groups))
     reporter = data.get("reporter") or _actor_from_message(message)
     if extra_attachments:
         serialized = [_serialize_saved_attachment(item) for item in extra_attachments]
@@ -9386,6 +9590,9 @@ async def on_task_bug_confirm(message: Message, state: FSMContext) -> None:
         updated_logs = data.get("logs", "")
         if normalized and not is_confirm:
             updated_logs = f"{updated_logs}\n{normalized}" if updated_logs else normalized
+        # 若是媒体组，统一使用合并后的文本，避免遗漏 caption
+        if text_part and not normalized:
+            updated_logs = f"{updated_logs}\n{text_part}" if updated_logs else text_part
         await state.update_data(logs=updated_logs)
         description = data.get("description", "")
         reproduction = data.get("reproduction", "")

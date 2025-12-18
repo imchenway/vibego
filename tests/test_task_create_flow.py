@@ -59,6 +59,7 @@ class DummyMessage:
         self.animation = None
         self.video_note = None
         self.caption = None
+        self.media_group_id = None
 
     async def answer(self, text, parse_mode=None, reply_markup=None, **kwargs):
         self.calls.append(
