@@ -257,18 +257,54 @@ fi
 
 mkdir -p "$RUNTIME_ROOT"
 
-if [[ ! -d "$VENV_DIR" ]]; then
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+if [[ -n "${VIBEGO_WORKER_BOOT_ID:-}" ]]; then
+  # master 会注入 boot_id，用于健康检查在追加日志场景下避免误判旧握手日志。
+  echo "[run-bot] boot_id=$VIBEGO_WORKER_BOOT_ID"
 fi
-# shellcheck disable=SC1091
-source "$VENV_DIR/bin/activate"
+
+ensure_runtime_venv() {
+  # 运行时虚拟环境可能因 Homebrew 升级 Python 导致解释器断链（例如指向旧的 Cellar 路径），
+  # 此时继续使用会触发 "exec: python: not found"；最稳妥的策略是直接重建 venv。
+  if [[ ! -d "$VENV_DIR" ]]; then
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    return 0
+  fi
+
+  local venv_python="$VENV_DIR/bin/python"
+  local venv_pip="$VENV_DIR/bin/pip"
+
+  if [[ ! -x "$venv_python" ]]; then
+    echo "[run-bot] 检测到运行时 venv 异常：python 不可用，将自动重建：$venv_python" >&2
+    rm -rf "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    return 0
+  fi
+
+  if ! "$venv_python" -V >/dev/null 2>&1; then
+    echo "[run-bot] 检测到运行时 venv 异常：python 无法执行，将自动重建：$venv_python" >&2
+    rm -rf "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    return 0
+  fi
+
+  if [[ ! -x "$venv_pip" ]] || ! "$venv_python" -m pip --version >/dev/null 2>&1; then
+    echo "[run-bot] 检测到运行时 venv 异常：pip 不可用，将自动重建：$venv_pip" >&2
+    rm -rf "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    return 0
+  fi
+}
+
+ensure_runtime_venv
+VENV_PYTHON="$VENV_DIR/bin/python"
+export VIRTUAL_ENV="$VENV_DIR"
 REQUIREMENTS_PATH="${VIBEGO_REQUIREMENTS_PATH:-$SOURCE_ROOT/scripts/requirements.txt}"
 if [[ ! -f "$REQUIREMENTS_PATH" ]]; then
   echo "[run-bot] 未找到依赖清单: $REQUIREMENTS_PATH" >&2
   exit 1
 fi
 if [[ ! -f "$VENV_DIR/.requirements.installed" ]] || [[ "$REQUIREMENTS_PATH" -nt "$VENV_DIR/.requirements.installed" ]]; then
-  pip install -r "$REQUIREMENTS_PATH" >/dev/null
+  "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_PATH" >/dev/null
   touch "$VENV_DIR/.requirements.installed"
 fi
 
@@ -302,4 +338,4 @@ fi
 "$SOURCE_ROOT/scripts/start_tmux_codex.sh" --kill >/dev/null
 
 echo $$ > "$PID_FILE"
-exec python "$SOURCE_ROOT/bot.py"
+exec "$VENV_PYTHON" "$SOURCE_ROOT/bot.py"

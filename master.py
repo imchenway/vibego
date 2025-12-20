@@ -23,6 +23,7 @@ import re
 import threading
 import unicodedata
 import urllib.request
+import uuid
 from urllib.error import URLError
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -255,6 +256,8 @@ WORKER_HEALTH_LOG_TAIL = int(os.environ.get("WORKER_HEALTH_LOG_TAIL", "80"))
 HANDSHAKE_MARKERS = (
     "Telegram 连接正常",
 )
+WORKER_BOOT_ID_ENV = "VIBEGO_WORKER_BOOT_ID"
+WORKER_BOOT_ID_LOG_PREFIX = "[run-bot] boot_id="
 DELETE_CONFIRM_TIMEOUT = int(os.environ.get("MASTER_DELETE_CONFIRM_TIMEOUT", "120"))
 
 _ENV_FILE_RAW = os.environ.get("MASTER_ENV_FILE")
@@ -302,6 +305,9 @@ _UPGRADE_RESTART_COMMAND = os.environ.get(
     "vibego stop && vibego start",
 )
 _UPGRADE_RESTART_DELAY = float(os.environ.get("MASTER_UPGRADE_RESTART_DELAY", "2.0"))
+_UPGRADE_RESTART_LOG_PATH = Path(
+    os.environ.get("MASTER_UPGRADE_RESTART_LOG_PATH", str(LOG_DIR / "upgrade_restart.log"))
+)
 _UPGRADE_REPORT_PATH = Path(
     os.environ.get("MASTER_UPGRADE_REPORT_PATH", STATE_DIR / "upgrade_report.json")
 )
@@ -1294,6 +1300,7 @@ def _persist_upgrade_report(
         "elapsed": round(elapsed, 3),
         "restart_command": restart_command,
         "restart_delay": restart_delay,
+        "restart_log_path": str(_UPGRADE_RESTART_LOG_PATH),
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "version": __version__,
         "old_version": old_version,
@@ -1313,14 +1320,31 @@ def _spawn_detached_restart(command: str, delay: float) -> Optional[subprocess.P
         return None
     safe_delay = max(0.0, delay)
     shell_command = f"sleep {safe_delay:.3f} && {cleaned}"
-    return subprocess.Popen(
-        ["bash", "-lc", shell_command],
-        cwd=str(ROOT_DIR),
-        stdin=subprocess.DEVNULL,  # 重启命令也在后台执行，stdin 绑定 /dev/null 避免描述符被关闭
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    log_fp = None
+    try:
+        _UPGRADE_RESTART_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        log_fp = _UPGRADE_RESTART_LOG_PATH.open("a", encoding="utf-8")
+        log_fp.write(
+            f"\n[{_utcnow().isoformat()}] 安排升级后重启：delay={safe_delay:.3f}s command={cleaned}\n"
+        )
+        log_fp.flush()
+    except OSError:
+        if log_fp:
+            log_fp.close()
+        log_fp = None
+
+    try:
+        return subprocess.Popen(
+            ["bash", "-lc", shell_command],
+            cwd=str(ROOT_DIR),
+            stdin=subprocess.DEVNULL,  # 重启命令也在后台执行，stdin 绑定 /dev/null 避免描述符被关闭
+            stdout=log_fp or subprocess.DEVNULL,
+            stderr=log_fp or subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    finally:
+        if log_fp:
+            log_fp.close()
 
 
 async def _announce_upgrade_completion(
@@ -1350,6 +1374,7 @@ async def _announce_upgrade_completion(
         "升级流程完成（pipx 阶段） ✅\n"
         f"pipx upgrade 耗时 {elapsed:.1f} 秒，将在 {_UPGRADE_RESTART_DELAY:.1f} 秒后执行：{restart_command}\n"
         "master 即将重启并短暂离线，稍后使用 /start 验证状态。\n\n"
+        f"重启日志：{_UPGRADE_RESTART_LOG_PATH}\n\n"
         f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
     )
     await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
@@ -1926,23 +1951,37 @@ class MasterManager:
         tail = data[-lines:]
         return "".join(tail).rstrip()
 
-    def _log_contains_handshake(self, path: Path) -> bool:
-        """判断日志中是否包含 Telegram 握手成功的标记。"""
+    def _log_contains_handshake(self, path: Path, *, boot_id: Optional[str] = None) -> bool:
+        """判断日志中是否包含 Telegram 握手成功的标记。
+
+        run_bot.sh 默认以追加模式写入 run_bot.log，旧版本的“握手成功”日志可能导致误判。
+        若提供 boot_id，则只在对应 boot_id 之后的日志片段中匹配握手标记。
+        """
 
         if not path.exists():
             return False
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception as exc:
-            log.warning(
-                "读取日志失败: %s",
-                exc,
-                extra={"log_path": str(path)},
-            )
+
+        # 仅扫描尾部，避免大文件在健康检查轮询中频繁全量读取。
+        text = self._log_tail(path, lines=max(WORKER_HEALTH_LOG_TAIL, 200))
+        if not text:
             return False
+
+        if boot_id:
+            token = f"{WORKER_BOOT_ID_LOG_PREFIX}{boot_id}"
+            idx = text.rfind(token)
+            if idx < 0:
+                return False
+            text = text[idx:]
+
         return any(marker in text for marker in HANDSHAKE_MARKERS)
 
-    async def _health_check_worker(self, cfg: ProjectConfig, model: str) -> Optional[str]:
+    async def _health_check_worker(
+        self,
+        cfg: ProjectConfig,
+        model: str,
+        *,
+        boot_id: Optional[str] = None,
+    ) -> Optional[str]:
         """验证 worker 启动后的健康状态，返回失败描述。"""
 
         log_dir = LOG_ROOT_PATH / model / cfg.project_slug
@@ -1974,7 +2013,7 @@ class MasterManager:
                         extra={"pid_path": str(pid_path)},
                     )
 
-            if self._log_contains_handshake(run_log):
+            if self._log_contains_handshake(run_log, boot_id=boot_id):
                 return None
 
             await asyncio.sleep(WORKER_HEALTH_INTERVAL)
@@ -2024,6 +2063,7 @@ class MasterManager:
             raise RuntimeError(message)
         chat_id_env = state.chat_id or cfg.allowed_chat_id
         env = os.environ.copy()
+        boot_id = uuid.uuid4().hex
         env.update(
             {
                 "BOT_TOKEN": cfg.bot_token,
@@ -2034,6 +2074,7 @@ class MasterManager:
                 "CLAUDE_WORKDIR": cfg.workdir or env.get("CLAUDE_WORKDIR", ""),
                 "GEMINI_WORKDIR": cfg.workdir or env.get("GEMINI_WORKDIR", ""),
                 "STATE_FILE": str(STATE_PATH),
+                WORKER_BOOT_ID_ENV: boot_id,
             }
         )
         cmd = [str(RUN_SCRIPT), "--model", target_model, "--project", cfg.project_slug]
@@ -2074,7 +2115,7 @@ class MasterManager:
                 extra={"project": cfg.project_slug, "model": target_model},
             )
             raise RuntimeError(message)
-        health_issue = await self._health_check_worker(cfg, target_model)
+        health_issue = await self._health_check_worker(cfg, target_model, boot_id=boot_id)
         if health_issue:
             self.state_store.update(cfg.project_slug, status="stopped")
             log.error(
