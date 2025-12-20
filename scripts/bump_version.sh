@@ -21,13 +21,61 @@ BUMP_CMD="$RUNTIME_DIR/.venv/bin/bump-my-version"
 # pipx fallback 标记
 USE_PIPEX=false
 
+# 检测脚本型可执行文件的 shebang 是否指向不存在的解释器。
+# 典型场景：运行时 venv 被重建/迁移后，bump-my-version 的首行仍指向旧的 python 路径，
+# 执行时会报：bad interpreter: No such file or directory (exit=126)。
+is_broken_shebang() {
+    local candidate="$1"
+    [[ -f "$candidate" && -x "$candidate" ]] || return 1
+    local first_line=""
+    first_line="$(head -n 1 "$candidate" 2>/dev/null || true)"
+    [[ "$first_line" == "#!"* ]] || return 1
+    local shebang="${first_line#\#!}"
+    # 兼容 CRLF
+    shebang="${shebang%%$'\r'}"
+    local interpreter="${shebang%% *}"
+    # /usr/bin/env 由系统提供，后续由 PATH 解析真正解释器，无法在此处强校验
+    if [[ "$interpreter" == "/usr/bin/env" || "$interpreter" == "env" ]]; then
+        return 1
+    fi
+    # 仅对绝对路径做存在性校验
+    if [[ "$interpreter" == /* && ! -x "$interpreter" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+is_usable_bump_cmd() {
+    local candidate="$1"
+    [[ -n "$candidate" && -x "$candidate" ]] || return 1
+    if is_broken_shebang "$candidate"; then
+        return 1
+    fi
+    return 0
+}
+
 # 依次尝试运行时虚拟环境、pipx 安装目录以及 PATH 中的可执行文件
-if [ ! -x "$BUMP_CMD" ]; then
+if ! is_usable_bump_cmd "$BUMP_CMD"; then
+    if [[ -x "$BUMP_CMD" ]] && is_broken_shebang "$BUMP_CMD"; then
+        echo "⚠️  检测到 bump-my-version 解释器缺失（bad interpreter），将自动降级到 pipx/PATH 版本。" >&2
+    fi
     # 优先尝试 pipx 默认的 ~/.local/bin
-    if [ -x "$HOME/.local/bin/bump-my-version" ]; then
+    if is_usable_bump_cmd "$HOME/.local/bin/bump-my-version"; then
         BUMP_CMD="$HOME/.local/bin/bump-my-version"
     elif command -v bump-my-version >/dev/null 2>&1; then
-        BUMP_CMD="$(command -v bump-my-version)"
+        CANDIDATE="$(command -v bump-my-version)"
+        if is_usable_bump_cmd "$CANDIDATE"; then
+            BUMP_CMD="$CANDIDATE"
+        else
+            # PATH 中的 bump-my-version 也可能因解释器缺失而不可用
+            if command -v pipx >/dev/null 2>&1; then
+                USE_PIPEX=true
+            else
+                echo "错误：检测到 bump-my-version 但不可用（可能是 bad interpreter），且未安装 pipx" >&2
+                echo "请先执行：pipx install bump-my-version" >&2
+                exit 1
+            fi
+        fi
     elif command -v pipx >/dev/null 2>&1; then
         USE_PIPEX=true
     else
