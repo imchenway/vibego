@@ -373,8 +373,8 @@ async def test_run_single_upgrade_step_uses_devnull_stdin(monkeypatch: pytest.Mo
     assert recorded["stderr"] is asyncio.subprocess.STDOUT
 
 
-def test_spawn_detached_restart_uses_devnull(monkeypatch: pytest.MonkeyPatch):
-    """后台重启命令同样需要绑定 /dev/null。"""
+def test_spawn_detached_restart_uses_devnull(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """后台重启命令同样需要绑定 /dev/null，同时输出需落盘便于排查。"""
 
     captured = {}
 
@@ -383,11 +383,12 @@ def test_spawn_detached_restart_uses_devnull(monkeypatch: pytest.MonkeyPatch):
         return SimpleNamespace(pid=222)
 
     monkeypatch.setattr(master.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(master, "_UPGRADE_RESTART_LOG_PATH", tmp_path / "upgrade_restart.log")
     proc = master._spawn_detached_restart("echo hi", 0.1)
     assert proc.pid == 222
     assert captured["stdin"] is master.subprocess.DEVNULL
-    assert captured["stdout"] is master.subprocess.DEVNULL
-    assert captured["stderr"] is master.subprocess.DEVNULL
+    assert captured["stdout"] is not master.subprocess.DEVNULL
+    assert captured["stderr"] is not master.subprocess.DEVNULL
 
 
 def test_persist_upgrade_report_records_versions(upgrade_report_path: Path):

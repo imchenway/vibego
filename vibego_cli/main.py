@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 import signal
 import subprocess
@@ -84,9 +85,37 @@ def _ensure_virtualenv(repo_root: Path) -> Tuple[Path, Path]:
 
     venv_dir = config.RUNTIME_DIR / "venv"
     python_exec, pip_exec = _virtualenv_paths(venv_dir)
+
+    def _create_runtime_venv() -> None:
+        """创建运行时虚拟环境。"""
+
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+
+    def _recreate_runtime_venv(reason: str) -> None:
+        """删除并重建运行时虚拟环境。
+
+        运行时 venv 仅用于运行 master/worker，若发现解释器断链或 pip 缺失，
+        通常是 Homebrew 升级 Python 后旧路径失效导致。此时直接重建最稳妥。
+        """
+
+        print("检测到运行时虚拟环境异常，将自动重建：", reason)
+        print("目标目录：", venv_dir)
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        print("正在重新创建虚拟环境:", venv_dir)
+        _create_runtime_venv()
+
     if not venv_dir.exists():
         print("正在创建虚拟环境:", venv_dir)
-        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+        _create_runtime_venv()
+
+    if not python_exec.exists() or not pip_exec.exists():
+        details: list[str] = []
+        if not python_exec.exists():
+            details.append(f"python 缺失或断链：{python_exec}")
+        if not pip_exec.exists():
+            details.append(f"pip 缺失或断链：{pip_exec}")
+        _recreate_runtime_venv("；".join(details))
+        python_exec, pip_exec = _virtualenv_paths(venv_dir)
     if not python_exec.exists():
         raise RuntimeError(f"未找到虚拟环境 python: {python_exec}")
     if not pip_exec.exists():
