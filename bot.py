@@ -315,6 +315,8 @@ DELIVERABLE_KIND_MESSAGE = "message"
 DELIVERABLE_KIND_PLAN = "plan_update"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
+# 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
+ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先阅读并严格遵守 $HOME/.config/vibego/AGENTS.md 的全部规约；"
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
@@ -1099,6 +1101,28 @@ async def _send_session_ack(
     )
 
 
+def _prepend_enforced_agents_notice(raw_prompt: str) -> str:
+    """在推送到 tmux 前追加强制规约提示语。
+
+    约束：
+    - 仅对非命令类 prompt 生效（以 / 开头的内部命令不注入，避免破坏语义）
+    - 避免重复注入同一条提示语
+    """
+
+    text = (raw_prompt or "").strip("\n")
+    if not text:
+        return raw_prompt
+    # 约定：内部命令（如 /compact）不应被提示语破坏
+    if text.lstrip().startswith("/"):
+        return raw_prompt
+    notice = ENFORCED_AGENTS_NOTICE.strip()
+    if not notice:
+        return raw_prompt
+    if text.lstrip().startswith(notice):
+        return raw_prompt
+    return f"{notice}\n\n{raw_prompt}"
+
+
 async def _dispatch_prompt_to_model(
     chat_id: int,
     prompt: str,
@@ -1232,7 +1256,7 @@ async def _dispatch_prompt_to_model(
         return False, None
 
     try:
-        tmux_send_line(TMUX_SESSION, prompt)
+        tmux_send_line(TMUX_SESSION, _prepend_enforced_agents_notice(prompt))
     except subprocess.CalledProcessError as exc:
         await _reply_to_chat(
             chat_id,

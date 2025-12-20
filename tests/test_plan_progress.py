@@ -514,7 +514,8 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
 
     msg = DummyMessage("测试指令")
     try:
-        asyncio.run(bot.on_text(msg))
+        # 直接调用内部派发函数，避免依赖 router 注入的 FSMContext 参数。
+        asyncio.run(bot._handle_prompt_dispatch(msg, msg.text))
     finally:
         bot.MODE = original_mode
         bot.ACTIVE_MODEL = original_model

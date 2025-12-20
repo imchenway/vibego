@@ -1948,6 +1948,185 @@ def test_dispatch_prompt_rebinds_when_pointer_updates(monkeypatch, tmp_path: Pat
     bot.CHAT_DELIVERED_OFFSETS.clear()
 
 
+def test_dispatch_prompt_injects_enforced_agents_notice(monkeypatch, tmp_path: Path):
+    """普通 prompt 推送到 tmux 前应自动追加强制规约提示语。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent: dict[str, str] = {}
+
+    def fake_tmux_send_line(_session: str, line: str) -> None:
+        sent["line"] = line
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(777, "pwd", reply_to=None, ack_immediately=False)
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent.get("line") == f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
+def test_dispatch_prompt_skips_enforced_agents_notice_for_slash_command(monkeypatch, tmp_path: Path):
+    """命令类 prompt（以 / 开头）必须跳过强制提示语，避免破坏语义。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent: dict[str, str] = {}
+
+    def fake_tmux_send_line(_session: str, line: str) -> None:
+        sent["line"] = line
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(778, "/compact", reply_to=None, ack_immediately=False)
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent.get("line") == "/compact"
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
+@pytest.mark.parametrize(
+    "raw_prompt,expected",
+    [
+        ("pwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"),
+        ("pwd\n", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd\n"),
+        ("\npwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\n\npwd"),
+        ("  pwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\n  pwd"),
+        ("/compact", "/compact"),
+        (" /compact", " /compact"),
+        ("", ""),
+        ("\n", "\n"),
+        (f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"),
+        (f"  {bot.ENFORCED_AGENTS_NOTICE}\nabc", f"  {bot.ENFORCED_AGENTS_NOTICE}\nabc"),
+    ],
+)
+def test_prepend_enforced_agents_notice_cases(raw_prompt: str, expected: str):
+    """验证强制规约提示语在多种输入下的拼接与跳过逻辑（覆盖 ≥10 条输入）。"""
+
+    assert bot._prepend_enforced_agents_notice(raw_prompt) == expected
+
+
 @pytest.mark.parametrize(
     "status,description,expected_checks",
     [

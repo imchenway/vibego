@@ -168,6 +168,12 @@ if ! sync_vibego_agents_for_model "$MODEL" "$AGENTS_TEMPLATE_FILE"; then
   echo "[run-bot] 同步 AGENTS 模板失败，已终止启动。" >&2
   exit 1
 fi
+# 额外同步一份到 ~/.config/vibego/AGENTS.md，供所有模型/提示语统一引用（避免写死用户名路径）
+ENFORCED_AGENTS_FILE="$HOME/.config/vibego/AGENTS.md"
+if ! sync_agents_block "$ENFORCED_AGENTS_FILE" "$AGENTS_TEMPLATE_FILE"; then
+  echo "[run-bot] 同步统一 AGENTS 文件失败: $ENFORCED_AGENTS_FILE" >&2
+  exit 1
+fi
 export VIBEGO_AGENTS_SYNCED=1
 export VIBEGO_AGENTS_TEMPLATE="$AGENTS_TEMPLATE_FILE"
 
