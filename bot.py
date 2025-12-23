@@ -554,6 +554,183 @@ def _normalize_legacy_markdown(text: str) -> str:
     return "".join(pieces)
 
 
+_LEGACY_FENCE_LINE_RE = re.compile(r"^(\s*)```.*$")
+_LEGACY_STAR_BULLET_RE = re.compile(r"^(\s*)\*\s+")
+_TASK_CODE_TOKEN_RE = re.compile(r"(?<![\w`])/?TASK_\d{4,}(?![\w`])", re.IGNORECASE)
+_TASK_SUMMARY_REQUEST_TOKEN_RE = re.compile(
+    r"(?<![\w`])/?task_summary_request_TASK_\d{4,}(?![\w`])",
+    re.IGNORECASE,
+)
+
+
+def _count_unescaped_char(text: str, target: str) -> int:
+    """统计未被反斜杠转义的字符数量。"""
+
+    if not text:
+        return 0
+    count = 0
+    idx = 0
+    length = len(text)
+    while idx < length:
+        ch = text[idx]
+        if ch == "\\":
+            idx += 2
+            continue
+        if ch == target:
+            count += 1
+        idx += 1
+    return count
+
+
+def _escape_last_unescaped_char(text: str, target: str) -> str:
+    """若未转义的 target 数量为奇数，则转义最后一个 target，避免 Telegram Markdown 解析失败。"""
+
+    if not text:
+        return text
+    if _count_unescaped_char(text, target) % 2 == 0:
+        return text
+
+    idx = len(text) - 1
+    while idx >= 0:
+        if text[idx] != target:
+            idx -= 1
+            continue
+
+        # 统计紧邻的反斜杠数量，奇数表示该字符已被转义。
+        slash_count = 0
+        j = idx - 1
+        while j >= 0 and text[j] == "\\":
+            slash_count += 1
+            j -= 1
+        if slash_count % 2 == 0:
+            return f"{text[:idx]}\\{target}{text[idx + 1:]}"
+        idx -= 1
+    return text
+
+
+def _escape_inline_triple_backticks(line: str) -> str:
+    """将行内的 ``` 转义为 \\`\\`\\`，避免被 Telegram 误判为代码块起始。"""
+
+    if "```" not in line:
+        return line
+    return line.replace("```", r"\`\`\`")
+
+
+def _escape_token_underscores(token: str) -> str:
+    """仅转义 token 内未转义的下划线，避免触发 Telegram Markdown 斜体解析。"""
+
+    if "_" not in token:
+        return token
+    return re.sub(r"(?<!\\)_", r"\\_", token)
+
+
+def _escape_tokens_for_legacy_markdown(text: str) -> str:
+    """转义容易触发 Telegram Markdown 解析失败的 token（常见为带下划线的任务编码/命令）。"""
+
+    def _escape(match: re.Match[str]) -> str:
+        return _escape_token_underscores(match.group(0))
+
+    text = _TASK_SUMMARY_REQUEST_TOKEN_RE.sub(_escape, text)
+    text = _TASK_CODE_TOKEN_RE.sub(_escape, text)
+    return text
+
+
+def _transform_outside_inline_code(line: str, transform: Callable[[str], str]) -> str:
+    """仅对不在 `...` 行内代码块内的片段应用 transform。"""
+
+    if "`" not in line:
+        return transform(line)
+
+    parts: list[str] = []
+    buffer: list[str] = []
+    in_code = False
+    idx = 0
+    length = len(line)
+
+    while idx < length:
+        ch = line[idx]
+        if ch == "\\" and idx + 1 < length:
+            buffer.append(line[idx : idx + 2])
+            idx += 2
+            continue
+        if ch == "`":
+            segment = "".join(buffer)
+            parts.append(transform(segment) if not in_code else segment)
+            parts.append("`")
+            buffer.clear()
+            in_code = not in_code
+            idx += 1
+            continue
+        buffer.append(ch)
+        idx += 1
+
+    segment = "".join(buffer)
+    parts.append(transform(segment) if not in_code else segment)
+    return "".join(parts)
+
+
+def _sanitize_telegram_markdown_legacy(text: str) -> str:
+    """尽量修正 Telegram Markdown(legacy) 易失败的输出，降低降级为纯文本的概率。
+
+    典型失败样例：
+    - 文本中出现 “半截代码块 ```” 但未闭合，导致 Telegram 报 can't parse entities。
+    - 任务编码/命令如 /TASK_0027 含下划线，可能触发斜体实体解析失败。
+    """
+
+    if not text:
+        return text
+
+    lines = normalize_newlines(text).splitlines()
+    sanitized_lines: list[str] = []
+    in_fence = False
+
+    for raw_line in lines:
+        line = raw_line
+        stripped = line.lstrip()
+        is_fence = stripped.startswith("```")
+
+        if is_fence:
+            # Telegram Markdown(legacy) 对 ``` 后跟语言标记的兼容性不稳定，统一去掉语言部分。
+            match = _LEGACY_FENCE_LINE_RE.match(line)
+            if match:
+                indent = match.group(1) or ""
+                sanitized_lines.append(f"{indent}```")
+            else:
+                sanitized_lines.append("```")
+            in_fence = not in_fence
+            continue
+
+        if in_fence:
+            sanitized_lines.append(line)
+            continue
+
+        # 兼容模型偶尔使用 * item 作为列表符号，避免误触发加粗实体。
+        line = _LEGACY_STAR_BULLET_RE.sub(r"\1- ", line)
+
+        # 将行内 ``` 视为普通文本并转义，避免被解析为代码块（常见于“举例说明”）。
+        line = _escape_inline_triple_backticks(line)
+
+        # 若存在未闭合的行内代码标记，转义最后一个反引号，避免 can't parse entities。
+        line = _escape_last_unescaped_char(line, "`")
+
+        def _fix_plain_segment(segment: str) -> str:
+            fixed = _escape_tokens_for_legacy_markdown(segment)
+            fixed = _escape_last_unescaped_char(fixed, "*")
+            fixed = _escape_last_unescaped_char(fixed, "_")
+            return fixed
+
+        # 仅在非 `...` 代码片段中修复 token / 未配对标记，避免污染行内代码内容。
+        line = _transform_outside_inline_code(line, _fix_plain_segment)
+
+        sanitized_lines.append(line)
+
+    # 若代码块未闭合，追加闭合标记，避免后续整条消息解析失败。
+    if in_fence:
+        sanitized_lines.append("```")
+
+    return "\n".join(sanitized_lines)
+
+
 # MarkdownV2 转义字符模式（用于检测已转义文本）
 _ESCAPED_MARKDOWN_PATTERN = re.compile(
     r"\\[_*\[\]()~`>#+=|{}.!:-]"  # 添加了冒号
@@ -671,7 +848,8 @@ def _prepare_model_payload(text: str) -> str:
         cleaned = _unescape_if_already_escaped(text)
         return _escape_markdown_v2(cleaned)
     if _IS_MARKDOWN:
-        return _normalize_legacy_markdown(text)
+        normalized = _normalize_legacy_markdown(text)
+        return _sanitize_telegram_markdown_legacy(normalized)
     return text
 
 
