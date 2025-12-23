@@ -65,6 +65,23 @@ vibego start         # 启动 master 服务
       `MODEL_LOG_RETENTION_SECONDS` 覆盖）。
 - `.env.example`：环境配置模板（复制为 `.env` 后按需修改）。
 
+## Spec-Driven Development（speckit）工作流（实验）
+
+vibego 仓库内包含 `.specify/` 脚本与模板，可用于按 Spec-Driven Development 的节奏产出可审阅的规格/计划/任务，
+再进入实现阶段；用于降低“纯 vibe coding”带来的不确定性。
+
+参考入口（本仓库样例，绝对路径可复核）：
+- 评估结论：`/Users/david/hypha/tools/vibego/specs/001-speckit-feasibility/assessment-report.md`
+- 快速复现与演示：`/Users/david/hypha/tools/vibego/specs/001-speckit-feasibility/quickstart.md`
+
+上游参考（官方）：
+- Spec Kit：https://github.com/github/spec-kit
+- SDD 流程说明：https://raw.githubusercontent.com/github/spec-kit/main/spec-driven.md
+
+安全边界提醒（必读）：
+- 不要在任何文档/日志/报错中粘贴真实 token、chat_id 或用户标识；示例请使用占位符。
+- 运行期日志/状态文件必须写入 `~/.config/vibego/`（或由 `VIBEGO_CONFIG_DIR`/`MASTER_CONFIG_ROOT` 覆盖），不要落入仓库。
+
 ## 日志 & 目录
 
 ```

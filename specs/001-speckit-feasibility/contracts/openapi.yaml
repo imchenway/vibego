@@ -1,0 +1,392 @@
+openapi: 3.0.3
+info:
+  title: vibego × speckit Workflow Contracts (Concept)
+  version: 0.1.0
+  description: |
+    这是“vibego 与 speckit 互补工作流”的概念性合同，用于统一输入/输出语义与错误处理方式。
+
+    注意：当前仅为设计产物，不代表仓库已实现 HTTP 服务；最终实现可能以 CLI/Telegram 命令为主。
+
+    安全约束（硬性）：
+    - 所有输出（包括 error 字段）MUST 脱敏：不得包含 token/chat_id/user_id 等敏感信息明文
+    - 所有运行期状态与日志 MUST 留在配置目录边界内（默认 ~/.config/vibego）
+
+servers:
+  - url: http://localhost
+    description: Local-only (concept)
+
+tags:
+  - name: Speckit
+    description: Spec-Driven Development workflow orchestration
+
+paths:
+  /speckit/features/{featureSlug}:
+    get:
+      tags: [Speckit]
+      summary: Get feature metadata (paths only)
+      parameters:
+        - name: featureSlug
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9]{3}-[a-z0-9-]+$"
+      responses:
+        "200":
+          description: Feature metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Feature"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /speckit/assessments:
+    post:
+      tags: [Speckit]
+      summary: Start a feasibility assessment run
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+          description: |
+            幂等键（可选）。相同 key 的重复请求应返回同一 runId（或返回冲突错误并给出可恢复建议）。
+            - 若已有运行中：返回 409 且 Error.code=CONFLICT_RUN_IN_PROGRESS
+            - 若输出路径冲突：返回 409 且 Error.code=OUTPUT_PATH_CONFLICT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssessmentRequest"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssessmentStatus"
+              examples:
+                accepted:
+                  summary: Accepted (queued)
+                  value:
+                    runId: "11111111-1111-1111-1111-111111111111"
+                    featureSlug: "001-speckit-feasibility"
+                    status: "queued"
+                    outputs:
+                      reportPath: "/Users/david/hypha/tools/vibego/specs/001-speckit-feasibility/assessment-report.md"
+                      artifacts: []
+        "409":
+          description: Conflict (run already in progress / output path conflict)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                runInProgress:
+                  summary: Another run in progress
+                  value:
+                    code: CONFLICT_RUN_IN_PROGRESS
+                    message: "已有评估运行中，拒绝重复触发。"
+                    hint: "稍后重试，或先查询 /speckit/assessments/{runId} 获取状态。"
+                outputPathConflict:
+                  summary: Output path conflict
+                  value:
+                    code: OUTPUT_PATH_CONFLICT
+                    message: "输出路径冲突，拒绝覆盖已有产物。"
+                    hint: "请使用新的 run_id/Idempotency-Key，或清理冲突产物后重试。"
+        "400":
+          description: Bad request (invalid scope/featureSlug)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Unprocessable entity (validation failed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal error (must be redacted)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /speckit/assessments/{runId}:
+    get:
+      tags: [Speckit]
+      summary: Get assessment run status and outputs
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssessmentStatus"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal error (must be redacted)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /speckit/demos:
+    post:
+      tags: [Speckit]
+      summary: Start a minimal demo flow run
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+          description: |
+            幂等键（可选）。相同 key 的重复请求应返回同一 runId（或返回冲突错误并给出可恢复建议）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoRequest"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoStatus"
+              examples:
+                accepted:
+                  summary: Accepted (queued)
+                  value:
+                    runId: "22222222-2222-2222-2222-222222222222"
+                    featureSlug: "001-speckit-feasibility"
+                    status: "queued"
+                    outputs:
+                      expectedArtifacts:
+                        - "demo-flow.md"
+                        - "quickstart.md"
+                      artifacts: []
+        "409":
+          description: Conflict (run already in progress / output path conflict)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                runInProgress:
+                  summary: Another run in progress
+                  value:
+                    code: CONFLICT_RUN_IN_PROGRESS
+                    message: "已有演示运行中，拒绝重复触发。"
+                    hint: "稍后重试，或先查询演示运行状态。"
+                outputPathConflict:
+                  summary: Output path conflict
+                  value:
+                    code: OUTPUT_PATH_CONFLICT
+                    message: "输出路径冲突，拒绝覆盖已有产物。"
+                    hint: "请使用新的 run_id/Idempotency-Key，或清理冲突产物后重试。"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Unprocessable entity (validation failed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal error (must be redacted)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    Feature:
+      type: object
+      additionalProperties: false
+      required: [featureId, featureSlug, paths]
+      properties:
+        featureId:
+          type: string
+          pattern: "^[0-9]{3}$"
+        featureSlug:
+          type: string
+          pattern: "^[0-9]{3}-[a-z0-9-]+$"
+        paths:
+          type: object
+          additionalProperties: false
+          required: [featureDir, specPath, planPath]
+          properties:
+            featureDir:
+              type: string
+              description: Absolute path to feature dir
+            specPath:
+              type: string
+              description: Absolute path to spec.md
+            planPath:
+              type: string
+              description: Absolute path to plan.md
+
+    AssessmentRequest:
+      type: object
+      additionalProperties: false
+      required: [featureSlug, scope]
+      properties:
+        featureSlug:
+          type: string
+          pattern: "^[0-9]{3}-[a-z0-9-]+$"
+        scope:
+          type: string
+          description: Scope hint for assessment depth
+          enum:
+            - workflow-only
+            - command-orchestration
+            - end-to-end
+        notes:
+          type: string
+          maxLength: 4000
+          description: Optional human notes (must not include secrets)
+
+    AssessmentStatus:
+      type: object
+      additionalProperties: false
+      required: [runId, featureSlug, status, outputs]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        featureSlug:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        outputs:
+          type: object
+          additionalProperties: false
+          required: [reportPath, artifacts]
+          properties:
+            reportPath:
+              type: string
+              description: Absolute path to assessment report (repo file)
+            artifacts:
+              type: array
+              items:
+                type: string
+              description: Absolute paths to generated artifacts
+        error:
+          type: string
+          description: Error summary (MUST be redacted; no secrets)
+
+    DemoRequest:
+      type: object
+      additionalProperties: false
+      required: [featureSlug, mode, targetDir]
+      properties:
+        featureSlug:
+          type: string
+          pattern: "^[0-9]{3}-[a-z0-9-]+$"
+        mode:
+          type: string
+          enum: [repo-scripts, upstream-specify-cli]
+          description: |
+            演示路径：
+            - repo-scripts：仅用仓库内 `.specify/scripts`（不依赖上游 CLI）
+            - upstream-specify-cli：使用上游 `specify` CLI（对比/同步模板用途）
+        targetDir:
+          type: string
+          description: |
+            绝对路径：演示运行的工作目录根（建议位于配置目录边界内）。
+
+            语义：
+            - mode=repo-scripts：targetDir 下会创建隔离 worktree（或克隆）并生成 feature 产物
+            - mode=upstream-specify-cli：targetDir 下会初始化上游 demo 项目用于对比
+        notes:
+          type: string
+          maxLength: 4000
+          description: Optional human notes (must not include secrets)
+
+    DemoStatus:
+      type: object
+      additionalProperties: false
+      required: [runId, featureSlug, status, outputs]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        featureSlug:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        outputs:
+          type: object
+          additionalProperties: false
+          required: [expectedArtifacts, artifacts]
+          properties:
+            expectedArtifacts:
+              type: array
+              items:
+                type: string
+              description: |
+                预期产物清单（相对 `targetDir` 的相对路径）。
+
+                语义：它描述“成功时应该出现什么”，用于复核与自动化检查；不代表全部已生成。
+            artifacts:
+              type: array
+              items:
+                type: string
+              description: Absolute paths to generated demo artifacts
+        error:
+          type: string
+          description: Error summary (MUST be redacted; no secrets)
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            错误码（示例）：
+            - INVALID_ARGUMENT
+            - FEATURE_NOT_FOUND
+            - CONFLICT_RUN_IN_PROGRESS
+            - OUTPUT_PATH_CONFLICT
+            - PATH_NOT_WRITABLE
+            - INTERNAL_ERROR
+        message:
+          type: string
+          description: Human-readable message (MUST be redacted; no secrets)
+        hint:
+          type: string
+          description: Optional next-step hint for recovery (MUST be redacted; no secrets)
