@@ -7,6 +7,6 @@ from __future__ import annotations
 
 __all__ = ["main", "__version__"]
 
-__version__ = "1.3.26"
+__version__ = "1.3.27"
 
 from .main import main  # noqa: E402
