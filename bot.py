@@ -4662,8 +4662,10 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
                 callback_data=f"task:edit:{task.id}",
             ),
             InlineKeyboardButton(
-                text="🗂️ 归档任务" if not task.archived else "♻️ 恢复任务",
-                callback_data=f"task:toggle_archive:{task.id}",
+                # 任务详情：移除“归档任务/恢复任务”按钮，用“添加附件”替换到该位置；
+                # 归档/恢复仍可通过 /task_delete 命令完成。
+                text="📎 添加附件",
+                callback_data=f"task:attach:{task.id}",
             ),
         ]
     )
@@ -4677,14 +4679,6 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
                 text="🕘 查看历史",
                 callback_data=f"task:history:{task.id}",
             ),
-        ]
-    )
-    keyboard.append(
-        [
-            InlineKeyboardButton(
-                text="📎 添加附件",
-                callback_data=f"task:attach:{task.id}",
-            )
         ]
     )
     if task.status in MODEL_PUSH_ELIGIBLE_STATUSES:
