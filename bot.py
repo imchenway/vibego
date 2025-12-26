@@ -1730,6 +1730,8 @@ class PendingBugMediaGroupState:
 BUG_MEDIA_GROUP_STATE: dict[str, PendingBugMediaGroupState] = {}
 BUG_MEDIA_GROUP_LOCK = asyncio.Lock()
 BUG_MEDIA_GROUP_PROCESSED: set[str] = set()
+# 通用附件流程（/task_new、/attach）媒体组仅允许消费一次，避免相册导致重复附件。
+GENERIC_MEDIA_GROUP_CONSUMED: set[tuple[int, str]] = set()
 
 ATTACHMENT_USAGE_HINT = (
     "请按需读取附件：图片可使用 Codex 的 view_image 功能或 Claude Code 的文件引用能力；"
@@ -2201,8 +2203,16 @@ async def _collect_generic_media_group(
         state.finalize_task = asyncio.create_task(_finalize_bug_media_group(media_group_id))
 
     all_attachments, merged_caption = await waiter
-    if media_group_id not in processed:
-        processed.add(media_group_id)
+    # 同一媒体组会触发多次 handler（每张图一条消息），这里需要确保整组仅被消费一次。
+    # 否则会出现：用户发两张图，任务附件写入四条（每张图各重复一次）。
+    async with BUG_MEDIA_GROUP_LOCK:
+        consumed_key = (message.chat.id, media_group_id)
+        already_consumed = consumed_key in GENERIC_MEDIA_GROUP_CONSUMED
+        if not already_consumed:
+            GENERIC_MEDIA_GROUP_CONSUMED.add(consumed_key)
+    processed.add(media_group_id)
+    if already_consumed:
+        return [], "", processed
     return all_attachments, merged_caption, processed
 
 
@@ -2226,12 +2236,19 @@ async def _bind_serialized_attachments(
     """将序列化附件绑定到任务并记录事件日志。"""
 
     bound: list[TaskAttachmentRecord] = []
+    # 兜底：按 path 去重，避免媒体组/重放导致同一附件重复写库。
+    seen_paths: set[str] = set()
     for item in attachments:
+        path = (item.get("path") or "").strip()
+        if path:
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
         record = await TASK_SERVICE.add_attachment(
             task.id,
             display_name=item.get("display_name") or "attachment",
             mime_type=item.get("mime_type") or "application/octet-stream",
-            path=item.get("path") or "",
+            path=path,
             kind=item.get("kind") or "document",
         )
         bound.append(record)
@@ -8420,6 +8437,9 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
         attachment_dir,
         processed=processed_groups,
     )
+    # 媒体组会触发多次 handler，若本次调用已被其他消息消费则直接忽略，避免重复推进流程。
+    if message.media_group_id and not saved_attachments and not text_part:
+        return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
     if saved_attachments:
@@ -8478,6 +8498,9 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
         attachment_dir,
         processed=processed_groups,
     )
+    # 媒体组会触发多次 handler，若本次调用已被其他消息消费则直接忽略，避免重复追加附件/描述。
+    if message.media_group_id and not extra_attachments and not text_part:
+        return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
     extra_text = _normalize_choice_token(text_part or message.text or "")
@@ -9310,22 +9333,17 @@ async def on_task_attach_files(message: Message, state: FSMContext) -> None:
         attachment_dir,
         processed=processed_groups,
     )
+    # 媒体组会触发多次 handler，若本次调用已被其他消息消费则直接忽略，避免重复绑定/误报无附件。
+    if message.media_group_id and not saved and not text_part:
+        return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
     if not saved:
         await message.answer("未检测到附件，请发送图片/文件等，或输入“取消”退出。")
         return
     actor = _actor_from_message(message)
-    bound: list[TaskAttachmentRecord] = []
-    for item in saved:
-        record = await TASK_SERVICE.add_attachment(
-            task.id,
-            display_name=item.display_name,
-            mime_type=item.mime_type,
-            path=item.relative_path,
-            kind=item.kind,
-        )
-        bound.append(record)
+    serialized = [_serialize_saved_attachment(item) for item in saved]
+    bound = await _bind_serialized_attachments(task, serialized, actor=actor)
     await state.clear()
     detail_text, markup = await _render_task_detail(task.id)
     lines = ["附件已绑定到任务：", f"- 任务：{task.id}"]

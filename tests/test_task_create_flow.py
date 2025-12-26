@@ -469,6 +469,210 @@ def test_task_create_album_keeps_text_and_collects_followup_attachments(monkeypa
     assert added_paths == ["./data/a1.jpg", "./data/a2.jpg"]
 
 
+def test_task_create_media_group_dedupes_attachments_and_advances_once(monkeypatch, tmp_path):
+    """相册两张图只应推进一次创建流程，pending 附件不应重复。"""
+
+    bot.GENERIC_MEDIA_GROUP_CONSUMED.clear()
+    monkeypatch.setattr(bot, "MEDIA_GROUP_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    state = DummyState(
+        data={
+            "title": "测试标题",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "task",
+            "processed_media_groups": [],
+        },
+        state=TaskCreateStates.waiting_description,
+    )
+
+    msg1 = DummyMessage("")
+    msg1.media_group_id = "task_album_1"
+    msg1.caption = "相册描述"
+
+    msg2 = DummyMessage("")
+    msg2.media_group_id = "task_album_1"
+
+    async def fake_collect(msg, target_dir):
+        if msg is msg1:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="a1.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "a1.jpg",
+                    relative_path="./data/a1.jpg",
+                )
+            ]
+        if msg is msg2:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="a2.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "a2.jpg",
+                    relative_path="./data/a2.jpg",
+                )
+            ]
+        return []
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+
+    async def run_album_flow():
+        await asyncio.gather(
+            bot.on_task_create_description(msg1, state),
+            bot.on_task_create_description(msg2, state),
+        )
+
+    asyncio.run(run_album_flow())
+
+    assert state.state == TaskCreateStates.waiting_confirm
+    assert state.data.get("description") == "相册描述"
+    pending = state.data.get("pending_attachments", [])
+    assert len(pending) == 2
+    assert {item.get("path") for item in pending} == {"./data/a1.jpg", "./data/a2.jpg"}
+    # 只应有一条消息触发回复（两次 answer：信息汇总 + 确认提示）
+    assert sorted([len(msg1.calls), len(msg2.calls)]) == [0, 2]
+
+
+def test_task_create_confirm_media_group_appends_once(monkeypatch, tmp_path):
+    """确认阶段相册补充附件只应记录一次。"""
+
+    bot.GENERIC_MEDIA_GROUP_CONSUMED.clear()
+    monkeypatch.setattr(bot, "MEDIA_GROUP_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    state = DummyState(
+        data={
+            "title": "测试标题",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "task",
+            "description": "已有描述",
+            "pending_attachments": [],
+            "processed_media_groups": [],
+        },
+        state=TaskCreateStates.waiting_confirm,
+    )
+
+    msg1 = DummyMessage("")
+    msg1.media_group_id = "task_album_2"
+    msg1.caption = "补充说明"
+
+    msg2 = DummyMessage("")
+    msg2.media_group_id = "task_album_2"
+
+    async def fake_collect(msg, target_dir):
+        if msg is msg1:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="b1.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "b1.jpg",
+                    relative_path="./data/b1.jpg",
+                )
+            ]
+        if msg is msg2:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="b2.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "b2.jpg",
+                    relative_path="./data/b2.jpg",
+                )
+            ]
+        return []
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+
+    async def run_album_flow():
+        await asyncio.gather(
+            bot.on_task_create_confirm(msg1, state),
+            bot.on_task_create_confirm(msg2, state),
+        )
+
+    asyncio.run(run_album_flow())
+
+    assert state.state == TaskCreateStates.waiting_confirm
+    pending = state.data.get("pending_attachments", [])
+    assert len(pending) == 2
+    assert {item.get("path") for item in pending} == {"./data/b1.jpg", "./data/b2.jpg"}
+    assert "已有描述" in (state.data.get("description") or "")
+    # 只应有一条消息提示“已记录补充…”
+    assert sorted([len(msg1.calls), len(msg2.calls)]) == [0, 1]
+
+
+@pytest.mark.parametrize(
+    ("attachments", "expected_paths"),
+    [
+        ([], []),
+        ([{"path": "./data/a.jpg"}], ["./data/a.jpg"]),
+        ([{"path": "./data/a.jpg"}, {"path": "./data/b.jpg"}], ["./data/a.jpg", "./data/b.jpg"]),
+        ([{"path": "./data/a.jpg"}, {"path": "./data/a.jpg"}], ["./data/a.jpg"]),
+        (
+            [{"path": "./data/a.jpg"}, {"path": "./data/a.jpg"}, {"path": "./data/b.jpg"}],
+            ["./data/a.jpg", "./data/b.jpg"],
+        ),
+        (
+            [{"path": "./data/a.jpg"}, {"path": "./data/b.jpg"}, {"path": "./data/a.jpg"}],
+            ["./data/a.jpg", "./data/b.jpg"],
+        ),
+        ([{"path": ""}, {"path": ""}], ["", ""]),
+        ([{"path": "  ./data/a.jpg  "}, {"path": "./data/a.jpg"}], ["./data/a.jpg"]),
+        ([{"path": None}, {"path": "./data/a.jpg"}, {"path": None}], ["", "./data/a.jpg", ""]),
+        (
+            [
+                {"path": "./data/a.jpg"},
+                {"path": "./data/a.jpg"},
+                {"path": "./data/b.jpg"},
+                {"path": "./data/c.jpg"},
+                {"path": "./data/b.jpg"},
+            ],
+            ["./data/a.jpg", "./data/b.jpg", "./data/c.jpg"],
+        ),
+    ],
+)
+def test_bind_serialized_attachments_dedupes_by_path(monkeypatch, attachments, expected_paths):
+    """按 path 去重，避免重复写库。"""
+
+    task = bot.TaskRecord(
+        id="TASK_9999",
+        project_slug="demo",
+        title="测试",
+        status="research",
+        priority=3,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description=None,
+        parent_id=None,
+        root_id="TASK_9999",
+        depth=0,
+        lineage="0001",
+        archived=False,
+    )
+
+    added_paths: list[str] = []
+
+    async def fake_add_attachment(task_id, display_name, mime_type, path, kind):
+        added_paths.append(path)
+        return bot.TaskAttachmentRecord(
+            id=len(added_paths),
+            task_id=task_id,
+            display_name=display_name,
+            mime_type=mime_type,
+            path=path,
+            kind=kind,
+        )
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "add_attachment", fake_add_attachment)
+
+    asyncio.run(bot._bind_serialized_attachments(task, attachments, actor="Tester"))
+
+    assert added_paths == expected_paths
+
+
 def test_task_create_confirm_uses_default_priority(monkeypatch):
     state = DummyState(
         data={
