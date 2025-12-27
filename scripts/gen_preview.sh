@@ -5,7 +5,8 @@ set -eo pipefail
 CLI_BIN="${CLI_BIN:-/Applications/wechatwebdevtools.app/Contents/MacOS/cli}"  # 可通过环境变量覆盖 CLI 路径
 PROJECT_PATH="${PROJECT_PATH:-}"                                              # 允许外部显式指定，未指定时后续自动探测
 VERSION="${VERSION:-$(date +%Y%m%d%H%M%S)}"
-PORT="${PORT:-12605}"
+PORT="${PORT:-}"                                                             # 可临时用环境变量覆盖；未设置则读取项目端口配置
+WX_DEVTOOLS_PORTS_FILE="${WX_DEVTOOLS_PORTS_FILE:-}"                          # 可显式指定端口映射文件路径（默认读取 vibego 配置目录）
 PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-6}"                             # 自动探测目录的最大深度（默认提升为 6，覆盖深层项目）
 PROJECT_BASE="${PROJECT_BASE:-${MODEL_WORKDIR:-$PWD}}"                        # 探测起始目录，可显式设置
 
@@ -33,6 +34,120 @@ _default_download_dir() {
   else
     echo "/tmp/Downloads"
   fi
+}
+
+# 解析 vibego 配置根目录，需与 scripts/run_bot.sh 的逻辑保持一致（用于定位端口映射文件）。
+_resolve_vibego_config_root() {
+  local raw=""
+  if [[ -n "${MASTER_CONFIG_ROOT:-}" ]]; then
+    raw="$MASTER_CONFIG_ROOT"
+  elif [[ -n "${VIBEGO_CONFIG_DIR:-}" ]]; then
+    raw="$VIBEGO_CONFIG_DIR"
+  elif [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+    raw="${XDG_CONFIG_HOME%/}/vibego"
+  else
+    raw="$HOME/.config/vibego"
+  fi
+  if [[ "$raw" == ~* ]]; then
+    printf '%s' "${raw/#\~/$HOME}"
+  else
+    printf '%s' "$raw"
+  fi
+}
+
+# 端口映射文件默认位置：<vibego_config_root>/config/wx_devtools_ports.json
+_default_wx_devtools_ports_file() {
+  local root
+  root="$(_resolve_vibego_config_root)"
+  printf '%s\n' "$root/config/wx_devtools_ports.json"
+}
+
+# 从端口映射文件中解析当前项目对应的 IDE 服务端口。
+# 规则：
+# 1) 若已通过环境变量 PORT 显式设置，则直接使用；
+# 2) 否则读取 wx_devtools_ports.json，优先按小程序目录（paths）匹配，其次按 vibego 项目名（projects/或顶层映射）匹配；
+# 3) 若仍未找到端口，则返回空字符串，由调用方给出“要求用户配置”的错误提示。
+_resolve_wx_devtools_port() {
+  local project_root="$1"
+  local project_slug="${PROJECT_NAME:-${PROJECT_SLUG:-}}"
+  local ports_file="${WX_DEVTOOLS_PORTS_FILE:-$(_default_wx_devtools_ports_file)}"
+
+  python - "$ports_file" "$project_slug" "$project_root" <<'PY' 2>/dev/null || true
+import json
+import os
+import sys
+
+ports_file = (sys.argv[1] or "").strip()
+project_slug = (sys.argv[2] or "").strip()
+project_root = (sys.argv[3] or "").strip()
+
+def norm_path(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return os.path.realpath(os.path.expanduser(value))
+    except Exception:
+        return value
+
+def normalize_port(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+def get_casefold_key(mapping, key: str):
+    if not isinstance(mapping, dict) or not key:
+        return None
+    if key in mapping:
+        return mapping[key]
+    lower_key = key.casefold()
+    for k, v in mapping.items():
+        if isinstance(k, str) and k.casefold() == lower_key:
+            return v
+    return None
+
+if not ports_file or not os.path.exists(ports_file):
+    sys.exit(2)
+
+with open(ports_file, "r", encoding="utf-8") as f:
+    raw = json.load(f)
+
+if not isinstance(raw, dict):
+    sys.exit(2)
+
+if "projects" in raw or "paths" in raw:
+    projects = raw.get("projects") or {}
+    paths = raw.get("paths") or {}
+else:
+    # 兼容最简写法：{"my-project": 12605}
+    projects = raw
+    paths = {}
+
+port = None
+
+if project_root and isinstance(paths, dict):
+    root_norm = norm_path(project_root)
+    direct = get_casefold_key(paths, project_root)
+    if direct is None and root_norm:
+        direct = get_casefold_key(paths, root_norm)
+    if direct is None and root_norm:
+        for k, v in paths.items():
+            if isinstance(k, str) and norm_path(k) == root_norm:
+                direct = v
+                break
+    port = normalize_port(direct)
+
+if port is None and project_slug and isinstance(projects, dict):
+    port = normalize_port(get_casefold_key(projects, project_slug))
+
+if port is None:
+    sys.exit(2)
+
+print(str(port))
+PY
 }
 
 # 根据当前/模型工作目录自动探测小程序根目录（含 app.json 或 project.config.json）
@@ -169,6 +284,34 @@ if [[ -z "$RESOLVED_PROJECT_PATH" ]]; then
 fi
 _validate_project_root "$RESOLVED_PROJECT_PATH"
 
+# 端口解析：不再使用全局默认端口，必须为每个项目配置（或临时通过 PORT 显式指定）。
+if [[ -z "${PORT:-}" ]]; then
+  PORT="$(_resolve_wx_devtools_port "$RESOLVED_PROJECT_PATH")"
+fi
+
+if [[ -z "${PORT:-}" ]]; then
+  PORTS_FILE="${WX_DEVTOOLS_PORTS_FILE:-$(_default_wx_devtools_ports_file)}"
+  echo "[错误] 未配置微信开发者工具 IDE 服务端口，无法生成预览二维码。" >&2
+  echo "  - vibego 项目：${PROJECT_NAME:-<unknown>}" >&2
+  echo "  - 小程序目录：$RESOLVED_PROJECT_PATH" >&2
+  echo "  - 端口配置文件：$PORTS_FILE" >&2
+  echo "" >&2
+  echo "请在微信开发者工具：设置 -> 安全设置 -> 服务端口，查看端口号并写入端口配置文件后重试。" >&2
+  echo "官方文档（命令行 V2 / --port 说明）：https://developers.weixin.qq.com/miniprogram/dev/devtools/cli.html" >&2
+  echo "" >&2
+  echo "配置示例（按 vibego 项目名 project_slug 配置）：" >&2
+  echo "  {\"projects\": {\"${PROJECT_NAME:-my-project}\": 12605}}" >&2
+  echo "" >&2
+  echo "也可临时指定端口（单次生效）：" >&2
+  echo "  PORT=12605 PROJECT_BASE=\"$PROJECT_BASE\" bash \"$0\"" >&2
+  exit 2
+fi
+
+if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
+  echo "[错误] 端口号无效：PORT=$PORT（必须为纯数字）" >&2
+  exit 2
+fi
+
 # 设置输出路径，确保目录存在
 DEFAULT_DOWNLOAD_DIR="$(_default_download_dir)"
 OUTPUT_QR="${OUTPUT_QR:-${DEFAULT_DOWNLOAD_DIR}/wx-preview-${VERSION}.jpg}"
@@ -180,7 +323,7 @@ mkdir -p "$(dirname "$OUTPUT_QR")"
 export http_proxy= https_proxy= all_proxy=
 export no_proxy="servicewechat.com,.weixin.qq.com"
 
-echo "[信息] 生成预览，项目：$RESOLVED_PROJECT_PATH，版本：$VERSION，输出：$OUTPUT_QR"
+echo "[信息] 生成预览，项目：$RESOLVED_PROJECT_PATH，版本：$VERSION，端口：$PORT，输出：$OUTPUT_QR"
 
 # 捕获 CLI 输出以便失败时回显
 CLI_LOG="$(mktemp -t wx-preview-cli)"
