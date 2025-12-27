@@ -2551,6 +2551,9 @@ COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 5)
 WX_PREVIEW_COMMAND_NAME = "wx-dev-preview"
 WX_PREVIEW_CHOICE_PREFIX = "wxpreview:choose:"
 WX_PREVIEW_CANCEL = "wxpreview:cancel"
+WX_PREVIEW_PORT_USE_PREFIX = "wxpreview:port_use:"
+WX_PREVIEW_PORT_CANCEL = "wxpreview:port_cancel"
+WX_PREVIEW_PORT_STATE_KEY = "wx_preview_port"
 
 
 @dataclass
@@ -2837,6 +2840,190 @@ def _wrap_wx_preview_command(command: CommandDefinition, project_root: Path) -> 
     )
 
 
+def _parse_numeric_port(text: str) -> Optional[int]:
+    """将用户输入解析为端口号（1-65535），非法则返回 None。"""
+
+    raw = (text or "").strip()
+    if not raw.isdigit():
+        return None
+    try:
+        port = int(raw)
+    except ValueError:
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
+def _is_wx_preview_missing_port_error(exit_code: Optional[int], stderr_text: str) -> bool:
+    """判断是否为 wx-dev-preview 缺少端口配置导致的可恢复错误。"""
+
+    if exit_code != 2:
+        return False
+    if not stderr_text:
+        return False
+    # scripts/gen_preview.sh / scripts/wx_preview.sh 的统一错误前缀
+    return "未配置微信开发者工具 IDE 服务端口" in stderr_text
+
+
+def _extract_shell_env_value(command_text: str, key: str) -> Optional[str]:
+    """从 shell 命令字符串中提取形如 KEY=... 的首个赋值。"""
+
+    if not command_text or not key:
+        return None
+    try:
+        tokens = shlex.split(command_text, posix=True)
+    except ValueError:
+        tokens = command_text.split()
+    prefix = f"{key}="
+    for token in tokens:
+        if token.startswith(prefix):
+            return token[len(prefix) :]
+    return None
+
+
+def _detect_wechat_devtools_security_settings() -> tuple[Optional[int], Optional[bool], Optional[Path]]:
+    """从微信开发者工具本地配置读取服务端口与开关（macOS）。"""
+
+    support_dir = Path.home() / "Library" / "Application Support"
+    candidates: list[Path] = []
+    # 常见目录名：微信开发者工具（当前版本）/ 微信web开发者工具（旧版本）
+    for product_name in ("微信开发者工具", "微信web开发者工具"):
+        base = support_dir / product_name
+        if not base.is_dir():
+            continue
+        candidates.extend(
+            base.glob("*/WeappLocalData/localstorage_b72da75d79277d2f5f9c30c9177be57e.json")
+        )
+    if not candidates:
+        return None, None, None
+
+    # 以 mtime 倒序，优先读取最近使用的配置
+    candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        security = payload.get("security") or {}
+        if not isinstance(security, dict):
+            continue
+        enabled = security.get("enableServicePort")
+        enabled_flag: Optional[bool] = enabled if isinstance(enabled, bool) else None
+        raw_port = security.get("port")
+        port: Optional[int] = None
+        if isinstance(raw_port, int):
+            port = raw_port
+        elif isinstance(raw_port, str) and raw_port.strip().isdigit():
+            port = int(raw_port.strip())
+        if port is not None and 1 <= port <= 65535:
+            return port, enabled_flag, path
+        # 即使端口缺失，也返回开关状态（便于提示用户去开启）
+        if enabled_flag is not None:
+            return None, enabled_flag, path
+    return None, None, None
+
+
+def _detect_wechat_devtools_listen_ports(timeout: float = 1.0) -> list[int]:
+    """尝试从本机监听端口中推断微信开发者工具正在使用的端口（macOS 优先）。"""
+
+    if shutil.which("lsof") is None:
+        return []
+    try:
+        proc = subprocess.run(
+            ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    ports: set[int] = set()
+    for line in (proc.stdout or "").splitlines():
+        if not line or line.startswith("COMMAND"):
+            continue
+        # 第一列是进程名（无空格）
+        cmd = line.split(None, 1)[0]
+        if cmd not in {"wechatwebdevtools", "wechatdevtools"}:
+            continue
+        match = re.search(r":(\\d+)\\s*\\(LISTEN\\)\\s*$", line)
+        if not match:
+            continue
+        try:
+            port = int(match.group(1))
+        except ValueError:
+            continue
+        if 1 <= port <= 65535:
+            ports.add(port)
+    return sorted(ports)
+
+
+def _suggest_wx_devtools_ports() -> tuple[list[int], Optional[bool], Optional[Path]]:
+    """综合本地配置与监听端口，输出候选端口列表。"""
+
+    listen_ports = _detect_wechat_devtools_listen_ports()
+    config_port, enabled_flag, config_path = _detect_wechat_devtools_security_settings()
+
+    candidates: list[int] = []
+    if config_port is not None:
+        candidates.append(config_port)
+    for port in listen_ports:
+        if port not in candidates:
+            candidates.append(port)
+    return candidates, enabled_flag, config_path
+
+
+def _upsert_wx_devtools_ports_file(
+    *,
+    ports_file: Path,
+    project_slug: str,
+    project_root: Optional[Path],
+    port: int,
+) -> None:
+    """写入 wx_devtools_ports.json（同时写 projects 与 paths）。"""
+
+    ports_file.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {"projects": {}, "paths": {}}
+    try:
+        if ports_file.is_file():
+            raw = json.loads(ports_file.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                if "projects" in raw or "paths" in raw:
+                    payload["projects"] = raw.get("projects") if isinstance(raw.get("projects"), dict) else {}
+                    payload["paths"] = raw.get("paths") if isinstance(raw.get("paths"), dict) else {}
+                else:
+                    # 兼容旧格式：{"my-project": 12605}
+                    payload["projects"] = raw
+    except (OSError, json.JSONDecodeError):
+        # 解析失败则直接重建，避免卡死在坏配置
+        payload = {"projects": {}, "paths": {}}
+
+    projects = payload.get("projects")
+    paths = payload.get("paths")
+    if not isinstance(projects, dict):
+        projects = {}
+        payload["projects"] = projects
+    if not isinstance(paths, dict):
+        paths = {}
+        payload["paths"] = paths
+
+    if project_slug:
+        projects[project_slug] = port
+    if project_root is not None:
+        try:
+            paths[str(project_root.resolve())] = port
+        except OSError:
+            paths[str(project_root)] = port
+
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    tmp_path = ports_file.with_name(f"{ports_file.name}.tmp.{uuid.uuid4().hex}")
+    tmp_path.write_text(serialized, encoding="utf-8")
+    tmp_path.replace(ports_file)
+
+
 def _is_cancel_text(text: str) -> bool:
     """判断输入是否代表取消。"""
 
@@ -3114,9 +3301,66 @@ async def _execute_command_definition(
         lines.append(stderr_block)
         if stderr_truncated:
             lines.append("_错误输出已截断_")
+
+    wx_port_keyboard_rows: list[list[InlineKeyboardButton]] = []
+    if (
+        command.name == WX_PREVIEW_COMMAND_NAME
+        and _is_wx_preview_missing_port_error(exit_code, stderr_text)
+        and fsm_state is not None
+        and reply_message is not None
+    ):
+        suggested_ports, enabled_flag, config_path = _suggest_wx_devtools_ports()
+        ports_file = CONFIG_DIR_PATH / "wx_devtools_ports.json"
+        raw_project_root = _extract_shell_env_value(command.command, "PROJECT_PATH") or _extract_shell_env_value(
+            command.command, "PROJECT_BASE"
+        )
+        project_root = Path(raw_project_root).expanduser() if raw_project_root else None
+
+        await fsm_state.clear()
+        await fsm_state.set_state(WxPreviewStates.waiting_port)
+        await fsm_state.update_data(
+            **{
+                WX_PREVIEW_PORT_STATE_KEY: {
+                    "command_id": command.id,
+                    "scope": command.scope,
+                    "trigger": trigger or "按钮",
+                    "project_root": str(project_root) if project_root is not None else "",
+                }
+            }
+        )
+
+        lines.append("")
+        lines.append("*端口配置缺失（可恢复）*")
+        lines.append("`wx-dev-preview` 需要微信开发者工具 CLI 的 `--port`（IDE HTTP 服务端口）。")
+        if enabled_flag is False:
+            lines.append("检测到 IDE 的“服务端口”开关可能未开启，请在 IDE：设置 → 安全设置 → 服务端口 打开后重试。")
+        if suggested_ports:
+            ports_label = ", ".join(str(port) for port in suggested_ports[:5])
+            lines.append(f"检测到可能的端口：`{_escape_markdown_text(ports_label)}`")
+        else:
+            lines.append("未能自动读取端口，请在 IDE：设置 → 安全设置 → 服务端口 查看端口号后回复。")
+        if config_path is not None:
+            lines.append(f"端口来源：`{_escape_markdown_text(str(config_path))}`")
+        lines.append(f"端口配置文件：`{_escape_markdown_text(str(ports_file))}`（确认后将自动写入）")
+        lines.append("请直接回复端口号（只发数字），或点击下方按钮使用。")
+        lines.append("官方文档：https://developers.weixin.qq.com/miniprogram/dev/devtools/cli.html")
+
+        for port in suggested_ports[:3]:
+            wx_port_keyboard_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"✅ 使用 {port} 并重试",
+                        callback_data=f"{WX_PREVIEW_PORT_USE_PREFIX}{port}",
+                    )
+                ]
+            )
+        wx_port_keyboard_rows.append(
+            [InlineKeyboardButton(text="❌ 取消", callback_data=WX_PREVIEW_PORT_CANCEL)]
+        )
     lines.append("_如需完整输出，请点击下方“查询详情”下载 txt 文件。_")
     summary_markup = InlineKeyboardMarkup(
         inline_keyboard=[
+            *wx_port_keyboard_rows,
             [
                 InlineKeyboardButton(
                     text="🔎 查询详情",
@@ -8046,6 +8290,158 @@ async def on_wx_preview_cancel(callback: CallbackQuery, state: FSMContext) -> No
     if callback.message:
         await callback.message.answer("已取消 wx-dev-preview 执行。")
     await callback.answer("已取消")
+
+
+async def _apply_wx_preview_port_and_retry(
+    *,
+    port: int,
+    state: FSMContext,
+    reply_message: Message,
+    actor_user: Optional[User],
+) -> None:
+    """保存端口映射并用指定端口重试 wx-dev-preview。"""
+
+    data = await state.get_data()
+    context = data.get(WX_PREVIEW_PORT_STATE_KEY) or {}
+    command_id = context.get("command_id")
+    scope = context.get("scope") or "project"
+    trigger = context.get("trigger") or "按钮"
+    project_root_raw = (context.get("project_root") or "").strip()
+    if not project_root_raw:
+        await state.clear()
+        await reply_message.answer("上下文已失效，请重新执行 wx-dev-preview。")
+        return
+
+    project_root = Path(project_root_raw).expanduser()
+    if not project_root.is_dir():
+        await state.clear()
+        await reply_message.answer("所选目录已不存在，请重新执行 wx-dev-preview。")
+        return
+
+    if not (1 <= port <= 65535):
+        await reply_message.answer("端口号无效，请发送 1-65535 的数字；发送“取消”可终止。")
+        return
+
+    service = GLOBAL_COMMAND_SERVICE if scope == GLOBAL_COMMAND_SCOPE else COMMAND_SERVICE
+    history_prefix = (
+        COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX
+        if scope == GLOBAL_COMMAND_SCOPE
+        else COMMAND_HISTORY_DETAIL_PREFIX
+    )
+    try:
+        command = await service.get_command(int(command_id))
+    except (TypeError, ValueError, CommandNotFoundError):
+        await state.clear()
+        await reply_message.answer("命令不存在，请刷新后重试。")
+        return
+
+    ports_file = CONFIG_DIR_PATH / "wx_devtools_ports.json"
+    project_slug_key = PROJECT_NAME or PROJECT_SLUG
+    config_note = ""
+    try:
+        _upsert_wx_devtools_ports_file(
+            ports_file=ports_file,
+            project_slug=project_slug_key,
+            project_root=project_root,
+            port=port,
+        )
+        config_note = f"已写入端口配置：`{_escape_markdown_text(str(ports_file))}`"
+    except OSError as exc:
+        worker_log.warning(
+            "写入 wx_devtools_ports.json 失败：%s",
+            exc,
+            extra=_session_extra(key="wx_preview_port_write_failed"),
+        )
+        config_note = "端口配置写入失败，将仅本次使用该端口重试。"
+
+    command_override = _wrap_wx_preview_command(command, project_root)
+    command_retry = CommandDefinition(
+        id=command_override.id,
+        project_slug=command_override.project_slug,
+        name=command_override.name,
+        title=command_override.title,
+        command=f"PORT={port} {command_override.command}",
+        scope=command_override.scope,
+        description=command_override.description,
+        timeout=command_override.timeout,
+        enabled=command_override.enabled,
+        created_at=command_override.created_at,
+        updated_at=command_override.updated_at,
+        aliases=command_override.aliases,
+    )
+
+    await state.clear()
+    await _answer_with_markdown(
+        reply_message,
+        "\n".join(
+            [
+                f"已收到端口：`{port}`",
+                config_note,
+                "开始重试生成预览…",
+            ]
+        ),
+    )
+    await _execute_command_definition(
+        command=command_retry,
+        reply_message=reply_message,
+        trigger=trigger,
+        actor_user=actor_user,
+        service=service,
+        history_detail_prefix=history_prefix,
+        fsm_state=state,
+    )
+
+
+@router.callback_query(F.data.startswith(WX_PREVIEW_PORT_USE_PREFIX))
+async def on_wx_preview_port_use(callback: CallbackQuery, state: FSMContext) -> None:
+    """处理 wx-dev-preview 端口快捷选择。"""
+
+    raw_port = (callback.data or "")[len(WX_PREVIEW_PORT_USE_PREFIX) :].strip()
+    port = _parse_numeric_port(raw_port)
+    if port is None:
+        await callback.answer("端口无效", show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    await callback.answer(f"使用端口 {port} 重试…")
+    await _apply_wx_preview_port_and_retry(
+        port=port,
+        state=state,
+        reply_message=callback.message,
+        actor_user=callback.from_user,
+    )
+
+
+@router.callback_query(F.data == WX_PREVIEW_PORT_CANCEL)
+async def on_wx_preview_port_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """取消 wx-dev-preview 端口输入流程。"""
+
+    await state.clear()
+    if callback.message:
+        await callback.message.answer("已取消端口输入，可重新执行 wx-dev-preview。")
+    await callback.answer("已取消")
+
+
+@router.message(WxPreviewStates.waiting_port)
+async def on_wx_preview_port_input(message: Message, state: FSMContext) -> None:
+    """处理 wx-dev-preview 端口手动输入。"""
+
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        await state.clear()
+        await message.answer("已取消端口输入。", reply_markup=_build_worker_main_keyboard())
+        return
+    port = _parse_numeric_port(text)
+    if port is None:
+        await message.answer("端口号无效，请仅发送 1-65535 的数字；发送“取消”可终止。")
+        return
+    await _apply_wx_preview_port_and_retry(
+        port=port,
+        state=state,
+        reply_message=message,
+        actor_user=message.from_user,
+    )
 
 
 @router.callback_query(F.data == COMMAND_READONLY_CALLBACK)

@@ -23,3 +23,4 @@ class WxPreviewStates(StatesGroup):
     """wx-dev-preview 交互流程。"""
 
     waiting_choice = State()
+    waiting_port = State()
