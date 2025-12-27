@@ -745,6 +745,114 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
     asyncio.run(_scenario())
 
 
+def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_path: Path):
+    """推送到模型：当任务存在关联任务时，附带关联任务详情与历史上下文。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_0002", message)
+    message.chat = SimpleNamespace(id=1)
+    message.from_user = SimpleNamespace(id=1)
+    state, _storage = make_state(message)
+
+    task = TaskRecord(
+        id="TASK_0002",
+        project_slug="demo",
+        title="测试任务",
+        status="test",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="主任务描述",
+        related_task_id="TASK_0001",
+        parent_id=None,
+        root_id="TASK_0002",
+        depth=0,
+        lineage="0002",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    related = TaskRecord(
+        id="TASK_0001",
+        project_slug="demo",
+        title="关联任务标题",
+        status="research",
+        priority=3,
+        task_type="requirement",
+        tags=(),
+        due_date=None,
+        description="关联任务描述",
+        parent_id=None,
+        root_id="TASK_0001",
+        depth=0,
+        lineage="0001",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    async def fake_get_task(task_id: str):
+        if task_id == "TASK_0002":
+            return task
+        if task_id == "TASK_0001":
+            return related
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    async def fake_list_history(task_id: str):
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
+
+    async def fake_list_notes(task_id: str):
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_notes", fake_list_notes)
+
+    async def fake_list_attachments(task_id: str):
+        return []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_attachments", fake_list_attachments)
+
+    recorded: list[tuple[int, str, DummyMessage]] = []
+
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+    ):
+        assert not ack_immediately
+        recorded.append((chat_id, prompt, reply_to))
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        return None
+
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+        input_message = DummyMessage()
+        input_message.text = "补充说明内容"
+        await bot.on_task_push_model_supplement(input_message, state)
+
+    asyncio.run(_scenario())
+
+    assert recorded
+    _chat_id, payload, _reply_to = recorded[0]
+    assert "任务标题：测试任务" in payload
+    assert "关联任务信息：" in payload
+    assert "任务标题：关联任务标题" in payload
+    assert "任务编码：/TASK_0001" in payload
+    assert "任务描述：关联任务描述" in payload
+
+
 def test_push_model_done_push(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     callback = DummyCallback("task:push_model:TASK_0004", message)

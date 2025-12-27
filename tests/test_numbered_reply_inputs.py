@@ -5,6 +5,7 @@ import pytest
 
 import bot
 from tasks.fsm import TaskCreateStates
+from aiogram.types import InlineKeyboardMarkup
 
 
 class StubState:
@@ -111,7 +112,14 @@ def test_resolve_reply_choice_priority(raw, expected):
         ("4", "risk"),
     ],
 )
-def test_task_create_type_accepts_number_inputs(raw, expected_type):
+def test_task_create_type_accepts_number_inputs(monkeypatch, raw, expected_type):
+    async def fake_view(*, page: int):
+        assert page == 1
+        return "请选择关联任务：", InlineKeyboardMarkup(inline_keyboard=[])
+
+    # 缺陷类型现在会进入“选择关联任务”阶段，避免测试依赖真实数据库，这里统一打桩视图构造。
+    monkeypatch.setattr(bot, "_build_related_task_select_view", fake_view)
+
     state = StubState(
         data={
             "title": "测试标题",
@@ -122,7 +130,12 @@ def test_task_create_type_accepts_number_inputs(raw, expected_type):
     message = StubMessage(raw)
     asyncio.run(bot.on_task_create_type(message, state))
 
-    assert state.state == TaskCreateStates.waiting_description
+    expected_state = (
+        TaskCreateStates.waiting_related_task
+        if expected_type == "defect"
+        else TaskCreateStates.waiting_description
+    )
+    assert state.state == expected_state
     assert state.data["task_type"] == expected_type
 
 

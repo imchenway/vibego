@@ -10,7 +10,7 @@ os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 import bot
 from tasks.fsm import TaskCreateStates
 
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup
 
 os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
@@ -149,6 +149,32 @@ def test_task_create_type_valid_moves_to_description_prompt():
     buttons = [button.text for row in markup.keyboard for button in row]
     assert any("跳过" in text for text in buttons)
     assert any("取消" in text for text in buttons)
+
+
+def test_task_create_type_defect_moves_to_related_selection(monkeypatch):
+    state = DummyState(
+        data={
+            "title": "缺陷任务",
+            "priority": bot.DEFAULT_PRIORITY,
+        },
+        state=TaskCreateStates.waiting_type,
+    )
+    message = DummyMessage(bot._format_task_type("defect"))
+
+    async def fake_view(*, page: int):
+        assert page == 1
+        return "请选择关联任务：", InlineKeyboardMarkup(inline_keyboard=[])
+
+    monkeypatch.setattr(bot, "_build_related_task_select_view", fake_view)
+
+    asyncio.run(bot.on_task_create_type(message, state))
+
+    assert state.state == TaskCreateStates.waiting_related_task
+    assert state.data["task_type"] == "defect"
+    assert state.data["related_page"] == 1
+    assert state.data["related_task_id"] is None
+    assert message.calls
+    assert isinstance(message.calls[-1]["reply_markup"], InlineKeyboardMarkup)
 
 
 @pytest.mark.parametrize(
