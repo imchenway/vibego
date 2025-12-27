@@ -296,6 +296,7 @@ WATCH_INTERVAL = float(os.environ.get("WATCH_INTERVAL", "2"))
 SEND_RETRY_ATTEMPTS = int(os.environ.get("SEND_RETRY_ATTEMPTS", "3"))
 TMUX_SNAPSHOT_LINES = _env_int("TMUX_SNAPSHOT_LINES", 5)
 TMUX_SNAPSHOT_MAX_LINES = _env_int("TMUX_SNAPSHOT_MAX_LINES", 500)
+TMUX_SNAPSHOT_TIMEOUT_SECONDS = max(_env_float("TMUX_SNAPSHOT_TIMEOUT_SECONDS", 3.0), 0.0)
 SEND_RETRY_BASE_DELAY = float(os.environ.get("SEND_RETRY_BASE_DELAY", "0.5"))
 SEND_FAILURE_NOTICE_COOLDOWN = float(os.environ.get("SEND_FAILURE_NOTICE_COOLDOWN", "30"))
 SESSION_INITIAL_BACKTRACK_BYTES = int(os.environ.get("SESSION_INITIAL_BACKTRACK_BYTES", "16384"))
@@ -1190,6 +1191,9 @@ def _capture_tmux_recent_lines(line_count: int) -> str:
     tmux = tmux_bin()
     normalized = max(1, min(line_count, TMUX_SNAPSHOT_MAX_LINES))
     start_arg = f"-{normalized}"
+    timeout: Optional[float] = None
+    if TMUX_SNAPSHOT_TIMEOUT_SECONDS > 0:
+        timeout = max(TMUX_SNAPSHOT_TIMEOUT_SECONDS, 0.1)
     return subprocess.check_output(
         _tmux_cmd(
             tmux,
@@ -1201,6 +1205,87 @@ def _capture_tmux_recent_lines(line_count: int) -> str:
             start_arg,
         ),
         text=True,
+        timeout=timeout,
+    )
+
+
+async def _resume_session_watcher_if_needed(chat_id: int, *, reason: str) -> None:
+    """在不打断用户会话的前提下尝试恢复 watcher。
+
+    背景：
+    - 用户点击“终端实况”通常发生在模型仍在输出时；
+    - 若此时 watcher 因异常提前结束，后续推送会看起来“断了”；
+    - 用户再次发消息会触发 `_dispatch_prompt_to_model` 重建 watcher。
+
+    这里做一次轻量自愈，尽量避免用户必须再发一条消息才能恢复推送。
+
+    约束：
+    - 仅当 watcher 已存在但已结束时才尝试恢复，避免无会话时误启动监听任务；
+    - 不主动发送任何消息，仅重建监听任务。
+    """
+
+    watcher = CHAT_WATCHERS.get(chat_id)
+    if watcher is None:
+        return
+    if not watcher.done():
+        return
+
+    # watcher 已结束，准备清理并尝试恢复
+    CHAT_WATCHERS.pop(chat_id, None)
+
+    session_key = CHAT_SESSION_MAP.get(chat_id)
+    if not session_key:
+        worker_log.debug(
+            "[session-map] chat=%s watcher 已退出但未绑定会话，跳过恢复（reason=%s）",
+            chat_id,
+            reason,
+        )
+        return
+
+    session_path = resolve_path(session_key)
+    if not session_path.exists():
+        worker_log.warning(
+            "[session-map] chat=%s watcher 已退出但会话文件不存在，跳过恢复（reason=%s）",
+            chat_id,
+            reason,
+            extra=_session_extra(key=session_key),
+        )
+        return
+
+    if session_key not in SESSION_OFFSETS:
+        initial_offset = 0
+        try:
+            size = session_path.stat().st_size
+        except FileNotFoundError:
+            size = 0
+        backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
+        initial_offset = max(size - backtrack, 0)
+        SESSION_OFFSETS[session_key] = initial_offset
+        worker_log.info(
+            "[session-map] init offset for %s -> %s",
+            session_key,
+            SESSION_OFFSETS[session_key],
+            extra=_session_extra(key=session_key),
+        )
+
+    # 若该 session 已经发送过响应，则恢复时直接进入延迟轮询阶段，避免重复追加“完成前缀”。
+    start_in_long_poll = session_key in (CHAT_LAST_MESSAGE.get(chat_id) or {})
+
+    await _interrupt_long_poll(chat_id)
+    CHAT_WATCHERS[chat_id] = asyncio.create_task(
+        _watch_and_notify(
+            chat_id,
+            session_path,
+            max_wait=WATCH_MAX_WAIT,
+            interval=WATCH_INTERVAL,
+            start_in_long_poll=start_in_long_poll,
+        )
+    )
+    worker_log.info(
+        "[session-map] chat=%s watcher resumed (reason=%s)",
+        chat_id,
+        reason,
+        extra=_session_extra(path=session_path),
     )
 
 
@@ -6723,8 +6808,14 @@ async def _interrupt_long_poll(chat_id: int) -> None:
             )
 
 
-async def _watch_and_notify(chat_id: int, session_path: Path,
-                            max_wait: float, interval: float):
+async def _watch_and_notify(
+    chat_id: int,
+    session_path: Path,
+    max_wait: float,
+    interval: float,
+    *,
+    start_in_long_poll: bool = False,
+):
     """
     监听会话文件并发送消息。
 
@@ -6736,11 +6827,29 @@ async def _watch_and_notify(chat_id: int, session_path: Path,
     中断机制：收到新 Telegram 消息时会设置 interrupted 标志，轮询自动停止。
     """
     start = time.monotonic()
-    first_delivery_done = False
-    current_interval = interval  # 初始为快速轮询间隔（0.3 秒）
+    first_delivery_done = bool(start_in_long_poll)
+    long_poll_interval = 3.0  # 3 秒
+    current_interval = long_poll_interval if first_delivery_done else interval
     long_poll_rounds = 0
     long_poll_max_rounds = 600  # 30 分钟 / 3 秒 = 600 次
-    long_poll_interval = 3.0  # 3 秒
+
+    if first_delivery_done:
+        # 直接进入延迟轮询阶段：用于恢复 watcher，避免重复追加完成前缀。
+        if CHAT_LONG_POLL_LOCK is not None:
+            async with CHAT_LONG_POLL_LOCK:
+                CHAT_LONG_POLL_STATE[chat_id] = {
+                    "active": True,
+                    "round": 0,
+                    "max_rounds": long_poll_max_rounds,
+                    "interrupted": False,
+                }
+        else:
+            CHAT_LONG_POLL_STATE[chat_id] = {
+                "active": True,
+                "round": 0,
+                "max_rounds": long_poll_max_rounds,
+                "interrupted": False,
+            }
 
     try:
         while True:
@@ -7601,49 +7710,100 @@ async def _handle_terminal_snapshot_request(message: Message) -> None:
 
     chat_id = message.chat.id
     lines = TMUX_SNAPSHOT_LINES
+    started = time.monotonic()
+
     try:
-        raw_output = _capture_tmux_recent_lines(lines)
-    except FileNotFoundError as exc:
-        worker_log.warning(
-            "终端实况截取失败，未找到 tmux：%s",
-            exc,
-            extra={"chat": chat_id},
-        )
-        await _reply_to_chat(
-            chat_id,
-            "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
-            reply_to=message,
-        )
-        return
-    except subprocess.CalledProcessError as exc:
-        worker_log.warning(
-            "终端实况截取失败：%s",
-            exc,
-            extra={"chat": chat_id, "tmux_session": TMUX_SESSION},
-        )
-        await _reply_to_chat(
-            chat_id,
-            f"无法读取 tmux 会话 {TMUX_SESSION} 的输出，请确认 worker 已启动。",
-            reply_to=message,
-        )
-        return
+        try:
+            # 使用线程池执行 tmux 命令，避免阻塞 asyncio 事件循环，影响 watcher 推送。
+            raw_output = await asyncio.to_thread(_capture_tmux_recent_lines, lines)
+        except FileNotFoundError as exc:
+            worker_log.warning(
+                "终端实况截取失败，未找到 tmux：%s",
+                exc,
+                extra={"chat": chat_id},
+            )
+            await _reply_to_chat(
+                chat_id,
+                "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
+                reply_to=message,
+            )
+            return
+        except subprocess.TimeoutExpired as exc:
+            worker_log.warning(
+                "终端实况截取超时：%s",
+                exc,
+                extra={
+                    "chat": chat_id,
+                    "timeout": str(TMUX_SNAPSHOT_TIMEOUT_SECONDS),
+                    "tmux_session": TMUX_SESSION,
+                },
+            )
+            timeout_text = (
+                f"终端实况截取超时（{TMUX_SNAPSHOT_TIMEOUT_SECONDS:.1f} 秒），"
+                "请稍后重试或提高 TMUX_SNAPSHOT_TIMEOUT_SECONDS。"
+            )
+            await _reply_to_chat(
+                chat_id,
+                timeout_text,
+                reply_to=message,
+            )
+            return
+        except subprocess.CalledProcessError as exc:
+            worker_log.warning(
+                "终端实况截取失败：%s",
+                exc,
+                extra={"chat": chat_id, "tmux_session": TMUX_SESSION},
+            )
+            await _reply_to_chat(
+                chat_id,
+                f"无法读取 tmux 会话 {TMUX_SESSION} 的输出，请确认 worker 已启动。",
+                reply_to=message,
+            )
+            return
 
-    cleaned = postprocess_tmux_output(raw_output)
-    header = f"{WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT}（最近 {lines} 行）"
-    if not cleaned:
-        await _reply_to_chat(
-            chat_id,
-            f"{header}\n\n暂无可展示的输出，请稍后再试。",
-            reply_to=message,
-        )
-        return
+        cleaned = postprocess_tmux_output(raw_output)
+        header = f"{WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT}（最近 {lines} 行）"
+        if not cleaned:
+            await _reply_to_chat(
+                chat_id,
+                f"{header}\n\n暂无可展示的输出，请稍后再试。",
+                reply_to=message,
+            )
+            return
 
-    payload = f"{header}\n\n{cleaned}"
-    worker_log.info(
-        "已发送终端实况",
-        extra={"chat": chat_id, "lines": str(lines), "length": str(len(cleaned))},
-    )
-    await reply_large_text(chat_id, payload)
+        payload = f"{header}\n\n{cleaned}"
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        worker_log.info(
+            "准备发送终端实况",
+            extra={
+                "chat": chat_id,
+                "lines": str(lines),
+                "length": str(len(cleaned)),
+                "elapsed_ms": str(elapsed_ms),
+            },
+        )
+        try:
+            await reply_large_text(chat_id, payload)
+        except (TelegramNetworkError, TelegramRetryAfter) as exc:
+            worker_log.warning(
+                "终端实况发送失败，将提示用户重试: %s",
+                exc,
+                extra={"chat": chat_id},
+            )
+            await _notify_send_failure_message(chat_id)
+            return
+        worker_log.info(
+            "已发送终端实况",
+            extra={
+                "chat": chat_id,
+                "lines": str(lines),
+                "length": str(len(cleaned)),
+                "elapsed_ms": str(elapsed_ms),
+            },
+        )
+    finally:
+        # 轻量自愈：若 watcher 意外退出，尝试恢复推送通道，避免用户必须再发一条消息。
+        await _resume_session_watcher_if_needed(chat_id, reason="terminal_snapshot")
 
 
 @router.message(Command("task_list"))

@@ -224,6 +224,63 @@ def test_worker_terminal_snapshot_handles_tmux_failure(monkeypatch):
     assert bot.TMUX_SESSION in call.args[1]
 
 
+def test_worker_terminal_snapshot_handles_tmux_timeout(monkeypatch):
+    def fake_capture(_: int) -> str:
+        raise subprocess.TimeoutExpired(cmd="tmux", timeout=1)
+
+    mock_reply = AsyncMock()
+
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
+    monkeypatch.setattr(bot, "_reply_to_chat", mock_reply)
+
+    message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
+    asyncio.run(bot.on_tmux_snapshot_button(message))
+
+    assert mock_reply.await_count == 1
+    call = mock_reply.await_args
+    assert "超时" in call.args[1]
+
+
+def test_worker_terminal_snapshot_resumes_watcher_when_exited(monkeypatch, tmp_path):
+    chat_id = 424242
+    session_path = tmp_path / "rollout-test.jsonl"
+    session_path.write_text("", encoding="utf-8")
+    session_key = str(session_path)
+
+    class DoneTask:
+        def done(self) -> bool:
+            return True
+
+    done_task = DoneTask()
+
+    bot.CHAT_SESSION_MAP[chat_id] = session_key
+    bot.CHAT_LAST_MESSAGE[chat_id] = {session_key: "previous"}
+    bot.CHAT_WATCHERS[chat_id] = done_task
+
+    async def fake_watch_and_notify(*args, **kwargs):
+        return None
+
+    def fake_capture(_: int) -> str:
+        return "line-1"
+
+    mock_reply_large_text = AsyncMock(return_value="sent")
+
+    monkeypatch.setattr(bot, "_watch_and_notify", fake_watch_and_notify)
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
+    monkeypatch.setattr(bot, "reply_large_text", mock_reply_large_text)
+
+    message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT, chat_id=chat_id)
+    asyncio.run(bot.on_tmux_snapshot_button(message))
+
+    assert chat_id in bot.CHAT_WATCHERS
+    assert bot.CHAT_WATCHERS[chat_id] is not done_task
+
+    bot.CHAT_WATCHERS.pop(chat_id, None)
+    bot.CHAT_SESSION_MAP.pop(chat_id, None)
+    bot.CHAT_LAST_MESSAGE.pop(chat_id, None)
+    bot.SESSION_OFFSETS.pop(session_key, None)
+
+
 def test_master_projects_button_accepts_legacy_text(monkeypatch):
     dummy_manager = _DummyManager()
 
