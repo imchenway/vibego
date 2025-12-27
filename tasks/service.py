@@ -75,6 +75,7 @@ class TaskService:
                 project_slug TEXT NOT NULL,
                 root_id TEXT NOT NULL,
                 parent_id TEXT,
+                related_task_id TEXT,
                 depth INTEGER NOT NULL DEFAULT 0,
                 lineage TEXT NOT NULL,
                 title TEXT NOT NULL,
@@ -196,6 +197,11 @@ class TaskService:
                 raise
         try:
             await db.execute("ALTER TABLE tasks ADD COLUMN task_type TEXT")
+        except aiosqlite.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+        try:
+            await db.execute("ALTER TABLE tasks ADD COLUMN related_task_id TEXT")
         except aiosqlite.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
@@ -432,6 +438,7 @@ class TaskService:
         tags: Sequence[str],
         due_date: Optional[str],
         description: Optional[str] = None,
+        related_task_id: Optional[str] = None,
         actor: Optional[str],
     ) -> TaskRecord:
         """创建顶级任务并写入初始历史记录。"""
@@ -447,13 +454,15 @@ class TaskService:
                 now = shanghai_now_iso()
                 tags_json = json.dumps(list(tags)) if tags else "[]"
                 normalized_status = self._normalize_status_token(status, context="create_root")
+                canonical_related_task_id = self._canonical_task_id(related_task_id)
+                canonical_related_task_id = (canonical_related_task_id or "").strip() or None
                 await db.execute(
                     """
                     INSERT INTO tasks (
                         id, project_slug, root_id, parent_id, depth, lineage,
-                        title, status, priority, task_type, tags, due_date, description,
+                        title, status, priority, task_type, tags, due_date, description, related_task_id,
                         created_at, updated_at, archived
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id,
@@ -469,6 +478,7 @@ class TaskService:
                         tags_json,
                         due_date,
                         description or "",
+                        canonical_related_task_id,
                         now,
                         now,
                         0,
@@ -485,6 +495,7 @@ class TaskService:
                     tags=tuple(tags),
                     due_date=due_date,
                     description=description or "",
+                    related_task_id=canonical_related_task_id,
                     parent_id=None,
                     root_id=task_id,
                     depth=0,
@@ -527,6 +538,31 @@ class TaskService:
             async with db.execute(sql, params) as cursor:
                 rows = await cursor.fetchall()
         return [self._row_to_task(row, context="list") for row in rows]
+
+    async def list_recent_tasks(
+        self,
+        *,
+        limit: int = DEFAULT_LIMIT,
+        offset: int = 0,
+        include_archived: bool = False,
+    ) -> List[TaskRecord]:
+        """按更新时间倒序返回任务列表，用于“最近更新”类视图。"""
+
+        safe_limit = max(1, min(int(limit or DEFAULT_LIMIT), 50))
+        safe_offset = max(int(offset or 0), 0)
+        query = ["SELECT * FROM tasks WHERE project_slug = ?"]
+        params: List[object] = [self.project_slug]
+        if not include_archived:
+            query.append("AND archived = 0")
+        query.append("ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?")
+        params.extend([safe_limit, safe_offset])
+        sql = " ".join(query)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            async with db.execute(sql, params) as cursor:
+                rows = await cursor.fetchall()
+        return [self._row_to_task(row, context="recent") for row in rows]
 
     async def search_tasks(
         self,
@@ -1158,6 +1194,7 @@ class TaskService:
             tags=tags_data,
             due_date=row["due_date"],
             description=(row["description"] or "") if "description" in row.keys() else "",
+            related_task_id=row["related_task_id"] if "related_task_id" in row.keys() else None,
             parent_id=row["parent_id"],
             root_id=row["root_id"],
             depth=row["depth"],

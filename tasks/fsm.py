@@ -9,6 +9,7 @@ class TaskCreateStates(StatesGroup):
 
     waiting_title = State()
     waiting_type = State()
+    waiting_related_task = State()
     waiting_description = State()
     waiting_confirm = State()
 

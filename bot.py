@@ -1568,6 +1568,30 @@ async def _push_task_to_model(
         attachments=attachments,
         is_bug_report=is_bug_report,
     )
+    related_payload: dict[str, Any] = {}
+    related_task_id = (getattr(task, "related_task_id", None) or "").strip()
+    if task.status in {"research", "test"} and related_task_id and related_task_id != task.id:
+        related_task = await TASK_SERVICE.get_task(related_task_id)
+        if related_task is None:
+            worker_log.warning(
+                "关联任务不存在，已忽略关联上下文",
+                extra={"task_id": task.id, "related_task_id": related_task_id},
+            )
+        else:
+            related_history_text, related_history_count = await _build_history_context_for_model(related_task.id)
+            related_attachments = await TASK_SERVICE.list_attachments(related_task.id)
+            related_block = _build_task_context_block_for_model(
+                related_task,
+                supplement=None,
+                history=related_history_text,
+                attachments=related_attachments,
+            )
+            prompt = f"{prompt}\n\n关联任务信息：\n{related_block}"
+            related_payload = {
+                "related_task_id": related_task.id,
+                "related_history_items": related_history_count,
+                "related_history_chars": len(related_history_text),
+            }
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         prompt,
@@ -1584,6 +1608,8 @@ async def _push_task_to_model(
         "prompt_chars": len(prompt),
         "model": ACTIVE_MODEL or "",
     }
+    if related_payload:
+        payload.update(related_payload)
     if has_supplement:
         payload["supplement"] = supplement or ""
 
@@ -3599,6 +3625,12 @@ TASK_DESC_REPROMPT_TEXT = "✏️ 重新打开输入提示"
 TASK_DESC_CONFIRM_TEXT = "✅ 确认更新"
 TASK_DESC_RETRY_TEXT = "✏️ 重新输入"
 
+TASK_RELATED_PAGE_SIZE = 5
+TASK_RELATED_SELECT_PREFIX = "task:rel_sel"
+TASK_RELATED_PAGE_PREFIX = "task:rel_page"
+TASK_RELATED_SKIP_CALLBACK = "task:rel_skip"
+TASK_RELATED_CANCEL_CALLBACK = "task:rel_cancel"
+
 DESCRIPTION_MAX_LENGTH = 3000
 SEARCH_KEYWORD_MIN_LENGTH = 2
 SEARCH_KEYWORD_MAX_LENGTH = 100
@@ -3968,6 +4000,51 @@ def _build_model_push_payload(
     return _strip_legacy_bug_header(result or body)
 
 
+def _build_task_context_block_for_model(
+    task: TaskRecord,
+    *,
+    supplement: Optional[str],
+    history: str,
+    attachments: Sequence[TaskAttachmentRecord],
+) -> str:
+    """构建任务上下文块（字段格式与推送任务一致，但不包含阶段提示）。"""
+
+    task_code_plain = f"/{task.id}" if task.id else "-"
+    title = (task.title or "").strip() or "-"
+    description = (task.description or "").strip() or "-"
+    supplement_value = (supplement or "").strip() or "-"
+    history_block = (history or "").strip()
+
+    lines: list[str] = [
+        f"任务标题：{title}",
+        f"任务编码：{task_code_plain}",
+        f"任务描述：{description}",
+        f"补充任务描述：{supplement_value}",
+        "",
+    ]
+
+    if attachments:
+        lines.append("附件列表：")
+        limit = TASK_ATTACHMENT_PREVIEW_LIMIT
+        for idx, item in enumerate(attachments[:limit], 1):
+            lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
+        if len(attachments) > limit:
+            lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开")
+        lines.append("")
+    else:
+        lines.append("附件列表：-")
+        lines.append("")
+
+    history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
+    if history_block:
+        lines.append(history_intro)
+        lines.extend(history_block.splitlines())
+    else:
+        lines.append(f"{history_intro} -")
+
+    return _strip_legacy_bug_header("\n".join(lines))
+
+
 try:
     SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
@@ -4258,6 +4335,10 @@ def _format_task_detail(
         else:
             parent_text = _escape_markdown_text(task.parent_id)
         lines.append(f"👪 父任务：{parent_text}")
+
+    related_task_id = (getattr(task, "related_task_id", None) or "").strip()
+    if related_task_id:
+        lines.append(f"🔗 关联任务：{_format_task_command(related_task_id)}")
 
     # 附件预览
     if attachments:
@@ -8353,6 +8434,25 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
                 "任务类型缺失或无效，请使用 type=需求/缺陷/优化/风险",
             )
             return
+        related_task_id: Optional[str] = None
+        if task_type == "defect":
+            related_raw = (extra.get("related") or extra.get("rel") or "").strip()
+            if related_raw:
+                normalized_related = _normalize_task_id(related_raw)
+                if not normalized_related:
+                    await _answer_with_markdown(
+                        message,
+                        "关联任务 ID 无效，请使用 related=TASK_0001（或 rel=TASK_0001）",
+                    )
+                    return
+                related_task = await TASK_SERVICE.get_task(normalized_related)
+                if related_task is None:
+                    await _answer_with_markdown(
+                        message,
+                        f"关联任务 {normalized_related} 不存在，请检查任务编号或改用 FSM 流程选择。",
+                    )
+                    return
+                related_task_id = normalized_related
         description = extra.get("description")
         actor = _actor_from_message(message)
         task = await TASK_SERVICE.create_root_task(
@@ -8363,6 +8463,7 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
             tags=(),
             due_date=None,
             description=description,
+            related_task_id=related_task_id,
             actor=actor,
         )
         detail_text, markup = await _render_task_detail(task.id)
@@ -8410,6 +8511,15 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(task_type=task_type)
+    if task_type == "defect":
+        await state.update_data(
+            related_task_id=None,
+            related_page=1,
+        )
+        await state.set_state(TaskCreateStates.waiting_related_task)
+        text, markup = await _build_related_task_select_view(page=1)
+        await _answer_with_markdown(message, text, reply_markup=markup)
+        return
     await state.update_data(processed_media_groups=[])
     await state.set_state(TaskCreateStates.waiting_description)
     await message.answer(
@@ -8419,6 +8529,193 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
         ),
         reply_markup=_build_description_keyboard(),
     )
+
+
+async def _build_related_task_select_view(*, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    """构建“选择关联任务”分页视图（最近更新优先）。"""
+
+    limit = TASK_RELATED_PAGE_SIZE
+    total = await TASK_SERVICE.count_tasks(status=None, include_archived=False)
+    total_pages = max((total + limit - 1) // limit, 1)
+    normalized_page = max(1, min(int(page or 1), total_pages))
+    offset = (normalized_page - 1) * limit
+    tasks = await TASK_SERVICE.list_recent_tasks(limit=limit, offset=offset, include_archived=False)
+
+    lines = [
+        "请选择关联任务（按更新时间倒序）：",
+        f"页码 {normalized_page}/{total_pages} · 每页 {limit} 条 · 总数 {total}",
+        "可点击按钮选择，或直接输入 TASK_0001（也支持 /TASK_0001）。",
+    ]
+    if not tasks:
+        lines.append("当前没有可选任务，可点击“跳过”继续创建缺陷任务。")
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for task in tasks:
+        label = _compose_task_button_label(task)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"{TASK_RELATED_SELECT_PREFIX}:{task.id}",
+                )
+            ]
+        )
+
+    nav_row: list[InlineKeyboardButton] = []
+    if normalized_page > 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ 上一页",
+                callback_data=f"{TASK_RELATED_PAGE_PREFIX}:{normalized_page - 1}",
+            )
+        )
+    if normalized_page < total_pages:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="下一页 ➡️",
+                callback_data=f"{TASK_RELATED_PAGE_PREFIX}:{normalized_page + 1}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append(
+        [
+            InlineKeyboardButton(text="跳过", callback_data=TASK_RELATED_SKIP_CALLBACK),
+            InlineKeyboardButton(text="取消", callback_data=TASK_RELATED_CANCEL_CALLBACK),
+        ]
+    )
+
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _advance_task_create_to_description(message: Message, state: FSMContext) -> None:
+    """从“关联任务选择”推进到“描述输入”阶段。"""
+
+    await state.update_data(processed_media_groups=[])
+    await state.set_state(TaskCreateStates.waiting_description)
+    await message.answer(
+        (
+            "请输入任务描述，建议说明业务背景与预期结果，支持直接发送图片/文件作为附件。\n"
+            "若暂时没有可点击“跳过”按钮或直接发送空消息，发送“取消”可终止。"
+        ),
+        reply_markup=_build_description_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith(f"{TASK_RELATED_PAGE_PREFIX}:"))
+async def on_task_create_related_page(callback: CallbackQuery, state: FSMContext) -> None:
+    """缺陷任务创建：翻页选择关联任务。"""
+
+    if callback.message is None:
+        await callback.answer("无法定位消息", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != TaskCreateStates.waiting_related_task.state:
+        await callback.answer("当前不在选择关联任务阶段", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer("回调参数错误", show_alert=True)
+        return
+    try:
+        page = int(parts[2])
+    except ValueError:
+        await callback.answer("页码参数错误", show_alert=True)
+        return
+    await state.update_data(related_page=page)
+    text, markup = await _build_related_task_select_view(page=page)
+    if not await _try_edit_message(callback.message, text, reply_markup=markup):
+        await _answer_with_markdown(callback.message, text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{TASK_RELATED_SELECT_PREFIX}:"))
+async def on_task_create_related_select(callback: CallbackQuery, state: FSMContext) -> None:
+    """缺陷任务创建：选择关联任务。"""
+
+    if callback.message is None:
+        await callback.answer("无法定位消息", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != TaskCreateStates.waiting_related_task.state:
+        await callback.answer("当前不在选择关联任务阶段", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer("回调参数错误", show_alert=True)
+        return
+    task_id = parts[2]
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await callback.answer("任务不存在或已删除", show_alert=True)
+        return
+    await state.update_data(related_task_id=task.id)
+    await callback.answer("已选择关联任务")
+    await callback.message.answer(f"已选择关联任务：/{task.id} {task.title}")
+    await _advance_task_create_to_description(callback.message, state)
+
+
+@router.callback_query(F.data == TASK_RELATED_SKIP_CALLBACK)
+async def on_task_create_related_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    """缺陷任务创建：跳过关联任务选择。"""
+
+    if callback.message is None:
+        await callback.answer("无法定位消息", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != TaskCreateStates.waiting_related_task.state:
+        await callback.answer("当前不在选择关联任务阶段", show_alert=True)
+        return
+    await state.update_data(related_task_id=None)
+    await callback.answer("已跳过")
+    await callback.message.answer("已跳过关联任务选择。")
+    await _advance_task_create_to_description(callback.message, state)
+
+
+@router.callback_query(F.data == TASK_RELATED_CANCEL_CALLBACK)
+async def on_task_create_related_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """缺陷任务创建：取消。"""
+
+    await state.clear()
+    await callback.answer("已取消", show_alert=False)
+    if callback.message:
+        await callback.message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
+
+
+@router.message(TaskCreateStates.waiting_related_task)
+async def on_task_create_related_task_text(message: Message, state: FSMContext) -> None:
+    """缺陷任务创建：处理用户手动输入关联任务编号 / 跳过 / 取消。"""
+
+    token = _normalize_choice_token(message.text or "")
+    if _is_cancel_message(token):
+        await state.clear()
+        await message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
+        return
+    if _is_skip_message(token):
+        await state.update_data(related_task_id=None)
+        await message.answer("已跳过关联任务选择。")
+        await _advance_task_create_to_description(message, state)
+        return
+    normalized_task_id = _normalize_task_id(token)
+    if not normalized_task_id:
+        data = await state.get_data()
+        page = int(data.get("related_page", 1) or 1)
+        text, markup = await _build_related_task_select_view(page=page)
+        await message.answer("任务编号无效，请点击按钮选择或输入 TASK_0001。")
+        await _answer_with_markdown(message, text, reply_markup=markup)
+        return
+    task = await TASK_SERVICE.get_task(normalized_task_id)
+    if task is None:
+        data = await state.get_data()
+        page = int(data.get("related_page", 1) or 1)
+        text, markup = await _build_related_task_select_view(page=page)
+        await message.answer("关联任务不存在，请重新选择或输入正确的任务编号。")
+        await _answer_with_markdown(message, text, reply_markup=markup)
+        return
+    await state.update_data(related_task_id=task.id)
+    await message.answer(f"已选择关联任务：/{task.id} {task.title}")
+    await _advance_task_create_to_description(message, state)
 
 
 @router.message(TaskCreateStates.waiting_description)
@@ -8468,6 +8765,17 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
     ]
     priority_text = _format_priority(int(data.get("priority", DEFAULT_PRIORITY)))
     summary_lines.append(f"优先级：{priority_text}（默认）")
+    related_task_id = data.get("related_task_id")
+    if task_type_code == "defect":
+        if related_task_id:
+            related_task = await TASK_SERVICE.get_task(related_task_id)
+            if related_task is not None:
+                related_title = (related_task.title or "").strip() or "-"
+                summary_lines.append(f"关联任务：/{related_task.id} {related_title}")
+            else:
+                summary_lines.append(f"关联任务：/{related_task_id}")
+        else:
+            summary_lines.append("关联任务：-（未选择）")
     if description:
         summary_lines.append("描述：")
         summary_lines.append(description)
@@ -8557,6 +8865,7 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
         tags=(),
         due_date=None,
         description=data.get("description"),
+        related_task_id=data.get("related_task_id"),
         actor=actor,
     )
     pending_attachments = data.get("pending_attachments") or []

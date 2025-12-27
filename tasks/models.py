@@ -59,6 +59,7 @@ class TaskRecord:
     tags: Sequence[str] = field(default_factory=tuple)
     due_date: Optional[str] = None
     description: str = ""
+    related_task_id: Optional[str] = None
     parent_id: Optional[str] = None
     root_id: Optional[str] = None
     depth: int = 0
