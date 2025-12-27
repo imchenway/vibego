@@ -1,0 +1,10 @@
+{
+  "projects": {
+    "hyphamall": 12605,
+    "my-miniapp-project": 64701
+  },
+  "paths": {
+    "/Users/username/path/to/miniprogram": 12605
+  }
+}
+

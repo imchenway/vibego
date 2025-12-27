@@ -2694,11 +2694,13 @@ def _build_wx_preview_prompt(base: Path, candidates: Sequence[WxPreviewCandidate
 
     output_dir = _default_wx_preview_output_dir()
     sample_file = output_dir / f"wx-preview-{int(time.time())}.jpg"
+    ports_file = CONFIG_DIR_PATH / "wx_devtools_ports.json"
     lines = [
         "*请选择要生成预览的小程序目录*",
         f"扫描范围：当前目录及一层子目录（基准：`{_escape_markdown_text(str(base))}`）",
         f"默认输出目录：`{_escape_markdown_text(str(output_dir))}`",
         f"输出文件示例：`{_escape_markdown_text(str(sample_file))}`",
+        f"端口配置文件：`{_escape_markdown_text(str(ports_file))}`（未配置将无法执行）",
         "",
         "候选目录：",
     ]

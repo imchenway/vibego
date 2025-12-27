@@ -167,6 +167,13 @@ vibego 仓库内包含 `.specify/` 脚本与模板，可用于按 Spec-Driven De
   `~/.config/vibego/state/master_state.json`。
 - 其他自定义字段暂不读取。
 
+### wx-dev-preview 端口配置
+
+- `wx-dev-preview` 会调用微信开发者工具 CLI 的 `--port`，该端口为 IDE HTTP 服务端口；若端口未配置则命令会直接报错。
+- 配置文件：`~/.config/vibego/config/wx_devtools_ports.json`（若设置了 `VIBEGO_CONFIG_DIR`/`MASTER_CONFIG_ROOT`，则路径随之变化）
+- 配置模板：`config/wx_devtools_ports.json.example`
+- 端口获取：微信开发者工具 → 设置 → 安全设置 → 服务端口（官方文档：https://developers.weixin.qq.com/miniprogram/dev/devtools/cli.html）
+
 ### 自动授权 & 状态
 
 - worker 启动时若 `allowed_chat_id` 为空，首次合法消息会写入 `state/state.json` 并立即生效。
