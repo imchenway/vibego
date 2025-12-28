@@ -1291,6 +1291,84 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
     assert push_kwargs.get("disable_notification") is False
 
 
+def test_bug_report_auto_push_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=321)
+    message.from_user = SimpleNamespace(id=321, full_name="Tester")
+    message.text = "✅ 确认提交"
+    state, _storage = make_state(message)
+
+    task = _make_task(
+        task_id="TASK_AUTO_LONG",
+        title="自动推送长预览任务",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == task.id
+        return task
+
+    async def fake_log_event(task_id: str, **kwargs):
+        return None
+
+    async def fake_push(
+        target_task: TaskRecord,
+        *,
+        chat_id: int,
+        reply_to,
+        supplement: Optional[str],
+        actor: Optional[str],
+        is_bug_report: bool | None = None,
+    ):
+        assert reply_to is message
+        long_prompt = "A" * (bot.TELEGRAM_MESSAGE_LIMIT + 100)
+        return True, long_prompt, tmp_path / "session.jsonl"
+
+    reply_calls: list[tuple[str, Optional[str], Optional[ReplyKeyboardMarkup]]] = []
+
+    async def fake_reply_to_chat(chat_id, text, reply_to=None, parse_mode=None, reply_markup=None):
+        reply_calls.append((text, parse_mode, reply_markup))
+        if len(reply_calls) == 1:
+            raise TelegramBadRequest(method="sendMessage", message="Bad Request: message is too long")
+        return None
+
+    fallback_calls: list[tuple[int, str, Optional[str], bool]] = []
+
+    async def fake_reply_large_text(chat_id, text, *, parse_mode=None, preformatted=False):
+        fallback_calls.append((chat_id, text, parse_mode, preformatted))
+        return text
+
+    async def fake_send_session_ack(chat_id: int, session_path: Path, *, reply_to):
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "log_task_event", fake_log_event)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply_to_chat)
+    monkeypatch.setattr(bot, "reply_large_text", fake_reply_large_text)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    async def _scenario() -> None:
+        await state.set_state(bot.TaskBugReportStates.waiting_confirm)
+        await state.update_data(
+            task_id=task.id,
+            description="缺陷描述",
+            reproduction="步骤",
+            logs="日志",
+            reporter="Tester#001",
+        )
+        await bot.on_task_bug_confirm(message, state)
+
+    asyncio.run(_scenario())
+
+    assert fallback_calls
+    sent_text = fallback_calls[0][1]
+    assert sent_text.startswith("已推送到模型：")
+    assert any("附件形式发送" in text for text, _mode, _markup in reply_calls)
+
+
 def test_bug_report_confirm_accepts_extra_attachments(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=321)

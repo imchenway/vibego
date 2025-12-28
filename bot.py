@@ -5032,9 +5032,11 @@ async def _auto_push_after_bug_report(task: TaskRecord, *, message: Message, act
         )
         return
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-    await _reply_to_chat(
+    # 复用“推送到模型”的预览发送逻辑：当预览超出 Telegram 单条限制时自动降级为附件，
+    # 避免因 TelegramBadRequest: message is too long 导致流程中断（用户看不到成功提示且底部菜单不恢复）。
+    await _send_model_push_preview(
         chat_id,
-        f"已推送到模型：\n{preview_block}",
+        preview_block,
         reply_to=message,
         parse_mode=preview_parse_mode,
         reply_markup=_build_worker_main_keyboard(),
