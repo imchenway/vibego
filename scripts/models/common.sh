@@ -206,6 +206,10 @@ sync_vibego_agents_for_model() {
     claudecode|claude|claude-code|claudecodex)
       target="${CLAUDE_AGENTS_FILE:-$HOME/.claude/CLAUDE.md}"
       ;;
+    gemini)
+      # Gemini CLI 默认读取 ~/.gemini/GEMINI.md 作为项目上下文文件
+      target="${GEMINI_AGENTS_FILE:-$HOME/.gemini/GEMINI.md}"
+      ;;
     *)
       return 0
       ;;

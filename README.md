@@ -40,7 +40,7 @@ source ~/.config/vibego/runtime/venv/bin/activate
 
 ### 安装 & 启动 vibego
 
-执行该步骤之前，确保您的终端已经安装并登录了 codex /claudeCode，且已经准备好了 telegram bot token。
+执行该步骤之前，确保您的终端已经安装并登录了 codex / claudeCode / gemini（按需），且已经准备好了 telegram bot token。
 
 - `demo` 启动脚本会在运行前自动把仓库根目录的 [AGENTS.md](AGENTS.md) 写入 `$HOME/.codex/AGENTS.md` / `$HOME/.claude/CLAUDE.md` 的 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` 区块；若文件原本不存在会直接创建，存在则保留你已有内容并备份为 `.vibego.bak`，方便进一步自定义
 
@@ -54,7 +54,7 @@ vibego start         # 启动 master 服务
 
 ## 目录结构
 
-- `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / 预留 Gemini）。
+- `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / Gemini）。
 - `scripts/run_bot.sh`：一键启动脚本（自动建 venv、启动 tmux + 模型 CLI + bot）。
 - `scripts/stop_bot.sh`：终止当前项目 worker（tmux + bot 进程）。
 - `scripts/start_tmux_codex.sh`：底层 tmux/CLI 启动器，被 `run_bot.sh` 调用，默认以 `tmux -u` 强制启用 UTF-8。
@@ -99,7 +99,7 @@ vibego 仓库内包含 `.specify/` 脚本与模板，可用于按 Spec-Driven De
 
 ## 模型切换
 
-- 支持参数：`codex`、`claudecode`、`gemini`（占位）。
+- 支持参数：`codex`、`claudecode`、`gemini`。
 - 切换流程：`stop_bot.sh --model <旧>` → `run_bot.sh --model <新>`。
 - 每个模型在 `scripts/models/<model>.sh` 中维护独立配置，互不依赖；公共逻辑位于 `scripts/models/common.sh`。
 - `ACTIVE_MODEL` 会在 `/start` 回复及日志中显示，并写入环境变量供 `bot.py` 使用。
@@ -123,16 +123,32 @@ vibego 仓库内包含 `.specify/` 脚本与模板，可用于按 Spec-Driven De
 | `CLAUDE_SESSION_GLOB` | JSONL 文件匹配（默认 `*.jsonl`）              |
 | `CLAUDE_PROJECT_KEY`  | 可选：显式指定 `~/.claude/projects/<key>` 路径 |
 
-### Gemini（预留）
+### Gemini
 
-- `scripts/models/gemini.sh` 暂使用占位命令，可在后续接入官方 CLI 时扩展。
+Gemini 基于官方 `gemini-cli`（Homebrew 包名 `gemini-cli`，命令为 `gemini`）。
+
+默认会话落盘路径（可复核）：
+
+```
+~/.gemini/tmp/<sha256(工作目录绝对路径字符串)>/chats/session-*.json
+```
+
+| 变量                 | 说明 |
+|--------------------|------|
+| `GEMINI_WORKDIR`   | 工程目录（默认与 `MODEL_WORKDIR` 相同） |
+| `GEMINI_CMD`       | CLI 启动命令，默认 `gemini --approval-mode yolo --sandbox`（高风险，需自行评估） |
+| `GEMINI_SESSION_ROOT` | 会话根目录，默认 `~/.gemini/tmp` |
+| `GEMINI_SESSION_GLOB` | 会话文件匹配，默认 `session-*.json` |
+
+启动时会自动把仓库根目录的 `AGENTS.md` 同步到 `~/.gemini/GEMINI.md` 的 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` 区块，
+用于让 Gemini CLI 自动继承 vibego 的强制规约。
 
 ## aiogram Worker 行为
 
 - `/start`：返回 `chat_id`、`MODE`、`ACTIVE_MODEL`；日志打印 `chat_id` 与 `user_id`。
 - 文本消息：
-    1. 依据 `ACTIVE_MODEL` 选择 `SessionAdapter`，读取 `current_session.txt` 中记录的 JSONL 文件，必要时搜索
-       `MODEL_SESSION_ROOT` 以回填。
+    1. 依据 `ACTIVE_MODEL` 解析会话文件：Codex/ClaudeCode 为 JSONL，Gemini 为 `session-*.json`；
+       默认读取 `current_session.txt` 中记录的会话路径，必要时搜索 `MODEL_SESSION_ROOT` 以回填。
     2. 将 prompt 注入 tmux（发送 `Esc` 清空模式、`C-j` 换行、`Enter` 提交）。
     3. 首次读取 `SESSION_OFFSETS` 初始化偏移；随后通过 `_deliver_pending_messages()` 补发当前尾部内容并持续轮询 JSONL。
     4. watcher 阶段提示 `ACTIVE_MODEL` 正在处理中，完成后自动推送结果（保留 Markdown）。
@@ -183,7 +199,7 @@ vibego 仓库内包含 `.specify/` 脚本与模板，可用于按 Spec-Driven De
 
 - Master bot 将统一轮询多个项目 bot，并调用 run/stop 脚本管理
   worker；当前版本先提供 worker 端结构与日志规范。
-- Gemini CLI 接入待官方方案确定后补充。
+- Gemini 已接入；后续可按需补充更细粒度的工具调用回推与会话管理能力。
 
 ## 注意
 

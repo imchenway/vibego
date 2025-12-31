@@ -300,6 +300,7 @@ TMUX_SNAPSHOT_TIMEOUT_SECONDS = max(_env_float("TMUX_SNAPSHOT_TIMEOUT_SECONDS", 
 SEND_RETRY_BASE_DELAY = float(os.environ.get("SEND_RETRY_BASE_DELAY", "0.5"))
 SEND_FAILURE_NOTICE_COOLDOWN = float(os.environ.get("SEND_FAILURE_NOTICE_COOLDOWN", "30"))
 SESSION_INITIAL_BACKTRACK_BYTES = int(os.environ.get("SESSION_INITIAL_BACKTRACK_BYTES", "16384"))
+GEMINI_SESSION_INITIAL_BACKTRACK_MESSAGES = max(_env_int("GEMINI_SESSION_INITIAL_BACKTRACK_MESSAGES", 20), 0)
 ENABLE_PLAN_PROGRESS = (os.environ.get("ENABLE_PLAN_PROGRESS", "1").strip().lower() not in {"0", "false", "no", "off"})
 AUTO_COMPACT_THRESHOLD = max(_env_int("AUTO_COMPACT_THRESHOLD", 0), 0)
 SESSION_BIND_STRICT = _env_bool("SESSION_BIND_STRICT", True)
@@ -351,6 +352,12 @@ def _is_claudecode_model() -> bool:
     """判断当前 worker 是否运行 ClaudeCode 模型。"""
 
     return MODEL_CANONICAL_NAME == "claudecode"
+
+
+def _is_gemini_model() -> bool:
+    """判断当前 worker 是否运行 Gemini 模型。"""
+
+    return MODEL_CANONICAL_NAME == "gemini"
 
 
 @dataclass
@@ -1253,13 +1260,7 @@ async def _resume_session_watcher_if_needed(chat_id: int, *, reason: str) -> Non
         return
 
     if session_key not in SESSION_OFFSETS:
-        initial_offset = 0
-        try:
-            size = session_path.stat().st_size
-        except FileNotFoundError:
-            size = 0
-        backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
-        initial_offset = max(size - backtrack, 0)
+        initial_offset = _initial_session_offset(session_path)
         SESSION_OFFSETS[session_key] = initial_offset
         worker_log.info(
             "[session-map] init offset for %s -> %s",
@@ -1293,6 +1294,34 @@ def resolve_path(path: Path | str) -> Path:
     if isinstance(path, Path):
         return path.expanduser()
     return Path(os.path.expanduser(os.path.expandvars(path))).expanduser()
+
+
+def _is_gemini_session_file(path: Path) -> bool:
+    """判断给定会话文件是否为 Gemini CLI 的 session-*.json。"""
+
+    return path.suffix.lower() == ".json"
+
+
+def _initial_session_offset(session_path: Path) -> int:
+    """为会话文件计算初始化偏移。
+
+    - Codex / ClaudeCode：按文件字节偏移回退一小段，避免漏掉刚写入的 JSONL 行；
+    - Gemini：会话文件是完整 JSON（非追加写），用 messages 列表长度作为游标，并回退最近 N 条。
+    """
+
+    if _is_gemini_session_file(session_path):
+        data = _read_gemini_session_json(session_path)
+        messages = (data or {}).get("messages")
+        total = len(messages) if isinstance(messages, list) else 0
+        backtrack = max(GEMINI_SESSION_INITIAL_BACKTRACK_MESSAGES, 0)
+        return max(total - backtrack, 0)
+
+    try:
+        size = session_path.stat().st_size
+    except FileNotFoundError:
+        size = 0
+    backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
+    return max(size - backtrack, 0)
 
 
 async def _reply_to_chat(
@@ -1479,16 +1508,19 @@ async def _dispatch_prompt_to_model(
             extra=_session_extra(path=session_path),
         )
 
-    target_cwd = CODEX_WORKDIR if CODEX_WORKDIR else None
+    # 统一以 MODEL_WORKDIR 作为目标工作目录（Gemini/Codex/ClaudeCode 皆由 run_bot.sh 注入）
+    target_cwd_raw = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
+    target_cwd = target_cwd_raw or None
     if pointer_path is not None and not SESSION_BIND_STRICT:
         current_cwd = _read_session_meta_cwd(session_path) if session_path else None
         if session_path is None or (target_cwd and current_cwd != target_cwd):
-            latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+            latest = (
+                _find_latest_gemini_session(pointer_path, target_cwd)
+                if _is_gemini_model()
+                else _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+            )
             if latest is not None:
-                try:
-                    SESSION_OFFSETS[str(latest)] = latest.stat().st_size
-                except FileNotFoundError:
-                    SESSION_OFFSETS[str(latest)] = 0
+                SESSION_OFFSETS[str(latest)] = _initial_session_offset(latest)
                 _update_pointer(pointer_path, latest)
                 session_path = latest
                 worker_log.info(
@@ -1569,14 +1601,7 @@ async def _dispatch_prompt_to_model(
     assert session_path is not None
     session_key = str(session_path)
     if session_key not in SESSION_OFFSETS:
-        initial_offset = 0
-        if session_path.exists():
-            try:
-                size = session_path.stat().st_size
-            except FileNotFoundError:
-                size = 0
-            backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
-            initial_offset = max(size - backtrack, 0)
+        initial_offset = _initial_session_offset(session_path)
         SESSION_OFFSETS[session_key] = initial_offset
         worker_log.info(
             "[session-map] init offset for %s -> %s",
@@ -6722,7 +6747,7 @@ async def _deliver_pending_messages(
 
 
 async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
-    """确保指定聊天已绑定 Codex 会话并启动监听。"""
+    """确保指定聊天已绑定模型会话并启动监听。"""
 
     pointer_path: Optional[Path] = None
     if CODEX_SESSION_FILE_PATH:
@@ -6741,7 +6766,8 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 extra={"session": previous_key},
             )
 
-    target_cwd = CODEX_WORKDIR or None
+    target_cwd_raw = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
+    target_cwd = target_cwd_raw or None
 
     if session_path is None and pointer_path is not None:
         session_path = _read_pointer_path(pointer_path)
@@ -6753,7 +6779,11 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 extra=_session_extra(path=session_path),
             )
     if session_path is None and pointer_path is not None and not SESSION_BIND_STRICT:
-        latest = _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+        latest = (
+            _find_latest_gemini_session(pointer_path, target_cwd)
+            if _is_gemini_model()
+            else _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+        )
         if latest is not None:
             session_path = latest
             _update_pointer(pointer_path, latest)
@@ -6818,14 +6848,7 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
 
     session_key = str(session_path)
     if session_key not in SESSION_OFFSETS:
-        initial_offset = 0
-        if session_path.exists():
-            try:
-                size = session_path.stat().st_size
-            except FileNotFoundError:
-                size = 0
-            backtrack = max(SESSION_INITIAL_BACKTRACK_BYTES, 0)
-            initial_offset = max(size - backtrack, 0)
+        initial_offset = _initial_session_offset(session_path)
         SESSION_OFFSETS[session_key] = initial_offset
         worker_log.info(
             "[session-map] init offset for %s -> %s",
@@ -7415,6 +7438,84 @@ def _find_latest_rollout_for_cwd(pointer: Path, target_cwd: Optional[str]) -> Op
     return latest_path
 
 
+def _gemini_project_hash_candidates(target_cwd: Optional[str]) -> set[str]:
+    """为 Gemini 会话匹配生成候选 projectHash（同时覆盖逻辑路径/物理路径）。"""
+
+    raw = (target_cwd or "").strip()
+    if not raw:
+        return set()
+
+    expanded = resolve_path(raw)
+    candidates: list[str] = []
+    raw_str = str(expanded).rstrip("/")
+    if raw_str:
+        candidates.append(raw_str)
+    try:
+        resolved_str = str(expanded.resolve()).rstrip("/")
+    except OSError:
+        resolved_str = ""
+    if resolved_str and resolved_str not in candidates:
+        candidates.append(resolved_str)
+
+    hashes: set[str] = set()
+    for item in candidates:
+        hashes.add(hashlib.sha256(item.encode("utf-8", errors="ignore")).hexdigest())
+    return hashes
+
+
+def _find_latest_gemini_session(pointer: Path, target_cwd: Optional[str]) -> Optional[Path]:
+    """Gemini 专用：依据 projectHash 在候选目录中寻找最新 session-*.json。"""
+
+    roots: List[Path] = []
+    for candidate in (MODEL_SESSION_ROOT,):
+        if candidate:
+            roots.append(resolve_path(candidate))
+
+    pointer_target = _read_pointer_path(pointer)
+    if pointer_target is not None:
+        roots.append(pointer_target.parent)
+
+    roots.append(pointer.parent)
+    roots.append(pointer.parent / "sessions")
+
+    latest_path: Optional[Path] = None
+    latest_mtime = -1.0
+    seen: set[str] = set()
+    expected_hashes = _gemini_project_hash_candidates(target_cwd)
+
+    pattern = f"**/{MODEL_SESSION_GLOB}"
+    for root in roots:
+        try:
+            real_root = root.resolve()
+        except OSError:
+            real_root = root
+        key = str(real_root)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not real_root.exists():
+            continue
+
+        for candidate in real_root.glob(pattern):
+            if not candidate.is_file() or candidate.suffix.lower() != ".json":
+                continue
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                continue
+            if mtime <= latest_mtime:
+                continue
+            if expected_hashes:
+                meta = _read_gemini_session_json(candidate) or {}
+                project_hash = meta.get("projectHash")
+                if not isinstance(project_hash, str) or project_hash not in expected_hashes:
+                    continue
+            latest_mtime = mtime
+            latest_path = candidate
+
+    return latest_path
+
+
 async def _await_session_path(
     pointer: Optional[Path],
     target_cwd: Optional[str],
@@ -7439,6 +7540,8 @@ async def _await_session_path(
         candidate = _read_pointer_path(pointer)
         if candidate is not None:
             return candidate
+        if _is_gemini_model():
+            return _find_latest_gemini_session(pointer, target_cwd)
         return _find_latest_rollout_for_cwd(pointer, target_cwd)
 
     deadline: Optional[float] = None
@@ -7627,15 +7730,9 @@ def _extract_deliverable_payload(data: dict, *, event_timestamp: Optional[str]) 
     return _extract_codex_payload(data, event_timestamp=event_timestamp)
 
 
-def _read_session_events(path: Path) -> Tuple[int, List[SessionDeliverable]]:
-    key = str(path)
-    offset = SESSION_OFFSETS.get(key)
-    if offset is None:
-        try:
-            offset = path.stat().st_size
-        except FileNotFoundError:
-            offset = 0
-        SESSION_OFFSETS[key] = offset
+def _read_session_events_jsonl(path: Path, offset: int) -> Tuple[int, List[SessionDeliverable]]:
+    """读取 Codex/ClaudeCode 的 JSONL 会话增量事件（按字节偏移）。"""
+
     events: List[SessionDeliverable] = []
     new_offset = offset
 
@@ -7673,6 +7770,91 @@ def _read_session_events(path: Path) -> Tuple[int, List[SessionDeliverable]]:
         return offset, []
 
     return new_offset, events
+
+
+def _read_gemini_session_json(path: Path) -> Optional[dict]:
+    """读取 Gemini session-*.json（可能在写入中，解析失败时返回 None）。"""
+
+    try:
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    if not raw.strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _read_session_events_gemini(path: Path, cursor: int) -> Tuple[int, List[SessionDeliverable]]:
+    """读取 Gemini 的 JSON 会话增量事件（按 messages 下标游标）。"""
+
+    data = _read_gemini_session_json(path)
+    if data is None:
+        return cursor, []
+
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return cursor, []
+
+    total = len(messages)
+    safe_cursor = max(int(cursor or 0), 0)
+    # 若游标异常（例如被旧逻辑写入了字节偏移），回退到最近 N 条，避免完全跳过新输出。
+    if safe_cursor > total:
+        safe_cursor = max(total - max(GEMINI_SESSION_INITIAL_BACKTRACK_MESSAGES, 0), 0)
+
+    deliverables: List[SessionDeliverable] = []
+    for idx in range(safe_cursor, total):
+        item = messages[idx]
+        if not isinstance(item, dict):
+            continue
+        msg_type = item.get("type")
+        if msg_type not in {"gemini", "assistant"}:
+            continue
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        ts = item.get("timestamp")
+        event_timestamp = ts if isinstance(ts, str) else None
+        metadata: Optional[Dict[str, Any]] = None
+        message_id = item.get("id")
+        if isinstance(message_id, str) and message_id:
+            metadata = {"message_id": message_id}
+        deliverables.append(
+            SessionDeliverable(
+                # offset 需要是整数且可去重：使用 1-based 的消息序号
+                offset=idx + 1,
+                kind=DELIVERABLE_KIND_MESSAGE,
+                text=content,
+                timestamp=event_timestamp,
+                metadata=metadata,
+            )
+        )
+
+    return total, deliverables
+
+
+def _read_session_events(path: Path) -> Tuple[int, List[SessionDeliverable]]:
+    key = str(path)
+    offset = SESSION_OFFSETS.get(key)
+    is_gemini_session = path.suffix.lower() == ".json"
+    if offset is None:
+        if is_gemini_session:
+            offset = 0
+        else:
+            try:
+                offset = path.stat().st_size
+            except FileNotFoundError:
+                offset = 0
+        SESSION_OFFSETS[key] = offset
+
+    if is_gemini_session:
+        return _read_session_events_gemini(path, int(offset))
+    return _read_session_events_jsonl(path, int(offset))
 
 
 # --- 处理器 ---

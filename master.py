@@ -1898,7 +1898,8 @@ class MasterManager:
             elif model_lower == "claudecode":
                 model_cmd = os.environ.get("CLAUDE_CMD") or "claude"
             elif model_lower == "gemini":
-                model_cmd = os.environ.get("GEMINI_CMD") or ""
+                # Gemini 默认可直接通过 `gemini` 命令启动（Homebrew: gemini-cli）
+                model_cmd = os.environ.get("GEMINI_CMD") or "gemini"
 
         if model_cmd:
             try:

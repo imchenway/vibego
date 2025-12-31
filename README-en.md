@@ -56,7 +56,7 @@ Then click on `/start` in the bot created by Telegram ,Enjoy it!
 
 ## Directory Layout
 
-- `bot.py`: aiogram 3 worker that supports multiple model sessions (Codex / ClaudeCode / reserved Gemini).
+- `bot.py`: aiogram 3 worker that supports multiple model sessions (Codex / ClaudeCode / Gemini).
 - `scripts/run_bot.sh`: one-click bootstrap (builds venv, starts tmux + model CLI + bot).
 - `scripts/stop_bot.sh`: terminates the worker for a project (tmux session + bot process).
 - `scripts/start_tmux_codex.sh`: low-level tmux/CLI launcher invoked by `run_bot.sh`, forces UTF‑8 via `tmux -u`.
@@ -84,7 +84,7 @@ Then click on `/start` in the bot created by Telegram ,Enjoy it!
 
 ## Model Switching
 
-- Supported model parameters: `codex`, `claudecode`, `gemini` (placeholder).
+- Supported model parameters: `codex`, `claudecode`, `gemini`.
 - Switch flow: `stop_bot.sh --model <old>` → `run_bot.sh --model <new>`.
 - Each model keeps an isolated configuration in `scripts/models/<model>.sh`; shared logic lives in
   `scripts/models/common.sh`.
@@ -109,18 +109,34 @@ Then click on `/start` in the bot created by Telegram ,Enjoy it!
 | `CLAUDE_SESSION_GLOB` | JSONL file pattern (default `*.jsonl`)                       |
 | `CLAUDE_PROJECT_KEY`  | Optional: explicitly set `~/.claude/projects/<key>`          |
 
-### Gemini (placeholder)
+### Gemini
 
-- `scripts/models/gemini.sh` currently contains a placeholder command to be expanded once the official CLI is available.
+Gemini is powered by the official `gemini-cli` (Homebrew formula `gemini-cli`, executable `gemini`).
+
+Default session files (verifiable on disk):
+
+```
+~/.gemini/tmp/<sha256(absolute_workdir_string)>/chats/session-*.json
+```
+
+| Variable              | Description |
+|-----------------------|-------------|
+| `GEMINI_WORKDIR`      | Project directory (defaults to `MODEL_WORKDIR`) |
+| `GEMINI_CMD`          | CLI launch command, default `gemini --approval-mode yolo --sandbox` (high risk; override if needed) |
+| `GEMINI_SESSION_ROOT` | Session root (default `~/.gemini/tmp`) |
+| `GEMINI_SESSION_GLOB` | Session file pattern (default `session-*.json`) |
+
+On startup, vibego syncs the repository `AGENTS.md` block into `~/.gemini/GEMINI.md` between the
+`<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` markers so Gemini CLI can inherit the same enforced rules.
 
 ## aiogram Worker Behaviour
 
 - `/start`: returns `chat_id`, `MODE`, and `ACTIVE_MODEL`; logs record `chat_id` and `user_id`.
 - Text messages:
-    1. Pick the `SessionAdapter` based on `ACTIVE_MODEL`, read `current_session.txt`, and search `MODEL_SESSION_ROOT` if
-       necessary.
+    1. Resolve the session file based on `ACTIVE_MODEL`: Codex/ClaudeCode uses JSONL, Gemini uses `session-*.json`.
+       Read `current_session.txt` first, then search `MODEL_SESSION_ROOT` if needed.
     2. Inject the prompt into tmux (send `Esc` to clear modes, `Ctrl+J` for newline, `Enter` to submit).
-    3. Initialise offsets from `SESSION_OFFSETS`; `_deliver_pending_messages()` streams tail updates from the JSONL log.
+    3. Initialise offsets from `SESSION_OFFSETS`; `_deliver_pending_messages()` streams updates from the session log.
     4. During the watcher phase, the bot informs the user the `ACTIVE_MODEL` is processing and pushes the result once
        ready (Markdown preserved).
 - MODE = A still honours `AGENT_CMD` for direct CLI execution.
@@ -169,7 +185,7 @@ Then click on `/start` in the bot created by Telegram ,Enjoy it!
 
 - Master bot will poll all project bots and invoke run/stop scripts to orchestrate workers; current version ships the
   worker layout and logging standard first.
-- Gemini CLI support will be added once an official integration path is available.
+- Gemini CLI is supported; next iterations can extend tool-call handling and richer session management if needed.
 
 ## Notes
 
