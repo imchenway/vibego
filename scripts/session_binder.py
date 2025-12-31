@@ -11,14 +11,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import time
 from pathlib import Path
+import hashlib
+from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Sequence, Set
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="绑定首个可用的 Codex/Claude 会话文件")
+    parser = argparse.ArgumentParser(description="绑定首个可用的 Codex/Claude/Gemini 会话文件")
     parser.add_argument("--pointer", required=True, help="current_session.txt 路径")
     parser.add_argument(
         "--session-root",
@@ -132,6 +135,81 @@ def _read_session_cwd(path: Path) -> Optional[str]:
     return cwd if isinstance(cwd, str) else None
 
 
+def _sha256_hex(text: str) -> str:
+    """计算 sha256 hex（用于 Gemini projectHash 匹配）。"""
+
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _normalize_cwd_variants(target_cwd: str) -> List[str]:
+    """为同一个工作目录生成多种等价表示，提升 Gemini projectHash 匹配鲁棒性。
+
+    Gemini CLI 的 projectHash 目前可通过“工作目录绝对路径字符串”的 sha256 计算得到，
+    但不同环境下可能出现“逻辑路径/物理路径”差异（例如 symlink）。
+    """
+
+    raw = target_cwd.strip()
+    if not raw:
+        return []
+
+    # 保留“逻辑路径”版本：只展开 ~ 和环境变量，不做 resolve。
+    expanded = Path(os.path.expandvars(raw)).expanduser()
+    candidates: List[str] = []
+    raw_str = str(expanded).rstrip("/")
+    if raw_str:
+        candidates.append(raw_str)
+
+    try:
+        resolved = expanded.resolve()
+    except OSError:
+        resolved = expanded
+    resolved_str = str(resolved).rstrip("/")
+    if resolved_str and resolved_str not in candidates:
+        candidates.append(resolved_str)
+
+    return candidates
+
+
+def _read_gemini_session_meta(path: Path) -> Optional[dict]:
+    """读取 Gemini session-*.json 的顶层元数据。"""
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _gemini_project_hash_matches(meta: dict, target_cwd: str) -> bool:
+    """判断 Gemini 会话文件是否属于目标工作目录。"""
+
+    project_hash = meta.get("projectHash")
+    if not isinstance(project_hash, str) or not project_hash:
+        return False
+    cwd_variants = _normalize_cwd_variants(target_cwd)
+    if not cwd_variants:
+        return True
+    for variant in cwd_variants:
+        if _sha256_hex(variant) == project_hash:
+            return True
+    return False
+
+
+def _parse_iso_to_epoch_ms(value: str) -> Optional[float]:
+    """解析 ISO-8601 时间为 epoch(ms)。"""
+
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp() * 1000.0
+
+
 def _select_latest_session(
     roots: Sequence[Path],
     pattern: str,
@@ -147,12 +225,25 @@ def _select_latest_session(
             mtime = candidate.stat().st_mtime
         except OSError:
             continue
-        if boot_ts_ms > 0 and (mtime * 1000.0) < boot_ts_ms:
-            continue
-        if target_cwd:
-            cwd = _read_session_cwd(candidate)
-            if cwd != target_cwd:
+        # Gemini 会话文件是 JSON（非 JSONL），过滤逻辑不同
+        if candidate.suffix.lower() == ".json":
+            meta = _read_gemini_session_meta(candidate)
+            if meta is None:
                 continue
+            # 优先使用 startTime 做启动时间过滤，避免“旧会话被更新”导致误选
+            start_ms = _parse_iso_to_epoch_ms(meta.get("startTime", ""))
+            effective_ms = start_ms if start_ms is not None else (mtime * 1000.0)
+            if boot_ts_ms > 0 and effective_ms < boot_ts_ms:
+                continue
+            if target_cwd and not _gemini_project_hash_matches(meta, target_cwd):
+                continue
+        else:
+            if boot_ts_ms > 0 and (mtime * 1000.0) < boot_ts_ms:
+                continue
+            if target_cwd:
+                cwd = _read_session_cwd(candidate)
+                if cwd != target_cwd:
+                    continue
         if mtime > latest_mtime:
             latest_mtime = mtime
             latest_path = candidate
@@ -219,7 +310,15 @@ def main() -> int:
         if candidate is not None:
             _write_text(pointer, str(candidate))
             if session_id_path is not None:
-                _write_text(session_id_path, candidate.stem)
+                if candidate.suffix.lower() == ".json":
+                    meta = _read_gemini_session_meta(candidate) or {}
+                    session_id = meta.get("sessionId")
+                    if isinstance(session_id, str) and session_id:
+                        _write_text(session_id_path, session_id)
+                    else:
+                        _write_text(session_id_path, candidate.stem)
+                else:
+                    _write_text(session_id_path, candidate.stem)
             _append_log(args.log, f"[binder] bind session -> {candidate}")
             return 0
 
