@@ -736,6 +736,7 @@ def test_switch_all_action_displays_model_options(repo: ProjectRepository, tmp_p
     button_texts = [btn.text for row in markup.inline_keyboard for btn in row]
     assert any("Codex" in text for text in button_texts)
     assert any("ClaudeCode" in text for text in button_texts)
+    assert any("Gemini" in text for text in button_texts)
     assert any("取消" in text for text in button_texts)
 
 

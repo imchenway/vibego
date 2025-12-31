@@ -285,6 +285,7 @@ MASTER_BROADCAST_MESSAGE = os.environ.get("MASTER_BROADCAST_MESSAGE", "")
 SWITCHABLE_MODELS: Tuple[Tuple[str, str], ...] = (
     ("codex", "⚙️ Codex"),
     ("claudecode", "⚙️ ClaudeCode"),
+    ("gemini", "⚙️ Gemini"),
 )
 SYSTEM_SETTINGS_MENU_CALLBACK = "system:menu"
 SYSTEM_SETTINGS_BACK_CALLBACK = "system:back"
