@@ -2891,6 +2891,39 @@ def _is_wx_preview_missing_port_error(exit_code: Optional[int], stderr_text: str
     return "未配置微信开发者工具 IDE 服务端口" in stderr_text
 
 
+_WX_PREVIEW_PORT_MISMATCH_RE = re.compile(
+    r"IDE server has started on https?://[^:\s]+:(\d+)\s+and must be restarted on port\s+(\d+)\s+first",
+    re.IGNORECASE,
+)
+
+
+def _parse_wx_preview_port_mismatch(stderr_text: str) -> tuple[Optional[int], Optional[int]]:
+    """从微信开发者工具 CLI 的“端口不匹配”报错中解析（当前端口，期望端口）。"""
+
+    if not stderr_text:
+        return None, None
+    match = _WX_PREVIEW_PORT_MISMATCH_RE.search(stderr_text)
+    if not match:
+        return None, None
+    try:
+        current_port = int(match.group(1))
+        expected_port = int(match.group(2))
+    except (TypeError, ValueError):
+        return None, None
+    if not (1 <= current_port <= 65535 and 1 <= expected_port <= 65535):
+        return None, None
+    return current_port, expected_port
+
+
+def _is_wx_preview_port_mismatch_error(exit_code: Optional[int], stderr_text: str) -> bool:
+    """判断是否为 wx-dev-preview 端口不匹配导致的可恢复错误。"""
+
+    if exit_code is None or exit_code == 0:
+        return False
+    current_port, expected_port = _parse_wx_preview_port_mismatch(stderr_text)
+    return current_port is not None and expected_port is not None
+
+
 def _extract_shell_env_value(command_text: str, key: str) -> Optional[str]:
     """从 shell 命令字符串中提取形如 KEY=... 的首个赋值。"""
 
@@ -3330,11 +3363,17 @@ async def _execute_command_definition(
     wx_port_keyboard_rows: list[list[InlineKeyboardButton]] = []
     if (
         command.name == WX_PREVIEW_COMMAND_NAME
-        and _is_wx_preview_missing_port_error(exit_code, stderr_text)
+        and (
+            _is_wx_preview_missing_port_error(exit_code, stderr_text)
+            or _is_wx_preview_port_mismatch_error(exit_code, stderr_text)
+        )
         and fsm_state is not None
         and reply_message is not None
     ):
+        mismatch_current_port, mismatch_expected_port = _parse_wx_preview_port_mismatch(stderr_text)
         suggested_ports, enabled_flag, config_path = _suggest_wx_devtools_ports()
+        if mismatch_current_port is not None and mismatch_current_port not in suggested_ports:
+            suggested_ports = [mismatch_current_port, *suggested_ports]
         ports_file = CONFIG_DIR_PATH / "wx_devtools_ports.json"
         raw_project_root = _extract_shell_env_value(command.command, "PROJECT_PATH") or _extract_shell_env_value(
             command.command, "PROJECT_BASE"
@@ -3355,8 +3394,17 @@ async def _execute_command_definition(
         )
 
         lines.append("")
-        lines.append("*端口配置缺失（可恢复）*")
+        if _is_wx_preview_missing_port_error(exit_code, stderr_text):
+            lines.append("*端口配置缺失（可恢复）*")
+        else:
+            lines.append("*端口配置不匹配（可恢复）*")
         lines.append("`wx-dev-preview` 需要微信开发者工具 CLI 的 `--port`（IDE HTTP 服务端口）。")
+        if mismatch_current_port is not None and mismatch_expected_port is not None:
+            lines.append(
+                "检测到 IDE 当前端口为 "
+                f"`{mismatch_current_port}`，但本次命令使用端口为 `{mismatch_expected_port}`。"
+            )
+            lines.append("可选择使用当前端口重试（推荐），或退出 IDE 并在安全设置把服务端口切回旧端口后再重试。")
         if enabled_flag is False:
             lines.append("检测到 IDE 的“服务端口”开关可能未开启，请在 IDE：设置 → 安全设置 → 服务端口 打开后重试。")
         if suggested_ports:
