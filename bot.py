@@ -2895,6 +2895,12 @@ _WX_PREVIEW_PORT_MISMATCH_RE = re.compile(
     r"IDE server has started on https?://[^:\s]+:(\d+)\s+and must be restarted on port\s+(\d+)\s+first",
     re.IGNORECASE,
 )
+_WX_PREVIEW_PROJECT_ROOT_PATTERNS = (
+    # 从 wx-dev-preview 的输出中提取实际小程序目录
+    re.compile(r"\[信息\]\s*生成预览，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
+    re.compile(r"小程序目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
+    re.compile(r"项目目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
+)
 
 
 def _parse_wx_preview_port_mismatch(stderr_text: str) -> tuple[Optional[int], Optional[int]]:
@@ -2913,6 +2919,32 @@ def _parse_wx_preview_port_mismatch(stderr_text: str) -> tuple[Optional[int], Op
     if not (1 <= current_port <= 65535 and 1 <= expected_port <= 65535):
         return None, None
     return current_port, expected_port
+
+
+def _extract_wx_preview_project_root(stdout_text: str, stderr_text: str) -> Optional[Path]:
+    """从 wx-dev-preview 输出中解析小程序目录路径。"""
+
+    for source in (stdout_text, stderr_text):
+        if not source:
+            continue
+        for pattern in _WX_PREVIEW_PROJECT_ROOT_PATTERNS:
+            match = pattern.search(source)
+            if not match:
+                continue
+            raw_path = (match.group("path") or "").strip()
+            if not raw_path:
+                continue
+            # 清理可能的引号或标点，避免路径解析失败
+            cleaned = raw_path.strip().strip("\"'").rstrip("，,").strip()
+            if not cleaned:
+                continue
+            candidate = Path(cleaned).expanduser()
+            try:
+                if candidate.is_dir():
+                    return candidate.resolve()
+            except OSError:
+                continue
+    return None
 
 
 def _is_wx_preview_port_mismatch_error(exit_code: Optional[int], stderr_text: str) -> bool:
@@ -3375,10 +3407,13 @@ async def _execute_command_definition(
         if mismatch_current_port is not None and mismatch_current_port not in suggested_ports:
             suggested_ports = [mismatch_current_port, *suggested_ports]
         ports_file = CONFIG_DIR_PATH / "wx_devtools_ports.json"
-        raw_project_root = _extract_shell_env_value(command.command, "PROJECT_PATH") or _extract_shell_env_value(
-            command.command, "PROJECT_BASE"
-        )
-        project_root = Path(raw_project_root).expanduser() if raw_project_root else None
+        # 优先从脚本输出解析实际目录，避免写入错误路径
+        project_root = _extract_wx_preview_project_root(stdout_text, stderr_text)
+        if project_root is None:
+            raw_project_root = _extract_shell_env_value(command.command, "PROJECT_PATH") or _extract_shell_env_value(
+                command.command, "PROJECT_BASE"
+            )
+            project_root = Path(raw_project_root).expanduser() if raw_project_root else None
 
         await fsm_state.clear()
         await fsm_state.set_state(WxPreviewStates.waiting_port)
