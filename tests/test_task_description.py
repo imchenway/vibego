@@ -490,6 +490,148 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
     asyncio.run(_scenario())
 
 
+def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
+    """推送补充阶段：图片/文件消息常用 caption 承载文字，应写入补充任务描述。"""
+
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=1)
+    message.from_user = SimpleNamespace(id=1, full_name="Tester")
+    message.text = None
+    message.caption = "补充描述中包含图片地址：https://example.com/image.jpg"
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.TaskPushStates.waiting_supplement))
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_0001",
+            actor="Tester",
+            chat_id=message.chat.id,
+            origin_message=None,
+            processed_media_groups=[],
+        )
+    )
+
+    task = _make_task(
+        task_id="TASK_0001",
+        title="调研任务",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == task.id
+        return task
+
+    async def fake_collect(msg, target_dir):
+        return []
+
+    push_calls: list[dict] = []
+
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+        push_calls.append(
+            {
+                "task_id": task_arg.id,
+                "chat_id": chat_id,
+                "supplement": supplement,
+                "actor": actor,
+            }
+        )
+        return True, "PROMPT", None
+
+    async def fake_preview(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+
+    asyncio.run(bot.on_task_push_model_supplement(message, state))
+
+    assert push_calls, "应触发推送"
+    assert push_calls[0]["supplement"] == message.caption
+
+
+def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_path: Path):
+    """推送补充阶段：仅附件无文字时，补充描述应生成“见附件：文件名列表”。"""
+
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=1)
+    message.from_user = SimpleNamespace(id=1, full_name="Tester")
+    message.text = None
+    message.caption = None
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.TaskPushStates.waiting_supplement))
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_0001",
+            actor="Tester",
+            chat_id=message.chat.id,
+            origin_message=None,
+            processed_media_groups=[],
+        )
+    )
+
+    task = _make_task(
+        task_id="TASK_0001",
+        title="调研任务",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == task.id
+        return task
+
+    saved = [
+        bot.TelegramSavedAttachment(
+            kind="photo",
+            display_name="photo.jpg",
+            mime_type="image/jpeg",
+            absolute_path=tmp_path / "photo.jpg",
+            relative_path="./data/photo.jpg",
+        )
+    ]
+
+    async def fake_collect(msg, target_dir):
+        return saved
+
+    bound_calls: list[tuple[str, list[dict], str]] = []
+
+    async def fake_bind(task_arg, attachments, actor):
+        bound_calls.append((task_arg.id, list(attachments), actor))
+        return []
+
+    push_calls: list[dict] = []
+
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+        push_calls.append(
+            {
+                "task_id": task_arg.id,
+                "chat_id": chat_id,
+                "supplement": supplement,
+                "actor": actor,
+            }
+        )
+        return True, "PROMPT", None
+
+    async def fake_preview(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_bind_serialized_attachments", fake_bind)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+
+    asyncio.run(bot.on_task_push_model_supplement(message, state))
+
+    assert bound_calls, "应绑定附件"
+    assert push_calls, "应触发推送"
+    assert push_calls[0]["supplement"] == "见附件：photo.jpg"
+
+
 def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=1)

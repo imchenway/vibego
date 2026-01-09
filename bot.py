@@ -1670,6 +1670,8 @@ async def _push_task_to_model(
     history_text, history_count = await _build_history_context_for_model(task.id)
     notes = await TASK_SERVICE.list_notes(task.id)
     attachments = await TASK_SERVICE.list_attachments(task.id)
+    # 需求约定：附件按发送顺序展示（时间升序）；服务层默认倒序，这里反转后输出。
+    attachments = list(reversed(attachments))
     prompt = _build_model_push_payload(
         task,
         supplement=supplement,
@@ -1690,6 +1692,8 @@ async def _push_task_to_model(
         else:
             related_history_text, related_history_count = await _build_history_context_for_model(related_task.id)
             related_attachments = await TASK_SERVICE.list_attachments(related_task.id)
+            # 需求约定：附件按发送顺序展示（时间升序）；服务层默认倒序，这里反转后输出。
+            related_attachments = list(reversed(related_attachments))
             related_block = _build_task_context_block_for_model(
                 related_task,
                 supplement=None,
@@ -4148,6 +4152,7 @@ def _is_cancel_message(value: Optional[str]) -> bool:
         return False
     lowered = token.lower()
     cancel_tokens = {"取消", "cancel", "quit"}
+    cancel_tokens.add("取消创建任务")
     # 兼容含有表情的菜单按钮文本，避免用户需重复点击取消。
     cancel_tokens.add(_normalize_choice_token(TASK_DESC_CANCEL_TEXT).lower())
     return lowered in cancel_tokens
@@ -5469,6 +5474,17 @@ def _build_description_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=SKIP_TEXT)],
         [KeyboardButton(text="取消")],
+    ]
+    _number_reply_buttons(rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+def _build_related_task_action_keyboard() -> ReplyKeyboardMarkup:
+    """缺陷创建：关联任务选择阶段的菜单栏按钮。"""
+
+    rows = [
+        [KeyboardButton(text=SKIP_TEXT)],
+        [KeyboardButton(text="取消创建任务")],
     ]
     _number_reply_buttons(rows)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
@@ -9342,6 +9358,11 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
             related_page=1,
         )
         await state.set_state(TaskCreateStates.waiting_related_task)
+        # 该阶段任务列表使用 InlineKeyboard（选择/翻页）；跳过/取消放入菜单栏保持与后续流程一致。
+        await message.answer(
+            "请选择关联前置任务，可在菜单栏点击“跳过”继续创建缺陷任务，或点击“取消创建任务”退出。",
+            reply_markup=_build_related_task_action_keyboard(),
+        )
         text, markup = await _build_related_task_select_view(page=1)
         await _answer_with_markdown(message, text, reply_markup=markup)
         return
@@ -9367,12 +9388,12 @@ async def _build_related_task_select_view(*, page: int) -> tuple[str, InlineKeyb
     tasks = await TASK_SERVICE.list_recent_tasks(limit=limit, offset=offset, include_archived=False)
 
     lines = [
-        "请选择关联任务（按更新时间倒序）：",
+        "请选择关联前置任务（按更新时间倒序）：",
         f"页码 {normalized_page}/{total_pages} · 每页 {limit} 条 · 总数 {total}",
-        "可点击按钮选择，或直接输入 TASK_0001（也支持 /TASK_0001）。",
+        "可点击按钮选择，或直接输入 TASK_0001（也支持 /TASK_0001）；也可在菜单栏点击“跳过/取消创建任务”。",
     ]
     if not tasks:
-        lines.append("当前没有可选任务，可点击“跳过”继续创建缺陷任务。")
+        lines.append("当前没有可选任务，可在菜单栏点击“跳过”继续创建缺陷任务。")
 
     rows: list[list[InlineKeyboardButton]] = []
     for task in tasks:
@@ -9403,13 +9424,6 @@ async def _build_related_task_select_view(*, page: int) -> tuple[str, InlineKeyb
         )
     if nav_row:
         rows.append(nav_row)
-
-    rows.append(
-        [
-            InlineKeyboardButton(text="跳过", callback_data=TASK_RELATED_SKIP_CALLBACK),
-            InlineKeyboardButton(text="取消", callback_data=TASK_RELATED_CANCEL_CALLBACK),
-        ]
-    )
 
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -9503,7 +9517,7 @@ async def on_task_create_related_cancel(callback: CallbackQuery, state: FSMConte
     """缺陷任务创建：取消。"""
 
     await state.clear()
-    await callback.answer("已取消", show_alert=False)
+    await callback.answer("已取消创建任务", show_alert=False)
     if callback.message:
         await callback.message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
 
@@ -9938,6 +9952,8 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
             origin_message=callback.message,
             chat_id=chat_id,
             actor=actor,
+            # 与任务创建/附件流程保持一致：相册（媒体组）会触发多次回调，需要记录已处理的 group。
+            processed_media_groups=[],
         )
         await state.set_state(TaskPushStates.waiting_supplement)
         await callback.answer("请补充任务描述，或点击跳过/取消")
@@ -10048,6 +10064,8 @@ async def on_task_push_model_fill(callback: CallbackQuery, state: FSMContext) ->
         origin_message=callback.message,
         chat_id=callback.message.chat.id if callback.message else callback.from_user.id,
         actor=actor,
+        # 与任务创建/附件流程保持一致：相册（媒体组）会触发多次回调，需要记录已处理的 group。
+        processed_media_groups=[],
     )
     await state.set_state(TaskPushStates.waiting_supplement)
     await callback.answer()
@@ -10055,16 +10073,23 @@ async def on_task_push_model_fill(callback: CallbackQuery, state: FSMContext) ->
         await _prompt_model_supplement_input(callback.message)
 
 
+def _build_attachment_only_supplement(attachments: Sequence[TelegramSavedAttachment]) -> str:
+    """仅发送附件无文字时，为“补充任务描述”生成兜底文案。"""
+
+    if not attachments:
+        return "-"
+    names = [str(item.display_name or "").strip() for item in attachments]
+    names = [name for name in names if name]
+    if not names:
+        return "见附件"
+    limit = TASK_ATTACHMENT_PREVIEW_LIMIT
+    shown = names[:limit]
+    suffix = f"（共 {len(names)} 个）" if len(names) > limit else ""
+    return f"见附件：{'、'.join(shown)}{suffix}"
+
+
 @router.message(TaskPushStates.waiting_supplement)
 async def on_task_push_model_supplement(message: Message, state: FSMContext) -> None:
-    raw_text = message.text or ""
-    trimmed = raw_text.strip()
-    options = [SKIP_TEXT, "取消"]
-    resolved = _resolve_reply_choice(raw_text, options=options)
-    if resolved == "取消" or trimmed == "取消":
-        await state.clear()
-        await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
-        return
     data = await state.get_data()
     task_id = data.get("task_id")
     if not task_id:
@@ -10076,20 +10101,54 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         await state.clear()
         await message.answer("任务不存在，已取消推送。", reply_markup=_build_worker_main_keyboard())
         return
-    supplement: Optional[str] = None
-    if trimmed and resolved != SKIP_TEXT:
-        if len(trimmed) > DESCRIPTION_MAX_LENGTH:
-            await message.answer(
-                f"补充任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-                reply_markup=_build_description_keyboard(),
-            )
-            return
-        supplement = raw_text.strip()
     chat_id = data.get("chat_id") or message.chat.id
     origin_message = data.get("origin_message")
     actor = data.get("actor") or _actor_from_message(message)
     attachment_dir = _attachment_dir_for_message(message)
-    saved_attachments = await _collect_saved_attachments(message, attachment_dir)
+
+    processed_groups = set(data.get("processed_media_groups") or [])
+    # 复用现有媒体组聚合逻辑：相册会触发多次 handler，这里合并 caption 并确保整组只消费一次。
+    saved_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    # 媒体组重复回调：该条消息已被其他 handler 消费，避免清空状态/误提示“会话失效”。
+    if message.media_group_id and not saved_attachments and not text_part:
+        return
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
+
+    raw_text = text_part or ""
+    trimmed = raw_text.strip()
+    options = [SKIP_TEXT, "取消"]
+    resolved = _resolve_reply_choice(raw_text, options=options)
+    if resolved == "取消" or trimmed == "取消":
+        await state.clear()
+        await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    supplement: Optional[str] = None
+    # Telegram 图片/文件常用 caption 承载文字；若本次仅有附件无文字，则按需求生成“见附件：文件名列表”。
+    if trimmed and resolved != SKIP_TEXT:
+        if len(trimmed) > DESCRIPTION_MAX_LENGTH:
+            if saved_attachments:
+                serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
+                await _bind_serialized_attachments(task, serialized, actor=actor)
+                await message.answer(
+                    f"补充任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入（附件已记录，无需重复发送）：",
+                    reply_markup=_build_description_keyboard(),
+                )
+            else:
+                await message.answer(
+                    f"补充任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
+                    reply_markup=_build_description_keyboard(),
+                )
+            return
+        supplement = trimmed
+    elif saved_attachments:
+        supplement = _build_attachment_only_supplement(saved_attachments)
+
     if saved_attachments:
         serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
         await _bind_serialized_attachments(task, serialized, actor=actor)
