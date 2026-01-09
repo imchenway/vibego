@@ -70,9 +70,15 @@ def test_related_task_select_view_sorts_by_updated_at_desc_and_paginates(monkeyp
     assert f"{bot.TASK_RELATED_PAGE_PREFIX}:2" in nav_buttons_1
     assert f"{bot.TASK_RELATED_PAGE_PREFIX}:1" not in nav_buttons_1
 
-    # “跳过/取消”固定在最后一行
-    assert markup_1.inline_keyboard[-1][0].callback_data == bot.TASK_RELATED_SKIP_CALLBACK
-    assert markup_1.inline_keyboard[-1][1].callback_data == bot.TASK_RELATED_CANCEL_CALLBACK
+    # “跳过/取消”已迁移到菜单栏（ReplyKeyboard），不再出现在列表 InlineKeyboard 中
+    callbacks_1 = [
+        button.callback_data
+        for row in markup_1.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert bot.TASK_RELATED_SKIP_CALLBACK not in callbacks_1
+    assert bot.TASK_RELATED_CANCEL_CALLBACK not in callbacks_1
 
     text_2, markup_2 = asyncio.run(bot._build_related_task_select_view(page=2))
     assert "页码 2/2" in text_2
@@ -93,3 +99,12 @@ def test_related_task_select_view_sorts_by_updated_at_desc_and_paginates(monkeyp
     ]
     assert f"{bot.TASK_RELATED_PAGE_PREFIX}:1" in nav_buttons_2
     assert f"{bot.TASK_RELATED_PAGE_PREFIX}:2" not in nav_buttons_2
+
+    callbacks_2 = [
+        button.callback_data
+        for row in markup_2.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert bot.TASK_RELATED_SKIP_CALLBACK not in callbacks_2
+    assert bot.TASK_RELATED_CANCEL_CALLBACK not in callbacks_2
