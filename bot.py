@@ -319,6 +319,9 @@ MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
 # 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
 ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先阅读并严格遵守 $HOME/.config/vibego/AGENTS.md 的全部规约；"
+# 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
+MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
+MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
@@ -1021,6 +1024,8 @@ async def reply_large_text(
     *,
     parse_mode: Optional[str] = None,
     preformatted: bool = False,
+    reply_markup: Optional[Any] = None,
+    attachment_reply_markup: Optional[Any] = None,
 ) -> str:
     """向指定会话发送可能较长的文本，必要时退化为附件。
 
@@ -1028,6 +1033,8 @@ async def reply_large_text(
     :param text: 待发送内容。
     :param parse_mode: 指定消息的 parse_mode，未提供时沿用全局默认值。
     :param preformatted: 标记文本已按 parse_mode 处理，跳过内部转义。
+    :param reply_markup: 短消息模式下，附带的键盘（如 InlineKeyboard）。
+    :param attachment_reply_markup: 长消息降级为文件时，附带在“文件消息”上的键盘（摘要消息不挂键盘）。
     """
     bot = current_bot()
     parse_mode_value = parse_mode if parse_mode is not None else _parse_mode_value()
@@ -1038,13 +1045,21 @@ async def reply_large_text(
         prepared, fallback_payload = _prepare_model_payload_variants(text)
 
     async def _send_formatted_message(payload: str) -> None:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=payload,
-            parse_mode=parse_mode_value,
-        )
+        kwargs: dict[str, Any] = {}
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        await bot.send_message(chat_id=chat_id, text=payload, parse_mode=parse_mode_value, **kwargs)
+
+    async def _send_formatted_message_without_markup(payload: str) -> None:
+        await bot.send_message(chat_id=chat_id, text=payload, parse_mode=parse_mode_value)
 
     async def _send_raw_message(payload: str) -> None:
+        kwargs: dict[str, Any] = {}
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        await bot.send_message(chat_id=chat_id, text=payload, parse_mode=None, **kwargs)
+
+    async def _send_raw_message_without_markup(payload: str) -> None:
         await bot.send_message(chat_id=chat_id, text=payload, parse_mode=None)
 
     if len(prepared) <= TELEGRAM_MESSAGE_LIMIT:
@@ -1074,15 +1089,18 @@ async def reply_large_text(
     summary_prepared, summary_fallback = _prepare_model_payload_variants(summary_text)
     delivered_summary = await _send_with_markdown_guard(
         summary_prepared,
-        _send_formatted_message,
-        raw_sender=_send_raw_message,
+        _send_formatted_message_without_markup,
+        raw_sender=_send_raw_message_without_markup,
         fallback_payload=summary_fallback,
     )
 
     document = BufferedInputFile(text.encode("utf-8"), filename=attachment_name)
 
     async def _send_document() -> None:
-        await bot.send_document(chat_id=chat_id, document=document)
+        kwargs: dict[str, Any] = {}
+        if attachment_reply_markup is not None:
+            kwargs["reply_markup"] = attachment_reply_markup
+        await bot.send_document(chat_id=chat_id, document=document, **kwargs)
 
     await _send_with_retry(_send_document)
 
@@ -2611,6 +2629,18 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
     )
+
+
+def _build_model_quick_reply_keyboard() -> InlineKeyboardMarkup:
+    """构建“模型答案消息”底部的快捷回复按钮（InlineKeyboard）。"""
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text="✅ 全部按推荐", callback_data=MODEL_QUICK_REPLY_ALL_CALLBACK),
+            InlineKeyboardButton(text="🧩 部分按推荐（需补充）", callback_data=MODEL_QUICK_REPLY_PARTIAL_CALLBACK),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _build_command_edit_cancel_keyboard() -> ReplyKeyboardMarkup:
@@ -6630,6 +6660,8 @@ async def _deliver_pending_messages(
     new_offset, events = _read_session_events(session_path)
     delivered_response = False
     last_sent = _get_last_message(chat_id, session_key)
+    # 需求约定：仅在“模型答案消息”（本函数投递的模型输出）底部展示快捷按钮。
+    quick_reply_markup = _build_model_quick_reply_keyboard()
     delivered_hashes = _get_delivered_hashes(chat_id, session_key)
     delivered_offsets = _get_delivered_offsets(chat_id, session_key)
     last_committed_offset = previous_offset
@@ -6726,7 +6758,12 @@ async def _deliver_pending_messages(
             },
         )
         try:
-            delivered_payload = await reply_large_text(chat_id, formatted_text)
+            delivered_payload = await reply_large_text(
+                chat_id,
+                formatted_text,
+                reply_markup=quick_reply_markup,
+                attachment_reply_markup=quick_reply_markup,
+            )
         except TelegramBadRequest as exc:
             SESSION_OFFSETS[session_key] = previous_offset
             _clear_last_message(chat_id, session_key)
@@ -8356,6 +8393,68 @@ async def on_commands_command(message: Message) -> None:
 @router.message(F.text == WORKER_COMMANDS_BUTTON_TEXT)
 async def on_commands_button(message: Message) -> None:
     await _send_command_overview(message)
+
+
+@router.callback_query(F.data == MODEL_QUICK_REPLY_ALL_CALLBACK)
+async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
+    """将“全部按推荐”快捷回复注入 tmux，模拟用户发送一条消息到模型。"""
+
+    chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+    origin_message = callback.message
+    prompt = "待决策项全部按模型推荐"
+
+    success, session_path = await _dispatch_prompt_to_model(
+        chat_id,
+        prompt,
+        reply_to=origin_message,
+        ack_immediately=False,
+    )
+    if not success:
+        await callback.answer("推送失败：模型未就绪", show_alert=True)
+        return
+
+    await callback.answer("已推送到模型")
+    preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+    await _send_model_push_preview(
+        chat_id,
+        preview_block,
+        reply_to=origin_message,
+        parse_mode=preview_parse_mode,
+        reply_markup=None,
+    )
+    if session_path is not None:
+        await _send_session_ack(chat_id, session_path, reply_to=origin_message)
+
+
+@router.callback_query(F.data == MODEL_QUICK_REPLY_PARTIAL_CALLBACK)
+async def on_model_quick_reply_partial(callback: CallbackQuery) -> None:
+    """将“部分按推荐（需补充）”快捷回复注入 tmux，触发模型追问例外项。"""
+
+    chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+    origin_message = callback.message
+    prompt = "待决策项部分按模型推荐，且需要补充"
+
+    success, session_path = await _dispatch_prompt_to_model(
+        chat_id,
+        prompt,
+        reply_to=origin_message,
+        ack_immediately=False,
+    )
+    if not success:
+        await callback.answer("推送失败：模型未就绪", show_alert=True)
+        return
+
+    await callback.answer("已推送到模型")
+    preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+    await _send_model_push_preview(
+        chat_id,
+        preview_block,
+        reply_to=origin_message,
+        parse_mode=preview_parse_mode,
+        reply_markup=None,
+    )
+    if session_path is not None:
+        await _send_session_ack(chat_id, session_path, reply_to=origin_message)
 
 
 @router.callback_query(F.data == COMMAND_REFRESH_CALLBACK)
