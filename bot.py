@@ -9360,7 +9360,7 @@ async def on_task_create_type(message: Message, state: FSMContext) -> None:
         await state.set_state(TaskCreateStates.waiting_related_task)
         # 该阶段任务列表使用 InlineKeyboard（选择/翻页）；跳过/取消放入菜单栏保持与后续流程一致。
         await message.answer(
-            "请选择关联前置任务，可在菜单栏点击“跳过”继续创建缺陷任务，或点击“取消创建任务”退出。",
+            "请选择关联前置任务，可输入 1 跳过、2 取消创建任务（或在菜单栏点击对应按钮）。",
             reply_markup=_build_related_task_action_keyboard(),
         )
         text, markup = await _build_related_task_select_view(page=1)
@@ -9390,10 +9390,10 @@ async def _build_related_task_select_view(*, page: int) -> tuple[str, InlineKeyb
     lines = [
         "请选择关联前置任务（按更新时间倒序）：",
         f"页码 {normalized_page}/{total_pages} · 每页 {limit} 条 · 总数 {total}",
-        "可点击按钮选择，或直接输入 TASK_0001（也支持 /TASK_0001）；也可在菜单栏点击“跳过/取消创建任务”。",
+        "可点击按钮选择，或直接输入 TASK_0001（也支持 /TASK_0001）；也可输入 1 跳过、2 取消创建任务（或在菜单栏点击）。",
     ]
     if not tasks:
-        lines.append("当前没有可选任务，可在菜单栏点击“跳过”继续创建缺陷任务。")
+        lines.append("当前没有可选任务，可输入 1 跳过继续创建缺陷任务（或在菜单栏点击“跳过”）。")
 
     rows: list[list[InlineKeyboardButton]] = []
     for task in tasks:
@@ -9440,6 +9440,36 @@ async def _advance_task_create_to_description(message: Message, state: FSMContex
         ),
         reply_markup=_build_description_keyboard(),
     )
+
+
+def _format_pending_attachments_for_create_summary(
+    pending_attachments: Sequence[Mapping[str, str]],
+) -> list[str]:
+    """将创建流程中暂存的附件列表格式化为确认摘要文本行（中文）。"""
+
+    if not pending_attachments:
+        return ["附件列表：-"]
+
+    # 与 _bind_serialized_attachments() 的行为保持一致：按 path 去重，避免媒体组/重放导致重复展示。
+    seen_paths: set[str] = set()
+    ordered: list[tuple[str, str, str]] = []
+    for item in pending_attachments:
+        display_name = (item.get("display_name") or "attachment").strip() or "attachment"
+        mime_type = (item.get("mime_type") or "application/octet-stream").strip() or "application/octet-stream"
+        path = (item.get("path") or "").strip() or "-"
+        if path != "-" and path in seen_paths:
+            continue
+        if path != "-":
+            seen_paths.add(path)
+        ordered.append((display_name, mime_type, path))
+
+    lines = ["附件列表："]
+    limit = TASK_ATTACHMENT_PREVIEW_LIMIT
+    for idx, (display_name, mime_type, path) in enumerate(ordered[:limit], 1):
+        lines.append(f"{idx}. {display_name}（{mime_type}）→ {path}")
+    if len(ordered) > limit:
+        lines.append(f"… 其余 {len(ordered) - limit} 个附件未展开（共 {len(ordered)} 个）")
+    return lines
 
 
 @router.callback_query(F.data.startswith(f"{TASK_RELATED_PAGE_PREFIX}:"))
@@ -9526,7 +9556,12 @@ async def on_task_create_related_cancel(callback: CallbackQuery, state: FSMConte
 async def on_task_create_related_task_text(message: Message, state: FSMContext) -> None:
     """缺陷任务创建：处理用户手动输入关联任务编号 / 跳过 / 取消。"""
 
-    token = _normalize_choice_token(message.text or "")
+    # 重要：该阶段菜单栏按钮会带数字前缀（例如 1. 跳过 / 2. 取消创建任务），且用户也可能直接输入 1/2。
+    # 使用 _resolve_reply_choice() 统一解析，避免把 “1” 误判为任务编号无效。
+    raw_text = message.text or ""
+    action_options = [SKIP_TEXT, "取消创建任务"]
+    resolved = _resolve_reply_choice(raw_text, options=action_options)
+    token = _normalize_choice_token(resolved or raw_text)
     if _is_cancel_message(token):
         await state.clear()
         await message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
@@ -9541,7 +9576,7 @@ async def on_task_create_related_task_text(message: Message, state: FSMContext) 
         data = await state.get_data()
         page = int(data.get("related_page", 1) or 1)
         text, markup = await _build_related_task_select_view(page=page)
-        await message.answer("任务编号无效，请点击按钮选择或输入 TASK_0001。")
+        await message.answer("任务编号无效，请点击按钮选择或输入 TASK_0001；也可输入 1 跳过、2 取消创建任务。")
         await _answer_with_markdown(message, text, reply_markup=markup)
         return
     task = await TASK_SERVICE.get_task(normalized_task_id)
@@ -9620,6 +9655,11 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
         summary_lines.append(description)
     else:
         summary_lines.append("描述：暂无（可稍后通过 /task_desc 补充）")
+    pending_attachments = data.get("pending_attachments") or []
+    if isinstance(pending_attachments, list):
+        summary_lines.extend(_format_pending_attachments_for_create_summary(pending_attachments))
+    else:
+        summary_lines.append("附件列表：-")
     await message.answer("\n".join(summary_lines), reply_markup=_build_worker_main_keyboard())
     await message.answer("是否创建该任务？", reply_markup=_build_confirm_keyboard())
 
@@ -9655,8 +9695,10 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
         if extra_text and not is_confirm and not is_cancel:
             description = f"{description}\n{extra_text}" if description else extra_text
         await state.update_data(pending_attachments=pending, description=description)
+        # 追加附件后，为用户回显最新附件列表（避免“确认页看不到附件”的困惑）。
+        updated_lines = _format_pending_attachments_for_create_summary(pending)
         await message.answer(
-            "已记录补充的描述/附件，请继续选择“确认创建”或“取消”。",
+            "已记录补充的描述/附件，请继续选择“确认创建”或“取消”。\n" + "\n".join(updated_lines),
             reply_markup=_build_confirm_keyboard(),
         )
         return
