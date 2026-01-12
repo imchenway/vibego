@@ -10,10 +10,56 @@ WX_DEVTOOLS_PORTS_FILE="${WX_DEVTOOLS_PORTS_FILE:-}"                          # 
 PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-6}"                             # 自动探测目录的最大深度（默认提升为 6，覆盖深层项目）
 PROJECT_BASE="${PROJECT_BASE:-${MODEL_WORKDIR:-$PWD}}"                        # 探测起始目录，可显式设置
 
+# 选择 Python 解释器：
+# - 优先外部显式指定：PYTHON_BIN / VIBEGO_PYTHON_BIN
+# - 其次使用当前虚拟环境：$VIRTUAL_ENV/bin/python（run_bot.sh 会设置 VIRTUAL_ENV，但未必会改 PATH）
+# - 最后回退到系统 python3.* / python3 / python（仅当 python 为 Python3 时）
+_pick_python_bin() {
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    printf '%s' "$PYTHON_BIN"
+    return 0
+  fi
+  if [[ -n "${VIBEGO_PYTHON_BIN:-}" ]]; then
+    printf '%s' "$VIBEGO_PYTHON_BIN"
+    return 0
+  fi
+  if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+    printf '%s' "$VIRTUAL_ENV/bin/python"
+    return 0
+  fi
+  local candidate
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  if command -v python >/dev/null 2>&1; then
+    if python - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info.major == 3 else 1)
+PY
+    then
+      printf '%s' "python"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+PYTHON_BIN="${PYTHON_BIN:-${VIBEGO_PYTHON_BIN:-}}"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  PYTHON_BIN="$(_pick_python_bin 2>/dev/null || true)"
+fi
+
 # 解析 project.config.json 中的 miniprogramRoot，返回绝对路径（若存在且有效）
 _extract_miniprogram_root() {
   local cfg="$1"
-  python - <<'PY' "$cfg" 2>/dev/null
+  # 仅在存在 Python 解释器时解析 JSON；否则直接返回空字符串，由后续逻辑走 app.json 探测兜底
+  if [[ -z "${PYTHON_BIN:-}" ]]; then
+    return 0
+  fi
+  "$PYTHON_BIN" - <<'PY' "$cfg" 2>/dev/null
 import json, sys, os
 cfg_path = sys.argv[1]
 try:
@@ -72,7 +118,12 @@ _resolve_wx_devtools_port() {
   local project_slug="${PROJECT_NAME:-${PROJECT_SLUG:-}}"
   local ports_file="${WX_DEVTOOLS_PORTS_FILE:-$(_default_wx_devtools_ports_file)}"
 
-  python - "$ports_file" "$project_slug" "$project_root" <<'PY' 2>/dev/null || true
+  # 端口映射解析依赖 Python；若缺失则返回空字符串，让上层走“缺失端口”的可恢复提示。
+  if [[ -z "${PYTHON_BIN:-}" ]]; then
+    return 0
+  fi
+
+  "$PYTHON_BIN" - "$ports_file" "$project_slug" "$project_root" <<'PY' 2>/dev/null || true
 import json
 import os
 import sys
@@ -323,7 +374,7 @@ mkdir -p "$(dirname "$OUTPUT_QR")"
 export http_proxy= https_proxy= all_proxy=
 export no_proxy="servicewechat.com,.weixin.qq.com"
 
-echo "[信息] 生成预览，项目：$RESOLVED_PROJECT_PATH，版本：$VERSION，端口：$PORT，输出：$OUTPUT_QR"
+echo "[信息] 生成预览，项目：${RESOLVED_PROJECT_PATH}，版本：${VERSION}，端口：${PORT}，输出：${OUTPUT_QR}"
 
 # 捕获 CLI 输出以便失败时回显
 CLI_LOG="$(mktemp -t wx-preview-cli)"
