@@ -751,7 +751,15 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
 
     fallback_calls: list[tuple[int, str, Optional[str], bool]] = []
 
-    async def fake_reply_large_text(chat_id, text, *, parse_mode=None, preformatted=False):
+    async def fake_reply_large_text(
+        chat_id,
+        text,
+        *,
+        parse_mode=None,
+        preformatted=False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+    ):
         fallback_calls.append((chat_id, text, parse_mode, preformatted))
         return text
 
@@ -1477,7 +1485,15 @@ def test_bug_report_auto_push_preview_fallback_on_too_long(monkeypatch, tmp_path
 
     fallback_calls: list[tuple[int, str, Optional[str], bool]] = []
 
-    async def fake_reply_large_text(chat_id, text, *, parse_mode=None, preformatted=False):
+    async def fake_reply_large_text(
+        chat_id,
+        text,
+        *,
+        parse_mode=None,
+        preformatted=False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+    ):
         fallback_calls.append((chat_id, text, parse_mode, preformatted))
         return text
 

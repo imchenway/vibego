@@ -61,6 +61,8 @@ def auto_compact_env(monkeypatch, tmp_path):
         *,
         parse_mode=None,
         preformatted: bool = False,
+        reply_markup=None,
+        attachment_reply_markup=None,
     ) -> str:
         responses.append((chat_id, text))
         return text
