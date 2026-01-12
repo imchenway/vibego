@@ -177,6 +177,53 @@ def test_task_create_type_defect_moves_to_related_selection(monkeypatch):
     assert isinstance(message.calls[-1]["reply_markup"], InlineKeyboardMarkup)
 
 
+def test_task_create_related_task_text_accepts_number_skip(monkeypatch):
+    """缺陷创建：关联任务阶段输入 1 应等价于“跳过”。"""
+
+    async def fake_view(*, page: int):
+        return "请选择关联任务：", InlineKeyboardMarkup(inline_keyboard=[])
+
+    monkeypatch.setattr(bot, "_build_related_task_select_view", fake_view)
+
+    state = DummyState(
+        data={
+            "title": "缺陷任务",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "defect",
+            "related_page": 1,
+        },
+        state=TaskCreateStates.waiting_related_task,
+    )
+    message = DummyMessage("1")
+    asyncio.run(bot.on_task_create_related_task_text(message, state))
+
+    assert state.state == TaskCreateStates.waiting_description
+    assert state.data.get("related_task_id") is None
+    assert message.calls
+    assert any("已跳过关联任务选择" in call["text"] for call in message.calls)
+
+
+def test_task_create_related_task_text_accepts_number_cancel():
+    """缺陷创建：关联任务阶段输入 2 应等价于“取消创建任务”。"""
+
+    state = DummyState(
+        data={
+            "title": "缺陷任务",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "defect",
+            "related_page": 1,
+        },
+        state=TaskCreateStates.waiting_related_task,
+    )
+    message = DummyMessage("2")
+    asyncio.run(bot.on_task_create_related_task_text(message, state))
+
+    assert state.state is None
+    assert not state.data
+    assert message.calls
+    assert message.calls[-1]["text"] == "已取消创建任务。"
+
+
 @pytest.mark.parametrize(
     "invalid_text",
     [
@@ -342,6 +389,10 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
     assert state.state == TaskCreateStates.waiting_confirm
     assert state.data.get("pending_attachments")
     assert state.data["pending_attachments"][0]["path"] == "./data/log.txt"
+    assert message.calls
+    summary = message.calls[-2]["text"]
+    assert "附件列表：" in summary
+    assert "log.txt（text/plain）→ ./data/log.txt" in summary
 
     created_task = bot.TaskRecord(
         id="TASK_1234",
