@@ -54,6 +54,12 @@ class TaskPushStates(StatesGroup):
     waiting_supplement = State()
 
 
+class ModelQuickReplyStates(StatesGroup):
+    """模型输出消息底部“快捷回复”交互状态集。"""
+
+    waiting_partial_supplement = State()
+
+
 class TaskAttachmentStates(StatesGroup):
     """任务附件绑定流程状态。"""
 

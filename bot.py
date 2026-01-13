@@ -76,6 +76,7 @@ from tasks.fsm import (
     TaskListSearchStates,
     TaskNoteStates,
     TaskPushStates,
+    ModelQuickReplyStates,
 )
 from command_center import (
     CommandCreateStates,
@@ -5697,6 +5698,24 @@ def _build_push_supplement_prompt() -> str:
     )
 
 
+def _build_quick_reply_partial_supplement_prompt() -> str:
+    """构建“部分按推荐（需补充）”的补充输入提示文案。"""
+
+    return (
+        "请发送需要补充的说明（未提及的决策项默认按推荐）。\n"
+        "发送“跳过”表示全部按推荐，发送“取消”退出。"
+    )
+
+
+async def _prompt_quick_reply_partial_supplement_input(message: Message) -> None:
+    """提示用户输入“部分按推荐（需补充）”的补充说明。"""
+
+    await message.answer(
+        _build_quick_reply_partial_supplement_prompt(),
+        reply_markup=_build_description_keyboard(),
+    )
+
+
 async def _prompt_model_supplement_input(message: Message) -> None:
     await message.answer(
         _build_push_supplement_prompt(),
@@ -8427,12 +8446,67 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == MODEL_QUICK_REPLY_PARTIAL_CALLBACK)
-async def on_model_quick_reply_partial(callback: CallbackQuery) -> None:
-    """将“部分按推荐（需补充）”快捷回复注入 tmux，触发模型追问例外项。"""
+async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContext) -> None:
+    """进入“部分按推荐（需补充）”流程，先收集用户补充说明再推送到模型。"""
 
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
     origin_message = callback.message
-    prompt = "待决策项部分按模型推荐，且需要补充"
+    current_state = await state.get_state()
+    if current_state and current_state != ModelQuickReplyStates.waiting_partial_supplement.state:
+        await callback.answer("当前有进行中的流程，请先完成或发送“取消”。", show_alert=True)
+        return
+
+    await state.clear()
+    await state.update_data(
+        chat_id=chat_id,
+        origin_message=origin_message,
+        # 用于后续超时清理或排查问题（单位：秒）。
+        started_at=time.time(),
+    )
+    await state.set_state(ModelQuickReplyStates.waiting_partial_supplement)
+    await callback.answer("请发送补充说明，或点击跳过/取消")
+    if origin_message is not None:
+        await _prompt_quick_reply_partial_supplement_input(origin_message)
+
+
+def _build_quick_reply_partial_prompt(supplement: str) -> str:
+    """构建“部分按推荐”最终推送给模型的提示词。"""
+
+    cleaned = (supplement or "").strip()
+    lines = [
+        "待决策项部分按模型推荐。",
+        "规则：未提及的决策项全部按推荐。",
+        f"补充说明：{cleaned}" if cleaned else "补充说明：-",
+    ]
+    return "\n".join(lines)
+
+
+@router.message(ModelQuickReplyStates.waiting_partial_supplement)
+async def on_model_quick_reply_partial_supplement(message: Message, state: FSMContext) -> None:
+    """接收用户补充说明，并推送“部分按推荐”到模型。"""
+
+    data = await state.get_data()
+    chat_id = int(data.get("chat_id") or message.chat.id)
+    origin_message = data.get("origin_message") or message
+
+    raw_text = (message.text or message.caption or "")
+    trimmed = raw_text.strip()
+    resolved = _resolve_reply_choice(raw_text, options=[SKIP_TEXT, "取消"])
+    if resolved == "取消" or trimmed == "取消":
+        await state.clear()
+        await message.answer("已取消快捷回复。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    if not trimmed or resolved == SKIP_TEXT:
+        prompt = "待决策项全部按模型推荐"
+    else:
+        if len(trimmed) > DESCRIPTION_MAX_LENGTH:
+            await message.answer(
+                f"补充说明长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
+                reply_markup=_build_description_keyboard(),
+            )
+            return
+        prompt = _build_quick_reply_partial_prompt(trimmed)
 
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
@@ -8440,18 +8514,18 @@ async def on_model_quick_reply_partial(callback: CallbackQuery) -> None:
         reply_to=origin_message,
         ack_immediately=False,
     )
+    await state.clear()
     if not success:
-        await callback.answer("推送失败：模型未就绪", show_alert=True)
+        await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
         return
 
-    await callback.answer("已推送到模型")
     preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
     await _send_model_push_preview(
         chat_id,
         preview_block,
         reply_to=origin_message,
         parse_mode=preview_parse_mode,
-        reply_markup=None,
+        reply_markup=_build_worker_main_keyboard(),
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
