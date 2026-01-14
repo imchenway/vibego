@@ -8473,12 +8473,13 @@ def _build_quick_reply_partial_prompt(supplement: str) -> str:
     """构建“部分按推荐”最终推送给模型的提示词。"""
 
     cleaned = (supplement or "").strip()
-    lines = [
-        "待决策项部分按模型推荐。",
-        "规则：未提及的决策项全部按推荐。",
-        f"补充说明：{cleaned}" if cleaned else "补充说明：-",
-    ]
-    return "\n".join(lines)
+    return "\n".join(
+        [
+            "未提及的决策项全部按推荐。",
+            "用户补充说明：",
+            cleaned,
+        ]
+    ).rstrip()
 
 
 @router.message(ModelQuickReplyStates.waiting_partial_supplement)

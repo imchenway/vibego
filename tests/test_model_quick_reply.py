@@ -83,7 +83,7 @@ def test_quick_reply_partial_enters_supplement_state():
 
 
 def test_quick_reply_partial_supplement_dispatches_prompt(monkeypatch, tmp_path: Path):
-    """补充阶段输入文案后，应推送“部分按推荐+规则+补充说明”到模型。"""
+    """补充阶段输入文案后，应推送“未提及按推荐 + 用户补充说明”到模型。"""
 
     origin = DummyMessage()
     callback = DummyCallback(bot.MODEL_QUICK_REPLY_PARTIAL_CALLBACK, origin)
@@ -118,9 +118,9 @@ def test_quick_reply_partial_supplement_dispatches_prompt(monkeypatch, tmp_path:
         assert chat_id == origin.chat.id
         assert reply_to is origin
         assert not ack_immediately
-        assert "待决策项部分按模型推荐" in prompt
-        assert "规则：未提及的决策项全部按推荐" in prompt
-        assert "补充说明：" in prompt
+        assert "未提及的决策项全部按推荐。" in prompt
+        assert "用户补充说明：" in prompt
+        assert supplement_message.text in prompt
         assert await state.get_state() is None
         assert previews, "应回显推送预览"
         assert ack_calls, "应回显 session ack"
@@ -189,4 +189,3 @@ def test_quick_reply_partial_cancel(monkeypatch):
         assert isinstance(reply_markup, ReplyKeyboardMarkup)
 
     asyncio.run(_scenario())
-
