@@ -319,7 +319,7 @@ DELIVERABLE_KIND_PLAN = "plan_update"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
 # 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
-ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先阅读并严格遵守 $HOME/.config/vibego/AGENTS.md 的全部规约；"
+ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先阅读并严格遵守 $HOME/.config/vibego/AGENTS.md 的全部规约以及当前目录下的所有AGENTS.md 内容，如出现部分内容的冲突请以目录下的规约为准。"
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
 MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
