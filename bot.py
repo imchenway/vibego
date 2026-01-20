@@ -2658,7 +2658,7 @@ def _build_model_quick_reply_keyboard(*, task_id: Optional[str] = None) -> Inlin
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🧪 任务状态更新为测试中",
+                    text="🧪 更新任务状态为测试中",
                     callback_data=f"{MODEL_TASK_TO_TEST_PREFIX}{normalized_task_id}",
                 )
             ]
