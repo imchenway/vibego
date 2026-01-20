@@ -86,7 +86,7 @@ def test_task_list_view_contains_create_button(monkeypatch):
     assert "➕ 创建任务" in buttons
 
 
-def test_task_list_view_renders_entries_with_icons(monkeypatch):
+def test_task_list_view_renders_entries_without_task_type_icons(monkeypatch):
     task = TaskRecord(
         id="TASK_9001",
         project_slug="demo",
@@ -127,9 +127,10 @@ def test_task_list_view_renders_entries_with_icons(monkeypatch):
     ]
     assert detail_buttons
     status_icon = bot._status_icon(task.status)
-    type_icon = bot.TASK_TYPE_EMOJIS.get(task.task_type) or "⚪"
-    expected_prefix = f"{status_icon} {type_icon} "
+    expected_prefix = f"{status_icon} " if status_icon else ""
     assert detail_buttons[0].startswith(expected_prefix)
+    assert all(icon not in detail_buttons[0] for icon in bot.TASK_TYPE_EMOJIS.values())
+    assert "⚪" not in detail_buttons[0]
     assert "修复登录问题" in detail_buttons[0]
 
 
@@ -227,9 +228,10 @@ def test_compose_task_button_label_truncates_but_keeps_status():
     label = bot._compose_task_button_label(task, max_length=40)
     status_icon = bot._status_icon(task.status)
     assert status_icon
-    type_icon = bot.TASK_TYPE_EMOJIS.get(task.task_type) or "⚪"
-    expected_prefix = f"{status_icon} {type_icon} "
+    expected_prefix = f"{status_icon} "
     assert label.startswith(expected_prefix)
+    assert all(icon not in label for icon in bot.TASK_TYPE_EMOJIS.values())
+    assert "⚪" not in label
     assert len(label) <= 40
     assert "…" in label
 
@@ -243,7 +245,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "research",
             "task_type": "task",
             "max_length": 60,
-            "expect_prefix": f"{bot._status_icon('research')} {bot.TASK_TYPE_EMOJIS['task']} ",
+            "expect_prefix": f"{bot._status_icon('research')} ",
             "expect_contains": "修复登录问题",
             "expect_ellipsis": False,
         },
@@ -253,7 +255,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "",
             "task_type": "task",
             "max_length": 30,
-            "expect_prefix": f"{bot.TASK_TYPE_EMOJIS['task']} ",
+            "expect_exact": "不含状态",
             "expect_contains": "不含状态",
             "expect_ellipsis": False,
         },
@@ -263,7 +265,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "blocked",
             "task_type": "task",
             "max_length": 30,
-            "expect_prefix": f"{bot.TASK_TYPE_EMOJIS['task']} ",
+            "expect_exact": "未知状态",
             "expect_contains": "未知状态",
             "expect_ellipsis": False,
         },
@@ -273,7 +275,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "research",
             "task_type": None,
             "max_length": 40,
-            "expect_prefix": f"{bot._status_icon('research')} ⚪ ",
+            "expect_prefix": f"{bot._status_icon('research')} ",
             "expect_contains": "无类型任务",
             "expect_ellipsis": False,
         },
@@ -283,7 +285,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "test",
             "task_type": "defect",
             "max_length": 20,
-            "expect_prefix": f"{bot._status_icon('test')} {bot.TASK_TYPE_EMOJIS['defect']} ",
+            "expect_prefix": f"{bot._status_icon('test')} ",
             "expect_contains": "这个标题超级超级长",
             "expect_ellipsis": True,
         },
@@ -293,9 +295,9 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "test",
             "task_type": "risk",
             "max_length": 8,
-            "expect_prefix": f"{bot._status_icon('test')} {bot.TASK_TYPE_EMOJIS['risk']} ",
-            "expect_exact": "🧪 ⚠️ 极短…",
-            "expect_ellipsis": True,
+            "expect_prefix": f"{bot._status_icon('test')} ",
+            "expect_exact": "🧪 极短限制",
+            "expect_ellipsis": False,
         },
         {
             "name": "empty_title",
@@ -303,8 +305,8 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "done",
             "task_type": "requirement",
             "max_length": 20,
-            "expect_prefix": f"{bot._status_icon('done')} {bot.TASK_TYPE_EMOJIS['requirement']} ",
-            "expect_exact": "✅ 📌 -",
+            "expect_prefix": f"{bot._status_icon('done')} ",
+            "expect_exact": "✅ -",
             "expect_ellipsis": False,
         },
         {
@@ -313,7 +315,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "done",
             "task_type": "risk",
             "max_length": 25,
-            "expect_prefix": f"{bot._status_icon('done')} {bot.TASK_TYPE_EMOJIS['risk']} ",
+            "expect_prefix": f"{bot._status_icon('done')} ",
             "expect_contains": "🔥 紧急处理",
             "expect_ellipsis": False,
         },
@@ -323,7 +325,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "research",
             "task_type": "defect",
             "max_length": 15,
-            "expect_prefix": f"{bot._status_icon('research')} {bot.TASK_TYPE_EMOJIS['defect']} ",
+            "expect_prefix": f"{bot._status_icon('research')} ",
             "expect_contains": "多字节标题测试",
             "expect_ellipsis": False,
         },
@@ -333,7 +335,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
             "status": "Research",
             "task_type": "task",
             "max_length": 30,
-            "expect_prefix": f"{bot._status_icon('Research')} {bot.TASK_TYPE_EMOJIS['task']} ",
+            "expect_prefix": f"{bot._status_icon('Research')} ",
             "expect_contains": "Alias 状态",
             "expect_ellipsis": False,
         },
@@ -440,12 +442,39 @@ def test_task_list_search_flow(monkeypatch):
         ]
         assert detail_buttons
         status_icon = bot._status_icon(task.status)
-        type_icon = bot.TASK_TYPE_EMOJIS.get(task.task_type) or "⚪"
-        expected_prefix = f"{status_icon} {type_icon} "
+        expected_prefix = f"{status_icon} " if status_icon else ""
         assert detail_buttons[0].startswith(expected_prefix)
+        assert all(icon not in detail_buttons[0] for icon in bot.TASK_TYPE_EMOJIS.values())
+        assert "⚪" not in detail_buttons[0]
         assert "修复登录问题" in detail_buttons[0]
 
     asyncio.run(_scenario())
+
+
+def test_compose_task_button_label_does_not_include_task_type_icons():
+    """列表按钮不应包含任务类型图标（📌🐞🛠️⚠️/⚪），避免列表信息噪声。"""
+    for task_type in [*bot.TASK_TYPE_EMOJIS.keys(), None]:
+        task = TaskRecord(
+            id=f"TASK_{task_type or 'none'}",
+            project_slug="demo",
+            title="按钮标题",
+            status="research",
+            priority=3,
+            task_type=task_type,
+            tags=(),
+            due_date=None,
+            description="",
+            parent_id=None,
+            root_id=f"TASK_{task_type or 'none'}",
+            depth=0,
+            lineage="0001",
+            created_at="2025-01-01T00:00:00+08:00",
+            updated_at="2025-01-01T00:00:00+08:00",
+            archived=False,
+        )
+        label = bot._compose_task_button_label(task, max_length=60)
+        assert all(icon not in label for icon in bot.TASK_TYPE_EMOJIS.values())
+        assert "⚪" not in label
 
 
 def test_task_list_search_cancel_restores_list(monkeypatch):

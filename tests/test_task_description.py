@@ -124,7 +124,7 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
                 status="research",
                 task_type="requirement",
             ),
-            "- 📌 调研任务",
+            "- 调研任务",
         ),
         (
             _make_task(
@@ -133,7 +133,7 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
                 status="research",
                 task_type="defect",
             ),
-            "- 🐞 -",
+            "- -",
         ),
         (
             _make_task(
@@ -143,7 +143,7 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
                 depth=1,
                 task_type=None,
             ),
-            "  - ⚪ 子任务",
+            "  - 子任务",
         ),
     ],
 )
@@ -3650,7 +3650,9 @@ def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
         if btn.callback_data == f"task:detail:{task_id}"
     ]
     assert detail_texts, "应包含跳转详情的按钮"
-    assert "🛠️" in detail_texts[0], "详情按钮文本应展示类型图标"
+    assert detail_texts[0].startswith("🔍 "), "详情按钮文本应展示状态图标"
+    assert all(icon not in detail_texts[0] for icon in bot.TASK_TYPE_EMOJIS.values()), "详情按钮文本不应展示类型图标"
+    assert "⚪" not in detail_texts[0], "详情按钮文本不应展示默认类型图标"
 
 
 def test_task_desc_confirm_numeric_input_1_confirms(monkeypatch):
