@@ -131,8 +131,8 @@ def test_bug_report_callback_enters_defect_report_flow(monkeypatch):
     assert message.calls and "创建缺陷任务" in message.calls[-1]["text"]
 
 
-def test_defect_report_description_requires_text_but_keeps_attachments(monkeypatch, tmp_path: Path):
-    """描述阶段允许先发附件，但必须补充文字描述才能推进。"""
+def test_defect_report_description_keeps_attachments_when_text_missing(monkeypatch, tmp_path: Path):
+    """描述阶段允许先发附件；若暂无描述应提示可跳过，并保留已收集附件。"""
 
     origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
@@ -172,7 +172,43 @@ def test_defect_report_description_requires_text_but_keeps_attachments(monkeypat
 
     assert state.state == bot.TaskDefectReportStates.waiting_description
     assert state.data.get("pending_attachments")
-    assert message.calls and "缺陷描述不能为空" in message.calls[-1]["text"]
+    assert message.calls and "缺陷描述可选" in message.calls[-1]["text"]
+    assert "跳过" in message.calls[-1]["text"]
+
+
+def test_defect_report_description_can_skip_to_confirm(monkeypatch):
+    """描述阶段选择“跳过”后应进入确认阶段，并允许描述为空。"""
+
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
+
+    async def fake_get_task(task_id: str):
+        assert task_id == origin.id
+        return origin
+
+    async def fake_collect(_message, _dir, *, processed):
+        return [], "", processed
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: Path("."))
+    monkeypatch.setattr(bot, "_collect_generic_media_group", fake_collect)
+
+    state = DummyState(
+        data={
+            "origin_task_id": origin.id,
+            "reporter": "Tester",
+            "title": "缺陷标题",
+            "pending_attachments": [],
+            "processed_media_groups": [],
+        },
+        state=bot.TaskDefectReportStates.waiting_description,
+    )
+    message = DummyMessage(text=bot.SKIP_TEXT)
+
+    asyncio.run(bot.on_task_defect_report_description(message, state))
+
+    assert state.state == bot.TaskDefectReportStates.waiting_confirm
+    assert state.data.get("description", "") == ""
+    assert any("描述：暂无" in call["text"] for call in message.calls)
 
 
 def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, tmp_path: Path):
@@ -255,3 +291,69 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
     assert logged_actions and logged_actions[0]["task_id"] == origin.id
     assert message.calls and any("缺陷任务详情" in call["text"] for call in message.calls)
 
+
+def test_defect_report_confirm_allows_empty_description(monkeypatch, tmp_path: Path):
+    """确认创建时允许描述为空。"""
+
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
+
+    async def fake_get_task(task_id: str):
+        assert task_id == origin.id
+        return origin
+
+    created_args: dict[str, Any] = {}
+
+    async def fake_create_root_task(**kwargs):
+        created_args.update(kwargs)
+        return TaskRecord(
+            id="TASK_9998",
+            project_slug="demo",
+            title=kwargs["title"],
+            status=kwargs["status"],
+            priority=kwargs["priority"],
+            task_type=kwargs["task_type"],
+            tags=(),
+            due_date=None,
+            description=kwargs.get("description") or "",
+            related_task_id=kwargs.get("related_task_id"),
+            parent_id=None,
+            root_id="TASK_9998",
+            depth=0,
+            lineage="9998",
+            archived=False,
+        )
+
+    async def fake_collect(_message, _dir, *, processed):
+        return [], "", processed
+
+    async def fake_log_action(*_args, **_kwargs):
+        return None
+
+    async def fake_render_task_detail(task_id: str):
+        assert task_id == "TASK_9998"
+        return "DETAIL", InlineKeyboardMarkup(inline_keyboard=[])
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
+    monkeypatch.setattr(bot, "_log_task_action", fake_log_action)
+    monkeypatch.setattr(bot, "_collect_generic_media_group", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render_task_detail)
+
+    state = DummyState(
+        data={
+            "origin_task_id": origin.id,
+            "reporter": "Tester",
+            "title": "缺陷标题",
+            "description": "",
+            "pending_attachments": [],
+            "processed_media_groups": [],
+        },
+        state=bot.TaskDefectReportStates.waiting_confirm,
+    )
+    message = DummyMessage(text="✅ 确认创建")
+
+    asyncio.run(bot.on_task_defect_report_confirm(message, state))
+
+    assert state.state is None
+    assert created_args["description"] == ""

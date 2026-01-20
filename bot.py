@@ -11197,8 +11197,8 @@ async def on_task_defect_report_title(message: Message, state: FSMContext) -> No
     )
     await state.set_state(TaskDefectReportStates.waiting_description)
     await message.answer(
-        "请输入缺陷描述（必填），可直接发送图片/文件作为附件：",
-        reply_markup=_build_task_desc_cancel_keyboard(),
+        "请输入缺陷描述（可选），可直接发送图片/文件作为附件；若暂无描述可发送“跳过”继续：",
+        reply_markup=_build_description_keyboard(),
     )
 
 
@@ -11225,21 +11225,27 @@ async def on_task_defect_report_description(message: Message, state: FSMContext)
         await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
-    if _is_cancel_message(trimmed):
+    # 缺陷描述非必填：用户可选择“跳过”直接进入确认阶段。
+    options = [SKIP_TEXT, "取消"]
+    resolved = _resolve_reply_choice(trimmed, options=options)
+    if resolved == "取消" or _is_cancel_message(resolved):
         await state.clear()
         await message.answer("已取消创建缺陷任务。", reply_markup=_build_worker_main_keyboard())
         return
-    if not trimmed:
-        # 缺陷描述必填：允许用户先发附件，再补充文字描述
+    is_skip = resolved == SKIP_TEXT or _is_skip_message(resolved)
+    if is_skip:
+        trimmed = ""
+    if not trimmed and not is_skip:
+        # 允许用户先发附件，再决定是否补充文字；若无描述可点“跳过”继续。
         await message.answer(
-            "缺陷描述不能为空，请继续输入缺陷描述（可同时发送附件）：",
-            reply_markup=_build_task_desc_cancel_keyboard(),
+            "缺陷描述可选：可继续输入描述（可同时发送附件），或发送“跳过”直接进入确认创建：",
+            reply_markup=_build_description_keyboard(),
         )
         return
     if len(trimmed) > DESCRIPTION_MAX_LENGTH:
         await message.answer(
             f"缺陷描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-            reply_markup=_build_task_desc_cancel_keyboard(),
+            reply_markup=_build_description_keyboard(),
         )
         return
     await state.update_data(description=trimmed)
@@ -11259,8 +11265,11 @@ async def on_task_defect_report_description(message: Message, state: FSMContext)
         summary_lines.append(f"关联任务：/{origin_task_id}")
     else:
         summary_lines.append("关联任务：-")
-    summary_lines.append("描述：")
-    summary_lines.append(trimmed)
+    if trimmed:
+        summary_lines.append("描述：")
+        summary_lines.append(trimmed)
+    else:
+        summary_lines.append("描述：暂无（可稍后通过 /task_desc 补充）")
     pending_attachments = data.get("pending_attachments") or []
     if isinstance(pending_attachments, list):
         summary_lines.extend(_format_pending_attachments_for_create_summary(pending_attachments))
@@ -11333,7 +11342,8 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
     title = (data.get("title") or "").strip()
     description = (data.get("description") or "").strip()
     reporter = data.get("reporter") or _actor_from_message(message)
-    if not origin_task_id or not title or not description:
+    # 缺陷描述可为空，仅校验关键上下文与标题。
+    if not origin_task_id or not title:
         await state.clear()
         await message.answer("会话已失效，请重新操作。", reply_markup=_build_worker_main_keyboard())
         return
