@@ -4750,29 +4750,18 @@ def _format_task_list_entry(task: TaskRecord) -> str:
         title = _unescape_if_already_escaped(title_raw)
     else:
         title = _escape_markdown_text(title_raw)
-    type_icon = TASK_TYPE_EMOJIS.get(task.task_type)
-    if not type_icon:
-        type_icon = "⚪"
-    return f"{indent}- {type_icon} {title}"
+    return f"{indent}- {title}"
 
 
 def _compose_task_button_label(task: TaskRecord, *, max_length: int = 60) -> str:
-    """生成任务列表按钮文本，将状态图标置于最左侧，保证两类图标都保留。"""
+    """生成任务列表按钮文本，将状态图标置于最左侧并去除任务类型图标。"""
 
     title_raw = (task.title or "").strip()
     title = title_raw if title_raw else "-"
-    type_icon = TASK_TYPE_EMOJIS.get(task.task_type) or "⚪"
     status_icon = _status_icon(task.status)
 
-    # 按“状态 → 类型”的顺序拼接前缀，让用户先看到进度状态。
-    prefix_parts: list[str] = []
-    if status_icon:
-        prefix_parts.append(status_icon)
-    if type_icon:
-        prefix_parts.append(type_icon)
-    prefix = " ".join(prefix_parts)
-    if prefix:
-        prefix = f"{prefix} "
+    # 前缀仅保留状态图标：列表场景更关注进度与标题，降低类型图标带来的视觉噪声。
+    prefix = f"{status_icon} " if status_icon else ""
 
     available = max_length - len(prefix)
     if available <= 0:
