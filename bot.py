@@ -328,6 +328,8 @@ ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先阅读并严格遵守 $H
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
 MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
+# 模型答案消息底部：一键将任务切换到“测试”（不依赖提示词/摘要输出）
+MODEL_TASK_TO_TEST_PREFIX = "model:task_to_test:"
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
@@ -1739,6 +1741,8 @@ async def _push_task_to_model(
         reply_to=reply_to,
         ack_immediately=False,
     )
+    if success and session_path is not None:
+        _bind_session_task(str(session_path), task.id)
     has_supplement = bool((supplement or "").strip())
     result_status = "success" if success else "failed"
     payload: dict[str, Any] = {
@@ -2640,7 +2644,7 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def _build_model_quick_reply_keyboard() -> InlineKeyboardMarkup:
+def _build_model_quick_reply_keyboard(*, task_id: Optional[str] = None) -> InlineKeyboardMarkup:
     """构建“模型答案消息”底部的快捷回复按钮（InlineKeyboard）。"""
 
     rows: list[list[InlineKeyboardButton]] = [
@@ -2649,6 +2653,16 @@ def _build_model_quick_reply_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🧩 部分按推荐（需补充）", callback_data=MODEL_QUICK_REPLY_PARTIAL_CALLBACK),
         ]
     ]
+    normalized_task_id = _normalize_task_id(task_id) if task_id else None
+    if normalized_task_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🧪 任务状态更新为测试中",
+                    callback_data=f"{MODEL_TASK_TO_TEST_PREFIX}{normalized_task_id}",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -6148,6 +6162,18 @@ class PendingSummary:
 
 
 PENDING_SUMMARIES: Dict[str, PendingSummary] = {}
+# 会话与任务的绑定关系：用于在“模型答案消息”底部提供一键入口（如切换到测试）
+SESSION_TASK_BINDINGS: Dict[str, str] = {}
+
+
+def _bind_session_task(session_key: str, task_id: str) -> None:
+    """将 session_key 与 task_id 绑定，便于从会话回溯当前任务。"""
+
+    key = (session_key or "").strip()
+    normalized_task_id = _normalize_task_id(task_id)
+    if not key or not normalized_task_id:
+        return
+    SESSION_TASK_BINDINGS[key] = normalized_task_id
 
 # --- 任务视图上下文缓存 ---
 TaskViewKind = Literal["list", "search", "detail", "history"]
@@ -6744,7 +6770,8 @@ async def _deliver_pending_messages(
     delivered_response = False
     last_sent = _get_last_message(chat_id, session_key)
     # 需求约定：仅在“模型答案消息”（本函数投递的模型输出）底部展示快捷按钮。
-    quick_reply_markup = _build_model_quick_reply_keyboard()
+    bound_task_id = SESSION_TASK_BINDINGS.get(session_key)
+    quick_reply_markup = _build_model_quick_reply_keyboard(task_id=bound_task_id)
     delivered_hashes = _get_delivered_hashes(chat_id, session_key)
     delivered_offsets = _get_delivered_offsets(chat_id, session_key)
     last_committed_offset = previous_offset
@@ -8531,6 +8558,45 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
     await callback.answer("请发送补充说明，或点击跳过/取消")
     if origin_message is not None:
         await _prompt_quick_reply_partial_supplement_input(origin_message)
+
+
+@router.callback_query(F.data.startswith(MODEL_TASK_TO_TEST_PREFIX))
+async def on_model_task_to_test(callback: CallbackQuery) -> None:
+    """从“模型答案消息”一键将任务切换到测试状态。"""
+
+    raw_task_id = ""
+    if callback.data:
+        raw_task_id = callback.data[len(MODEL_TASK_TO_TEST_PREFIX) :].strip()
+    task_id = _normalize_task_id(raw_task_id)
+    if not task_id:
+        await callback.answer("任务 ID 无效", show_alert=True)
+        return
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await callback.answer("任务不存在", show_alert=True)
+        return
+
+    if task.status == "test":
+        await callback.answer("任务已处于“测试”状态")
+        return
+
+    actor = _actor_from_callback(callback)
+    try:
+        await TASK_SERVICE.update_task(
+            task_id,
+            actor=actor,
+            status="test",
+        )
+    except ValueError as exc:
+        await callback.answer(f"任务状态更新失败：{exc}", show_alert=True)
+        return
+
+    await callback.answer("已切换到测试")
+    if callback.message is not None:
+        await callback.message.answer(
+            f"任务 /{task_id} 状态已更新为“测试”。",
+            reply_markup=_build_worker_main_keyboard(),
+        )
 
 
 def _build_quick_reply_partial_prompt(supplement: str) -> str:
@@ -10667,6 +10733,7 @@ async def _request_task_summary(
     actor_label = actor
     if session_path is not None:
         session_key = str(session_path)
+        _bind_session_task(session_key, current_task.id)
         PENDING_SUMMARIES[session_key] = PendingSummary(
             task_id=current_task.id,
             request_id=request_id,
