@@ -134,6 +134,62 @@ def test_task_list_view_renders_entries_without_task_type_icons(monkeypatch):
     assert "修复登录问题" in detail_buttons[0]
 
 
+def test_task_list_view_sorts_by_updated_at_desc(monkeypatch, tmp_path):
+    """任务列表视图：按更新时间倒序（最近更新优先），且旧任务更新后会置顶。"""
+
+    service = TaskService(tmp_path / "tasks.db", "demo")
+    asyncio.run(service.initialize())
+    monkeypatch.setattr(bot, "TASK_SERVICE", service)
+
+    import tasks.service as task_service_module
+
+    times = iter(
+        [
+            "2025-01-01T00:00:00+08:00",
+            "2025-01-02T00:00:00+08:00",
+            "2025-01-03T00:00:00+08:00",
+            "2025-01-04T00:00:00+08:00",
+            "2025-01-05T00:00:00+08:00",
+            "2025-01-06T00:00:00+08:00",
+            "2025-01-07T00:00:00+08:00",
+        ]
+    )
+    monkeypatch.setattr(task_service_module, "shanghai_now_iso", lambda: next(times))
+
+    for idx in range(6):
+        asyncio.run(
+            service.create_root_task(
+                title=f"任务{idx + 1}",
+                status="research",
+                priority=3,
+                task_type="task",
+                tags=(),
+                due_date=None,
+                description="",
+                actor="tester",
+            )
+        )
+
+    # 更新最早创建的任务，使其 updated_at 最新，应在列表中置顶。
+    asyncio.run(service.update_task("TASK_0001", actor="tester", title="任务1（已更新）"))
+
+    _text, markup = asyncio.run(bot._build_task_list_view(status=None, page=1, limit=10))
+    task_ids = [
+        button.callback_data.split(":")[2]
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data and button.callback_data.startswith("task:detail:")
+    ]
+    assert task_ids[:6] == [
+        "TASK_0001",
+        "TASK_0006",
+        "TASK_0005",
+        "TASK_0004",
+        "TASK_0003",
+        "TASK_0002",
+    ]
+
+
 def test_task_list_create_callback_forwards_command(monkeypatch):
     dummy_bot = SimpleNamespace()
     monkeypatch.setattr(bot, "current_bot", lambda: dummy_bot)

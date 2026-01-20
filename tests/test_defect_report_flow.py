@@ -131,8 +131,8 @@ def test_bug_report_callback_enters_defect_report_flow(monkeypatch):
     assert message.calls and "创建缺陷任务" in message.calls[-1]["text"]
 
 
-def test_defect_report_description_keeps_attachments_when_text_missing(monkeypatch, tmp_path: Path):
-    """描述阶段允许先发附件；若暂无描述应提示可跳过，并保留已收集附件。"""
+def test_defect_report_description_advances_to_confirm_when_only_attachments(monkeypatch, tmp_path: Path):
+    """描述阶段仅发送附件（无文字）应直接进入确认阶段，并保留已收集附件。"""
 
     origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
@@ -170,10 +170,11 @@ def test_defect_report_description_keeps_attachments_when_text_missing(monkeypat
 
     asyncio.run(bot.on_task_defect_report_description(message, state))
 
-    assert state.state == bot.TaskDefectReportStates.waiting_description
+    assert state.state == bot.TaskDefectReportStates.waiting_confirm
     assert state.data.get("pending_attachments")
-    assert message.calls and "缺陷描述可选" in message.calls[-1]["text"]
-    assert "跳过" in message.calls[-1]["text"]
+    assert any("附件列表" in call["text"] for call in message.calls)
+    assert message.calls and message.calls[-1]["text"] == "是否创建该缺陷任务？"
+    assert not any("缺陷描述可选" in call["text"] for call in message.calls)
 
 
 def test_defect_report_description_can_skip_to_confirm(monkeypatch):

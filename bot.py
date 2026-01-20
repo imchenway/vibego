@@ -11197,7 +11197,7 @@ async def on_task_defect_report_title(message: Message, state: FSMContext) -> No
     )
     await state.set_state(TaskDefectReportStates.waiting_description)
     await message.answer(
-        "请输入缺陷描述（可选），可直接发送图片/文件作为附件；若暂无描述可发送“跳过”继续：",
+        "请输入缺陷描述（可选），可直接发送图片/文件作为附件；若暂无描述可发送“跳过”继续（仅发送附件也会进入下一步）：",
         reply_markup=_build_description_keyboard(),
     )
 
@@ -11235,8 +11235,8 @@ async def on_task_defect_report_description(message: Message, state: FSMContext)
     is_skip = resolved == SKIP_TEXT or _is_skip_message(resolved)
     if is_skip:
         trimmed = ""
-    if not trimmed and not is_skip:
-        # 允许用户先发附件，再决定是否补充文字；若无描述可点“跳过”继续。
+    if not trimmed and not is_skip and not saved_attachments:
+        # 用户既没输入文字也没发送附件时，继续提示可补充描述或跳过。
         await message.answer(
             "缺陷描述可选：可继续输入描述（可同时发送附件），或发送“跳过”直接进入确认创建：",
             reply_markup=_build_description_keyboard(),
