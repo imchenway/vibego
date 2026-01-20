@@ -70,6 +70,7 @@ from tasks.constants import (
 from tasks.fsm import (
     TaskBugReportStates,
     TaskCreateStates,
+    TaskDefectReportStates,
     TaskDescriptionStates,
     TaskAttachmentStates,
     TaskEditStates,
@@ -198,6 +199,10 @@ VIBE_PHASE_PROMPT = f"进入vibe阶段{AGENTS_PHASE_SUFFIX}"
 TEST_PHASE_PROMPT = f"进入测试阶段{AGENTS_PHASE_SUFFIX}"
 # 报告缺陷时的专用前缀，插入在统一提示语之前
 BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。\n"
+
+# 推送到模型模式（PLAN / YOLO）
+PUSH_MODE_PLAN = "PLAN"
+PUSH_MODE_YOLO = "YOLO"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -1674,6 +1679,7 @@ async def _push_task_to_model(
     supplement: Optional[str],
     actor: Optional[str],
     is_bug_report: bool = False,
+    push_mode: Optional[str] = None,
 ) -> tuple[bool, str, Optional[Path]]:
     """推送任务信息到模型，并附带补充描述。
 
@@ -1684,6 +1690,7 @@ async def _push_task_to_model(
         supplement: 补充描述
         actor: 操作者
         is_bug_report: 是否为缺陷报告推送
+        push_mode: 推送模式（PLAN/YOLO），仅对推送到模型按钮流程生效
     """
 
     history_text, history_count = await _build_history_context_for_model(task.id)
@@ -1698,6 +1705,7 @@ async def _push_task_to_model(
         notes=notes,
         attachments=attachments,
         is_bug_report=is_bug_report,
+        push_mode=push_mode,
     )
     related_payload: dict[str, Any] = {}
     related_task_id = (getattr(task, "related_task_id", None) or "").strip()
@@ -4346,6 +4354,7 @@ def _build_model_push_payload(
     notes: Optional[Sequence[TaskNoteRecord]] = None,
     attachments: Optional[Sequence[TaskAttachmentRecord]] = None,
     is_bug_report: bool = False,
+    push_mode: Optional[str] = None,
 ) -> str:
     """根据任务状态构造推送到 tmux 的指令。
 
@@ -4355,6 +4364,7 @@ def _build_model_push_payload(
         history: 历史记录文本
         notes: 任务备注列表
         is_bug_report: 是否为缺陷报告推送，True 时会在提示词前添加缺陷前缀
+        push_mode: 推送模式（PLAN/YOLO），用于替换“进入vibe/测试阶段”前缀
     """
 
     config = MODEL_PUSH_CONFIG.get(task.status)
@@ -4384,7 +4394,13 @@ def _build_model_push_payload(
     task_code_plain = f"/{task.id}" if task.id else "-"
 
     if include_task and status in {"research", "test"}:
-        phase_line = VIBE_PHASE_PROMPT
+        normalized_push_mode = (push_mode or "").strip().upper()
+        if normalized_push_mode == PUSH_MODE_PLAN:
+            phase_line = f"{PUSH_MODE_PLAN} 模式：先给出清晰可执行的计划，再执行{AGENTS_PHASE_SUFFIX}"
+        elif normalized_push_mode == PUSH_MODE_YOLO:
+            phase_line = f"{PUSH_MODE_YOLO} 模式：默认直接执行{AGENTS_PHASE_SUFFIX}"
+        else:
+            phase_line = VIBE_PHASE_PROMPT
         # 如果是缺陷报告推送，在阶段提示前添加缺陷前缀
         if is_bug_report:
             phase_line = f"{BUG_REPORT_PREFIX}\n{phase_line}"
@@ -4464,7 +4480,13 @@ def _build_model_push_payload(
 
     tail_prompt = ""
     if status in {"research", "test"}:
-        tail_prompt = VIBE_PHASE_PROMPT
+        normalized_push_mode = (push_mode or "").strip().upper()
+        if normalized_push_mode == PUSH_MODE_PLAN:
+            tail_prompt = f"{PUSH_MODE_PLAN} 模式：先给出清晰可执行的计划，再执行{AGENTS_PHASE_SUFFIX}"
+        elif normalized_push_mode == PUSH_MODE_YOLO:
+            tail_prompt = f"{PUSH_MODE_YOLO} 模式：默认直接执行{AGENTS_PHASE_SUFFIX}"
+        else:
+            tail_prompt = VIBE_PHASE_PROMPT
 
     result = "\n\n".join(segment for segment in segments if segment)
     if tail_prompt:
@@ -5510,6 +5532,17 @@ def _build_description_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
+def _build_push_mode_keyboard() -> ReplyKeyboardMarkup:
+    """推送到模型：模式选择阶段菜单按钮。"""
+
+    rows = [
+        [KeyboardButton(text=PUSH_MODE_PLAN), KeyboardButton(text=PUSH_MODE_YOLO)],
+        [KeyboardButton(text="取消")],
+    ]
+    _number_reply_buttons(rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def _build_related_task_action_keyboard() -> ReplyKeyboardMarkup:
     """缺陷创建：关联任务选择阶段的菜单栏按钮。"""
 
@@ -5593,6 +5626,18 @@ def _build_bug_report_intro(task: TaskRecord) -> str:
     return (
         f"正在为任务 {task_code}（{title}）记录缺陷。\n"
         "请先描述缺陷现象（必填），例如发生了什么、期待的行为是什么，可直接发送图片/文件作为附件。"
+    )
+
+
+def _build_defect_report_intro(task: TaskRecord) -> str:
+    """生成“报告缺陷=创建缺陷任务”的开场提示。"""
+
+    # 直接拼接命令文本，确保提示语中不出现 Markdown 转义后的反斜杠。
+    task_code = f"/{task.id}" if task.id else "-"
+    title = task.title or "-"
+    return (
+        f"正在为任务 {task_code}（{title}）创建缺陷任务。\n"
+        "请输入缺陷标题（必填），例如：登录按钮点击无响应。"
     )
 
 
@@ -5698,6 +5743,12 @@ def _build_push_supplement_prompt() -> str:
     )
 
 
+def _build_push_mode_prompt() -> str:
+    """推送到模型：构建 PLAN/YOLO 模式选择提示文案。"""
+
+    return "请选择本次推送到模型的模式：PLAN / YOLO（发送“取消”退出）"
+
+
 def _build_quick_reply_partial_supplement_prompt() -> str:
     """构建“部分按推荐（需补充）”的补充输入提示文案。"""
 
@@ -5715,10 +5766,23 @@ async def _prompt_quick_reply_partial_supplement_input(message: Message) -> None
         reply_markup=_build_description_keyboard(),
     )
 
+async def _prompt_push_mode_input(message: Message) -> None:
+    """推送到模型：提示用户选择 PLAN/YOLO 模式。"""
 
-async def _prompt_model_supplement_input(message: Message) -> None:
     await message.answer(
-        _build_push_supplement_prompt(),
+        _build_push_mode_prompt(),
+        reply_markup=_build_push_mode_keyboard(),
+    )
+
+
+async def _prompt_model_supplement_input(message: Message, *, push_mode: Optional[str] = None) -> None:
+    """推送到模型：提示用户输入补充描述，可选展示已选择的模式。"""
+
+    prompt = _build_push_supplement_prompt()
+    if push_mode:
+        prompt = f"已选择 {push_mode} 模式。\n{prompt}"
+    await message.answer(
+        prompt,
         reply_markup=_build_description_keyboard(),
     )
 
@@ -10171,10 +10235,10 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
             # 与任务创建/附件流程保持一致：相册（媒体组）会触发多次回调，需要记录已处理的 group。
             processed_media_groups=[],
         )
-        await state.set_state(TaskPushStates.waiting_supplement)
-        await callback.answer("请补充任务描述，或点击跳过/取消")
+        await state.set_state(TaskPushStates.waiting_choice)
+        await callback.answer("请选择推送模式：PLAN / YOLO（可发送“取消”退出）")
         if callback.message:
-            await _prompt_model_supplement_input(callback.message)
+            await _prompt_push_mode_input(callback.message)
         return
     await state.clear()
     try:
@@ -10207,6 +10271,40 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=callback.message)
+
+
+@router.message(TaskPushStates.waiting_choice)
+async def on_task_push_model_choice(message: Message, state: FSMContext) -> None:
+    """推送到模型：处理 PLAN/YOLO 模式选择。"""
+
+    data = await state.get_data()
+    task_id = (data.get("task_id") or "").strip()
+    if not task_id:
+        await state.clear()
+        await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    raw_text = message.text or ""
+    resolved = _resolve_reply_choice(raw_text, options=[PUSH_MODE_PLAN, PUSH_MODE_YOLO, "取消"])
+    if resolved == "取消" or _is_cancel_message(raw_text):
+        await state.clear()
+        await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    normalized = _normalize_choice_token(resolved).upper()
+    if normalized in {PUSH_MODE_PLAN, PUSH_MODE_YOLO}:
+        resolved = normalized
+
+    if resolved not in {PUSH_MODE_PLAN, PUSH_MODE_YOLO}:
+        await message.answer(
+            "请选择 PLAN 或 YOLO，发送“取消”可退出：",
+            reply_markup=_build_push_mode_keyboard(),
+        )
+        return
+
+    await state.update_data(push_mode=resolved)
+    await state.set_state(TaskPushStates.waiting_supplement)
+    await _prompt_model_supplement_input(message, push_mode=resolved)
 
 
 @router.callback_query(F.data.startswith("task:push_model_skip:"))
@@ -10283,10 +10381,10 @@ async def on_task_push_model_fill(callback: CallbackQuery, state: FSMContext) ->
         # 与任务创建/附件流程保持一致：相册（媒体组）会触发多次回调，需要记录已处理的 group。
         processed_media_groups=[],
     )
-    await state.set_state(TaskPushStates.waiting_supplement)
-    await callback.answer()
+    await state.set_state(TaskPushStates.waiting_choice)
+    await callback.answer("请选择推送模式：PLAN / YOLO（可发送“取消”退出）")
     if callback.message:
-        await _prompt_model_supplement_input(callback.message)
+        await _prompt_push_mode_input(callback.message)
 
 
 def _build_attachment_only_supplement(attachments: Sequence[TelegramSavedAttachment]) -> str:
@@ -10312,6 +10410,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         await state.clear()
         await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
         return
+    push_mode = (data.get("push_mode") or "").strip().upper()
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
@@ -10375,6 +10474,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
             reply_to=origin_message,
             supplement=supplement,
             actor=actor,
+            push_mode=push_mode or None,
         )
     except ValueError as exc:
         await state.clear()
@@ -10993,7 +11093,7 @@ async def on_task_summary_command(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("task:bug_report:"))
 async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None:
-    """进入缺陷上报流程。"""
+    """从任务详情发起“报告缺陷（创建缺陷任务）”流程。"""
 
     parts = callback.data.split(":")
     if len(parts) != 3:
@@ -11007,20 +11107,221 @@ async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None
     await state.clear()
     reporter = _actor_from_callback(callback)
     await state.update_data(
-        task_id=task.id,
+        origin_task_id=task.id,
         reporter=reporter,
+        title="",
         description="",
-        reproduction="",
-        logs="",
+        pending_attachments=[],
         processed_media_groups=[],
     )
-    await state.set_state(TaskBugReportStates.waiting_description)
-    await callback.answer("请描述缺陷")
+    await state.set_state(TaskDefectReportStates.waiting_title)
+    await callback.answer("请输入缺陷标题")
     if callback.message:
         await callback.message.answer(
-            _build_bug_report_intro(task),
-            reply_markup=_build_description_keyboard(),
+            _build_defect_report_intro(task),
+            reply_markup=_build_task_desc_cancel_keyboard(),
         )
+
+
+@router.message(TaskDefectReportStates.waiting_title)
+async def on_task_defect_report_title(message: Message, state: FSMContext) -> None:
+    """报告缺陷：处理缺陷任务标题输入。"""
+
+    title = (message.text or "").strip()
+    if _is_cancel_message(title):
+        await state.clear()
+        await message.answer("已取消创建缺陷任务。", reply_markup=_build_worker_main_keyboard())
+        return
+    if not title:
+        await message.answer("缺陷标题不能为空，请重新输入：", reply_markup=_build_task_desc_cancel_keyboard())
+        return
+    await state.update_data(
+        title=title,
+        processed_media_groups=[],
+    )
+    await state.set_state(TaskDefectReportStates.waiting_description)
+    await message.answer(
+        "请输入缺陷描述（必填），可直接发送图片/文件作为附件：",
+        reply_markup=_build_task_desc_cancel_keyboard(),
+    )
+
+
+@router.message(TaskDefectReportStates.waiting_description)
+async def on_task_defect_report_description(message: Message, state: FSMContext) -> None:
+    """报告缺陷：处理缺陷任务描述输入，并暂存附件。"""
+
+    data = await state.get_data()
+    attachment_dir = _attachment_dir_for_message(message)
+    processed_groups = set(data.get("processed_media_groups") or [])
+    saved_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    # 媒体组会触发多次 handler，若本次调用已被其他消息消费则直接忽略，避免重复追加附件。
+    if message.media_group_id and not saved_attachments and not text_part:
+        return
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
+    if saved_attachments:
+        pending = list(data.get("pending_attachments") or [])
+        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
+        await state.update_data(pending_attachments=pending)
+    raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
+    trimmed = raw_text.strip()
+    if _is_cancel_message(trimmed):
+        await state.clear()
+        await message.answer("已取消创建缺陷任务。", reply_markup=_build_worker_main_keyboard())
+        return
+    if not trimmed:
+        # 缺陷描述必填：允许用户先发附件，再补充文字描述
+        await message.answer(
+            "缺陷描述不能为空，请继续输入缺陷描述（可同时发送附件）：",
+            reply_markup=_build_task_desc_cancel_keyboard(),
+        )
+        return
+    if len(trimmed) > DESCRIPTION_MAX_LENGTH:
+        await message.answer(
+            f"缺陷描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
+            reply_markup=_build_task_desc_cancel_keyboard(),
+        )
+        return
+    await state.update_data(description=trimmed)
+    await state.set_state(TaskDefectReportStates.waiting_confirm)
+    data = await state.get_data()
+    origin_task_id = data.get("origin_task_id")
+    origin_task = await TASK_SERVICE.get_task(origin_task_id) if origin_task_id else None
+    summary_lines = [
+        "请确认缺陷任务信息：",
+        f"标题：{data.get('title')}",
+        f"类型：{_format_task_type('defect')}",
+    ]
+    if origin_task is not None:
+        origin_title = (origin_task.title or "").strip() or "-"
+        summary_lines.append(f"关联任务：/{origin_task.id} {origin_title}")
+    elif origin_task_id:
+        summary_lines.append(f"关联任务：/{origin_task_id}")
+    else:
+        summary_lines.append("关联任务：-")
+    summary_lines.append("描述：")
+    summary_lines.append(trimmed)
+    pending_attachments = data.get("pending_attachments") or []
+    if isinstance(pending_attachments, list):
+        summary_lines.extend(_format_pending_attachments_for_create_summary(pending_attachments))
+    else:
+        summary_lines.append("附件列表：-")
+    await message.answer("\n".join(summary_lines), reply_markup=_build_worker_main_keyboard())
+    await message.answer("是否创建该缺陷任务？", reply_markup=_build_confirm_keyboard())
+
+
+@router.message(TaskDefectReportStates.waiting_confirm)
+async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> None:
+    """报告缺陷：确认创建缺陷任务。"""
+
+    options = ["✅ 确认创建", "❌ 取消"]
+    resolved = _resolve_reply_choice(message.text, options=options)
+    stripped_token = _strip_number_prefix((message.text or "").strip())
+    lowered = stripped_token.lower()
+
+    # 支持确认阶段继续补充附件/文本
+    attachment_dir = _attachment_dir_for_message(message)
+    data = await state.get_data()
+    processed_groups = set(data.get("processed_media_groups") or [])
+    extra_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    if message.media_group_id and not extra_attachments and not text_part:
+        return
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
+
+    extra_text = _normalize_choice_token(text_part or message.text or "")
+    is_cancel = resolved == options[1] or lowered == "取消"
+    is_confirm = resolved == options[0] or lowered in {"确认", "确认创建"}
+
+    if extra_attachments or (extra_text and not is_cancel and not is_confirm):
+        pending = list(data.get("pending_attachments") or [])
+        if extra_attachments:
+            pending.extend(_serialize_saved_attachment(item) for item in extra_attachments)
+        description = data.get("description") or ""
+        if extra_text and not is_confirm and not is_cancel:
+            description = f"{description}\n{extra_text}" if description else extra_text
+        # 若是媒体组，统一使用合并后的文本，避免遗漏 caption
+        if text_part and not extra_text:
+            description = f"{description}\n{text_part}" if description else text_part
+        await state.update_data(pending_attachments=pending, description=description)
+        updated_lines = _format_pending_attachments_for_create_summary(pending)
+        await message.answer(
+            "已记录补充的描述/附件，请继续选择“确认创建”或“取消”。\n" + "\n".join(updated_lines),
+            reply_markup=_build_confirm_keyboard(),
+        )
+        return
+
+    if is_cancel:
+        await state.clear()
+        await message.answer("已取消创建缺陷任务。", reply_markup=ReplyKeyboardRemove())
+        await message.answer("已返回主菜单。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    if not is_confirm:
+        await message.answer(
+            "请选择“确认创建”或“取消”，可直接输入编号或点击键盘按钮：",
+            reply_markup=_build_confirm_keyboard(),
+        )
+        return
+
+    data = await state.get_data()
+    origin_task_id = data.get("origin_task_id")
+    title = (data.get("title") or "").strip()
+    description = (data.get("description") or "").strip()
+    reporter = data.get("reporter") or _actor_from_message(message)
+    if not origin_task_id or not title or not description:
+        await state.clear()
+        await message.answer("会话已失效，请重新操作。", reply_markup=_build_worker_main_keyboard())
+        return
+    origin_task = await TASK_SERVICE.get_task(origin_task_id)
+    if origin_task is None:
+        await state.clear()
+        await message.answer("触发任务不存在，已取消创建缺陷任务。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    defect_task = await TASK_SERVICE.create_root_task(
+        title=title,
+        status=TASK_STATUSES[0],
+        priority=DEFAULT_PRIORITY,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description=description,
+        related_task_id=origin_task.id,
+        actor=reporter,
+    )
+    pending_attachments = data.get("pending_attachments") or []
+    if pending_attachments:
+        await _bind_serialized_attachments(defect_task, pending_attachments, actor=reporter)
+
+    # 在触发任务上留下“报告缺陷”历史记录，便于追溯新创建的缺陷任务。
+    await _log_task_action(
+        origin_task.id,
+        action="bug_report",
+        actor=reporter,
+        new_value=description[:HISTORY_DISPLAY_VALUE_LIMIT],
+        payload={
+            "has_reproduction": False,
+            "has_logs": False,
+            "created_defect_task_id": defect_task.id,
+            "defect_title": title,
+            "defect_task_id": defect_task.id,
+            "reporter": reporter,
+        },
+    )
+
+    await state.clear()
+    detail_text, markup = await _render_task_detail(defect_task.id)
+    await message.answer("缺陷任务已创建。", reply_markup=_build_worker_main_keyboard())
+    await _answer_with_markdown(message, f"缺陷任务详情：\n{detail_text}", reply_markup=markup)
 
 
 @router.message(TaskBugReportStates.waiting_description)
