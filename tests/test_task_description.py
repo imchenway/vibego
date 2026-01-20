@@ -451,13 +451,23 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
-        assert callback.answers and callback.answers[0][0] == "请补充任务描述，或点击跳过/取消"
+        assert await state.get_state() == bot.TaskPushStates.waiting_choice.state
+        assert callback.answers and "请选择推送模式" in (callback.answers[0][0] or "")
         assert not recorded
         assert message.calls
         prompt_text, _, prompt_markup, _ = message.calls[0]
-        assert prompt_text == bot._build_push_supplement_prompt()
+        assert prompt_text == bot._build_push_mode_prompt()
         assert prompt_markup is not None
+
+        choice_message = DummyMessage()
+        choice_message.text = bot.PUSH_MODE_PLAN
+        await bot.on_task_push_model_choice(choice_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
+        assert choice_message.calls
+        choice_text, _, choice_markup, _ = choice_message.calls[0]
+        assert f"已选择 {bot.PUSH_MODE_PLAN} 模式" in choice_text
+        assert bot._build_push_supplement_prompt() in choice_text
+        assert choice_markup is not None
 
         skip_message = DummyMessage()
         skip_message.text = bot.SKIP_TEXT
@@ -468,7 +478,9 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert chat_id == message.chat.id
         assert reply_to is message
         lines = payload.splitlines()
-        assert lines[0] == bot.VIBE_PHASE_PROMPT
+        assert lines[0].startswith(f"{bot.PUSH_MODE_PLAN} ")
+        assert "进入vibe阶段" not in lines[0]
+        assert "进入测试阶段" not in lines[0]
         assert "任务标题：调研任务" in payload
         assert "任务编码：/TASK_0001" in payload
         assert "\\_" not in payload
@@ -506,6 +518,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
             actor="Tester",
             chat_id=message.chat.id,
             origin_message=None,
+            push_mode=bot.PUSH_MODE_PLAN,
             processed_media_groups=[],
         )
     )
@@ -526,7 +539,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
 
     push_calls: list[dict] = []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
         push_calls.append(
             {
                 "task_id": task_arg.id,
@@ -568,6 +581,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
             actor="Tester",
             chat_id=message.chat.id,
             origin_message=None,
+            push_mode=bot.PUSH_MODE_PLAN,
             processed_media_groups=[],
         )
     )
@@ -604,7 +618,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
 
     push_calls: list[dict] = []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
         push_calls.append(
             {
                 "task_id": task_arg.id,
@@ -647,6 +661,7 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
             actor="Tester",
             chat_id=message.chat.id,
             origin_message=None,
+            push_mode=bot.PUSH_MODE_PLAN,
         )
     )
 
@@ -680,7 +695,7 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
         bound_calls.append((task_arg.id, list(attachments), actor))
         return []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
         return True, "PROMPT", None
 
     async def fake_reply_to_chat(chat_id, text, reply_to=None, parse_mode=None, reply_markup=None):
@@ -770,7 +785,7 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(bot, "reply_large_text", fake_reply_large_text)
     monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
         long_prompt = "A" * (bot.TELEGRAM_MESSAGE_LIMIT + 100)
         return True, long_prompt, tmp_path / "session.jsonl"
 
@@ -778,6 +793,9 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
+        choice_message = DummyMessage()
+        choice_message.text = bot.PUSH_MODE_YOLO
+        await bot.on_task_push_model_choice(choice_message, state)
         skip_message = DummyMessage()
         skip_message.text = "补充"
         await bot.on_task_push_model_supplement(skip_message, state)
@@ -858,12 +876,17 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
-        assert callback.answers and callback.answers[0][0] == "请补充任务描述，或点击跳过/取消"
+        assert await state.get_state() == bot.TaskPushStates.waiting_choice.state
+        assert callback.answers and "请选择推送模式" in (callback.answers[0][0] or "")
         assert message.calls
         prompt_text, _, prompt_markup, _ = message.calls[0]
-        assert prompt_text == bot._build_push_supplement_prompt()
+        assert prompt_text == bot._build_push_mode_prompt()
         assert prompt_markup is not None
+
+        choice_message = DummyMessage()
+        choice_message.text = bot.PUSH_MODE_YOLO
+        await bot.on_task_push_model_choice(choice_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
 
         input_message = DummyMessage()
         input_message.text = "补充说明内容"
@@ -874,7 +897,9 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         assert chat_id == message.chat.id
         assert reply_to is message
         lines = payload.splitlines()
-        assert lines[0] == bot.VIBE_PHASE_PROMPT
+        assert lines[0].startswith(f"{bot.PUSH_MODE_YOLO} ")
+        assert "进入vibe阶段" not in lines[0]
+        assert "进入测试阶段" not in lines[0]
         assert "任务标题：测试任务" in payload
         assert "任务备注：" not in payload
         assert "补充任务描述：补充说明内容" in payload
@@ -988,6 +1013,9 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
+        choice_message = DummyMessage()
+        choice_message.text = bot.PUSH_MODE_YOLO
+        await bot.on_task_push_model_choice(choice_message, state)
         input_message = DummyMessage()
         input_message.text = "补充说明内容"
         await bot.on_task_push_model_supplement(input_message, state)
