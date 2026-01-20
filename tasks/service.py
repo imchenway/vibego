@@ -514,7 +514,7 @@ class TaskService:
         include_archived: bool = False,
         exclude_statuses: Optional[Sequence[str]] = None,
     ) -> List[TaskRecord]:
-        """按条件查询任务列表，支持分页与状态过滤。"""
+        """按条件查询任务列表，支持分页与状态过滤（默认按更新时间倒序）。"""
 
         query = [
             "SELECT * FROM tasks WHERE project_slug = ?",
@@ -529,7 +529,8 @@ class TaskService:
             placeholders = ", ".join("?" for _ in exclude_statuses)
             query.append(f"AND status NOT IN ({placeholders})")
             params.extend(exclude_statuses)
-        query.append("ORDER BY lineage ASC LIMIT ? OFFSET ?")
+        # 任务列表按更新时间倒序展示：符合“最近更新优先”的用户预期，也与关联任务选择视图保持一致。
+        query.append("ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?")
         params.extend([limit, offset])
         sql = " ".join(query)
         async with aiosqlite.connect(self.db_path) as db:
