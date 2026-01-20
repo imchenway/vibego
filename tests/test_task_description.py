@@ -2105,6 +2105,138 @@ def test_task_summary_command_skips_status_when_already_test(monkeypatch, tmp_pa
     bot.PENDING_SUMMARIES.clear()
 
 
+def test_model_quick_reply_keyboard_includes_task_to_test_button():
+    markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0001")
+    assert isinstance(markup, InlineKeyboardMarkup)
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if getattr(button, "callback_data", None)
+    ]
+    assert any(value == f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0001" for value in callbacks)
+
+
+def test_model_task_to_test_callback_updates_status(monkeypatch):
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:TASK_0600", message)
+
+    base_task = TaskRecord(
+        id="TASK_0600",
+        project_slug="demo",
+        title="准备测试",
+        status="research",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0600",
+        depth=0,
+        lineage="0600",
+        archived=False,
+    )
+    updated_task = TaskRecord(
+        id="TASK_0600",
+        project_slug="demo",
+        title="准备测试",
+        status="test",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0600",
+        depth=0,
+        lineage="0600",
+        archived=False,
+    )
+
+    updates: list[tuple] = []
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0600"
+        return base_task
+
+    async def fake_update_task(task_id: str, *, actor, status=None, **kwargs):
+        updates.append((task_id, actor, status))
+        assert status == "test"
+        return updated_task
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert updates, "应更新任务状态为测试"
+    assert callback.answers[-1] == ("已切换到测试", False)
+    assert message.calls, "应发送状态更新提示消息"
+    reply_text, _, reply_markup, _ = message.calls[-1]
+    assert "状态已更新为“测试”" in reply_text
+    assert isinstance(reply_markup, ReplyKeyboardMarkup)
+    assert not message.edits, "不应编辑原消息内容"
+
+
+def test_model_task_to_test_callback_skips_when_already_test(monkeypatch):
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:TASK_0601", message)
+
+    task = TaskRecord(
+        id="TASK_0601",
+        project_slug="demo",
+        title="已在测试",
+        status="test",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0601",
+        depth=0,
+        lineage="0601",
+        archived=False,
+    )
+
+    async def fake_get_task(task_id: str):
+        return task
+
+    async def fake_update_task(*args, **kwargs):
+        raise AssertionError("不应在状态已为 test 时调用 update_task")
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert callback.answers[-1] == ("任务已处于“测试”状态", False)
+    assert not message.calls
+
+
+def test_model_task_to_test_callback_handles_missing_task(monkeypatch):
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:TASK_0602", message)
+
+    async def fake_get_task(task_id: str):
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert callback.answers[-1] == ("任务不存在", True)
+
+
+def test_model_task_to_test_callback_rejects_invalid_task_id():
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:BAD_TASK_ID", message)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert callback.answers[-1] == ("任务 ID 无效", True)
+
+
 def test_task_summary_command_handles_missing_task(monkeypatch):
     message = DummyMessage()
     message.text = "/task_summary_request_TASK_0400"
