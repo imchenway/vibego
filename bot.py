@@ -2658,7 +2658,7 @@ def _build_model_quick_reply_keyboard(*, task_id: Optional[str] = None) -> Inlin
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🧪 更新任务状态为测试中",
+                    text="🧪 任务状态更新为测试中",
                     callback_data=f"{MODEL_TASK_TO_TEST_PREFIX}{normalized_task_id}",
                 )
             ]
@@ -4410,7 +4410,7 @@ def _build_model_push_payload(
     if include_task and status in {"research", "test"}:
         normalized_push_mode = (push_mode or "").strip().upper()
         if normalized_push_mode == PUSH_MODE_PLAN:
-            phase_line = f"{PUSH_MODE_PLAN} 模式：先给出清晰可执行的计划，再执行{AGENTS_PHASE_SUFFIX}"
+            phase_line = f"进入 {PUSH_MODE_PLAN} 模式{AGENTS_PHASE_SUFFIX}"
         elif normalized_push_mode == PUSH_MODE_YOLO:
             phase_line = f"{PUSH_MODE_YOLO} 模式：默认直接执行{AGENTS_PHASE_SUFFIX}"
         else:
@@ -4496,7 +4496,7 @@ def _build_model_push_payload(
     if status in {"research", "test"}:
         normalized_push_mode = (push_mode or "").strip().upper()
         if normalized_push_mode == PUSH_MODE_PLAN:
-            tail_prompt = f"{PUSH_MODE_PLAN} 模式：先给出清晰可执行的计划，再执行{AGENTS_PHASE_SUFFIX}"
+            tail_prompt = f"进入 {PUSH_MODE_PLAN} 模式{AGENTS_PHASE_SUFFIX}"
         elif normalized_push_mode == PUSH_MODE_YOLO:
             tail_prompt = f"{PUSH_MODE_YOLO} 模式：默认直接执行{AGENTS_PHASE_SUFFIX}"
         else:

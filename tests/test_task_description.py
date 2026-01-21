@@ -478,7 +478,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert chat_id == message.chat.id
         assert reply_to is message
         lines = payload.splitlines()
-        assert lines[0].startswith(f"{bot.PUSH_MODE_PLAN} ")
+        assert lines[0].startswith(f"进入 {bot.PUSH_MODE_PLAN} 模式")
         assert "进入vibe阶段" not in lines[0]
         assert "进入测试阶段" not in lines[0]
         assert "任务标题：调研任务" in payload
