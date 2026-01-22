@@ -921,7 +921,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
 
 
 def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_path: Path):
-    """推送到模型：当任务存在关联任务时，附带关联任务详情与历史上下文。"""
+    """推送到模型：当任务存在关联任务时，仅包含关联任务编码（不再展开关联任务详情）。"""
 
     message = DummyMessage()
     callback = DummyCallback("task:push_model:TASK_0002", message)
@@ -1025,10 +1025,11 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
     assert recorded
     _chat_id, payload, _reply_to = recorded[0]
     assert "任务标题：测试任务" in payload
-    assert "关联任务信息：" in payload
-    assert "任务标题：关联任务标题" in payload
-    assert "任务编码：/TASK_0001" in payload
-    assert "任务描述：关联任务描述" in payload
+    assert "关联任务编码：/TASK_0001" in payload
+    assert "关联任务信息：" not in payload
+    assert "任务标题：关联任务标题" not in payload
+    assert "任务编码：/TASK_0001" not in [line.strip() for line in payload.splitlines()]
+    assert "任务描述：关联任务描述" not in payload
 
 
 def test_push_model_done_push(monkeypatch, tmp_path: Path):
