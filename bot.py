@@ -323,6 +323,12 @@ DELIVERABLE_KIND_MESSAGE = "message"
 DELIVERABLE_KIND_PLAN = "plan_update"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
+# 长文本粘贴聚合：当用户粘贴内容接近上限时，Telegram 客户端可能拆成多条消息；这里将其合并后转为“本地附件”再推送模型。
+# - 仅对普通对话文本生效（不影响任务/缺陷等 FSM 交互）
+# - 仅当单条文本长度达到阈值时才触发，降低误合并风险
+ENABLE_TEXT_PASTE_AGGREGATION = _env_bool("ENABLE_TEXT_PASTE_AGGREGATION", True)
+TEXT_PASTE_NEAR_LIMIT_THRESHOLD = max(_env_int("TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 3500), 0)
+TEXT_PASTE_AGGREGATION_DELAY = max(_env_float("TEXT_PASTE_AGGREGATION_DELAY", 0.8), 0.1)
 # 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
 ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先阅读并严格遵守 $HOME/.config/vibego/AGENTS.md 的全部规约以及当前目录下的所有AGENTS.md 内容，如出现部分内容的冲突请以当前目录下的规约为准。"
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
@@ -1876,6 +1882,20 @@ BUG_MEDIA_GROUP_PROCESSED: set[str] = set()
 # 通用附件流程（/task_new、/attach）媒体组仅允许消费一次，避免相册导致重复附件。
 GENERIC_MEDIA_GROUP_CONSUMED: set[tuple[int, str]] = set()
 
+
+@dataclass
+class PendingTextPasteState:
+    """聚合“长文本粘贴”被 Telegram 拆分的多条消息。"""
+
+    chat_id: int
+    origin_message: Message
+    parts: list[str]
+    finalize_task: Optional[asyncio.Task] = None
+
+
+TEXT_PASTE_STATE: dict[int, PendingTextPasteState] = {}
+TEXT_PASTE_LOCK = asyncio.Lock()
+
 ATTACHMENT_USAGE_HINT = (
     "请按需读取附件：图片可使用 Codex 的 view_image 功能或 Claude Code 的文件引用能力；"
     "文本/日志可直接通过 @<路径> 打开；若需其他处理请说明。"
@@ -2432,6 +2452,128 @@ def _build_prompt_with_attachments(
         ]
         sections.append("\n".join(fallback))
     return "\n\n".join(sections).strip()
+
+
+def _write_text_payload_as_attachment(
+    message: Message,
+    *,
+    text: str,
+    target_dir: Path,
+    file_name_hint: str = "pasted_log.txt",
+    mime_type: str = "text/plain",
+) -> Path:
+    """将长文本落盘为“本地附件”，用于提示模型按文件读取。
+
+    说明：
+    - 这里不调用 Telegram sendDocument，仅把文本写入 vibego 附件目录；
+    - 推送给模型的提示词会以“附件列表 → 文件路径”的形式引用该文件；
+    - 文件名使用混淆策略，避免泄露用户的原始上下文信息。
+    """
+
+    salt = f"text:{getattr(message, 'message_id', '')}:{getattr(message.chat, 'id', '')}:{uuid.uuid4().hex}"
+    filename = _build_obfuscated_filename(file_name_hint, mime_type, salt=salt)
+    destination = target_dir / filename
+    counter = 1
+    while destination.exists():
+        filename = _build_obfuscated_filename(
+            file_name_hint,
+            mime_type,
+            salt=f"{salt}:{counter}",
+        )
+        destination = target_dir / filename
+        counter += 1
+    destination.write_text(text, encoding="utf-8", errors="ignore")
+    return destination
+
+
+def _persist_text_paste_as_attachment(message: Message, text: str) -> TelegramSavedAttachment:
+    """把“被拆分的长文本粘贴”保存为本地附件，并返回附件描述对象。"""
+
+    attachment_dir = _attachment_dir_for_message(message)
+    path = _write_text_payload_as_attachment(
+        message,
+        text=text,
+        target_dir=attachment_dir,
+    )
+    _cleanup_attachment_storage()
+    return TelegramSavedAttachment(
+        kind="document",
+        display_name=path.name,
+        mime_type="text/plain",
+        absolute_path=path,
+        relative_path=_format_relative_path(path),
+    )
+
+
+async def _finalize_text_paste_after_delay(chat_id: int) -> None:
+    """在短暂延迟后合并“长文本粘贴”并推送到模型。"""
+
+    try:
+        await asyncio.sleep(TEXT_PASTE_AGGREGATION_DELAY)
+    except asyncio.CancelledError:
+        return
+
+    async with TEXT_PASTE_LOCK:
+        state = TEXT_PASTE_STATE.pop(chat_id, None)
+
+    if state is None:
+        return
+
+    merged = "".join(state.parts)
+    if not merged.strip():
+        return
+
+    try:
+        attachment = _persist_text_paste_as_attachment(state.origin_message, merged)
+        prompt = _build_prompt_with_attachments(None, [attachment])
+        await _handle_prompt_dispatch(state.origin_message, prompt)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.exception(
+            "长文本粘贴聚合推送失败：%s",
+            exc,
+            extra={**_session_extra(), "chat": chat_id},
+        )
+
+
+async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) -> bool:
+    """尝试将当前文本加入“长文本粘贴聚合”队列。
+
+    触发规则：
+    - 若当前 chat 已在聚合中：无条件追加（用户粘贴的后续分片可能较短）
+    - 若当前 chat 未聚合：仅当单条文本接近 Telegram 上限时才启动聚合
+    """
+
+    if not ENABLE_TEXT_PASTE_AGGREGATION:
+        return False
+    if TEXT_PASTE_NEAR_LIMIT_THRESHOLD <= 0:
+        return False
+    if not text_part:
+        return False
+
+    chat_id = message.chat.id
+
+    async with TEXT_PASTE_LOCK:
+        state = TEXT_PASTE_STATE.get(chat_id)
+        if state is None:
+            if len(text_part) < TEXT_PASTE_NEAR_LIMIT_THRESHOLD:
+                return False
+            state = PendingTextPasteState(
+                chat_id=chat_id,
+                origin_message=message,
+                parts=[],
+            )
+            TEXT_PASTE_STATE[chat_id] = state
+
+        state.parts.append(text_part)
+        # 使用最早的一条消息作为回复对象，避免引用后续分片导致上下文不连贯。
+        if getattr(state.origin_message, "message_id", 0) > getattr(message, "message_id", 0):
+            state.origin_message = message
+
+        if state.finalize_task and not state.finalize_task.done():
+            state.finalize_task.cancel()
+        state.finalize_task = asyncio.create_task(_finalize_text_paste_after_delay(chat_id))
+
+    return True
 
 
 async def _finalize_media_group_after_delay(media_group_id: str) -> None:
@@ -12022,7 +12164,8 @@ async def on_text(m: Message, state: FSMContext):
     # 首次收到消息时自动记录 chat_id 到 state 文件
     _auto_record_chat_id(m.chat.id)
 
-    prompt = (m.text or "").strip()
+    raw_text = m.text or ""
+    prompt = raw_text.strip()
     if not prompt:
         return await m.answer("请输入非空提示词")
     task_id_candidate = _normalize_task_id(prompt)
@@ -12032,6 +12175,10 @@ async def on_text(m: Message, state: FSMContext):
     if await _handle_command_trigger_message(m, prompt, state):
         return
     if prompt.startswith("/"):
+        return
+    # 长文本粘贴：当内容接近 Telegram 单条上限时，客户端可能拆成多条消息。
+    # 这里将其短时间内聚合为一个“本地附件文件”，再按附件提示词推送给模型，避免重复 ack/重复会话。
+    if await _maybe_enqueue_text_paste_message(m, raw_text):
         return
     await _handle_prompt_dispatch(m, prompt)
 

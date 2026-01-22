@@ -3421,6 +3421,73 @@ def test_on_text_ignores_regular_commands(monkeypatch):
     asyncio.run(bot.on_text(message, state))
 
 
+def test_on_text_aggregates_near_limit_messages_into_single_attachment_prompt(monkeypatch, tmp_path: Path):
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_cleanup_attachment_storage", lambda: None)
+
+    recorded: list[str] = []
+
+    async def fake_handle(_message: DummyMessage, prompt: str) -> None:
+        recorded.append(prompt)
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    message1 = DummyMessage()
+    message1.text = "A" * 10  # 触发阈值，开启聚合
+    message2 = DummyMessage()
+    message2.message_id = message1.message_id + 1
+    message2.text = "B"
+    message3 = DummyMessage()
+    message3.message_id = message1.message_id + 2
+    message3.text = "C"
+
+    state, _storage = make_state(message1)
+
+    async def _scenario() -> None:
+        await bot.on_text(message1, state)
+        await bot.on_text(message2, state)
+        await bot.on_text(message3, state)
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+
+    assert len(recorded) == 1
+    payload = recorded[0]
+    assert "附件列表" in payload
+    file_lines = [line for line in payload.splitlines() if "→" in line]
+    assert len(file_lines) == 1
+    path_str = file_lines[0].split("→", 1)[1].strip()
+    file_path = Path(path_str)
+    assert file_path.exists()
+    assert file_path.read_text(encoding="utf-8") == ("A" * 10 + "B" + "C")
+
+
+def test_on_text_skips_text_paste_aggregation_for_short_messages(monkeypatch):
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+
+    recorded: list[str] = []
+
+    async def fake_handle(_message: DummyMessage, prompt: str) -> None:
+        recorded.append(prompt)
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    message = DummyMessage()
+    message.text = "short"
+    state, _storage = make_state(message)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert recorded == ["short"]
+
+
 def test_on_task_quick_command_handles_slash_task(monkeypatch):
     message = DummyMessage()
     message.text = "/TASK_0042"
