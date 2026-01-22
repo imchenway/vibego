@@ -1709,32 +1709,6 @@ async def _push_task_to_model(
         is_bug_report=is_bug_report,
         push_mode=push_mode,
     )
-    related_payload: dict[str, Any] = {}
-    related_task_id = (getattr(task, "related_task_id", None) or "").strip()
-    if task.status in {"research", "test"} and related_task_id and related_task_id != task.id:
-        related_task = await TASK_SERVICE.get_task(related_task_id)
-        if related_task is None:
-            worker_log.warning(
-                "关联任务不存在，已忽略关联上下文",
-                extra={"task_id": task.id, "related_task_id": related_task_id},
-            )
-        else:
-            related_history_text, related_history_count = await _build_history_context_for_model(related_task.id)
-            related_attachments = await TASK_SERVICE.list_attachments(related_task.id)
-            # 需求约定：附件按发送顺序展示（时间升序）；服务层默认倒序，这里反转后输出。
-            related_attachments = list(reversed(related_attachments))
-            related_block = _build_task_context_block_for_model(
-                related_task,
-                supplement=None,
-                history=related_history_text,
-                attachments=related_attachments,
-            )
-            prompt = f"{prompt}\n\n关联任务信息：\n{related_block}"
-            related_payload = {
-                "related_task_id": related_task.id,
-                "related_history_items": related_history_count,
-                "related_history_chars": len(related_history_text),
-            }
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         prompt,
@@ -1753,8 +1727,6 @@ async def _push_task_to_model(
         "prompt_chars": len(prompt),
         "model": ACTIVE_MODEL or "",
     }
-    if related_payload:
-        payload.update(related_payload)
     if has_supplement:
         payload["supplement"] = supplement or ""
 
@@ -4421,6 +4393,13 @@ def _build_model_push_payload(
         title = (task.title or "").strip() or "-"
         description = (task.description or "").strip() or "-"
         supplement_value = supplement_text or "-"
+        # 关联任务编码：仅透传编码，不展开关联任务详情，避免提示词过长。
+        normalized_related_task_id = _normalize_task_id(getattr(task, "related_task_id", None))
+        related_task_code = (
+            f"/{normalized_related_task_id}"
+            if normalized_related_task_id and normalized_related_task_id != task.id
+            else "-"
+        )
 
         lines: list[str] = [
             phase_line,
@@ -4428,6 +4407,7 @@ def _build_model_push_payload(
             f"任务编码：{task_code_plain}",
             f"任务描述：{description}",
             f"补充任务描述：{supplement_value}",
+            f"关联任务编码：{related_task_code}",
             "",
         ]
         if attachments:
