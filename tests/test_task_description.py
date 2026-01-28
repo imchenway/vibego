@@ -3466,6 +3466,171 @@ def test_on_text_aggregates_near_limit_messages_into_single_attachment_prompt(mo
     assert file_path.read_text(encoding="utf-8") == ("A" * 10 + "B" + "C")
 
 
+def test_on_text_aggregates_prefix_and_near_limit_messages_into_single_attachment_prompt(monkeypatch, tmp_path: Path):
+    """短前缀 + 长日志：应合并为一次推送，并在 prompt 中同时包含前缀与附件列表。"""
+
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_MAX_CHARS", 50)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_cleanup_attachment_storage", lambda: None)
+
+    recorded: list[str] = []
+
+    async def fake_handle(_message: DummyMessage, prompt: str) -> None:
+        recorded.append(prompt)
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    prefix = DummyMessage()
+    prefix.text = "1 见如下日志："
+    part1 = DummyMessage()
+    part1.message_id = prefix.message_id + 1
+    part1.text = "A" * 10  # 触发阈值，进入聚合并落盘
+    part2 = DummyMessage()
+    part2.message_id = prefix.message_id + 2
+    part2.text = "B"
+
+    state, _storage = make_state(prefix)
+
+    async def _scenario() -> None:
+        await bot.on_text(prefix, state)
+        await bot.on_text(part1, state)
+        await bot.on_text(part2, state)
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+
+    assert len(recorded) == 1
+    payload = recorded[0]
+    assert "1 见如下日志：" in payload
+    assert "附件列表" in payload
+    file_lines = [line for line in payload.splitlines() if "→" in line]
+    assert len(file_lines) == 1
+    path_str = file_lines[0].split("→", 1)[1].strip()
+    file_path = Path(path_str)
+    assert file_path.exists()
+    assert file_path.read_text(encoding="utf-8") == ("A" * 10 + "B")
+
+
+def test_on_text_prefix_only_falls_back_to_normal_dispatch_after_delay(monkeypatch):
+    """仅发送短前缀且窗口内无后续日志：应在延迟后回退为普通推送，避免吞消息。"""
+
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_MAX_CHARS", 50)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200)
+
+    recorded: list[str] = []
+
+    async def fake_handle(_message: DummyMessage, prompt: str) -> None:
+        recorded.append(prompt)
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    prefix = DummyMessage()
+    prefix.text = "1 见如下日志："
+    state, _storage = make_state(prefix)
+
+    async def _scenario() -> None:
+        await bot.on_text(prefix, state)
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+
+    assert recorded == ["1 见如下日志："]
+
+
+def test_on_text_prefix_followed_by_short_message_flushes_prefix(monkeypatch):
+    """短前缀后面跟的消息仍很短：应立即回退推送前缀，避免误把普通对话转附件。"""
+
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.5)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_MAX_CHARS", 50)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200)
+
+    recorded: list[str] = []
+
+    async def fake_handle(_message: DummyMessage, prompt: str) -> None:
+        recorded.append(prompt)
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    prefix = DummyMessage()
+    prefix.text = "1 见如下日志："
+    followup = DummyMessage()
+    followup.message_id = prefix.message_id + 1
+    followup.text = "ok"
+    state, _storage = make_state(prefix)
+
+    async def _scenario() -> None:
+        await bot.on_text(prefix, state)
+        await bot.on_text(followup, state)
+
+    asyncio.run(_scenario())
+
+    assert recorded == ["1 见如下日志：", "ok"]
+    assert all("附件列表" not in item for item in recorded)
+
+
+def test_on_text_prefix_captures_short_log_fragment_before_near_limit_chunk(monkeypatch, tmp_path: Path):
+    """短前缀触发窗口后，首段日志可能小于 near-limit：仍应纳入聚合，避免附件内容缺头。"""
+
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 20)
+    # 留出足够的时间窗口，避免“短前缀 finalize”在后续分片到达前提前触发。
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.2)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_MAX_CHARS", 50)
+    monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_cleanup_attachment_storage", lambda: None)
+
+    recorded: list[str] = []
+
+    async def fake_handle(_message: DummyMessage, prompt: str) -> None:
+        recorded.append(prompt)
+
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    prefix = DummyMessage()
+    prefix.text = "1 见如下日志："
+    part1 = DummyMessage()
+    part1.message_id = prefix.message_id + 1
+    part1.text = "2026-01-27 17:12:13"  # 小于阈值，但符合日志前缀特征
+    part2 = DummyMessage()
+    part2.message_id = prefix.message_id + 2
+    part2.text = "X" * 20  # 达到阈值，确保落盘
+
+    state, _storage = make_state(prefix)
+
+    async def _scenario() -> None:
+        await bot.on_text(prefix, state)
+        await bot.on_text(part1, state)
+        await bot.on_text(part2, state)
+        await asyncio.sleep(0.25)
+
+    asyncio.run(_scenario())
+
+    assert len(recorded) == 1
+    payload = recorded[0]
+    assert "1 见如下日志：" in payload
+    assert "附件列表" in payload
+    file_lines = [line for line in payload.splitlines() if "→" in line]
+    assert len(file_lines) == 1
+    path_str = file_lines[0].split("→", 1)[1].strip()
+    file_path = Path(path_str)
+    assert file_path.exists()
+    assert file_path.read_text(encoding="utf-8") == ("2026-01-27 17:12:13" + "X" * 20)
+
+
 def test_on_text_skips_text_paste_aggregation_for_short_messages(monkeypatch):
     bot.TEXT_PASTE_STATE.clear()
     monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
