@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.filters.command import CommandObject
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
@@ -323,9 +324,9 @@ DELIVERABLE_KIND_MESSAGE = "message"
 DELIVERABLE_KIND_PLAN = "plan_update"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
-# 长文本粘贴聚合：当用户粘贴内容接近上限时，Telegram 客户端可能拆成多条消息；这里将其合并后转为“本地附件”再推送模型。
-# - 仅对普通对话文本生效（不影响任务/缺陷等 FSM 交互）
-# - 仅当单条文本长度达到阈值时才触发，降低误合并风险
+# 长文本粘贴聚合：当用户粘贴内容接近上限时，Telegram 客户端可能拆成多条消息；
+# 这里在入站最前置聚合为一次逻辑输入（覆盖普通对话 + 任务/缺陷等 FSM 交互），避免流程被分片打断。
+# - 仅当单条文本长度达到阈值或命中“短前缀 + 长日志”模式时触发，降低误合并风险
 ENABLE_TEXT_PASTE_AGGREGATION = _env_bool("ENABLE_TEXT_PASTE_AGGREGATION", True)
 TEXT_PASTE_NEAR_LIMIT_THRESHOLD = max(_env_int("TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 3500), 0)
 TEXT_PASTE_AGGREGATION_DELAY = max(_env_float("TEXT_PASTE_AGGREGATION_DELAY", 0.8), 0.1)
@@ -399,6 +400,33 @@ dp = Dispatcher(storage=storage)
 dp.include_router(router)
 
 _bot: Bot | None = None
+
+
+class TextPasteAggregationMiddleware(BaseMiddleware):
+    """全局长文本粘贴聚合中间件。
+
+    目标：
+    - Telegram 可能会把超长文本拆成多条消息；这里在入站最前置聚合为一次逻辑输入；
+    - 聚合完成后再交由原有 handler / FSM 流程处理，避免“第一段被当成完整输入”导致流程中断。
+    """
+
+    async def __call__(self, handler: Callable[[Any, Dict[str, Any]], Awaitable[Any]], event: Any, data: Dict[str, Any]) -> Any:
+        if not ENABLE_TEXT_PASTE_AGGREGATION:
+            return await handler(event, data)
+        if not isinstance(event, Message):
+            return await handler(event, data)
+        if not event.text:
+            return await handler(event, data)
+        if _is_text_paste_synthetic_message(event):
+            return await handler(event, data)
+        if await _maybe_enqueue_text_paste_message(event, event.text):
+            # 命中聚合：吞掉当前分片，等待窗口结束后再注入合并后的“合成消息”。
+            return None
+        return await handler(event, data)
+
+
+# 注册全局中间件：覆盖所有文本消息（含 FSM 流程中的文本输入）。
+router.message.middleware(TextPasteAggregationMiddleware())
 
 
 def _mask_proxy(url: str) -> str:
@@ -1902,11 +1930,43 @@ class PendingTextPasteState:
 
 TEXT_PASTE_STATE: dict[int, PendingTextPasteState] = {}
 TEXT_PASTE_LOCK = asyncio.Lock()
+# 合成消息保护：聚合完成后会注入一条“合成消息”走原有 handler/FSM；这里避免再次被聚合中间件吞掉。
+TEXT_PASTE_SYNTHETIC_GUARD: dict[tuple[int, int], float] = {}
+TEXT_PASTE_SYNTHETIC_GUARD_TTL_SECONDS = 60.0
 
 ATTACHMENT_USAGE_HINT = (
     "请按需读取附件：图片可使用 Codex 的 view_image 功能或 Claude Code 的文件引用能力；"
     "文本/日志可直接通过 @<路径> 打开；若需其他处理请说明。"
 )
+
+
+def _mark_text_paste_synthetic_message(chat_id: int, message_id: int) -> None:
+    """标记某条 message_id 为“合成消息”，在短 TTL 内跳过再次聚合。"""
+
+    now = time.monotonic()
+    TEXT_PASTE_SYNTHETIC_GUARD[(chat_id, message_id)] = now
+    # 简单清理：避免守护表无限增长（窗口短，数量不会大）。
+    expired_before = now - TEXT_PASTE_SYNTHETIC_GUARD_TTL_SECONDS
+    for key, ts in list(TEXT_PASTE_SYNTHETIC_GUARD.items()):
+        if ts < expired_before:
+            TEXT_PASTE_SYNTHETIC_GUARD.pop(key, None)
+
+
+def _is_text_paste_synthetic_message(message: Message) -> bool:
+    """判断当前消息是否为聚合后注入的“合成消息”。"""
+
+    try:
+        chat_id = int(message.chat.id)
+        message_id = int(getattr(message, "message_id", 0) or 0)
+    except Exception:
+        return False
+    ts = TEXT_PASTE_SYNTHETIC_GUARD.get((chat_id, message_id))
+    if ts is None:
+        return False
+    if time.monotonic() - ts > TEXT_PASTE_SYNTHETIC_GUARD_TTL_SECONDS:
+        TEXT_PASTE_SYNTHETIC_GUARD.pop((chat_id, message_id), None)
+        return False
+    return True
 
 _FS_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -2512,8 +2572,59 @@ def _persist_text_paste_as_attachment(message: Message, text: str) -> TelegramSa
     )
 
 
+def _build_overlong_text_placeholder(label: str) -> str:
+    """为写库字段生成“超长占位文本”，提示用户全文已保存为附件。"""
+
+    cleaned = (label or "").strip()
+    if cleaned.endswith(("：", ":")):
+        cleaned = cleaned[:-1].strip()
+    prefix = f"{cleaned}" if cleaned else "内容"
+    return f"⚠️ {prefix}过长，已自动保存为附件（文本），请查看附件获取全文。"
+
+
+async def _feed_synthetic_text_update(origin_message: Message, *, text: str) -> None:
+    """将聚合后的文本以“合成消息”的形式重新注入 dispatcher，让原有流程继续执行。"""
+
+    bot = current_bot()
+    raw_text = text or ""
+    stripped = raw_text.strip()
+    if not stripped:
+        return
+
+    try:
+        now = datetime.now(tz=ZoneInfo("UTC"))
+    except ZoneInfoNotFoundError:
+        now = datetime.now(UTC)
+
+    origin_message_id = int(getattr(origin_message, "message_id", 0) or 0)
+    # 关键：使用远大于真实 Telegram message_id 的编号，避免与真实消息冲突导致误判为“合成消息”。
+    synthetic_message_id = origin_message_id + 10_000_000
+
+    entities: Optional[list[MessageEntity]] = None
+    if stripped.startswith("/"):
+        command_token = stripped.split()[0]
+        entities = [MessageEntity(type="bot_command", offset=0, length=len(command_token))]
+
+    synthetic_message = origin_message.model_copy(
+        update={
+            "message_id": synthetic_message_id,
+            "date": now,
+            "edit_date": None,
+            "text": stripped,
+            "caption": None,
+            "entities": entities,
+        }
+    )
+    update = Update.model_construct(
+        update_id=int(time.time() * 1000),
+        message=synthetic_message,
+    )
+    _mark_text_paste_synthetic_message(int(origin_message.chat.id), synthetic_message_id)
+    await dp.feed_update(bot, update)
+
+
 async def _finalize_text_paste_after_delay(chat_id: int) -> None:
-    """在短暂延迟后合并“长文本粘贴”并推送到模型。"""
+    """在短暂延迟后合并“长文本粘贴”并注入合成消息。"""
 
     try:
         await asyncio.sleep(TEXT_PASTE_AGGREGATION_DELAY)
@@ -2529,10 +2640,10 @@ async def _finalize_text_paste_after_delay(chat_id: int) -> None:
     prefix_text = (state.prefix_text or "").strip() or None
     merged = "".join(part for _message_id, part in sorted(state.parts, key=lambda item: item[0]))
     if not merged.strip():
-        # 仅有“短前缀”但没有后续日志分片：窗口结束后按普通消息推送，避免吞消息。
+        # 仅有“短前缀”但没有后续日志分片：窗口结束后按普通消息处理，避免吞消息。
         if prefix_text:
             try:
-                await _handle_prompt_dispatch(state.origin_message, prefix_text)
+                await _feed_synthetic_text_update(state.origin_message, text=prefix_text)
             except Exception as exc:  # noqa: BLE001
                 worker_log.exception(
                     "短前缀聚合回退推送失败：%s",
@@ -2542,13 +2653,11 @@ async def _finalize_text_paste_after_delay(chat_id: int) -> None:
         return
 
     try:
-        attachment = _persist_text_paste_as_attachment(state.origin_message, merged)
-        # prompt 中同时包含短前缀（如“见如下日志：”）与附件路径，确保模型只收到一次推送。
-        prompt = _build_prompt_with_attachments(prefix_text, [attachment])
-        await _handle_prompt_dispatch(state.origin_message, prompt)
+        combined = f"{prefix_text}\n{merged}" if prefix_text else merged
+        await _feed_synthetic_text_update(state.origin_message, text=combined)
     except Exception as exc:  # noqa: BLE001
         worker_log.exception(
-            "长文本粘贴聚合推送失败：%s",
+            "长文本粘贴聚合注入失败：%s",
             exc,
             extra={**_session_extra(), "chat": chat_id},
         )
@@ -2569,7 +2678,12 @@ def _is_text_paste_prefix_candidate(text: str) -> bool:
         return False
     if "\n" in stripped or "\r" in stripped:
         return False
-    return stripped.endswith((":", "："))
+    if not stripped.endswith((":", "：")):
+        return False
+    # 降低误触发：纯数字/编号（如“1:”）不视为短前缀。
+    if re.search(r"[A-Za-z\u4e00-\u9fff]", stripped) is None:
+        return False
+    return True
 
 
 _TEXT_PASTE_LOG_PREFIX_PATTERN = re.compile(r"^\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}")
@@ -2660,7 +2774,7 @@ async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) ->
             state.finalize_task = asyncio.create_task(_finalize_text_paste_after_delay(chat_id))
 
     if prefix_to_flush and prefix_message is not None:
-        await _handle_prompt_dispatch(prefix_message, prefix_to_flush)
+        await _feed_synthetic_text_update(prefix_message, text=prefix_to_flush)
         return False
 
     return True
@@ -2753,6 +2867,23 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
         await message.answer(message_text)
         return
 
+    # 全局长文本处理：合成消息（>4096）通常意味着 Telegram 拆分后的聚合结果；
+    # 为避免把超长文本直接塞进 tmux/CLI，这里统一转为“本地附件 + 附件提示词”再推送模型。
+    dispatch_prompt = prompt
+    if len(dispatch_prompt) > TELEGRAM_MESSAGE_LIMIT:
+        try:
+            attachment = _persist_text_paste_as_attachment(message, dispatch_prompt)
+            dispatch_prompt = _build_prompt_with_attachments(
+                "收到一段超长文本，已自动保存为附件，请阅读附件获取全文。",
+                [attachment],
+            )
+        except Exception as exc:  # noqa: BLE001
+            worker_log.warning(
+                "超长文本转附件失败，将回退为原始提示词推送：%s",
+                exc,
+                extra={**_session_extra(), "chat": message.chat.id},
+            )
+
     bot = current_bot()
     await bot.send_chat_action(message.chat.id, "typing")
 
@@ -2760,13 +2891,13 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
         if not AGENT_CMD:
             await message.answer("AGENT_CMD 未配置（.env）")
             return
-        rc, out = run_subprocess_capture(AGENT_CMD, input_text=prompt)
+        rc, out = run_subprocess_capture(AGENT_CMD, input_text=dispatch_prompt)
         out = out or ""
         out = out + ("" if rc == 0 else f"\n(exit={rc})")
         await reply_large_text(message.chat.id, out)
         return
 
-    await _dispatch_prompt_to_model(message.chat.id, prompt, reply_to=message)
+    await _dispatch_prompt_to_model(message.chat.id, dispatch_prompt, reply_to=message)
 
 BOT_COMMANDS: list[tuple[str, str]] = [
     ("start", "打开任务概览"),
@@ -4312,6 +4443,8 @@ TASK_LIST_SEARCH_CALLBACK = "task:list_search"
 TASK_LIST_SEARCH_PAGE_CALLBACK = "task:list_search_page"
 TASK_LIST_RETURN_CALLBACK = "task:list_return"
 TASK_DETAIL_BACK_CALLBACK = "task:detail_back"
+TASK_DETAIL_DELETE_PROMPT_CALLBACK = "task:delete_prompt"
+TASK_DETAIL_DELETE_CONFIRM_CALLBACK = "task:delete_confirm"
 TASK_HISTORY_PAGE_CALLBACK = "task:history_page"
 TASK_HISTORY_BACK_CALLBACK = "task:history_back"
 TASK_DESC_INPUT_CALLBACK = "task:desc_input"
@@ -4819,11 +4952,126 @@ def _wrap_text_in_code_block(text: str) -> tuple[str, str]:
     return f"```\n{text}\n```", ParseMode.MARKDOWN.value
 
 
+def _is_text_too_long_for_telegram(text: str) -> bool:
+    """判断文本在当前 parse_mode 下是否会超过 Telegram 单条消息限制。"""
+
+    prepared = _prepare_model_payload(text)
+    return len(prepared) > TELEGRAM_MESSAGE_LIMIT
+
+
+def _build_task_detail_failure_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    """任务详情兜底：当详情无法展示时提供“删除/重试/返回”等可操作入口。"""
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="🗑️ 删除（归档）",
+                callback_data=f"{TASK_DETAIL_DELETE_PROMPT_CALLBACK}:{task_id}",
+            ),
+            InlineKeyboardButton(
+                text="🔄 重试",
+                callback_data=f"task:refresh:{task_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ 返回任务列表",
+                callback_data=TASK_DETAIL_BACK_CALLBACK,
+            )
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_task_delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    """任务删除二次确认键盘（归档语义，可恢复）。"""
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="✅ 确认删除（可恢复）",
+                callback_data=f"{TASK_DETAIL_DELETE_CONFIRM_CALLBACK}:{task_id}",
+            ),
+            InlineKeyboardButton(
+                text="❌ 取消",
+                callback_data=f"task:refresh:{task_id}",
+            ),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_task_detail_overflow_summary(task_id: str, attachment_name: str) -> str:
+    """生成“详情超长”时的摘要提示文案，确保可挂载操作按钮。"""
+
+    task_text = _format_task_command(task_id)
+    return "\n".join(
+        [
+            f"📄 任务详情（{task_text}）",
+            f"⚠️ 详情内容过长，已生成附件 `{attachment_name}`，请下载查看全文。",
+            "你仍可使用下方按钮继续操作（刷新/删除/返回）。",
+        ]
+    )
+
+
+async def _send_task_detail_as_attachment(
+    message: Message,
+    *,
+    task_id: str,
+    detail_text: str,
+    reply_markup: InlineKeyboardMarkup,
+    prefer_edit: bool,
+) -> tuple[Optional[Message], bool]:
+    """任务详情超长时：发送摘要（含按钮）+ 全文附件（md）。"""
+
+    # 说明：Telegram sendMessage 单条限制 4096 字符；详情超长时直接 edit/send 会失败。
+    bot = current_bot()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    attachment_name = f"task-detail-{task_id}-{timestamp}.md"
+    summary_text = _build_task_detail_overflow_summary(task_id, attachment_name)
+
+    sent_summary: Optional[Message] = None
+    edited_summary = False
+    if prefer_edit:
+        edited = await _try_edit_message(message, summary_text, reply_markup=reply_markup)
+        edited_summary = bool(edited)
+        if not edited_summary:
+            sent_summary = await _answer_with_markdown(message, summary_text, reply_markup=reply_markup)
+    else:
+        sent_summary = await _answer_with_markdown(message, summary_text, reply_markup=reply_markup)
+
+    document = BufferedInputFile(detail_text.encode("utf-8", errors="ignore"), filename=attachment_name)
+
+    async def _send_document() -> None:
+        await bot.send_document(chat_id=message.chat.id, document=document)
+
+    try:
+        await _send_with_retry(_send_document)
+    except (TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter) as exc:
+        # 文档发送失败时仍然保留摘要与操作按钮，避免用户完全卡死在详情页。
+        worker_log.warning(
+            "任务详情附件发送失败：%s",
+            exc,
+            extra={**_session_extra(), "task_id": task_id},
+        )
+
+    return sent_summary, edited_summary
+
+
 async def _reply_task_detail_message(message: Message, task_id: str) -> None:
     try:
         detail_text, markup = await _render_task_detail(task_id)
     except ValueError:
         await _answer_with_markdown(message, f"任务 {task_id} 不存在")
+        return
+    if _is_text_too_long_for_telegram(detail_text):
+        await _send_task_detail_as_attachment(
+            message,
+            task_id=task_id,
+            detail_text=detail_text,
+            reply_markup=markup,
+            prefer_edit=False,
+        )
         return
     await _answer_with_markdown(message, detail_text, reply_markup=markup)
 
@@ -5485,6 +5733,15 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
                 )
             ]
         )
+    # 任务详情：提供“删除（归档）”入口（可恢复），仅在可查看详情的用户范围内可见。
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                text="🗑️ 删除（归档）",
+                callback_data=f"{TASK_DETAIL_DELETE_PROMPT_CALLBACK}:{task.id}",
+            )
+        ]
+    )
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -8798,6 +9055,8 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
             f"任务 /{task_id} 状态已更新为“测试”。",
             reply_markup=_build_worker_main_keyboard(),
         )
+        # 体验优化：状态更新为“测试”后自动展示任务列表，减少用户一次额外点击/输入。
+        await _handle_task_list_request(callback.message)
 
 
 def _build_quick_reply_partial_prompt(supplement: str) -> str:
@@ -8833,12 +9092,19 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
         prompt = "待决策项全部按模型推荐"
     else:
         if len(trimmed) > DESCRIPTION_MAX_LENGTH:
-            await message.answer(
-                f"补充说明长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-                reply_markup=_build_description_keyboard(),
+            # 补充说明超长：自动转为附件提示词推送模型，避免被长度限制卡住。
+            attachment = _persist_text_paste_as_attachment(message, trimmed)
+            prompt = _build_prompt_with_attachments(
+                "\n".join(
+                    [
+                        "未提及的决策项全部按推荐。",
+                        "用户补充说明较长，已作为附件提供，请阅读附件后再继续。",
+                    ]
+                ),
+                [attachment],
             )
-            return
-        prompt = _build_quick_reply_partial_prompt(trimmed)
+        else:
+            prompt = _build_quick_reply_partial_prompt(trimmed)
 
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
@@ -9799,7 +10065,15 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
                     )
                     return
                 related_task_id = normalized_related
+        pending_attachments: list[Mapping[str, str]] = []
         description = extra.get("description")
+        if description is not None:
+            description = description.strip()
+            if len(description) > DESCRIPTION_MAX_LENGTH:
+                # 命令式创建：描述超长自动转附件并写入占位，避免后续详情无法展示/编辑。
+                attachment = _persist_text_paste_as_attachment(message, description)
+                pending_attachments.append(_serialize_saved_attachment(attachment))
+                description = _build_overlong_text_placeholder("任务描述")
         actor = _actor_from_message(message)
         task = await TASK_SERVICE.create_root_task(
             title=title,
@@ -9812,6 +10086,8 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
             related_task_id=related_task_id,
             actor=actor,
         )
+        if pending_attachments:
+            await _bind_serialized_attachments(task, pending_attachments, actor=actor)
         detail_text, markup = await _render_task_detail(task.id)
         await _answer_with_markdown(message, f"任务已创建：\n{detail_text}", reply_markup=markup)
         return
@@ -10124,15 +10400,17 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
         await state.clear()
         await message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
         return
-    if trimmed and resolved != SKIP_TEXT and len(trimmed) > DESCRIPTION_MAX_LENGTH:
-        await message.answer(
-            f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-            reply_markup=_build_description_keyboard(),
-        )
-        return
     description: str = data.get("description", "")
     if trimmed and resolved != SKIP_TEXT:
-        description = trimmed
+        if len(trimmed) > DESCRIPTION_MAX_LENGTH:
+            # 任务描述超长：自动落盘为附件，DB 写入占位文本并继续流程（无需用户手动拆分/重发）。
+            attachment = _persist_text_paste_as_attachment(message, trimmed)
+            pending = list(data.get("pending_attachments") or [])
+            pending.append(_serialize_saved_attachment(attachment))
+            await state.update_data(pending_attachments=pending)
+            description = _build_overlong_text_placeholder("任务描述")
+        else:
+            description = trimmed
     await state.update_data(description=description)
     await state.set_state(TaskCreateStates.waiting_confirm)
     data = await state.get_data()
@@ -10198,7 +10476,15 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
             pending.extend(_serialize_saved_attachment(item) for item in extra_attachments)
         description = data.get("description") or ""
         if extra_text and not is_confirm and not is_cancel:
-            description = f"{description}\n{extra_text}" if description else extra_text
+            trimmed_extra = extra_text.strip()
+            if trimmed_extra:
+                if len(trimmed_extra) > DESCRIPTION_MAX_LENGTH:
+                    attachment = _persist_text_paste_as_attachment(message, trimmed_extra)
+                    pending.append(_serialize_saved_attachment(attachment))
+                    placeholder = _build_overlong_text_placeholder("补充任务描述")
+                    description = f"{description}\n{placeholder}" if description else placeholder
+                else:
+                    description = f"{description}\n{trimmed_extra}" if description else trimmed_extra
         await state.update_data(pending_attachments=pending, description=description)
         # 追加附件后，为用户回显最新附件列表（避免“确认页看不到附件”的困惑）。
         updated_lines = _format_pending_attachments_for_create_summary(pending)
@@ -10348,22 +10634,26 @@ async def on_task_desc_input(message: Message, state: FSMContext) -> None:
         return
 
     trimmed = (message.text or "").strip()
+    pending = list(data.get("pending_attachments") or [])
+    actor = _actor_from_message(message)
     if len(trimmed) > DESCRIPTION_MAX_LENGTH:
-        await message.answer(
-            f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-            reply_markup=_build_task_desc_input_keyboard(),
+        # 任务描述超长：自动转为附件，并在 DB 中写入占位文本。
+        attachment = _persist_text_paste_as_attachment(message, trimmed)
+        pending.append(_serialize_saved_attachment(attachment))
+        placeholder = _build_overlong_text_placeholder("任务描述")
+        preview_segment = "\n".join([placeholder, "（原文已保存为附件，无需重复发送）"])
+        await state.update_data(
+            new_description=placeholder,
+            pending_attachments=pending,
+            actor=actor,
         )
-        await _prompt_task_description_input(
-            message,
-            current_description=data.get("current_description", ""),
+    else:
+        preview_segment = trimmed if trimmed else "（新描述为空，将清空任务描述）"
+        await state.update_data(
+            new_description=trimmed,
+            pending_attachments=pending,
+            actor=actor,
         )
-        return
-
-    preview_segment = trimmed if trimmed else "（新描述为空，将清空任务描述）"
-    await state.update_data(
-        new_description=trimmed,
-        actor=_actor_from_message(message),
-    )
     await state.set_state(TaskDescriptionStates.waiting_confirm)
     await _answer_with_markdown(
         message,
@@ -10431,6 +10721,9 @@ async def on_task_desc_confirm_stage_text(message: Message, state: FSMContext) -
                 actor=actor,
                 description=new_description,
             )
+            pending_attachments = data.get("pending_attachments") or []
+            if pending_attachments:
+                await _bind_serialized_attachments(updated, pending_attachments, actor=actor)
         except ValueError as exc:
             await state.clear()
             await message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
@@ -10714,20 +11007,13 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     # Telegram 图片/文件常用 caption 承载文字；若本次仅有附件无文字，则按需求生成“见附件：文件名列表”。
     if trimmed and resolved != SKIP_TEXT:
         if len(trimmed) > DESCRIPTION_MAX_LENGTH:
-            if saved_attachments:
-                serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
-                await _bind_serialized_attachments(task, serialized, actor=actor)
-                await message.answer(
-                    f"补充任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入（附件已记录，无需重复发送）：",
-                    reply_markup=_build_description_keyboard(),
-                )
-            else:
-                await message.answer(
-                    f"补充任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-                    reply_markup=_build_description_keyboard(),
-                )
-            return
-        supplement = trimmed
+            # 补充描述超长：自动落盘为文本附件并绑定到任务，提示模型通过附件读取全文。
+            text_attachment = _persist_text_paste_as_attachment(message, trimmed)
+            saved_attachments = list(saved_attachments)
+            saved_attachments.append(text_attachment)
+            supplement = _build_overlong_text_placeholder("补充任务描述")
+        else:
+            supplement = trimmed
     elif saved_attachments:
         supplement = _build_attachment_only_supplement(saved_attachments)
 
@@ -10876,7 +11162,16 @@ async def on_task_history_back(callback: CallbackQuery) -> None:
     chat = getattr(message, "chat", None)
     if chat is not None:
         _clear_task_view(chat.id, message.message_id)
-    sent = await _answer_with_markdown(message, text, reply_markup=markup)
+    if _is_text_too_long_for_telegram(text):
+        sent, _edited = await _send_task_detail_as_attachment(
+            message,
+            task_id=task_id,
+            detail_text=text,
+            reply_markup=markup,
+            prefer_edit=False,
+        )
+    else:
+        sent = await _answer_with_markdown(message, text, reply_markup=markup)
     if sent is not None:
         _init_task_view_context(sent, detail_state)
         await callback.answer("已返回任务详情")
@@ -11162,13 +11457,15 @@ async def on_task_update(message: Message) -> None:
             await _answer_with_markdown(message, "优先级需要为数字 1-5")
             return
         priority = max(1, min(priority, 5))
+    pending_attachments: list[Mapping[str, str]] = []
     description = extra.get("description")
-    if description is not None and len(description) > DESCRIPTION_MAX_LENGTH:
-        await _answer_with_markdown(
-            message,
-            f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字",
-        )
-        return
+    if description is not None:
+        description = description.strip()
+        if len(description) > DESCRIPTION_MAX_LENGTH:
+            # /task_update 场景：描述超长自动转附件并写入占位，避免命令被长度限制卡住。
+            attachment = _persist_text_paste_as_attachment(message, description)
+            pending_attachments.append(_serialize_saved_attachment(attachment))
+            description = _build_overlong_text_placeholder("任务描述")
     task_type = None
     if "type" in extra:
         task_type = _normalize_task_type(extra.get("type"))
@@ -11199,6 +11496,8 @@ async def on_task_update(message: Message) -> None:
             task_type=updates["task_type"],
             description=updates["description"],
         )
+        if pending_attachments:
+            await _bind_serialized_attachments(updated, pending_attachments, actor=actor)
     except ValueError as exc:
         await _answer_with_markdown(message, str(exc))
         return
@@ -11260,6 +11559,24 @@ async def on_status_callback(callback: CallbackQuery) -> None:
         await callback.answer("无法定位原消息", show_alert=True)
         return
     detail_state = TaskViewState(kind="detail", data={"task_id": updated.id})
+    if _is_text_too_long_for_telegram(detail_text):
+        sent, edited = await _send_task_detail_as_attachment(
+            message,
+            task_id=updated.id,
+            detail_text=detail_text,
+            reply_markup=markup,
+            prefer_edit=True,
+        )
+        if edited:
+            _set_task_view_context(message, detail_state)
+            await callback.answer("状态已更新")
+            return
+        if sent is not None:
+            _init_task_view_context(sent, detail_state)
+            await callback.answer("状态已更新")
+            return
+        await callback.answer("状态更新但消息刷新失败", show_alert=True)
+        return
     if await _try_edit_message(message, detail_text, reply_markup=markup):
         _set_task_view_context(message, detail_state)
         await callback.answer("状态已更新")
@@ -11454,13 +11771,15 @@ async def on_task_defect_report_description(message: Message, state: FSMContext)
             reply_markup=_build_description_keyboard(),
         )
         return
-    if len(trimmed) > DESCRIPTION_MAX_LENGTH:
-        await message.answer(
-            f"缺陷描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-            reply_markup=_build_description_keyboard(),
-        )
-        return
-    await state.update_data(description=trimmed)
+    description = trimmed
+    if len(description) > DESCRIPTION_MAX_LENGTH:
+        # 缺陷描述超长：自动落盘为附件，写入占位文本并继续流程。
+        attachment = _persist_text_paste_as_attachment(message, description)
+        pending = list(data.get("pending_attachments") or [])
+        pending.append(_serialize_saved_attachment(attachment))
+        await state.update_data(pending_attachments=pending)
+        description = _build_overlong_text_placeholder("缺陷描述")
+    await state.update_data(description=description)
     await state.set_state(TaskDefectReportStates.waiting_confirm)
     data = await state.get_data()
     origin_task_id = data.get("origin_task_id")
@@ -11477,9 +11796,9 @@ async def on_task_defect_report_description(message: Message, state: FSMContext)
         summary_lines.append(f"关联任务：/{origin_task_id}")
     else:
         summary_lines.append("关联任务：-")
-    if trimmed:
+    if description:
         summary_lines.append("描述：")
-        summary_lines.append(trimmed)
+        summary_lines.append(description)
     else:
         summary_lines.append("描述：暂无（可稍后通过 /task_desc 补充）")
     pending_attachments = data.get("pending_attachments") or []
@@ -11524,10 +11843,26 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
             pending.extend(_serialize_saved_attachment(item) for item in extra_attachments)
         description = data.get("description") or ""
         if extra_text and not is_confirm and not is_cancel:
-            description = f"{description}\n{extra_text}" if description else extra_text
+            trimmed_extra = extra_text.strip()
+            if trimmed_extra:
+                if len(trimmed_extra) > DESCRIPTION_MAX_LENGTH:
+                    attachment = _persist_text_paste_as_attachment(message, trimmed_extra)
+                    pending.append(_serialize_saved_attachment(attachment))
+                    placeholder = _build_overlong_text_placeholder("补充缺陷描述")
+                    description = f"{description}\n{placeholder}" if description else placeholder
+                else:
+                    description = f"{description}\n{trimmed_extra}" if description else trimmed_extra
         # 若是媒体组，统一使用合并后的文本，避免遗漏 caption
         if text_part and not extra_text:
-            description = f"{description}\n{text_part}" if description else text_part
+            trimmed_part = text_part.strip()
+            if trimmed_part:
+                if len(trimmed_part) > DESCRIPTION_MAX_LENGTH:
+                    attachment = _persist_text_paste_as_attachment(message, trimmed_part)
+                    pending.append(_serialize_saved_attachment(attachment))
+                    placeholder = _build_overlong_text_placeholder("补充缺陷描述")
+                    description = f"{description}\n{placeholder}" if description else placeholder
+                else:
+                    description = f"{description}\n{trimmed_part}" if description else trimmed_part
         await state.update_data(pending_attachments=pending, description=description)
         updated_lines = _format_pending_attachments_for_create_summary(pending)
         await message.answer(
@@ -11889,18 +12224,62 @@ async def on_task_detail_callback(callback: CallbackQuery) -> None:
         await callback.answer("任务不存在", show_alert=True)
         return
     await callback.answer()
+    failure_markup = _build_task_detail_failure_keyboard(task_id)
     detail_state = TaskViewState(kind="detail", data={"task_id": task_id})
     chat = getattr(message, "chat", None)
     base_state = _peek_task_view(chat.id, message.message_id) if chat else None
     if base_state is None:
-        sent = await _answer_with_markdown(message, detail_text, reply_markup=markup)
+        if _is_text_too_long_for_telegram(detail_text):
+            sent, _edited = await _send_task_detail_as_attachment(
+                message,
+                task_id=task_id,
+                detail_text=detail_text,
+                reply_markup=markup,
+                prefer_edit=False,
+            )
+        else:
+            sent = await _answer_with_markdown(message, detail_text, reply_markup=markup)
         if sent is not None:
             _init_task_view_context(sent, detail_state)
         else:
-            # 修复：消息发送失败时给用户反馈
+            # 兜底：给出可行动入口，避免用户卡死在“打不开详情”的状态。
             await message.answer(
-                f"⚠️ 任务详情显示失败，可能包含特殊字符。\n任务ID: {task_id}\n请联系管理员检查任务内容。"
+                "\n".join(
+                    [
+                        "⚠️ 任务详情显示失败。",
+                        f"任务ID: {task_id}",
+                        "可能原因：内容过长、格式异常或网络波动。",
+                        "你可以点击“重试”，或直接“删除（归档）（可恢复）”。",
+                    ]
+                ),
+                reply_markup=failure_markup,
             )
+        return
+    if _is_text_too_long_for_telegram(detail_text):
+        sent, edited = await _send_task_detail_as_attachment(
+            message,
+            task_id=task_id,
+            detail_text=detail_text,
+            reply_markup=markup,
+            prefer_edit=True,
+        )
+        if edited:
+            _push_detail_view(message, task_id)
+            return
+        if sent is not None:
+            _init_task_view_context(sent, detail_state)
+            return
+        await message.answer(
+            "\n".join(
+                [
+                    "⚠️ 任务详情显示失败。",
+                    f"任务ID: {task_id}",
+                    "可能原因：内容过长、格式异常或网络波动。",
+                    "你可以点击“重试”，或直接“删除（归档）（可恢复）”。",
+                ]
+            ),
+            reply_markup=failure_markup,
+        )
         return
     if await _try_edit_message(message, detail_text, reply_markup=markup):
         _push_detail_view(message, task_id)
@@ -11909,9 +12288,16 @@ async def on_task_detail_callback(callback: CallbackQuery) -> None:
     if sent is not None:
         _init_task_view_context(sent, detail_state)
     else:
-        # 修复：消息发送失败时给用户反馈
         await message.answer(
-            f"⚠️ 任务详情显示失败，可能包含特殊字符。\n任务ID: {task_id}\n请联系管理员检查任务内容。"
+            "\n".join(
+                [
+                    "⚠️ 任务详情显示失败。",
+                    f"任务ID: {task_id}",
+                    "可能原因：内容过长、格式异常或网络波动。",
+                    "你可以点击“重试”，或直接“删除（归档）（可恢复）”。",
+                ]
+            ),
+            reply_markup=failure_markup,
         )
 
 
@@ -11991,6 +12377,83 @@ async def on_task_detail_back(callback: CallbackQuery) -> None:
     await _fallback_task_detail_back(callback)
 
 
+@router.callback_query(F.data.startswith(f"{TASK_DETAIL_DELETE_PROMPT_CALLBACK}:"))
+async def on_task_detail_delete_prompt(callback: CallbackQuery) -> None:
+    """任务详情：点击“删除（归档）”后展示二次确认（仅更新键盘，避免超长文本导致 edit_text 失败）。"""
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("回调参数错误", show_alert=True)
+        return
+    _, _, task_id = parts
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await callback.answer("任务不存在", show_alert=True)
+        return
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+
+    try:
+        await message.edit_reply_markup(reply_markup=_build_task_delete_confirm_keyboard(task_id))
+    except TelegramBadRequest as exc:
+        worker_log.info(
+            "更新删除确认键盘失败：%s",
+            exc,
+            extra={"task_id": task_id, **_session_extra()},
+        )
+        await message.answer(
+            f"⚠️ 即将删除（归档）任务 {task_id}，确认吗？（可恢复）",
+            reply_markup=_build_task_delete_confirm_keyboard(task_id),
+        )
+    await callback.answer("请确认是否删除（归档）")
+
+
+@router.callback_query(F.data.startswith(f"{TASK_DETAIL_DELETE_CONFIRM_CALLBACK}:"))
+async def on_task_detail_delete_confirm(callback: CallbackQuery) -> None:
+    """任务详情：确认删除（归档）并给出恢复提示。"""
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("回调参数错误", show_alert=True)
+        return
+    _, _, task_id = parts
+    actor = _actor_from_callback(callback)
+    try:
+        updated = await TASK_SERVICE.delete_task(task_id, actor=actor)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    message = callback.message
+    if message is None:
+        await callback.answer("已归档（可恢复）")
+        return
+
+    # 删除成功后，恢复详情页的操作按钮，避免停留在确认态。
+    try:
+        _detail_text, markup = await _render_task_detail(updated.id)
+        await message.edit_reply_markup(reply_markup=markup)
+    except Exception as exc:  # pragma: no cover - 兜底保护
+        worker_log.warning(
+            "归档后刷新任务详情键盘失败：%s",
+            exc,
+            extra={"task_id": task_id, **_session_extra()},
+        )
+
+    await message.answer(
+        "\n".join(
+            [
+                f"✅ 已归档任务 /{updated.id}（可恢复）。",
+                f"恢复方式：/task_delete {updated.id} restore=yes",
+            ]
+        ),
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    await callback.answer("已归档（可恢复）")
+
+
 @router.callback_query(F.data.startswith("task:toggle_archive:"))
 async def on_toggle_archive(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
@@ -12013,6 +12476,24 @@ async def on_toggle_archive(callback: CallbackQuery) -> None:
         await callback.answer("无法定位原消息", show_alert=True)
         return
     detail_state = TaskViewState(kind="detail", data={"task_id": updated.id})
+    if _is_text_too_long_for_telegram(detail_text):
+        sent, edited = await _send_task_detail_as_attachment(
+            message,
+            task_id=updated.id,
+            detail_text=detail_text,
+            reply_markup=markup,
+            prefer_edit=True,
+        )
+        if edited:
+            _set_task_view_context(message, detail_state)
+            await callback.answer("已切换任务状态")
+            return
+        if sent is not None:
+            _init_task_view_context(sent, detail_state)
+            await callback.answer("已切换任务状态")
+            return
+        await callback.answer("状态已切换但消息刷新失败", show_alert=True)
+        return
     if await _try_edit_message(message, detail_text, reply_markup=markup):
         _set_task_view_context(message, detail_state)
         await callback.answer("已切换任务状态")
@@ -12042,6 +12523,24 @@ async def on_refresh_callback(callback: CallbackQuery) -> None:
         await callback.answer("任务不存在", show_alert=True)
         return
     detail_state = TaskViewState(kind="detail", data={"task_id": task_id})
+    if _is_text_too_long_for_telegram(detail_text):
+        sent, edited = await _send_task_detail_as_attachment(
+            message,
+            task_id=task_id,
+            detail_text=detail_text,
+            reply_markup=markup,
+            prefer_edit=True,
+        )
+        if edited:
+            _set_task_view_context(message, detail_state)
+            await callback.answer("已刷新")
+            return
+        if sent is not None:
+            _init_task_view_context(sent, detail_state)
+            await callback.answer("已刷新")
+            return
+        await callback.answer("刷新失败", show_alert=True)
+        return
     if await _try_edit_message(message, detail_text, reply_markup=markup):
         _set_task_view_context(message, detail_state)
         await callback.answer("已刷新")
@@ -12154,6 +12653,7 @@ async def on_edit_new_value(message: Message, state: FSMContext) -> None:
         return
 
     update_kwargs: dict[str, Any] = {}
+    pending_attachments: list[Mapping[str, str]] = []
     if field == "priority":
         priority_options = [str(i) for i in range(1, 6)]
         priority_options.append(SKIP_TEXT)
@@ -12171,12 +12671,12 @@ async def on_edit_new_value(message: Message, state: FSMContext) -> None:
         update_kwargs["priority"] = value
     elif field == "description":
         if len(text) > DESCRIPTION_MAX_LENGTH:
-            await message.answer(
-                f"任务描述长度不可超过 {DESCRIPTION_MAX_LENGTH} 字，请重新输入：",
-                reply_markup=_build_worker_main_keyboard(),
-            )
-            return
-        update_kwargs["description"] = text
+            # 描述超长：自动转为附件并写入占位文本，避免编辑流程被长度限制打断。
+            attachment = _persist_text_paste_as_attachment(message, text)
+            pending_attachments.append(_serialize_saved_attachment(attachment))
+            update_kwargs["description"] = _build_overlong_text_placeholder("任务描述")
+        else:
+            update_kwargs["description"] = text
     elif field == "task_type":
         candidate = resolved_task_type or text
         task_type = _normalize_task_type(candidate)
@@ -12194,14 +12694,17 @@ async def on_edit_new_value(message: Message, state: FSMContext) -> None:
         update_kwargs["title"] = text
     await state.clear()
     try:
+        actor = _actor_from_message(message)
         updated = await TASK_SERVICE.update_task(
             task_id,
-            actor=_actor_from_message(message),
+            actor=actor,
             title=update_kwargs.get("title"),
             priority=update_kwargs.get("priority"),
             task_type=update_kwargs.get("task_type"),
             description=update_kwargs.get("description"),
         )
+        if pending_attachments:
+            await _bind_serialized_attachments(updated, pending_attachments, actor=actor)
     except ValueError as exc:
         await message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
         return
@@ -12265,10 +12768,6 @@ async def on_text(m: Message, state: FSMContext):
     if await _handle_command_trigger_message(m, prompt, state):
         return
     if prompt.startswith("/"):
-        return
-    # 长文本粘贴：当内容接近 Telegram 单条上限时，客户端可能拆成多条消息。
-    # 这里将其短时间内聚合为一个“本地附件文件”，再按附件提示词推送给模型，避免重复 ack/重复会话。
-    if await _maybe_enqueue_text_paste_message(m, raw_text):
         return
     await _handle_prompt_dispatch(m, prompt)
 

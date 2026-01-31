@@ -296,7 +296,7 @@ def test_task_create_description_accepts_text():
     assert description in summary
 
 
-def test_task_create_description_too_long_reprompts():
+def test_task_create_description_too_long_converts_to_attachment_and_continues():
     state = DummyState(
         data={
             "title": "测试标题",
@@ -309,14 +309,13 @@ def test_task_create_description_too_long_reprompts():
     message = DummyMessage(long_text)
     asyncio.run(bot.on_task_create_description(message, state))
 
-    assert state.state == TaskCreateStates.waiting_description
-    assert message.calls
-    assert "不可超过" in message.calls[-1]["text"]
-    markup = message.calls[-1]["reply_markup"]
-    assert isinstance(markup, ReplyKeyboardMarkup)
-    buttons = [button.text for row in markup.keyboard for button in row]
-    assert any("跳过" in text for text in buttons)
-    assert any("取消" in text for text in buttons)
+    assert state.state == TaskCreateStates.waiting_confirm
+    assert "已自动保存为附件" in state.data["description"]
+    pending = state.data.get("pending_attachments")
+    assert isinstance(pending, list) and pending, "超长描述应被转为附件并暂存"
+    last = pending[-1]
+    assert last.get("mime_type") == "text/plain"
+    assert last.get("path")
 
 
 def test_task_create_description_cancel_aborts():
