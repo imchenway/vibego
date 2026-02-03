@@ -58,3 +58,40 @@ def test_task_detail_actions_replace_archive_with_attach(status: str, archived: 
     has_push = any(button.callback_data == f"task:push_model:{task.id}" for button in buttons)
     assert has_push is expected_push
 
+
+def test_task_detail_actions_move_delete_to_history_position() -> None:
+    """任务详情按钮：删除（归档）移动到原查看历史位置，且移除查看历史入口（TASK_0060）。"""
+
+    task = TaskRecord(
+        id="TASK_0060",
+        project_slug="proj",
+        title="测试任务",
+        status="research",
+        description="描述",
+        archived=False,
+    )
+    markup = bot._build_task_actions(task)
+
+    rows = markup.inline_keyboard
+    buttons = [button for row in rows for button in row]
+
+    # “查看历史”入口不再出现在任务详情页（历史能力仍可能通过其他入口触发）
+    assert not any(button.callback_data == f"task:history:{task.id}" for button in buttons)
+
+    # “删除（归档）”仅出现一次
+    delete_callback = f"{bot.TASK_DETAIL_DELETE_PROMPT_CALLBACK}:{task.id}"
+    delete_buttons = [button for button in buttons if button.callback_data == delete_callback]
+    assert len(delete_buttons) == 1
+    assert delete_buttons[0].text == "🗑️ 删除（归档）"
+
+    # 删除按钮位于“报告缺陷”同行右侧（原“查看历史”位置）
+    expected_row = None
+    for row in rows:
+        if len(row) != 2:
+            continue
+        if row[0].callback_data == f"task:bug_report:{task.id}" and row[1].callback_data == delete_callback:
+            expected_row = row
+            break
+    assert expected_row is not None
+    assert expected_row[0].text == "🚨 报告缺陷"
+    assert expected_row[1].text == "🗑️ 删除（归档）"

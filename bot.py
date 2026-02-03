@@ -5719,8 +5719,11 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
                 callback_data=f"task:bug_report:{task.id}",
             ),
             InlineKeyboardButton(
-                text="🕘 查看历史",
-                callback_data=f"task:history:{task.id}",
+                # 任务详情：按 TASK_0060 调整按钮布局：
+                # - 移除“查看历史”入口（历史能力仍保留，但不在详情页暴露入口）
+                # - 将“删除（归档）”移动到原“查看历史”位置，并复用既有二次确认流程
+                text="🗑️ 删除（归档）",
+                callback_data=f"{TASK_DETAIL_DELETE_PROMPT_CALLBACK}:{task.id}",
             ),
         ]
     )
@@ -5733,15 +5736,6 @@ def _build_task_actions(task: TaskRecord) -> InlineKeyboardMarkup:
                 )
             ]
         )
-    # 任务详情：提供“删除（归档）”入口（可恢复），仅在可查看详情的用户范围内可见。
-    keyboard.append(
-        [
-            InlineKeyboardButton(
-                text="🗑️ 删除（归档）",
-                callback_data=f"{TASK_DETAIL_DELETE_PROMPT_CALLBACK}:{task.id}",
-            )
-        ]
-    )
     keyboard.append(
         [
             InlineKeyboardButton(
