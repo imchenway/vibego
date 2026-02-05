@@ -1638,10 +1638,31 @@ async def _dispatch_prompt_to_model(
             and not SESSION_BIND_STRICT
         ):
             session_path = _find_latest_claudecode_rollout(pointer_path)
+        if session_path is None and pointer_path is not None and SESSION_BIND_STRICT:
+            # strict 模式兜底：当 pointer 长时间未写入（binder 异常/已退出）时，
+            # 直接扫描会话目录定位最新 session，避免用户侧出现“未检测到会话日志”的误报。
+            session_path = _fallback_locate_latest_session(pointer_path, target_cwd)
+            if session_path is not None:
+                worker_log.info(
+                    "[session-map] chat=%s strict fallback locate latest session %s",
+                    chat_id,
+                    session_path,
+                    extra=_session_extra(path=session_path),
+                )
         if session_path is None:
+            details = []
+            if pointer_path is not None:
+                details.append(f"pointer={pointer_path}")
+            if target_cwd:
+                details.append(f"cwd={target_cwd}")
+            if details:
+                hint = "；".join(details)
+                message = f"未检测到 {MODEL_DISPLAY_LABEL} 会话日志，请稍后重试。\n（{hint}）"
+            else:
+                message = f"未检测到 {MODEL_DISPLAY_LABEL} 会话日志，请稍后重试。"
             await _reply_to_chat(
                 chat_id,
-                f"未检测到 {MODEL_DISPLAY_LABEL} 会话日志，请稍后重试。",
+                message,
                 reply_to=reply_to,
             )
             return False, None
@@ -1708,6 +1729,22 @@ async def _dispatch_prompt_to_model(
     )
     CHAT_WATCHERS[chat_id] = watcher_task
     return True, session_path
+
+
+def _fallback_locate_latest_session(pointer_path: Path, target_cwd: Optional[str]) -> Optional[Path]:
+    """在 session pointer 未写入时，兜底扫描会话目录定位最新 session 文件。
+
+    主要用于修复以下场景：
+    - session_binder 异常退出/未启动，导致 pointer 文件长期为空；
+    - bot 处于 strict 绑定模式时，仅等待 pointer 会导致误报“未检测到会话日志”。
+    """
+
+    if _is_gemini_model():
+        return _find_latest_gemini_session(pointer_path, target_cwd)
+    if _is_claudecode_model():
+        # ClaudeCode 会话可能缺少 cwd 元数据，按更新时间回退选择最新（并排除 agent-*）。
+        return _find_latest_claudecode_rollout(pointer_path)
+    return _find_latest_rollout_for_cwd(pointer_path, target_cwd)
 
 
 async def _push_task_to_model(
@@ -7516,6 +7553,17 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
             _update_pointer(pointer_path, session_path)
             worker_log.info(
                 "[session-map] chat=%s bind fresh session %s",
+                chat_id,
+                session_path,
+                extra=_session_extra(path=session_path),
+            )
+    if session_path is None and pointer_path is not None and SESSION_BIND_STRICT:
+        # strict 模式兜底：当 pointer 长时间未写入时，尝试直接扫描会话目录定位最新 session。
+        session_path = _fallback_locate_latest_session(pointer_path, target_cwd)
+        if session_path is not None:
+            _update_pointer(pointer_path, session_path)
+            worker_log.info(
+                "[session-map] chat=%s strict fallback locate latest session %s",
                 chat_id,
                 session_path,
                 extra=_session_extra(path=session_path),

@@ -2546,6 +2546,175 @@ def test_dispatch_prompt_injects_enforced_agents_notice(monkeypatch, tmp_path: P
     bot.CHAT_DELIVERED_OFFSETS.clear()
 
 
+def test_dispatch_prompt_strict_fallback_locates_latest_session_when_pointer_empty(monkeypatch, tmp_path: Path):
+    """strict 绑定模式下，当 pointer 长时间为空时，应兜底扫描会话目录定位最新 session。"""
+
+    pointer = tmp_path / "current_session.txt"
+    pointer.write_text("", encoding="utf-8")
+
+    target_cwd = str(tmp_path / "workdir")
+    monkeypatch.setenv("MODEL_WORKDIR", target_cwd)
+
+    session_file = tmp_path / "rollout-2026-02-05T00-00-00-test.jsonl"
+    session_file.write_text(json.dumps({"payload": {"cwd": target_cwd}}) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "MODEL_SESSION_ROOT", str(tmp_path))
+    monkeypatch.setattr(bot, "CODEX_SESSIONS_ROOT", "")
+    monkeypatch.setattr(bot, "MODEL_SESSION_GLOB", "rollout-*.jsonl")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    def fake_tmux_send_line(_session: str, _prompt: str) -> None:
+        return
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+
+    async def fake_await_session_path(*_args, **_kwargs) -> Optional[Path]:
+        return None
+
+    monkeypatch.setattr(bot, "_await_session_path", fake_await_session_path)
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    acked: list[Path] = []
+
+    async def fake_send_ack(_chat_id: int, path: Path, *, reply_to) -> None:
+        acked.append(path)
+
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(900, "pwd", reply_to=None, ack_immediately=True)
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert pointer.read_text(encoding="utf-8").strip() == str(session_file)
+    assert acked == [session_file]
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
+def test_dispatch_prompt_strict_fallback_errors_with_details_when_no_session_found(monkeypatch, tmp_path: Path):
+    """strict 绑定模式下，当 pointer 为空且扫描也找不到 session 时，应返回带细节的错误提示。"""
+
+    pointer = tmp_path / "current_session.txt"
+    pointer.write_text("", encoding="utf-8")
+
+    target_cwd = str(tmp_path / "workdir")
+    monkeypatch.setenv("MODEL_WORKDIR", target_cwd)
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "MODEL_SESSION_ROOT", str(tmp_path))
+    monkeypatch.setattr(bot, "CODEX_SESSIONS_ROOT", "")
+    monkeypatch.setattr(bot, "MODEL_SESSION_GLOB", "rollout-*.jsonl")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    def fake_tmux_send_line(_session: str, _prompt: str) -> None:
+        return
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+
+    async def fake_await_session_path(*_args, **_kwargs) -> Optional[Path]:
+        return None
+
+    monkeypatch.setattr(bot, "_await_session_path", fake_await_session_path)
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    replies: list[str] = []
+
+    async def fake_reply(_chat_id: int, text: str, **_kwargs):
+        replies.append(text)
+        return None
+
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(901, "pwd", reply_to=None, ack_immediately=True)
+        assert not ok
+        assert path is None
+
+    asyncio.run(scenario())
+
+    assert replies, "应返回错误提示"
+    assert "pointer=" in replies[-1]
+    assert str(pointer) in replies[-1]
+    assert "cwd=" in replies[-1]
+    assert target_cwd in replies[-1]
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
 def test_dispatch_prompt_skips_enforced_agents_notice_for_slash_command(monkeypatch, tmp_path: Path):
     """命令类 prompt（以 / 开头）必须跳过强制提示语，避免破坏语义。"""
 

@@ -166,9 +166,42 @@ kill_tty_sessions() {
   fi
 }
 
+kill_session_binder_for_log_dir() {
+  local log_dir="$1"
+  local pid_file="$log_dir/session_binder.pid"
+  local pointer_file="$log_dir/$POINTER_BASENAME"
+
+  [[ -d "$log_dir" ]] || return 0
+
+  local pid=""
+  if [[ -f "$pid_file" ]]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
+      local cmd=""
+      cmd="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+      if [[ "$cmd" == *"session_binder.py"* ]] && [[ "$cmd" == *"$pointer_file"* ]]; then
+        kill "$pid" >/dev/null 2>&1 || true
+        sleep 0.2
+        if ps -p "$pid" >/dev/null 2>&1; then
+          kill -9 "$pid" >/dev/null 2>&1 || true
+        fi
+      fi
+    fi
+    rm -f "$pid_file"
+  fi
+
+  # 兼容升级前未写 pid_file 的 orphan 进程：按 pointer 路径兜底清理
+  if command -v ps >/dev/null 2>&1; then
+    while read -r orphan_pid _cmd; do
+      [[ -z "$orphan_pid" ]] && continue
+      kill "$orphan_pid" >/dev/null 2>&1 || true
+    done < <(ps -Ao pid=,args= 2>/dev/null | grep -F "session_binder.py" | grep -F "$pointer_file" || true)
+  fi
+}
+
 clear_session_files() {
   local log_dir="$1"
-  rm -f "$log_dir/$POINTER_BASENAME" "$log_dir/$ACTIVE_SESSION_BASENAME" "$log_dir/$LOCK_BASENAME"
+  rm -f "$log_dir/$POINTER_BASENAME" "$log_dir/$ACTIVE_SESSION_BASENAME" "$log_dir/$LOCK_BASENAME" "$log_dir/session_binder.pid"
 }
 
 kill_pid_file() {
@@ -177,6 +210,7 @@ kill_pid_file() {
     local fallback_dir
     fallback_dir="$(dirname "$pid_file")"
     if [[ -d "$fallback_dir" ]]; then
+      kill_session_binder_for_log_dir "$fallback_dir"
       clear_session_files "$fallback_dir"
     fi
     return 0
@@ -194,6 +228,7 @@ kill_pid_file() {
   local pid_dir
   pid_dir="$(dirname "$pid_file")"
   if [[ -d "$pid_dir" ]]; then
+    kill_session_binder_for_log_dir "$pid_dir"
     clear_session_files "$pid_dir"
   fi
   return 0
@@ -241,6 +276,16 @@ stop_all_workers() {
       kill_pid_file "$pid_file"
       stopped=1
     done < <(find "$LOG_ROOT" -maxdepth 4 -type f -name "bot.pid" 2>/dev/null)
+
+    # 兜底：若 bot.pid 已缺失，但 binder 仍在运行，则按 pid 文件逐目录清理
+    while IFS= read -r binder_pid_file; do
+      [[ -z "$binder_pid_file" ]] && continue
+      local binder_dir
+      binder_dir="$(dirname "$binder_pid_file")"
+      kill_session_binder_for_log_dir "$binder_dir"
+      clear_session_files "$binder_dir"
+      stopped=1
+    done < <(find "$LOG_ROOT" -maxdepth 4 -type f -name "session_binder.pid" 2>/dev/null)
   fi
   return $stopped
 }

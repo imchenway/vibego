@@ -21,8 +21,11 @@ SESSION_POINTER_FILE="${SESSION_POINTER_FILE:-$LOG_ROOT/${MODEL_NAME:-codex}/${P
 SESSION_ACTIVE_ID_FILE="${SESSION_ACTIVE_ID_FILE:-$(dirname "${SESSION_POINTER_FILE}")/active_session_id.txt}"
 SESSION_BINDER="${SESSION_BINDER:-$ROOT_DIR/scripts/session_binder.py}"
 SESSION_BINDER_POLL_INTERVAL="${SESSION_BINDER_POLL_INTERVAL:-0.5}"
-SESSION_BINDER_TIMEOUT="${SESSION_BINDER_TIMEOUT:-600}"
 SESSION_BINDER_LOG="${SESSION_BINDER_LOG:-$(dirname "${SESSION_POINTER_FILE}")/session_binder.log}"
+# session_binder 默认常驻等待首个会话（0 表示一直等待），避免启动较久后首次交互导致指针长期为空。
+SESSION_BINDER_TIMEOUT="${SESSION_BINDER_TIMEOUT:-0}"
+# 用于管理后台 binder 生命周期，避免 stop/restart 后残留常驻进程。
+SESSION_BINDER_PID_FILE="${SESSION_BINDER_PID_FILE:-$(dirname "${SESSION_POINTER_FILE}")/session_binder.pid}"
 
 # 避免 oh-my-zsh 在非交互环境弹出更新提示
 export DISABLE_UPDATE_PROMPT="${DISABLE_UPDATE_PROMPT:-true}"
@@ -70,10 +73,14 @@ LOG_PATH=$(expand_path "$LOG_PATH")
 MODEL_WORKDIR=$(expand_path "$MODEL_WORKDIR")
 MODEL_SESSION_ROOT=$(expand_path "$MODEL_SESSION_ROOT")
 SESSION_POINTER_FILE=$(expand_path "$SESSION_POINTER_FILE")
+SESSION_ACTIVE_ID_FILE=$(expand_path "$SESSION_ACTIVE_ID_FILE")
+SESSION_BINDER_LOG=$(expand_path "$SESSION_BINDER_LOG")
+SESSION_BINDER_PID_FILE=$(expand_path "$SESSION_BINDER_PID_FILE")
 ensure_dir "$(dirname "$LOG_PATH")"
 ensure_dir "$(dirname "$SESSION_POINTER_FILE")"
 ensure_dir "$(dirname "$SESSION_ACTIVE_ID_FILE")"
 ensure_dir "$(dirname "$SESSION_BINDER_LOG")"
+ensure_dir "$(dirname "$SESSION_BINDER_PID_FILE")"
 
 if [[ "${VIBEGO_AGENTS_SYNCED:-0}" != "1" ]]; then
   AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$ROOT_DIR/AGENTS.md}"
@@ -163,6 +170,41 @@ if (( DRY_RUN )); then
   exit 0
 fi
 
+# 清理历史 binder（避免 stop 后残留常驻进程，或升级前未写 pid 的 orphan 进程）
+kill_session_binder_for_pointer() {
+  local pointer_file="$1" pid_file="$2"
+  local pid=""
+
+	  if [[ -f "$pid_file" ]]; then
+	    pid="$(cat "$pid_file" 2>/dev/null || true)"
+	    if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
+	      local cmd=""
+	      cmd="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+	      if [[ "$cmd" == *"session_binder.py"* ]] && [[ "$cmd" == *"$pointer_file"* ]]; then
+	        kill "$pid" >/dev/null 2>&1 || true
+	        for _ in {1..20}; do
+	          sleep 0.1
+          ps -p "$pid" >/dev/null 2>&1 || break
+        done
+        if ps -p "$pid" >/dev/null 2>&1; then
+          kill -9 "$pid" >/dev/null 2>&1 || true
+        fi
+      fi
+    fi
+    rm -f "$pid_file"
+  fi
+
+	  # 升级前版本可能未写 pid_file：按 pointer 路径兜底清理
+	  if command -v ps >/dev/null 2>&1; then
+	    while read -r orphan_pid _cmd; do
+	      [[ -z "$orphan_pid" ]] && continue
+	      kill "$orphan_pid" >/dev/null 2>&1 || true
+	    done < <(ps -Ao pid=,args= 2>/dev/null | grep -F "session_binder.py" | grep -F "$pointer_file" || true)
+	  fi
+	}
+
+kill_session_binder_for_pointer "$SESSION_POINTER_FILE" "$SESSION_BINDER_PID_FILE"
+
 : > "$SESSION_POINTER_FILE"
 : > "$SESSION_ACTIVE_ID_FILE"
 
@@ -198,6 +240,7 @@ PY
     BINDER_CMD+=(--log "$SESSION_BINDER_LOG")
   fi
   nohup "${BINDER_CMD[@]}" >>"$SESSION_BINDER_LOG" 2>&1 &
+  echo $! >"$SESSION_BINDER_PID_FILE"
 else
   echo "[start-tmux] session binder 未找到：$SESSION_BINDER" >&2
 fi
