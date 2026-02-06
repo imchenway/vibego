@@ -99,3 +99,37 @@ rg -n --max-count 40 '"phase"\s*:\s*"(commentary|final_answer)"' ~/.codex/sessio
   2. 再发送任务正文；
   3. 若 `/plan` 不可用，自动回退为“文本触发 PLAN”（保留现有 `进入 PLAN 模式...` 前缀）。
 - 同时配合 vibego 侧阶段门禁（FSM）实现“未确认不切换阶段”的硬约束。
+
+## 6. 二次排查补充（2026-02-06 11:40）
+
+### 6.1 复现证据（为何仍会推送 commentary）
+- 目标会话：`rollout-2026-02-06T10-37-19-019c30cf-a129-7ae3-9edf-aaf591620540`
+- 同一条中间文本在 JSONL 中有两条事件：
+  1. `event_msg.payload.type=agent_message`（**无 phase**）
+  2. `response_item.payload.type=message`（`phase=commentary`）
+- 旧逻辑会过滤第 2 条，但第 1 条因“无 phase 兼容”被放行，最终仍发到 Telegram。
+
+### 6.2 根因
+- 根因不是 `response_item.phase` 过滤失效，而是 **`event_msg.agent_message` 镜像通道漏过滤**。
+- 该镜像通道在新版 Codex 中常不携带 `phase`，且与 `response_item` 重复。
+
+### 6.3 修复
+- 文件：`bot.py`
+- 调整：`_extract_codex_payload()` 的 `event_type == "event_msg"` 分支
+  - 仅当 `payload.phase` 为字符串时才进入投递判断；
+  - `payload.phase` 缺失时直接忽略（不再把镜像中间消息发到 Telegram）。
+
+### 6.4 新增回归用例
+- 文件：`tests/test_codex_jsonl_phase.py`
+- 新增覆盖：
+  - `event_msg.agent_message` 无 `phase` -> 忽略
+  - `event_msg.agent_message` `phase=commentary` -> 忽略
+  - `event_msg.agent_message` `phase=final_answer` -> 允许发送
+
+### 6.5 验证结果
+- `PYTHONPATH=. pytest -q tests/test_codex_jsonl_phase.py` -> `7 passed`
+- `PYTHONPATH=. pytest -q tests/test_claudecode_jsonl.py` -> `5 passed`
+- `PYTHONPATH=. pytest -q tests/test_task_description.py` -> 通过（全量）
+- 真实会话重放（同 offset）：
+  - 修复前：解析到 8 条中间消息（commentary 镜像）
+  - 修复后：仅解析到 1 条最终消息（final_answer）

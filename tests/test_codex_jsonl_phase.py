@@ -39,6 +39,19 @@ def _build_codex_message_event(text: str, *, phase: Optional[str]) -> dict:
     }
 
 
+def _build_codex_event_msg_agent_message_event(text: str, *, phase: Optional[str]) -> dict:
+    payload = {
+        "type": "agent_message",
+        "message": text,
+    }
+    if phase is not None:
+        payload["phase"] = phase
+    return {
+        "type": "event_msg",
+        "payload": payload,
+    }
+
+
 def test_extract_codex_commentary_phase_ignored():
     event = _build_codex_message_event("中间进度", phase="commentary")
     assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
@@ -67,3 +80,23 @@ def test_extract_codex_legacy_message_without_phase_kept():
 def test_extract_codex_unknown_phase_ignored():
     event = _build_codex_message_event("未知阶段输出", phase="analysis")
     assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
+
+
+def test_extract_codex_event_msg_without_phase_ignored():
+    event = _build_codex_event_msg_agent_message_event("中间进度", phase=None)
+    assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
+
+
+def test_extract_codex_event_msg_commentary_phase_ignored():
+    event = _build_codex_event_msg_agent_message_event("中间进度", phase="commentary")
+    assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
+
+
+def test_extract_codex_event_msg_final_answer_phase_delivered():
+    event = _build_codex_event_msg_agent_message_event("最终答案", phase="final_answer")
+    result = bot._extract_deliverable_payload(event, event_timestamp=None)
+    assert result is not None
+    kind, text, metadata = result
+    assert kind == bot.DELIVERABLE_KIND_MESSAGE
+    assert text == "最终答案"
+    assert metadata is None
