@@ -322,6 +322,8 @@ PLAN_STATUS_LABELS = {
 
 DELIVERABLE_KIND_MESSAGE = "message"
 DELIVERABLE_KIND_PLAN = "plan_update"
+CODEX_MESSAGE_PHASE_COMMENTARY = "commentary"
+CODEX_MESSAGE_PHASE_FINAL_ANSWER = "final_answer"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
 # 长文本粘贴聚合：当用户粘贴内容接近上限时，Telegram 客户端可能拆成多条消息；
@@ -8367,9 +8369,30 @@ def _format_plan_update(arguments: Any, *, event_timestamp: Optional[str]) -> Op
 
 
 def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Optional[Tuple[str, str, Optional[Dict[str, Any]]]]:
+    def _should_deliver_message(payload: Optional[dict] = None) -> bool:
+        """按 Codex phase 过滤消息：仅 final_answer 投递到 Telegram。"""
+
+        phase_value: Any = None
+        if isinstance(payload, dict):
+            phase_value = payload.get("phase")
+        if not isinstance(phase_value, str):
+            phase_value = data.get("phase")
+        if not isinstance(phase_value, str):
+            # 兼容旧版本：没有 phase 字段时，保持原有投递行为。
+            return True
+        normalized = phase_value.strip().lower()
+        if not normalized:
+            return True
+        if normalized == CODEX_MESSAGE_PHASE_FINAL_ANSWER:
+            return True
+        # 只要出现 phase 且不是 final_answer（如 commentary），都视为中间过程并忽略。
+        return False
+
     event_type = data.get("type")
 
     if event_type == "agent_message":
+        if not _should_deliver_message():
+            return None
         message = data.get("message")
         if isinstance(message, str) and message.strip():
             return DELIVERABLE_KIND_MESSAGE, message, None
@@ -8377,6 +8400,8 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
     if event_type == "event_msg":
         payload = data.get("payload") or {}
         if payload.get("type") == "agent_message":
+            if not _should_deliver_message(payload):
+                return None
             message = payload.get("message")
             if isinstance(message, str) and message.strip():
                 return DELIVERABLE_KIND_MESSAGE, message, None
@@ -8389,6 +8414,8 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
     payload_type = payload.get("type")
 
     if payload_type in {"message", "assistant_message"}:
+        if not _should_deliver_message(payload):
+            return None
         content = payload.get("content")
         if isinstance(content, list):
             fragments = []
@@ -8419,6 +8446,8 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
             return DELIVERABLE_KIND_PLAN, plan_text, extra
 
     if payload.get("event") == "final":
+        if not _should_deliver_message(payload):
+            return None
         delta = payload.get("delta")
         if isinstance(delta, str) and delta.strip():
             return DELIVERABLE_KIND_MESSAGE, delta, None
