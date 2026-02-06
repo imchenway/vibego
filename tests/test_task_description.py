@@ -484,7 +484,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert "任务标题：调研任务" in payload
         assert "任务编码：/TASK_0001" in payload
         assert "\\_" not in payload
-        assert "任务描述：需要调研的事项" in payload
+        assert "任务描述：\n~~~\n需要调研的事项\n~~~" in payload
         assert "任务备注：" not in payload
         assert "补充任务描述：-" in payload
         assert payload.endswith("以下为任务执行记录，用于辅助回溯任务处理记录： -")
@@ -902,7 +902,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         assert "进入测试阶段" not in lines[0]
         assert "任务标题：测试任务" in payload
         assert "任务备注：" not in payload
-        assert "补充任务描述：补充说明内容" in payload
+        assert "补充任务描述：\n~~~\n补充说明内容\n~~~" in payload
         assert "以下为任务执行记录，用于辅助回溯任务处理记录： -" in payload
         assert "测试阶段补充说明：" not in payload
         assert await state.get_state() is None
@@ -2823,7 +2823,7 @@ def test_prepend_enforced_agents_notice_cases(raw_prompt: str, expected: str):
             "描述A",
             (
                 ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
-                ("contains", "任务描述：描述A"),
+                ("contains", "任务描述：\n~~~\n描述A\n~~~"),
                 ("not_contains", "任务备注："),
                 ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
             ),
@@ -2843,7 +2843,7 @@ def test_prepend_enforced_agents_notice_cases(raw_prompt: str, expected: str):
             "测试说明",
             (
                 ("startswith", f"{bot.VIBE_PHASE_PROMPT}\n任务标题：案例任务"),
-                ("contains", "任务描述：测试说明"),
+                ("contains", "任务描述：\n~~~\n测试说明\n~~~"),
                 ("not_contains", "任务备注："),
                 ("endswith", "以下为任务执行记录，用于辅助回溯任务处理记录： -"),
             ),
@@ -2931,19 +2931,114 @@ def test_build_model_push_payload_with_supplement():
     payload = bot._build_model_push_payload(task, supplement="补充内容", history=history)
     lines = payload.splitlines()
     assert lines[0] == bot.VIBE_PHASE_PROMPT
-    assert "任务描述：原始描述" in payload
+    assert "任务描述：\n~~~\n原始描述\n~~~" in payload
     assert "任务编码：/TASK_CHECK_SUP" in payload
     assert "\\_" not in payload
     assert "任务备注：" not in payload
-    assert "补充任务描述：补充内容" in payload
+    assert "补充任务描述：\n~~~\n补充内容\n~~~" in payload
     assert "以下为任务执行记录，用于辅助回溯任务处理记录：" in payload
     assert "2025-01-01T10:00:00+08:00 | 推送到模型（结果=success）" in payload
     assert "补充任务描述：旧补充" in payload
     history_intro_index = payload.index("以下为任务执行记录，用于辅助回溯任务处理记录：")
-    assert payload.index("补充任务描述：补充内容") < history_intro_index
+    assert payload.index("补充任务描述：\n~~~\n补充内容\n~~~") < history_intro_index
     assert payload.endswith("补充任务描述：旧补充")
     assert "## 测试阶段" not in payload
     assert "测试阶段补充说明：" not in payload
+
+
+def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, tmp_path: Path):
+    """推送到模型：任务上下文超长时应自动转为本地附件提示词，避免直接注入超长文本。"""
+
+    task = TaskRecord(
+        id="TASK_PUSH_LONG",
+        project_slug="demo",
+        title="超长推送任务",
+        status="research",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="X" * (bot.TELEGRAM_MESSAGE_LIMIT + 300),
+        parent_id=None,
+        root_id="TASK_PUSH_LONG",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=2468)
+
+    async def fake_history(task_id: str):
+        assert task_id == task.id
+        return "", 0
+
+    async def fake_notes(task_id: str):
+        assert task_id == task.id
+        return []
+
+    async def fake_attachments(task_id: str):
+        assert task_id == task.id
+        return []
+
+    captured: dict[str, object] = {}
+
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+    ):
+        captured["chat_id"] = chat_id
+        captured["prompt"] = prompt
+        captured["reply_to"] = reply_to
+        captured["ack_immediately"] = ack_immediately
+        return True, tmp_path / "session.jsonl"
+
+    def fake_persist(msg: DummyMessage, text: str) -> bot.TelegramSavedAttachment:
+        assert msg is message
+        assert len(text) > bot.TELEGRAM_MESSAGE_LIMIT
+        path = tmp_path / "20260206_000000000-long-prompt.txt"
+        path.write_text(text, encoding="utf-8")
+        return bot.TelegramSavedAttachment(
+            kind="document",
+            display_name=path.name,
+            mime_type="text/plain",
+            absolute_path=path,
+            relative_path=bot._format_relative_path(path),
+        )
+
+    monkeypatch.setattr(bot, "_build_history_context_for_model", fake_history)
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_notes", fake_notes)
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_attachments", fake_attachments)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_persist_text_paste_as_attachment", fake_persist)
+
+    async def _scenario() -> tuple[bool, str, Optional[Path]]:
+        return await bot._push_task_to_model(
+            task,
+            chat_id=message.chat.id,
+            reply_to=message,
+            supplement=None,
+            actor="Tester",
+        )
+
+    success, prompt, session_path = asyncio.run(_scenario())
+
+    assert success is True
+    assert session_path == tmp_path / "session.jsonl"
+    assert captured["chat_id"] == message.chat.id
+    assert captured["reply_to"] is message
+    assert captured["ack_immediately"] is False
+    assert isinstance(captured.get("prompt"), str)
+    dispatched_prompt = captured["prompt"]  # type: ignore[assignment]
+    assert prompt == dispatched_prompt
+    assert "当前任务推送内容较长，已自动保存为附件（文本）" in dispatched_prompt
+    assert "附件列表（文件位于项目工作目录" in dispatched_prompt
+    assert "20260206_000000000-long-prompt.txt" in dispatched_prompt
+    assert "X" * 120 not in dispatched_prompt
 
 
 def test_build_model_push_payload_without_history_formatting():

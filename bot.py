@@ -1749,6 +1749,47 @@ def _fallback_locate_latest_session(pointer_path: Path, target_cwd: Optional[str
     return _find_latest_rollout_for_cwd(pointer_path, target_cwd)
 
 
+def _convert_overlong_task_prompt_to_attachment(
+    prompt: str,
+    *,
+    chat_id: int,
+    reply_to: Optional[Message],
+) -> str:
+    """任务推送兜底：超长提示词自动落盘为附件并改写为附件提示。"""
+
+    if len(prompt) <= TELEGRAM_MESSAGE_LIMIT:
+        return prompt
+    if reply_to is None:
+        worker_log.warning(
+            "任务推送提示词超长，但缺少消息上下文，回退原始提示词推送",
+            extra={"chat": chat_id, "length": str(len(prompt))},
+        )
+        return prompt
+    try:
+        attachment = _persist_text_paste_as_attachment(reply_to, prompt)
+        converted = _build_prompt_with_attachments(
+            "当前任务推送内容较长，已自动保存为附件（文本），请阅读附件获取全文。",
+            [attachment],
+        )
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "任务推送超长转附件失败，将回退为原始提示词推送：%s",
+            exc,
+            extra={"chat": chat_id, "length": str(len(prompt))},
+        )
+        return prompt
+    worker_log.info(
+        "任务推送内容过长，已转为附件提示词",
+        extra={
+            "chat": chat_id,
+            "original_length": str(len(prompt)),
+            "converted_length": str(len(converted)),
+            "attachment_path": attachment.relative_path,
+        },
+    )
+    return converted
+
+
 async def _push_task_to_model(
     task: TaskRecord,
     *,
@@ -1785,9 +1826,14 @@ async def _push_task_to_model(
         is_bug_report=is_bug_report,
         push_mode=push_mode,
     )
+    dispatch_prompt = _convert_overlong_task_prompt_to_attachment(
+        prompt,
+        chat_id=chat_id,
+        reply_to=reply_to,
+    )
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
-        prompt,
+        dispatch_prompt,
         reply_to=reply_to,
         ack_immediately=False,
     )
@@ -1800,9 +1846,11 @@ async def _push_task_to_model(
         "has_supplement": has_supplement,
         "history_items": history_count,
         "history_chars": len(history_text),
-        "prompt_chars": len(prompt),
+        "prompt_chars": len(dispatch_prompt),
         "model": ACTIVE_MODEL or "",
     }
+    if dispatch_prompt != prompt:
+        payload["original_prompt_chars"] = len(prompt)
     if has_supplement:
         payload["supplement"] = supplement or ""
 
@@ -1820,7 +1868,7 @@ async def _push_task_to_model(
                 "has_supplement": str(has_supplement),
             },
         )
-    return success, prompt, session_path
+    return success, dispatch_prompt, session_path
 
 
 def _extract_executable(cmd: str) -> Optional[str]:
@@ -4737,6 +4785,20 @@ def _strip_legacy_bug_header(text: str) -> str:
     return "\n".join(cleaned_lines).strip()
 
 
+def _append_prompt_field_as_code_block(lines: list[str], *, label: str, value: Optional[str]) -> None:
+    """将任务字段按代码块样式追加到提示词，提升长文本可读性。"""
+
+    normalized = (value or "").strip()
+    if not normalized or normalized == "-":
+        lines.append(f"{label}：-")
+        return
+    lines.append(f"{label}：")
+    # 使用 ~~~ 代码块，避免与外层 Telegram ``` 预览代码块冲突。
+    lines.append("~~~")
+    lines.extend(normalized.splitlines() or [normalized])
+    lines.append("~~~")
+
+
 def _build_model_push_payload(
     task: TaskRecord,
     supplement: Optional[str] = None,
@@ -4809,11 +4871,10 @@ def _build_model_push_payload(
             phase_line,
             f"任务标题：{title}",
             f"任务编码：{task_code_plain}",
-            f"任务描述：{description}",
-            f"补充任务描述：{supplement_value}",
-            f"关联任务编码：{related_task_code}",
-            "",
         ]
+        _append_prompt_field_as_code_block(lines, label="任务描述", value=description)
+        _append_prompt_field_as_code_block(lines, label="补充任务描述", value=supplement_value)
+        lines.extend([f"关联任务编码：{related_task_code}", ""])
         if attachments:
             lines.append("附件列表：")
             limit = TASK_ATTACHMENT_PREVIEW_LIMIT
@@ -4839,16 +4900,11 @@ def _build_model_push_payload(
             title = (task.title or "-").strip() or "-"
             description = (task.description or "").strip() or "暂无"
             supplement_value = supplement_text or "-"
-            info_lines.extend(
-                [
-                    f"任务标题：{title}",
-                    f"任务编码：{task_code_plain}",
-                    f"任务描述：{description}",
-                    f"补充任务描述：{supplement_value}",
-                ]
-            )
+            info_lines.extend([f"任务标题：{title}", f"任务编码：{task_code_plain}"])
+            _append_prompt_field_as_code_block(info_lines, label="任务描述", value=description)
+            _append_prompt_field_as_code_block(info_lines, label="补充任务描述", value=supplement_value)
         elif supplement_text:
-            info_lines.append(f"补充任务描述：{supplement_text}")
+            _append_prompt_field_as_code_block(info_lines, label="补充任务描述", value=supplement_text)
 
         if history_block:
             if info_lines and info_lines[-1].strip():
@@ -4913,10 +4969,10 @@ def _build_task_context_block_for_model(
     lines: list[str] = [
         f"任务标题：{title}",
         f"任务编码：{task_code_plain}",
-        f"任务描述：{description}",
-        f"补充任务描述：{supplement_value}",
-        "",
     ]
+    _append_prompt_field_as_code_block(lines, label="任务描述", value=description)
+    _append_prompt_field_as_code_block(lines, label="补充任务描述", value=supplement_value)
+    lines.append("")
 
     if attachments:
         lines.append("附件列表：")
