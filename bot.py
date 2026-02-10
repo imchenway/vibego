@@ -313,6 +313,11 @@ AUTO_COMPACT_THRESHOLD = max(_env_int("AUTO_COMPACT_THRESHOLD", 0), 0)
 SESSION_BIND_STRICT = _env_bool("SESSION_BIND_STRICT", True)
 SESSION_BIND_TIMEOUT_SECONDS = max(_env_float("SESSION_BIND_TIMEOUT_SECONDS", 30.0), 0.0)
 SESSION_BIND_POLL_INTERVAL = max(_env_float("SESSION_BIND_POLL_INTERVAL", 0.5), 0.1)
+# Codex PLAN 模式切换：在发送提示词前可选发送 /plan 预命令
+PLAN_MODE_SWITCH_COMMAND = (os.environ.get("PLAN_MODE_SWITCH_COMMAND") or "/plan").strip() or "/plan"
+PLAN_MODE_SWITCH_DELAY_SECONDS = max(_env_float("PLAN_MODE_SWITCH_DELAY_SECONDS", 0.25), 0.0)
+# 直接 Telegram 文本消息默认按 PLAN 推送（先 /plan 再发正文）
+ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE = _env_bool("ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE", True)
 
 PLAN_STATUS_LABELS = {
     "completed": "✅",
@@ -322,6 +327,7 @@ PLAN_STATUS_LABELS = {
 
 DELIVERABLE_KIND_MESSAGE = "message"
 DELIVERABLE_KIND_PLAN = "plan_update"
+DELIVERABLE_KIND_REQUEST_INPUT = "request_input"
 CODEX_MESSAGE_PHASE_COMMENTARY = "commentary"
 CODEX_MESSAGE_PHASE_FINAL_ANSWER = "final_answer"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
@@ -342,6 +348,17 @@ MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
 # 模型答案消息底部：一键将任务切换到“测试”（不依赖提示词/摘要输出）
 MODEL_TASK_TO_TEST_PREFIX = "model:task_to_test:"
+# request_user_input：Telegram 按钮回调前缀（需控制总长度 <= 64 字节）
+REQUEST_INPUT_CALLBACK_PREFIX = "rui:"
+REQUEST_INPUT_ACTION_OPTION = "opt"
+REQUEST_INPUT_ACTION_PREV = "prev"
+REQUEST_INPUT_ACTION_NEXT = "next"
+REQUEST_INPUT_ACTION_SUBMIT = "submit"
+REQUEST_INPUT_ACTION_CANCEL = "cancel"
+REQUEST_INPUT_SESSION_TTL_SECONDS = max(_env_float("REQUEST_INPUT_SESSION_TTL_SECONDS", 900.0), 60.0)
+REQUEST_INPUT_MAX_QUESTIONS = max(_env_int("REQUEST_INPUT_MAX_QUESTIONS", 20), 1)
+REQUEST_INPUT_MAX_OPTIONS = max(_env_int("REQUEST_INPUT_MAX_OPTIONS", 10), 1)
+ENABLE_REQUEST_USER_INPUT_UI = _env_bool("ENABLE_REQUEST_USER_INPUT_UI", True)
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
@@ -383,6 +400,12 @@ def _is_gemini_model() -> bool:
     return MODEL_CANONICAL_NAME == "gemini"
 
 
+def _is_codex_model() -> bool:
+    """判断当前 worker 是否运行 Codex 模型。"""
+
+    return MODEL_CANONICAL_NAME == "codex"
+
+
 @dataclass
 class SessionDeliverable:
     """描述 JSONL 会话中的单个推送事件。"""
@@ -392,6 +415,42 @@ class SessionDeliverable:
     text: str
     timestamp: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass(**_DATACLASS_SLOT_KW)
+class RequestInputOption:
+    """request_user_input 单个候选项。"""
+
+    label: str
+    description: str = ""
+
+
+@dataclass(**_DATACLASS_SLOT_KW)
+class RequestInputQuestion:
+    """request_user_input 单个问题。"""
+
+    question_id: str
+    question: str
+    header: str = ""
+    options: List[RequestInputOption] = field(default_factory=list)
+
+
+@dataclass(**_DATACLASS_SLOT_KW)
+class RequestInputSession:
+    """Telegram 侧 request_user_input 交互会话。"""
+
+    token: str
+    chat_id: int
+    user_id: int
+    call_id: str
+    session_key: str
+    questions: List[RequestInputQuestion]
+    current_index: int
+    created_at: float
+    expires_at: float
+    selected_option_indexes: Dict[str, int] = field(default_factory=dict)
+    submitted: bool = False
+    cancelled: bool = False
 
 ENV_ISSUES: list[str] = []
 PRIMARY_WORKDIR: Optional[Path] = None
@@ -1480,14 +1539,86 @@ def _prepend_enforced_agents_notice(raw_prompt: str) -> str:
     return f"{notice}\n\n{raw_prompt}"
 
 
+def _infer_dispatch_mode_from_prompt(prompt: str) -> Optional[str]:
+    """根据提示词前缀推断推送模式（用于兼容旧调用方）。"""
+
+    text = (prompt or "").lstrip()
+    if text.startswith(f"进入 {PUSH_MODE_PLAN} 模式"):
+        return PUSH_MODE_PLAN
+    if text.startswith(f"{PUSH_MODE_YOLO} 模式"):
+        return PUSH_MODE_YOLO
+    return None
+
+
+def _resolve_dispatch_mode(*, intended_mode: Optional[str], prompt: str) -> Optional[str]:
+    """归一化本次推送模式；若调用方未显式传入则尝试从提示词推断。"""
+
+    normalized = (intended_mode or "").strip().upper()
+    if normalized in {PUSH_MODE_PLAN, PUSH_MODE_YOLO}:
+        return normalized
+    return _infer_dispatch_mode_from_prompt(prompt)
+
+
+def _should_send_plan_switch_command(*, intended_mode: Optional[str], prompt: str) -> bool:
+    """判断本次推送前是否需要先发送 /plan。"""
+
+    if not _is_codex_model():
+        return False
+    resolved_mode = _resolve_dispatch_mode(intended_mode=intended_mode, prompt=prompt)
+    if resolved_mode != PUSH_MODE_PLAN:
+        return False
+    # 内部 slash 命令不插入 /plan，避免干扰语义。
+    if (prompt or "").lstrip().startswith("/"):
+        return False
+    return True
+
+
+async def _maybe_send_plan_switch_command(
+    *,
+    chat_id: int,
+    intended_mode: Optional[str],
+    prompt: str,
+) -> bool:
+    """按条件先向 tmux 发送 /plan，再短暂等待模式切换稳定。"""
+
+    if not _should_send_plan_switch_command(intended_mode=intended_mode, prompt=prompt):
+        return False
+    try:
+        tmux_send_line(TMUX_SESSION, PLAN_MODE_SWITCH_COMMAND)
+    except subprocess.CalledProcessError as exc:
+        worker_log.warning(
+            "发送 PLAN 预命令失败，继续发送正文：%s",
+            exc,
+            extra={"chat": chat_id, "mode": PUSH_MODE_PLAN},
+        )
+        return False
+    if PLAN_MODE_SWITCH_DELAY_SECONDS > 0:
+        await asyncio.sleep(PLAN_MODE_SWITCH_DELAY_SECONDS)
+    worker_log.info(
+        "已发送 PLAN 预命令",
+        extra={
+            "chat": chat_id,
+            "mode": PUSH_MODE_PLAN,
+            "delay": str(PLAN_MODE_SWITCH_DELAY_SECONDS),
+            "command": PLAN_MODE_SWITCH_COMMAND,
+        },
+    )
+    return True
+
+
 async def _dispatch_prompt_to_model(
     chat_id: int,
     prompt: str,
     *,
     reply_to: Optional[Message],
     ack_immediately: bool = True,
+    intended_mode: Optional[str] = None,
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
+
+    stale_token = CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id)
+    if stale_token:
+        _drop_request_input_session(stale_token)
 
     prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
     if prev_watcher is not None:
@@ -1614,6 +1745,12 @@ async def _dispatch_prompt_to_model(
             reply_to=reply_to,
         )
         return False, None
+
+    await _maybe_send_plan_switch_command(
+        chat_id=chat_id,
+        intended_mode=intended_mode,
+        prompt=prompt,
+    )
 
     try:
         tmux_send_line(TMUX_SESSION, _prepend_enforced_agents_notice(prompt))
@@ -1813,8 +1950,24 @@ async def _push_task_to_model(
     """
 
     history_text, history_count = await _build_history_context_for_model(task.id)
-    notes = await TASK_SERVICE.list_notes(task.id)
-    attachments = await TASK_SERVICE.list_attachments(task.id)
+    try:
+        notes = await TASK_SERVICE.list_notes(task.id)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "读取任务备注失败，已回退为空列表：%s",
+            exc,
+            extra={"task_id": task.id},
+        )
+        notes = []
+    try:
+        attachments = await TASK_SERVICE.list_attachments(task.id)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "读取任务附件失败，已回退为空列表：%s",
+            exc,
+            extra={"task_id": task.id},
+        )
+        attachments = []
     # 需求约定：附件按发送顺序展示（时间升序）；服务层默认倒序，这里反转后输出。
     attachments = list(reversed(attachments))
     prompt = _build_model_push_payload(
@@ -1831,6 +1984,7 @@ async def _push_task_to_model(
         chat_id=chat_id,
         reply_to=reply_to,
     )
+    _remember_chat_active_user(chat_id, _extract_actor_user_id(actor))
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         dispatch_prompt,
@@ -2945,14 +3099,25 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
     """统一封装向模型推送提示词的流程。"""
 
     if ENV_ISSUES:
-        message_text = _format_env_issue_message()
-        worker_log.warning(
-            "拒绝处理消息，环境异常: %s",
-            message_text,
-            extra={**_session_extra(), "chat": message.chat.id},
-        )
-        await message.answer(message_text)
-        return
+        allow_with_existing_session = False
+        reusable_session = CHAT_SESSION_MAP.get(message.chat.id)
+        if reusable_session:
+            candidate = Path(reusable_session)
+            if candidate.exists():
+                allow_with_existing_session = True
+                worker_log.warning(
+                    "检测到环境异常，但存在可复用会话，继续处理消息",
+                    extra={"chat": message.chat.id, **_session_extra(path=candidate)},
+                )
+        if not allow_with_existing_session:
+            message_text = _format_env_issue_message()
+            worker_log.warning(
+                "拒绝处理消息，环境异常: %s",
+                message_text,
+                extra={**_session_extra(), "chat": message.chat.id},
+            )
+            await message.answer(message_text)
+            return
 
     # 全局长文本处理：合成消息（>4096）通常意味着 Telegram 拆分后的聚合结果；
     # 为避免把超长文本直接塞进 tmux/CLI，这里统一转为“本地附件 + 附件提示词”再推送模型。
@@ -2984,7 +3149,15 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
         await reply_large_text(message.chat.id, out)
         return
 
-    await _dispatch_prompt_to_model(message.chat.id, dispatch_prompt, reply_to=message)
+    active_user_id = getattr(message.from_user, "id", None) if message.from_user else None
+    _remember_chat_active_user(message.chat.id, active_user_id)
+    intended_mode = PUSH_MODE_PLAN if ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE else None
+    await _dispatch_prompt_to_model(
+        message.chat.id,
+        dispatch_prompt,
+        reply_to=message,
+        intended_mode=intended_mode,
+    )
 
 BOT_COMMANDS: list[tuple[str, str]] = [
     ("start", "打开任务概览"),
@@ -6689,6 +6862,12 @@ CHAT_DELIVERED_HASHES: Dict[int, Dict[str, set[str]]] = {}
 CHAT_DELIVERED_OFFSETS: Dict[int, Dict[str, set[int]]] = {}
 CHAT_REPLY_COUNT: Dict[int, Dict[str, int]] = {}
 CHAT_COMPACT_STATE: Dict[int, Dict[str, Dict[str, Any]]] = {}
+# 记录每个 chat 最近一次向模型发起请求的用户（用于按钮权限校验）。
+CHAT_ACTIVE_USERS: Dict[int, int] = {}
+# request_user_input：token -> session
+REQUEST_INPUT_SESSIONS: Dict[str, RequestInputSession] = {}
+# request_user_input：每个 chat 当前生效 token（旧 token 自动失效）
+CHAT_ACTIVE_REQUEST_INPUT_TOKENS: Dict[int, str] = {}
 # 长轮询状态：用于延迟轮询机制
 CHAT_LONG_POLL_STATE: Dict[int, Dict[str, Any]] = {}
 CHAT_LONG_POLL_LOCK: Optional[asyncio.Lock] = None  # 在事件循环启动后初始化
@@ -7298,6 +7477,458 @@ def _get_delivered_offsets(chat_id: int, session_key: str) -> set[int]:
     return CHAT_DELIVERED_OFFSETS.setdefault(chat_id, {}).setdefault(session_key, set())
 
 
+def _remember_chat_active_user(chat_id: int, user_id: Optional[int]) -> None:
+    """记录 chat 最近一次主动发起请求的用户。"""
+
+    if user_id is None:
+        return
+    CHAT_ACTIVE_USERS[chat_id] = int(user_id)
+
+
+def _cleanup_expired_request_input_sessions() -> None:
+    """清理过期或已终结的 request_user_input 交互会话。"""
+
+    if not REQUEST_INPUT_SESSIONS:
+        return
+    now = time.monotonic()
+    expired_tokens: list[str] = []
+    for token, session in REQUEST_INPUT_SESSIONS.items():
+        if session.cancelled or session.submitted or session.expires_at <= now:
+            expired_tokens.append(token)
+
+    for token in expired_tokens:
+        session = REQUEST_INPUT_SESSIONS.pop(token, None)
+        if session is None:
+            continue
+        if CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(session.chat_id) == token:
+            CHAT_ACTIVE_REQUEST_INPUT_TOKENS.pop(session.chat_id, None)
+
+
+def _drop_request_input_session(token: str) -> None:
+    """按 token 删除 request_user_input 会话及其 chat 映射。"""
+
+    session = REQUEST_INPUT_SESSIONS.pop(token, None)
+    if session is None:
+        return
+    if CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(session.chat_id) == token:
+        CHAT_ACTIVE_REQUEST_INPUT_TOKENS.pop(session.chat_id, None)
+
+
+def _build_request_input_callback_data(token: str, action: str, value: Optional[int] = None) -> str:
+    """构造 request_user_input 按钮回调数据（遵循 Telegram 64 字节限制）。"""
+
+    parts = [REQUEST_INPUT_CALLBACK_PREFIX.rstrip(":"), token, action]
+    if value is not None:
+        parts.append(str(value))
+    payload = ":".join(parts)
+    if len(payload.encode("utf-8")) > 64:
+        # 理论上不会触发（token/action 都是短字符串），保底兜底。
+        payload = f"{REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{token}:{action}"
+    return payload
+
+
+def _parse_request_input_callback_data(data: Optional[str]) -> Optional[Tuple[str, str, Optional[int]]]:
+    """解析 request_user_input 回调数据。"""
+
+    if not data or not data.startswith(REQUEST_INPUT_CALLBACK_PREFIX):
+        return None
+    parts = data.split(":")
+    if len(parts) < 3:
+        return None
+    _, token, action, *rest = parts
+    if not token:
+        return None
+    numeric: Optional[int] = None
+    if rest:
+        candidate = (rest[0] or "").strip()
+        if not candidate.isdigit():
+            return None
+        numeric = int(candidate)
+    return token, action, numeric
+
+
+def _truncate_button_label(text: str, *, limit: int = 18) -> str:
+    """压缩按钮文案，避免 Telegram 按钮过长影响可读性。"""
+
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if not cleaned:
+        return "-"
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[: max(limit - 1, 1)]}…"
+
+
+def _normalize_request_input_questions(raw: Any) -> List[RequestInputQuestion]:
+    """将 request_user_input 的原始 questions 归一化。"""
+
+    if not isinstance(raw, list):
+        return []
+
+    normalized: List[RequestInputQuestion] = []
+    used_ids: set[str] = set()
+    for index, item in enumerate(raw, 1):
+        if len(normalized) >= REQUEST_INPUT_MAX_QUESTIONS:
+            break
+        if not isinstance(item, dict):
+            continue
+
+        question_text = str(item.get("question") or "").strip()
+        header_text = str(item.get("header") or "").strip()
+        if not question_text:
+            # 与 request_user_input 定义对齐：问题文案是核心字段。
+            continue
+
+        raw_id = str(item.get("id") or "").strip() or f"question_{index}"
+        # question_id 仅保留字母数字/下划线，避免后续 payload 键值异常。
+        safe_id = re.sub(r"[^a-zA-Z0-9_]+", "_", raw_id).strip("_") or f"question_{index}"
+        base_id = safe_id
+        suffix = 2
+        while safe_id in used_ids:
+            safe_id = f"{base_id}_{suffix}"
+            suffix += 1
+        used_ids.add(safe_id)
+
+        options_raw = item.get("options")
+        if not isinstance(options_raw, list):
+            continue
+
+        options: List[RequestInputOption] = []
+        for option in options_raw:
+            if len(options) >= REQUEST_INPUT_MAX_OPTIONS:
+                break
+            if not isinstance(option, dict):
+                continue
+            label = str(option.get("label") or "").strip()
+            if not label:
+                continue
+            description = str(option.get("description") or "").strip()
+            options.append(RequestInputOption(label=label, description=description))
+
+        if not options:
+            continue
+
+        normalized.append(
+            RequestInputQuestion(
+                question_id=safe_id,
+                question=question_text,
+                header=header_text,
+                options=options,
+            )
+        )
+
+    return normalized
+
+
+def _parse_request_user_input_function_call(payload: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """解析 Codex 的 request_user_input function_call。"""
+
+    call_id = str(payload.get("call_id") or "").strip()
+    if not call_id:
+        return None
+
+    arguments = payload.get("arguments")
+    parsed_args: Optional[Dict[str, Any]] = None
+    if isinstance(arguments, str):
+        try:
+            candidate = json.loads(arguments)
+        except (TypeError, json.JSONDecodeError):
+            candidate = None
+        if isinstance(candidate, dict):
+            parsed_args = candidate
+    elif isinstance(arguments, dict):
+        parsed_args = arguments
+
+    if not isinstance(parsed_args, dict):
+        return None
+
+    questions = _normalize_request_input_questions(parsed_args.get("questions"))
+    if not questions:
+        return None
+
+    # 仅存储可序列化结构，避免 metadata 中出现复杂对象。
+    serialized_questions = [
+        {
+            "id": question.question_id,
+            "question": question.question,
+            "header": question.header,
+            "options": [
+                {
+                    "label": option.label,
+                    "description": option.description,
+                }
+                for option in question.options
+            ],
+        }
+        for question in questions
+    ]
+    summary = f"🧩 模型请求你补充决策（共 {len(serialized_questions)} 题），请点击按钮作答。"
+    metadata = {
+        "call_id": call_id,
+        "questions": serialized_questions,
+    }
+    return summary, metadata
+
+
+def _build_request_input_session(
+    *,
+    token: str,
+    chat_id: int,
+    session_key: str,
+    user_id: int,
+    call_id: str,
+    questions_raw: Sequence[Mapping[str, Any]],
+) -> Optional[RequestInputSession]:
+    """根据 metadata 反序列化 request_user_input 会话对象。"""
+
+    questions = _normalize_request_input_questions(list(questions_raw))
+    if not questions:
+        return None
+    now = time.monotonic()
+    return RequestInputSession(
+        token=token,
+        chat_id=chat_id,
+        user_id=user_id,
+        call_id=call_id,
+        session_key=session_key,
+        questions=questions,
+        current_index=0,
+        created_at=now,
+        expires_at=now + REQUEST_INPUT_SESSION_TTL_SECONDS,
+    )
+
+
+def _render_request_input_question_text(session: RequestInputSession) -> str:
+    """渲染当前题目文案。"""
+
+    total = len(session.questions)
+    index = max(0, min(session.current_index, total - 1))
+    question = session.questions[index]
+    selected_index = session.selected_option_indexes.get(question.question_id)
+    answered_count = len(session.selected_option_indexes)
+    remaining_seconds = max(int(session.expires_at - time.monotonic()), 0)
+    remaining_minutes = max(1, remaining_seconds // 60) if remaining_seconds else 0
+
+    lines: List[str] = [
+        "🧩 模型请求补充决策",
+        f"进度：第 {index + 1}/{total} 题（已答 {answered_count} 题）",
+    ]
+    if question.header:
+        lines.append(f"分组：{question.header}")
+    lines.append(f"问题：{question.question}")
+    lines.append("")
+    lines.append("选项：")
+    for option_index, option in enumerate(question.options, 1):
+        selected_flag = " ✅" if selected_index == option_index - 1 else ""
+        suffix = f"（{option.description}）" if option.description else ""
+        lines.append(f"{option_index}. {option.label}{selected_flag}{suffix}")
+
+    if selected_index is None:
+        lines.append("")
+        lines.append("当前选择：未选择")
+    else:
+        selected_label = question.options[selected_index].label
+        lines.append("")
+        lines.append(f"当前选择：{selected_label}")
+
+    lines.append("")
+    lines.append("说明：仅当前会话发起人可操作。")
+    if remaining_minutes > 0:
+        lines.append(f"有效期：剩余约 {remaining_minutes} 分钟")
+    else:
+        lines.append("有效期：已过期，请重新触发。")
+    return "\n".join(lines)
+
+
+def _build_request_input_keyboard(session: RequestInputSession) -> InlineKeyboardMarkup:
+    """构造 request_user_input 当前题目的交互按钮。"""
+
+    total = len(session.questions)
+    index = max(0, min(session.current_index, total - 1))
+    question = session.questions[index]
+    selected = session.selected_option_indexes.get(question.question_id)
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for option_index, option in enumerate(question.options):
+        marker = "✅ " if selected == option_index else ""
+        label = f"{option_index + 1}. {marker}{_truncate_button_label(option.label)}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=_build_request_input_callback_data(
+                        session.token,
+                        REQUEST_INPUT_ACTION_OPTION,
+                        option_index,
+                    ),
+                )
+            ]
+        )
+
+    nav_row: list[InlineKeyboardButton] = []
+    if index > 0:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ 上一步",
+                callback_data=_build_request_input_callback_data(
+                    session.token,
+                    REQUEST_INPUT_ACTION_PREV,
+                ),
+            )
+        )
+    if index < total - 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="➡️ 下一步",
+                callback_data=_build_request_input_callback_data(
+                    session.token,
+                    REQUEST_INPUT_ACTION_NEXT,
+                ),
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="📤 提交",
+                callback_data=_build_request_input_callback_data(
+                    session.token,
+                    REQUEST_INPUT_ACTION_SUBMIT,
+                ),
+            ),
+            InlineKeyboardButton(
+                text="❌ 取消",
+                callback_data=_build_request_input_callback_data(
+                    session.token,
+                    REQUEST_INPUT_ACTION_CANCEL,
+                ),
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_request_input_question(session: RequestInputSession, *, reply_to: Optional[Message]) -> bool:
+    """向 Telegram 发送当前题目的交互消息。"""
+
+    text = _render_request_input_question_text(session)
+    markup = _build_request_input_keyboard(session)
+    try:
+        await _reply_to_chat(
+            session.chat_id,
+            text,
+            reply_to=reply_to,
+            parse_mode=None,
+            reply_markup=markup,
+        )
+    except TelegramBadRequest as exc:
+        worker_log.warning(
+            "发送 request_user_input 题目失败：%s",
+            exc,
+            extra={"chat": session.chat_id, "token": session.token},
+        )
+        return False
+    return True
+
+
+def _build_request_input_output_payload(session: RequestInputSession) -> Dict[str, Any]:
+    """构建 request_user_input 的结构化 answers 负载。"""
+
+    answers: Dict[str, Dict[str, List[str]]] = {}
+    for question in session.questions:
+        selected_index = session.selected_option_indexes.get(question.question_id)
+        if selected_index is None:
+            continue
+        if selected_index < 0 or selected_index >= len(question.options):
+            continue
+        selected_label = question.options[selected_index].label
+        answers[question.question_id] = {"answers": [selected_label]}
+    return {"answers": answers}
+
+
+def _build_request_input_submission_prompt(call_id: str, output_payload: Mapping[str, Any]) -> str:
+    """构造回推到模型的提示词（结构化 JSON + call_id 绑定）。"""
+
+    payload_json = json.dumps(output_payload, ensure_ascii=False, separators=(",", ":"))
+    return "\n".join(
+        [
+            "request_user_input 工具结果（来自 Telegram 按钮交互）：",
+            f"call_id={call_id}",
+            payload_json,
+            "请基于上述工具结果继续执行后续步骤。",
+        ]
+    )
+
+
+async def _start_request_input_interaction(
+    chat_id: int,
+    session_path: Path,
+    *,
+    summary_text: str,
+    metadata: Optional[Dict[str, Any]],
+) -> bool:
+    """创建并发送 request_user_input 交互会话。"""
+
+    _cleanup_expired_request_input_sessions()
+    metadata = metadata or {}
+    call_id = str(metadata.get("call_id") or "").strip()
+    questions_raw = metadata.get("questions")
+    if not call_id or not isinstance(questions_raw, list):
+        fallback_text = summary_text.strip() or "⚠️ 检测到 request_user_input，但解析失败，请手动回复模型。"
+        await reply_large_text(chat_id, fallback_text, parse_mode=None, preformatted=True)
+        return True
+
+    # 替换同 chat 的旧 token，旧按钮将自动失效。
+    previous_token = CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id)
+    if previous_token:
+        _drop_request_input_session(previous_token)
+
+    token = uuid.uuid4().hex[:10]
+    owner_user_id = int(CHAT_ACTIVE_USERS.get(chat_id, chat_id))
+    session = _build_request_input_session(
+        token=token,
+        chat_id=chat_id,
+        session_key=str(session_path),
+        user_id=owner_user_id,
+        call_id=call_id,
+        questions_raw=questions_raw,
+    )
+    if session is None:
+        fallback_text = summary_text.strip() or "⚠️ request_user_input 题目为空，请手动回复模型。"
+        await reply_large_text(chat_id, fallback_text, parse_mode=None, preformatted=True)
+        return True
+
+    REQUEST_INPUT_SESSIONS[token] = session
+    CHAT_ACTIVE_REQUEST_INPUT_TOKENS[chat_id] = token
+    sent = await _send_request_input_question(session, reply_to=None)
+    if not sent:
+        _drop_request_input_session(token)
+    return sent
+
+
+async def _handle_request_input_deliverable(
+    chat_id: int,
+    session_path: Path,
+    deliverable: SessionDeliverable,
+) -> bool:
+    """处理 request_user_input 事件（发送按钮交互或降级提示）。"""
+
+    text_to_send = (deliverable.text or "").strip()
+    metadata = deliverable.metadata or {}
+    if not ENABLE_REQUEST_USER_INPUT_UI:
+        fallback = text_to_send or "检测到 request_user_input，请在终端中手动回复模型。"
+        await reply_large_text(chat_id, fallback, parse_mode=None, preformatted=True)
+        return True
+
+    return await _start_request_input_interaction(
+        chat_id,
+        session_path,
+        summary_text=text_to_send,
+        metadata=metadata,
+    )
+
+
 async def _deliver_pending_messages(
     chat_id: int,
     session_path: Path,
@@ -7379,6 +8010,14 @@ async def _deliver_pending_messages(
                 # 计划事件可能在同一批次后继续跟随模型输出，这里刷新本地状态避免误判
                 plan_active = ENABLE_PLAN_PROGRESS and (chat_id in CHAT_PLAN_TEXT)
                 plan_completed_flag = bool(CHAT_PLAN_COMPLETION.get(chat_id))
+            delivered_offsets.add(event_offset)
+            last_committed_offset = event_offset
+            SESSION_OFFSETS[session_key] = event_offset
+            continue
+        if deliverable.kind == DELIVERABLE_KIND_REQUEST_INPUT:
+            handled = await _handle_request_input_deliverable(chat_id, session_path, deliverable)
+            if handled:
+                delivered_response = True
             delivered_offsets.add(event_offset)
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset
@@ -8499,15 +9138,31 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
         if isinstance(text, str) and text.strip():
             return DELIVERABLE_KIND_MESSAGE, text, None
 
-    if payload_type == "function_call" and payload.get("name") == "update_plan":
-        plan_result = _format_plan_update(payload.get("arguments"), event_timestamp=event_timestamp)
-        if plan_result:
-            plan_text, plan_completed = plan_result
-            extra: Dict[str, Any] = {"plan_completed": plan_completed}
-            call_id = payload.get("call_id")
-            if call_id:
-                extra["call_id"] = call_id
-            return DELIVERABLE_KIND_PLAN, plan_text, extra
+    if payload_type == "function_call":
+        function_name = payload.get("name")
+        if function_name == "request_user_input":
+            request_input_result = _parse_request_user_input_function_call(payload)
+            if request_input_result:
+                text, extra = request_input_result
+                return DELIVERABLE_KIND_REQUEST_INPUT, text, extra
+            worker_log.warning(
+                "检测到 request_user_input 但解析失败，已降级为提示文本",
+                extra={"timestamp": event_timestamp or "-"},
+            )
+            return (
+                DELIVERABLE_KIND_REQUEST_INPUT,
+                "⚠️ 检测到 request_user_input，但题目解析失败，请手动在终端中继续交互。",
+                {"error": "request_user_input_parse_failed"},
+            )
+        if function_name == "update_plan":
+            plan_result = _format_plan_update(payload.get("arguments"), event_timestamp=event_timestamp)
+            if plan_result:
+                plan_text, plan_completed = plan_result
+                extra: Dict[str, Any] = {"plan_completed": plan_completed}
+                call_id = payload.get("call_id")
+                if call_id:
+                    extra["call_id"] = call_id
+                return DELIVERABLE_KIND_PLAN, plan_text, extra
 
     if payload.get("event") == "final":
         if not _should_deliver_message(payload):
@@ -8778,6 +9433,20 @@ def _actor_from_callback(callback: CallbackQuery) -> str:
     if callback.message and callback.message.chat:
         return str(callback.message.chat.id)
     return "unknown"
+
+
+def _extract_actor_user_id(actor: Optional[str]) -> Optional[int]:
+    """从 actor 文本中提取用户 ID（兼容 `name#123` / `123`）。"""
+
+    raw = (actor or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    matched = re.search(r"#(\d+)$", raw)
+    if matched:
+        return int(matched.group(1))
+    return None
 
 
 async def _build_task_list_view(
@@ -9105,6 +9774,7 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
     origin_message = callback.message
     prompt = "待决策项全部按模型推荐"
+    _remember_chat_active_user(chat_id, callback.from_user.id if callback.from_user else None)
 
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
@@ -9241,6 +9911,7 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
         else:
             prompt = _build_quick_reply_partial_prompt(trimmed)
 
+    _remember_chat_active_user(chat_id, message.from_user.id if message.from_user else None)
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         prompt,
@@ -9262,6 +9933,135 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
+
+
+def _first_unanswered_request_input_index(session: RequestInputSession) -> Optional[int]:
+    """返回首个未作答的问题下标。"""
+
+    for index, question in enumerate(session.questions):
+        if question.question_id not in session.selected_option_indexes:
+            return index
+    return None
+
+
+@router.callback_query(F.data.startswith(REQUEST_INPUT_CALLBACK_PREFIX))
+async def on_request_user_input_callback(callback: CallbackQuery) -> None:
+    """处理 request_user_input 的按钮交互。"""
+
+    parsed = _parse_request_input_callback_data(callback.data)
+    if parsed is None:
+        await callback.answer("交互参数无效", show_alert=True)
+        return
+
+    token, action, numeric = parsed
+    _cleanup_expired_request_input_sessions()
+    session = REQUEST_INPUT_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("该交互已失效，请重新触发。", show_alert=True)
+        return
+
+    chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+    if chat_id != session.chat_id:
+        await callback.answer("会话不匹配，无法操作。", show_alert=True)
+        return
+
+    active_token = CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id)
+    if active_token and active_token != token:
+        await callback.answer("该交互已被新问题替换，请使用最新消息。", show_alert=True)
+        return
+
+    if callback.from_user and callback.from_user.id != session.user_id:
+        await callback.answer("仅会话发起人可操作该按钮。", show_alert=True)
+        return
+
+    if session.expires_at <= time.monotonic():
+        _drop_request_input_session(token)
+        await callback.answer("交互已过期，请重新触发。", show_alert=True)
+        return
+
+    if session.submitted:
+        _drop_request_input_session(token)
+        await callback.answer("该交互已提交。", show_alert=True)
+        return
+    if session.cancelled:
+        _drop_request_input_session(token)
+        await callback.answer("该交互已取消。", show_alert=True)
+        return
+
+    if action == REQUEST_INPUT_ACTION_OPTION:
+        question = session.questions[session.current_index]
+        option_index = numeric if isinstance(numeric, int) else None
+        if option_index is None or option_index < 0 or option_index >= len(question.options):
+            await callback.answer("选项无效，请重试。", show_alert=True)
+            return
+        session.selected_option_indexes[question.question_id] = option_index
+        option_label = question.options[option_index].label
+        await callback.answer(f"已选择：{option_label}")
+        return
+
+    if action == REQUEST_INPUT_ACTION_PREV:
+        if session.current_index <= 0:
+            await callback.answer("已经是第一题。")
+            return
+        session.current_index -= 1
+        await _send_request_input_question(session, reply_to=callback.message)
+        await callback.answer("已切换到上一题")
+        return
+
+    if action == REQUEST_INPUT_ACTION_NEXT:
+        if session.current_index >= len(session.questions) - 1:
+            await callback.answer("已经是最后一题。")
+            return
+        session.current_index += 1
+        await _send_request_input_question(session, reply_to=callback.message)
+        await callback.answer("已切换到下一题")
+        return
+
+    if action == REQUEST_INPUT_ACTION_CANCEL:
+        session.cancelled = True
+        _drop_request_input_session(token)
+        await callback.answer("已取消")
+        if callback.message is not None:
+            await callback.message.answer("已取消本次决策交互。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    if action == REQUEST_INPUT_ACTION_SUBMIT:
+        missing_index = _first_unanswered_request_input_index(session)
+        if missing_index is not None:
+            session.current_index = missing_index
+            await callback.answer("请先完成全部题目后再提交。", show_alert=True)
+            await _send_request_input_question(session, reply_to=callback.message)
+            return
+
+        output_payload = _build_request_input_output_payload(session)
+        prompt = _build_request_input_submission_prompt(session.call_id, output_payload)
+        _remember_chat_active_user(chat_id, callback.from_user.id if callback.from_user else None)
+        success, session_path = await _dispatch_prompt_to_model(
+            chat_id,
+            prompt,
+            reply_to=callback.message,
+            ack_immediately=False,
+        )
+        if not success:
+            await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
+            return
+
+        session.submitted = True
+        _drop_request_input_session(token)
+        await callback.answer("已提交并推送到模型")
+        preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+        await _send_model_push_preview(
+            chat_id,
+            preview_block,
+            reply_to=callback.message,
+            parse_mode=preview_parse_mode,
+            reply_markup=_build_worker_main_keyboard(),
+        )
+        if session_path is not None:
+            await _send_session_ack(chat_id, session_path, reply_to=callback.message)
+        return
+
+    await callback.answer("暂不支持该操作。", show_alert=True)
 
 
 @router.callback_query(F.data == COMMAND_REFRESH_CALLBACK)
@@ -11021,6 +11821,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
     actor = _actor_from_callback(callback)
     chat_id = data.get("chat_id") or (callback.message.chat.id if callback.message else callback.from_user.id)
     origin_message = data.get("origin_message") or callback.message
+    push_mode = (data.get("push_mode") or "").strip().upper()
     try:
         success, prompt, session_path = await _push_task_to_model(
             task,
@@ -11028,6 +11829,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
             reply_to=origin_message,
             supplement=None,
             actor=actor,
+            push_mode=push_mode or None,
         )
     except ValueError as exc:
         await state.clear()
@@ -11352,6 +12154,7 @@ async def _request_task_summary(
         notes=notes,
     )
 
+    _remember_chat_active_user(chat_id, _extract_actor_user_id(actor))
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         prompt,
