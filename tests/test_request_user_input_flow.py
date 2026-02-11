@@ -43,10 +43,19 @@ class DummyBot:
 class DummyMessage:
     """模拟 callback.message，支持 answer。"""
 
-    def __init__(self, *, chat_id: int = 1, user_id: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        chat_id: int = 1,
+        user_id: int = 1,
+        text: str | None = None,
+        caption: str | None = None,
+    ) -> None:
         self.chat = SimpleNamespace(id=chat_id)
         self.from_user = SimpleNamespace(id=user_id, full_name="Tester")
         self.message_id = 100
+        self.text = text
+        self.caption = caption
         self.calls: list[tuple[str, object, object, dict]] = []
 
     async def answer(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
@@ -112,9 +121,13 @@ def _reset_runtime(monkeypatch):
     bot.CHAT_ACTIVE_USERS.clear()
     bot.REQUEST_INPUT_SESSIONS.clear()
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
+    bot.PLAN_CONFIRM_SESSIONS.clear()
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
     yield
     bot.REQUEST_INPUT_SESSIONS.clear()
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
+    bot.PLAN_CONFIRM_SESSIONS.clear()
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
 
 
 def test_extract_request_user_input_payload():
@@ -322,3 +335,203 @@ def test_request_input_callback_expired_session():
 
     assert callback.answers[-1] == ("该交互已失效，请重新触发。", True)
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
+
+
+def test_request_input_keyboard_hides_submit_button():
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="A"), bot.RequestInputOption(label="B"), bot.RequestInputOption(label="C")],
+    )
+    session = bot.RequestInputSession(
+        token="token_keyboard",
+        chat_id=1,
+        user_id=1,
+        call_id="call_kb",
+        session_key="s-kb",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    keyboard = bot._build_request_input_keyboard(session)
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert any("D." in text for text in labels)
+    assert not any("提交" in text for text in labels)
+
+
+def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_path: Path):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_auto_submit",
+        chat_id=88,
+        user_id=88,
+        call_id="call_auto_submit",
+        session_key="s-auto",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[88] = session.token
+
+    dispatched: list[str] = []
+    preview_calls: list[str] = []
+    ack_calls: list[str] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        assert chat_id == 88
+        dispatched.append(prompt)
+        return True, tmp_path / "auto_submit.jsonl"
+
+    async def fake_preview(chat_id: int, preview_block: str, *, reply_to, parse_mode, reply_markup):
+        preview_calls.append(preview_block)
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        ack_calls.append(str(session_path))
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_OPTION, 1),
+        message=DummyMessage(chat_id=88, user_id=88),
+        user_id=88,
+    )
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert dispatched, "选项作答完成后应自动推送"
+    assert '{"answers":{"scope":{"answers":["两页都改"]}}}' in dispatched[-1]
+    assert callback.answers[-1] == ("已自动推送到模型", False)
+    assert preview_calls
+    assert ack_calls
+    assert session.token not in bot.REQUEST_INPUT_SESSIONS
+
+
+def test_request_input_custom_option_enters_text_mode():
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_custom_mode",
+        chat_id=99,
+        user_id=99,
+        call_id="call_custom_mode",
+        session_key="s-custom",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[99] = session.token
+    message = DummyMessage(chat_id=99, user_id=99)
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_CUSTOM),
+        message=message,
+        user_id=99,
+    )
+
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert session.input_mode_question_id == "scope"
+    assert callback.answers[-1] == ("请发送自定义决策文本", False)
+    assert message.calls
+    assert "请发送本题的自定义决策文本" in message.calls[-1][0]
+
+
+def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_custom_submit",
+        chat_id=66,
+        user_id=66,
+        call_id="call_custom_submit",
+        session_key="s-custom-submit",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        input_mode_question_id="scope",
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[66] = session.token
+
+    dispatched: list[str] = []
+    preview_calls: list[str] = []
+    ack_calls: list[str] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        assert chat_id == 66
+        dispatched.append(prompt)
+        return True, tmp_path / "custom_submit.jsonl"
+
+    async def fake_preview(chat_id: int, preview_block: str, *, reply_to, parse_mode, reply_markup):
+        preview_calls.append(preview_block)
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        ack_calls.append(str(session_path))
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    message = DummyMessage(chat_id=66, user_id=66, text="按现有逻辑先仅做归因")
+    handled = asyncio.run(bot._handle_request_input_custom_text_message(message))
+
+    assert handled is True
+    assert dispatched, "输入自定义决策后应自动推送"
+    assert '{"answers":{"scope":{"answers":["按现有逻辑先仅做归因"]}}}' in dispatched[-1]
+    assert preview_calls
+    assert ack_calls
+    assert session.token not in bot.REQUEST_INPUT_SESSIONS
+
+
+def test_request_input_custom_text_cancel_returns_question(monkeypatch):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_custom_cancel",
+        chat_id=77,
+        user_id=77,
+        call_id="call_custom_cancel",
+        session_key="s-custom-cancel",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        input_mode_question_id="scope",
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[77] = session.token
+
+    sent_questions: list[str] = []
+
+    async def fake_send_question(current_session, *, reply_to):
+        sent_questions.append(current_session.token)
+        return True
+
+    monkeypatch.setattr(bot, "_send_request_input_question", fake_send_question)
+
+    message = DummyMessage(chat_id=77, user_id=77, text="取消")
+    handled = asyncio.run(bot._handle_request_input_custom_text_message(message))
+
+    assert handled is True
+    assert session.input_mode_question_id is None
+    assert sent_questions == [session.token]
+    assert session.token in bot.REQUEST_INPUT_SESSIONS
