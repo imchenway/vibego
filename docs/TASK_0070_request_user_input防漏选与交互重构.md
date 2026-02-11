@@ -57,6 +57,7 @@
   3) 自动提交失败后展示“重试提交”按钮。
   4) 旧提交入口未答完时仅提示，不再跳题。
   5) 自定义输入提示文案包含题号。
+  6) request_user_input 提交成功后不再发送“中间工具结果代码块”回显。
 
 ## 5. 回归结果
 ```bash
@@ -77,3 +78,34 @@ PYTHONPATH=. pytest -q
   https://core.telegram.org/bots/api#callbackquery
 - Telegram EditMessageReplyMarkup：
   https://core.telegram.org/bots/api#editmessagereplymarkup
+
+## 7. 2026-02-11 追加变更（去除重复回显）
+
+### 7.1 变更目标
+- 用户已明确要求：保留“✅ 已推送到模型 + 决策摘要”，去掉其后重复的“已推送到模型 + request_user_input 工具结果代码块”。
+
+### 7.2 代码改动
+- 文件：`bot.py`
+- 位置：`_submit_request_input_session(...)`
+- 调整内容：
+  - 保留：模型派发、决策摘要发送、session ack。
+  - 删除：`_send_model_push_preview(...)` 在 request_user_input 提交成功链路中的调用。
+
+### 7.3 测试改动
+- 文件：`tests/test_request_user_input_flow.py`
+- 更新 3 个用例断言为“**不再发送中间推送代码块预览**”：
+  1) `test_request_input_submit_dispatches_structured_payload`
+  2) `test_request_input_option_auto_submits_when_all_answered`
+  3) `test_request_input_custom_text_auto_submits`
+
+### 7.4 回归结果
+```bash
+PYTHONPATH=. pytest -q tests/test_request_user_input_flow.py
+# 14 passed, 2 warnings
+
+PYTHONPATH=. pytest -q tests/test_plan_confirm_bridge.py tests/test_task_description.py tests/test_plan_progress.py tests/test_model_quick_reply.py tests/test_codex_jsonl_phase.py tests/test_request_user_input_flow.py tests/test_long_poll_mechanism.py tests/test_auto_compact.py
+# 193 passed
+
+PYTHONPATH=. pytest -q
+# 579 passed, 6 warnings
+```

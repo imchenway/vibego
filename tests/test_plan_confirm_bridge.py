@@ -63,9 +63,21 @@ def _reset_runtime():
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
+    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
+    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
+        if not task.done():
+            task.cancel()
+    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
     yield
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
+    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
+    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
+        if not task.done():
+            task.cancel()
+    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
 
 
 def _build_assistant_message_event(text: str) -> dict:
@@ -165,12 +177,17 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
 
     dispatched: list[tuple[int, str]] = []
+    monitor_calls: list[tuple[int, object | None, int | None]] = []
 
     async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, intended_mode=None):
         dispatched.append((chat_id, prompt))
         return True, None
 
+    def fake_schedule(*, chat_id: int, session_path, reply_to, user_id):
+        monitor_calls.append((chat_id, session_path, user_id))
+
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_schedule_plan_execution_monitor", fake_schedule)
 
     callback = DummyCallback(
         bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
@@ -179,7 +196,8 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     )
     asyncio.run(bot.on_plan_confirm_callback(callback))
 
-    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_PROMPT)]
+    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_EXEC_PROMPT)]
+    assert monitor_calls == [(chat_id, None, 9)]
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已确认并推送到模型", False)
@@ -217,3 +235,43 @@ def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已保持 Plan 模式", False)
+
+
+def test_plan_develop_retry_dispatches_exec_prompt(monkeypatch: pytest.MonkeyPatch):
+    chat_id = 225
+    token = "retrytok"
+    session = bot.PlanDevelopRetrySession(
+        token=token,
+        chat_id=chat_id,
+        session_key="session-retry",
+        user_id=12,
+        created_at=time.monotonic(),
+    )
+    bot.PLAN_DEVELOP_RETRY_SESSIONS[token] = session
+    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS[chat_id] = token
+
+    dispatched: list[tuple[int, str]] = []
+    monitor_calls: list[tuple[int, object | None, int | None]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, intended_mode=None):
+        dispatched.append((chat_id, prompt))
+        return True, None
+
+    def fake_schedule(*, chat_id: int, session_path, reply_to, user_id):
+        monitor_calls.append((chat_id, session_path, user_id))
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_schedule_plan_execution_monitor", fake_schedule)
+
+    callback = DummyCallback(
+        bot._build_plan_develop_retry_callback_data(token, bot.PLAN_DEVELOP_RETRY_ACTION_RETRY),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=12,
+    )
+    asyncio.run(bot.on_plan_develop_retry_callback(callback))
+
+    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_EXEC_PROMPT)]
+    assert monitor_calls == [(chat_id, None, 12)]
+    assert token not in bot.PLAN_DEVELOP_RETRY_SESSIONS
+    assert chat_id not in bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS
+    assert callback.answers[-1] == ("已重试并推送到模型", False)

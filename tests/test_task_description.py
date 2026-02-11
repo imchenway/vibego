@@ -2852,8 +2852,18 @@ def test_dispatch_prompt_skips_enforced_agents_notice_for_slash_command(monkeypa
     bot.CHAT_DELIVERED_OFFSETS.clear()
 
 
-def test_dispatch_prompt_skips_enforced_agents_notice_for_plan_implement_prompt(monkeypatch, tmp_path: Path):
-    """Plan 收口确认（Yes）的固定提示词必须原样透传，不能注入强制提示语。"""
+@pytest.mark.parametrize(
+    "plan_prompt",
+    [
+        bot.PLAN_IMPLEMENT_PROMPT,
+        bot.PLAN_IMPLEMENT_EXEC_PROMPT,
+        bot.PLAN_RECOVERY_DEVELOP_PROMPT,
+    ],
+)
+def test_dispatch_prompt_skips_enforced_agents_notice_for_plan_implement_prompt(
+    monkeypatch, tmp_path: Path, plan_prompt: str
+):
+    """Plan 收口确认与恢复提示必须原样透传，不能注入强制提示语。"""
 
     pointer = tmp_path / "pointer.txt"
     session_file = tmp_path / "rollout.jsonl"
@@ -2907,14 +2917,14 @@ def test_dispatch_prompt_skips_enforced_agents_notice_for_plan_implement_prompt(
 
     async def scenario() -> None:
         ok, path = await bot._dispatch_prompt_to_model(
-            779, bot.PLAN_IMPLEMENT_PROMPT, reply_to=None, ack_immediately=False
+            779, plan_prompt, reply_to=None, ack_immediately=False
         )
         assert ok
         assert path == session_file
 
     asyncio.run(scenario())
 
-    assert sent.get("line") == bot.PLAN_IMPLEMENT_PROMPT
+    assert sent.get("line") == plan_prompt
 
     for coro in created_tasks:
         try:
@@ -3166,6 +3176,8 @@ def test_handle_prompt_dispatch_defaults_to_plan_mode(monkeypatch):
         ("/compact", "/compact"),
         (" /compact", " /compact"),
         (bot.PLAN_IMPLEMENT_PROMPT, bot.PLAN_IMPLEMENT_PROMPT),
+        (bot.PLAN_IMPLEMENT_EXEC_PROMPT, bot.PLAN_IMPLEMENT_EXEC_PROMPT),
+        (bot.PLAN_RECOVERY_DEVELOP_PROMPT, bot.PLAN_RECOVERY_DEVELOP_PROMPT),
         ("", ""),
         ("\n", "\n"),
         (f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"),

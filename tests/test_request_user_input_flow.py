@@ -128,11 +128,23 @@ def _reset_runtime(monkeypatch):
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
+    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
+    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
+        if not task.done():
+            task.cancel()
+    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
     yield
     bot.REQUEST_INPUT_SESSIONS.clear()
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
+    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
+    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
+        if not task.done():
+            task.cancel()
+    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
 
 
 def test_extract_request_user_input_payload():
@@ -260,7 +272,7 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     prompt = dispatched[-1]
     assert "call_id=call_submit_1" in prompt
     assert '{"answers":{"scope":{"answers":["两页"]},"style":{"answers":["胶囊"]}}}' in prompt
-    assert preview_calls, "应回显推送预览"
+    assert not preview_calls, "提交后不应再发送中间推送代码块预览"
     assert ack_calls, "应发送 session ack"
     assert callback.answers[-1] == ("已提交并推送到模型", False)
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
@@ -413,7 +425,7 @@ def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_pa
     assert dispatched, "选项作答完成后应自动推送"
     assert '{"answers":{"scope":{"answers":["两页都改"]}}}' in dispatched[-1]
     assert callback.answers[-1] == ("已自动推送到模型", False)
-    assert preview_calls
+    assert not preview_calls, "自动提交后不应再发送中间推送代码块预览"
     assert ack_calls
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
 
@@ -498,7 +510,7 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     assert handled is True
     assert dispatched, "输入自定义决策后应自动推送"
     assert '{"answers":{"scope":{"answers":["按现有逻辑先仅做归因"]}}}' in dispatched[-1]
-    assert preview_calls
+    assert not preview_calls, "自定义文本自动提交后不应再发送中间推送代码块预览"
     assert ack_calls
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
 
