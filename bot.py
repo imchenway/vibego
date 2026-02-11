@@ -400,6 +400,14 @@ PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS = max(_env_int("PLAN_EXECUTION_EXIT_PLAN_MAX
 # 单轮按键序列发送完成后，等待终端模式稳定再探测。
 PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS = max(_env_float("PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS", 0.2), 0.0)
 PLAN_EXECUTION_MODE_PROBE_LINES = max(_env_int("PLAN_EXECUTION_MODE_PROBE_LINES", 80), 20)
+# “重试进入开发”按钮链路的专用退出按键策略（默认：Escape + 单次 BTab）。
+PLAN_DEVELOP_RETRY_EXIT_PLAN_ESC_FIRST = _env_bool("PLAN_DEVELOP_RETRY_EXIT_PLAN_ESC_FIRST", True)
+PLAN_DEVELOP_RETRY_EXIT_PLAN_KEYS = tuple(
+    key.strip()
+    for key in (os.environ.get("PLAN_DEVELOP_RETRY_EXIT_PLAN_KEYS") or PLAN_EXECUTION_EXIT_PLAN_KEY).split(",")
+    if key.strip()
+)
+PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS = max(_env_int("PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS", 1), 1)
 # 执行态信号关键词（命中任一视为已进入开发执行）
 PLAN_EXECUTION_DEVELOP_KEYWORDS = (
     "当前执行的阶段：develop",
@@ -1489,11 +1497,26 @@ def _should_force_exit_plan_ui(*, force_exit_plan_ui: bool, prompt: str) -> bool
     return True
 
 
+def _build_plan_develop_retry_exit_plan_key_sequence() -> Tuple[str, ...]:
+    """构造“重试进入开发”按钮链路的退出按键序列。"""
+
+    key_sequence: list[str] = []
+    if PLAN_DEVELOP_RETRY_EXIT_PLAN_ESC_FIRST:
+        key_sequence.append("Escape")
+    if PLAN_DEVELOP_RETRY_EXIT_PLAN_KEYS:
+        key_sequence.extend(PLAN_DEVELOP_RETRY_EXIT_PLAN_KEYS)
+    if not key_sequence:
+        key_sequence.append(PLAN_EXECUTION_EXIT_PLAN_KEY)
+    return tuple(key_sequence)
+
+
 async def _maybe_force_exit_plan_ui(
     *,
     chat_id: int,
     prompt: str,
     force_exit_plan_ui: bool,
+    force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
+    force_exit_plan_ui_max_rounds: Optional[int] = None,
 ) -> Literal["plan", "non_plan", "unknown", "skipped"]:
     """在发送 develop 提示词前，尝试通过 Shift+Tab 退出 Plan UI 锁定。"""
 
@@ -1509,18 +1532,30 @@ async def _maybe_force_exit_plan_ui(
         return before_mode
 
     # 构造“退出 Plan”按键序列：
-    # 1) 可选 Escape（清理输入态/菜单态）
-    # 2) 一组 Shift+Tab（默认两次）
+    # 1) 优先使用调用方显式传入序列（便于链路级策略覆盖）
+    # 2) 否则走全局默认：可选 Escape + 一组 Shift+Tab
     key_sequence: list[str] = []
-    if PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST:
-        key_sequence.append("Escape")
-    if PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS:
-        key_sequence.extend(PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS)
+    if force_exit_plan_ui_key_sequence is not None:
+        key_sequence = [str(key).strip() for key in force_exit_plan_ui_key_sequence if str(key).strip()]
     else:
+        if PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST:
+            key_sequence.append("Escape")
+        if PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS:
+            key_sequence.extend(PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS)
+        else:
+            key_sequence.append(PLAN_EXECUTION_EXIT_PLAN_KEY)
+    if not key_sequence:
         key_sequence.append(PLAN_EXECUTION_EXIT_PLAN_KEY)
 
+    max_rounds = PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS
+    if force_exit_plan_ui_max_rounds is not None:
+        try:
+            max_rounds = max(int(force_exit_plan_ui_max_rounds), 1)
+        except (TypeError, ValueError):
+            max_rounds = 1
+
     current_mode = before_mode
-    for round_index in range(1, PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS + 1):
+    for round_index in range(1, max_rounds + 1):
         try:
             for key_index, key in enumerate(key_sequence):
                 tmux_send_key(TMUX_SESSION, key)
@@ -1553,7 +1588,7 @@ async def _maybe_force_exit_plan_ui(
                 "before_mode": before_mode,
                 "after_mode": current_mode,
                 "round": str(round_index),
-                "max_rounds": str(PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS),
+                "max_rounds": str(max_rounds),
                 "switch_key_sequence": ",".join(key_sequence),
                 "round_gap": str(PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS),
                 "delay": str(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS),
@@ -1844,6 +1879,8 @@ async def _dispatch_prompt_to_model(
     intended_mode: Optional[str] = None,
     reset_plan_execution_monitor: bool = True,
     force_exit_plan_ui: bool = False,
+    force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
+    force_exit_plan_ui_max_rounds: Optional[int] = None,
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
 
@@ -1992,6 +2029,8 @@ async def _dispatch_prompt_to_model(
         chat_id=chat_id,
         prompt=prompt,
         force_exit_plan_ui=force_exit_plan_ui,
+        force_exit_plan_ui_key_sequence=force_exit_plan_ui_key_sequence,
+        force_exit_plan_ui_max_rounds=force_exit_plan_ui_max_rounds,
     )
 
     try:
@@ -10842,6 +10881,7 @@ async def _submit_request_input_session(
     *,
     reply_to: Optional[Message],
     actor_user_id: Optional[int],
+    remove_reply_keyboard: bool = False,
 ) -> bool:
     """将当前 request_user_input 会话答案推送到模型。"""
 
@@ -10866,6 +10906,7 @@ async def _submit_request_input_session(
         summary_text,
         reply_to=reply_to,
         parse_mode=None,
+        reply_markup=ReplyKeyboardRemove() if remove_reply_keyboard else None,
     )
     # request_user_input 场景已通过“决策摘要”收口，避免重复发送中间工具结果代码块。
     if session_path is not None:
@@ -10879,6 +10920,7 @@ async def _submit_request_input_session_with_auto_retry(
     reply_to: Optional[Message],
     actor_user_id: Optional[int],
     allow_auto_retry: bool,
+    remove_reply_keyboard: bool = False,
 ) -> bool:
     """提交 request_user_input，会在自动提交链路中按约定做一次重试。"""
 
@@ -10890,6 +10932,7 @@ async def _submit_request_input_session_with_auto_retry(
         session,
         reply_to=reply_to,
         actor_user_id=actor_user_id,
+        remove_reply_keyboard=remove_reply_keyboard,
     )
     if success:
         session.submission_state = "submitted"
@@ -10902,6 +10945,7 @@ async def _submit_request_input_session_with_auto_retry(
             session,
             reply_to=reply_to,
             actor_user_id=actor_user_id,
+            remove_reply_keyboard=remove_reply_keyboard,
         )
         if success:
             session.submission_state = "submitted"
@@ -10909,6 +10953,14 @@ async def _submit_request_input_session_with_auto_retry(
 
     session.submission_state = "failed"
     await _send_request_input_retry_prompt(session, reply_to=reply_to)
+    if remove_reply_keyboard:
+        await _reply_to_chat(
+            session.chat_id,
+            "自动提交失败，可点击“重试提交”继续。",
+            reply_to=reply_to,
+            parse_mode=None,
+            reply_markup=ReplyKeyboardRemove(),
+        )
     return False
 
 
@@ -11074,17 +11126,12 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
 
     next_unanswered = _next_unanswered_request_input_index(session, after_index=question_index)
     if next_unanswered is None:
-        success = await _submit_request_input_session_with_auto_retry(
+        await _submit_request_input_session_with_auto_retry(
             session,
             reply_to=message,
             actor_user_id=user_id,
             allow_auto_retry=True,
-        )
-        if success:
-            return True
-        await message.answer(
-            "自动提交失败，可点击“重试提交”继续。",
-            reply_markup=ReplyKeyboardRemove(),
+            remove_reply_keyboard=True,
         )
         return True
 
@@ -11202,11 +11249,13 @@ async def on_plan_develop_retry_callback(callback: CallbackQuery) -> None:
     _remember_chat_active_user(chat_id, actor_user_id)
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
-        PLAN_IMPLEMENT_EXEC_PROMPT,
+        PLAN_IMPLEMENT_PROMPT,
         reply_to=callback.message,
         ack_immediately=True,
         intended_mode=None,
         force_exit_plan_ui=True,
+        force_exit_plan_ui_key_sequence=_build_plan_develop_retry_exit_plan_key_sequence(),
+        force_exit_plan_ui_max_rounds=PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
     )
     if not success:
         await callback.answer("重试失败：模型未就绪，请稍后再试。", show_alert=True)

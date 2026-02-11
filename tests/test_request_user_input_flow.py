@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardRemove
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -513,6 +513,44 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     assert not preview_calls, "自定义文本自动提交后不应再发送中间推送代码块预览"
     assert ack_calls
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
+    assert message.calls, "自定义文本成功提交后应发送收口消息"
+    assert isinstance(message.calls[-1][2], ReplyKeyboardRemove)
+
+
+def test_request_input_custom_text_submit_failure_clears_reply_keyboard(monkeypatch):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_custom_submit_fail",
+        chat_id=166,
+        user_id=166,
+        call_id="call_custom_submit_fail",
+        session_key="s-custom-submit-fail",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        input_mode_question_id="scope",
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[166] = session.token
+
+    async def fake_dispatch(*_args, **_kwargs):
+        return False, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    message = DummyMessage(chat_id=166, user_id=166, text="继续按现有逻辑")
+    handled = asyncio.run(bot._handle_request_input_custom_text_message(message))
+
+    assert handled is True
+    assert session.submission_state == "failed"
+    assert message.calls, "失败后应提示重试并清理输入菜单"
+    assert isinstance(message.calls[0][2], InlineKeyboardMarkup), "首条应保留重试提交按钮"
+    assert isinstance(message.calls[-1][2], ReplyKeyboardRemove), "最后一条应清理取消菜单"
 
 
 def test_request_input_custom_text_cancel_returns_question(monkeypatch):

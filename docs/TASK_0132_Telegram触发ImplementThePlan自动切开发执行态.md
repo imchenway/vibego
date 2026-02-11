@@ -129,3 +129,41 @@ PYTHONPATH=. pytest -q tests/test_plan_confirm_bridge.py tests/test_task_descrip
 PYTHONPATH=. pytest -q
 # 595 passed, 6 warnings
 ```
+
+## 8. 三次修正（2026-02-11，重试按钮链路回归到单次切换）
+
+### 8.1 触发背景
+- 用户反馈：点击“🔁 重试进入开发”时，双 `BTab` 可能把模式又切回去，导致持续停留在 Plan。
+- 新决策（已确认）：
+  1) 仅调整“重试进入开发”按钮链路（不动 Yes 首次链路与自动恢复链路）；  
+  2) 顺序固定：`Escape -> BTab(1次) -> Implement the plan.`；  
+  3) 成功判定仍按“终端模式优先”；  
+  4) 失败仍仅下发“重试进入开发”按钮。
+
+### 8.2 代码改动（`bot.py`）
+- 新增“重试按钮专用”配置：
+  - `PLAN_DEVELOP_RETRY_EXIT_PLAN_ESC_FIRST`（默认 `true`）
+  - `PLAN_DEVELOP_RETRY_EXIT_PLAN_KEYS`（默认 `BTab`，支持 env 覆盖）
+  - `PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS`（默认 `1`）
+- 新增 `_build_plan_develop_retry_exit_plan_key_sequence()`：
+  - 统一构造重试链路按键序列（默认 `Escape,BTab`）。
+- `_maybe_force_exit_plan_ui(...)` 扩展可选参数：
+  - `force_exit_plan_ui_key_sequence`
+  - `force_exit_plan_ui_max_rounds`
+  - 支持链路级覆盖按键序列与轮数。
+- `_dispatch_prompt_to_model(...)` 同步透传上述两个可选参数。
+- `on_plan_develop_retry_callback(...)`：
+  - 推送提示词从 `PLAN_IMPLEMENT_EXEC_PROMPT` 改为 `PLAN_IMPLEMENT_PROMPT`（即 `Implement the plan.`）
+  - 启用专用退出参数：单轮、单次快捷键序列。
+
+### 8.3 测试改动
+- `tests/test_plan_confirm_bridge.py`
+  - `test_plan_develop_retry_dispatches_implement_prompt`：
+    - 断言重试链路发送 `Implement the plan.`
+    - 断言强制退出参数为：`Escape + BTab` 且 `max_rounds=1`
+
+### 8.4 回归结果
+```bash
+PYTHONPATH=. pytest -q tests/test_plan_confirm_bridge.py tests/test_task_description.py
+# 149 passed, 2 warnings
+```

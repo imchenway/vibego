@@ -109,3 +109,44 @@ PYTHONPATH=. pytest -q tests/test_plan_confirm_bridge.py tests/test_task_descrip
 PYTHONPATH=. pytest -q
 # 579 passed, 6 warnings
 ```
+
+## 8. 2026-02-11 追加修复（自定义决策后“取消”菜单残留）
+
+### 8.1 问题现象
+- 在 `request_user_input` 中点击 `D. 输入自定义决策` 后，用户发送自定义文本并自动提交成功，Telegram 底部菜单仍可能停留在“取消”按钮。
+
+### 8.2 根因分析
+- 自定义输入成功收口链路最终走 `_submit_request_input_session(...)`；
+- 该路径此前发送“决策摘要”时未附带 `ReplyKeyboardRemove`，导致 ReplyKeyboard 未被清理。
+
+### 8.3 代码修复（`bot.py`）
+- `_submit_request_input_session(...)` 新增参数：
+  - `remove_reply_keyboard: bool = False`
+  - 当该参数为 `True` 时，决策摘要消息附带 `ReplyKeyboardRemove()`，统一清理底部菜单。
+- `_submit_request_input_session_with_auto_retry(...)` 新增参数：
+  - `remove_reply_keyboard: bool = False`
+  - 成功重试链路向下透传该参数；
+  - 失败链路（含自动重试失败）在提示“重试提交”后，补发一条带 `ReplyKeyboardRemove()` 的清理消息，避免菜单残留。
+- `_handle_request_input_custom_text_message(...)`：
+  - 在“最后一题自定义文本自动提交”调用中启用 `remove_reply_keyboard=True`，将菜单清理收敛到统一提交收口逻辑。
+
+### 8.4 测试更新（`tests/test_request_user_input_flow.py`）
+- 现有用例增强：
+  - `test_request_input_custom_text_auto_submits`：新增断言，成功收口消息带 `ReplyKeyboardRemove`。
+- 新增用例：
+  - `test_request_input_custom_text_submit_failure_clears_reply_keyboard`：覆盖自定义文本提交失败场景，断言先出现“重试提交”按钮，再清理 ReplyKeyboard。
+
+### 8.5 回归结果
+```bash
+PYTHONPATH=. pytest -q tests/test_request_user_input_flow.py
+# 15 passed, 2 warnings
+
+PYTHONPATH=. pytest -q
+# 596 passed, 6 warnings
+```
+
+### 8.6 可验证资料（官方）
+- ReplyKeyboardRemove：
+  https://core.telegram.org/bots/api#replykeyboardremove
+- InlineKeyboardMarkup：
+  https://core.telegram.org/bots/api#inlinekeyboardmarkup
