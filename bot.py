@@ -380,6 +380,10 @@ PLAN_DEVELOP_RETRY_ACTION_RETRY = "retry"
 PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS = max(_env_float("PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS", 12.0), 3.0)
 PLAN_EXECUTION_SIGNAL_POLL_INTERVAL_SECONDS = max(_env_float("PLAN_EXECUTION_SIGNAL_POLL_INTERVAL_SECONDS", 0.8), 0.2)
 PLAN_EXECUTION_AUTO_RECOVERY_MAX = max(_env_int("PLAN_EXECUTION_AUTO_RECOVERY_MAX", 1), 0)
+# Plan -> develop 强制切换：先发送 Shift+Tab（tmux 键名 BTab）再发送 develop 提示。
+PLAN_EXECUTION_EXIT_PLAN_KEY = (os.environ.get("PLAN_EXECUTION_EXIT_PLAN_KEY") or "BTab").strip() or "BTab"
+PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS = max(_env_float("PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS", 0.2), 0.0)
+PLAN_EXECUTION_MODE_PROBE_LINES = max(_env_int("PLAN_EXECUTION_MODE_PROBE_LINES", 80), 20)
 # 执行态信号关键词（命中任一视为已进入开发执行）
 PLAN_EXECUTION_DEVELOP_KEYWORDS = (
     "当前执行的阶段：develop",
@@ -398,6 +402,8 @@ PLAN_EXECUTION_STILL_PLAN_KEYWORDS = (
     "当前执行的阶段：design",
     "保持 plan 模式",
     "stay in plan mode",
+    "强制处于 plan mode",
+    "plan mode 锁定",
     "<proposed_plan>",
 )
 
@@ -1384,6 +1390,14 @@ def tmux_send_line(session: str, line: str):
         subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
 
 
+def tmux_send_key(session: str, key: str) -> None:
+    """向 tmux 会话发送单个按键（如 BTab / Escape）。"""
+
+    tmux = tmux_bin()
+    subprocess.check_call(_tmux_cmd(tmux, "has-session", "-t", session))
+    subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, key))
+
+
 def _capture_tmux_recent_lines(line_count: int) -> str:
     """截取 tmux 会话尾部指定行数的原始文本。"""
 
@@ -1406,6 +1420,106 @@ def _capture_tmux_recent_lines(line_count: int) -> str:
         text=True,
         timeout=timeout,
     )
+
+
+def _extract_terminal_collaboration_mode(raw_output: str) -> Optional[str]:
+    """从 tmux 截图文本中提取底部协作模式（plan/default/...）。"""
+
+    text = normalize_newlines(raw_output or "")
+    text = strip_ansi(text)
+    for raw_line in reversed(text.splitlines()):
+        line = (raw_line or "").strip()
+        if not line:
+            continue
+        match = TERMINAL_COLLABORATION_MODE_RE.search(line)
+        if match:
+            mode = (match.group(1) or "").strip().lower()
+            if mode:
+                return mode
+    return None
+
+
+def _probe_terminal_collaboration_mode() -> Literal["plan", "non_plan", "unknown"]:
+    """探测当前终端协作模式：plan / 非 plan / unknown。"""
+
+    try:
+        raw_output = _capture_tmux_recent_lines(PLAN_EXECUTION_MODE_PROBE_LINES)
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        return "unknown"
+    mode = _extract_terminal_collaboration_mode(raw_output)
+    if not mode:
+        return "unknown"
+    if mode == "plan":
+        return "plan"
+    return "non_plan"
+
+
+async def _probe_plan_execution_terminal_mode() -> Literal["plan", "non_plan", "unknown"]:
+    """异步包装终端模式探测，避免阻塞事件循环。"""
+
+    return await asyncio.to_thread(_probe_terminal_collaboration_mode)
+
+
+def _should_force_exit_plan_ui(*, force_exit_plan_ui: bool, prompt: str) -> bool:
+    """判断本次发送前是否需要尝试切出 Plan UI 模式。"""
+
+    if not force_exit_plan_ui:
+        return False
+    if not _is_codex_model():
+        return False
+    if (prompt or "").lstrip().startswith("/"):
+        return False
+    return True
+
+
+async def _maybe_force_exit_plan_ui(
+    *,
+    chat_id: int,
+    prompt: str,
+    force_exit_plan_ui: bool,
+) -> Literal["plan", "non_plan", "unknown", "skipped"]:
+    """在发送 develop 提示词前，尝试通过 Shift+Tab 退出 Plan UI 锁定。"""
+
+    if not _should_force_exit_plan_ui(force_exit_plan_ui=force_exit_plan_ui, prompt=prompt):
+        return "skipped"
+
+    before_mode = await _probe_plan_execution_terminal_mode()
+    if before_mode == "non_plan":
+        worker_log.info(
+            "Plan 切换预检：当前已非 Plan 模式，跳过 Shift+Tab",
+            extra={"chat": chat_id, "before_mode": before_mode},
+        )
+        return before_mode
+
+    try:
+        tmux_send_key(TMUX_SESSION, PLAN_EXECUTION_EXIT_PLAN_KEY)
+    except subprocess.CalledProcessError as exc:
+        worker_log.warning(
+            "发送 Plan 退出按键失败，继续发送提示词：%s",
+            exc,
+            extra={
+                "chat": chat_id,
+                "before_mode": before_mode,
+                "switch_key": PLAN_EXECUTION_EXIT_PLAN_KEY,
+            },
+        )
+        return before_mode
+
+    if PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS > 0:
+        await asyncio.sleep(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS)
+
+    after_mode = await _probe_plan_execution_terminal_mode()
+    worker_log.info(
+        "Plan 切换预命令已发送",
+        extra={
+            "chat": chat_id,
+            "before_mode": before_mode,
+            "after_mode": after_mode,
+            "switch_key": PLAN_EXECUTION_EXIT_PLAN_KEY,
+            "delay": str(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS),
+        },
+    )
+    return after_mode
 
 
 async def _resume_session_watcher_if_needed(chat_id: int, *, reason: str) -> None:
@@ -1685,6 +1799,7 @@ async def _dispatch_prompt_to_model(
     ack_immediately: bool = True,
     intended_mode: Optional[str] = None,
     reset_plan_execution_monitor: bool = True,
+    force_exit_plan_ui: bool = False,
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
 
@@ -1828,6 +1943,11 @@ async def _dispatch_prompt_to_model(
         chat_id=chat_id,
         intended_mode=intended_mode,
         prompt=prompt,
+    )
+    await _maybe_force_exit_plan_ui(
+        chat_id=chat_id,
+        prompt=prompt,
+        force_exit_plan_ui=force_exit_plan_ui,
     )
 
     try:
@@ -6838,6 +6958,11 @@ def normalize_newlines(text: str) -> str:
 
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
+# 终端底部协作模式标识，例如：Plan mode (shift+tab to cycle)
+TERMINAL_COLLABORATION_MODE_RE = re.compile(
+    r"\b([a-z]+)\s+mode\s*\(shift\+tab\s+to\s+cycle\)",
+    re.IGNORECASE,
+)
 
 
 def strip_ansi(text: str) -> str:
@@ -8377,6 +8502,34 @@ async def _wait_for_plan_execution_signal(
         await asyncio.sleep(max(poll_interval_seconds, 0.1))
 
 
+async def _resolve_plan_execution_signal(
+    session_path: Path,
+    *,
+    start_cursor: int,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+) -> Literal["develop", "plan", "unknown"]:
+    """按“先终端模式、后模型回复”顺序判定是否进入开发执行态。"""
+
+    terminal_mode = await _probe_plan_execution_terminal_mode()
+    if terminal_mode == "plan":
+        return "plan"
+
+    response_signal = await _wait_for_plan_execution_signal(
+        session_path,
+        start_cursor=start_cursor,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    if response_signal != "unknown":
+        return response_signal
+
+    # 终端已非 Plan，但短窗口内尚无明确模型信号，按“已退出 Plan 锁定”视为开发可执行。
+    if terminal_mode == "non_plan":
+        return "develop"
+    return "unknown"
+
+
 async def _send_plan_develop_retry_prompt(
     *,
     chat_id: int,
@@ -8414,7 +8567,7 @@ async def _monitor_plan_execution_and_recover(
         if session_path is None:
             return
         current_path = session_path
-        signal = await _wait_for_plan_execution_signal(
+        signal = await _resolve_plan_execution_signal(
             current_path,
             start_cursor=_initial_plan_execution_cursor(current_path),
             timeout_seconds=PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS,
@@ -8441,6 +8594,7 @@ async def _monitor_plan_execution_and_recover(
                 ack_immediately=False,
                 intended_mode=None,
                 reset_plan_execution_monitor=False,
+                force_exit_plan_ui=True,
             )
             if not success:
                 worker_log.warning(
@@ -8450,7 +8604,7 @@ async def _monitor_plan_execution_and_recover(
                 break
             if rebound_path is not None:
                 current_path = rebound_path
-            signal = await _wait_for_plan_execution_signal(
+            signal = await _resolve_plan_execution_signal(
                 current_path,
                 start_cursor=_initial_plan_execution_cursor(current_path),
                 timeout_seconds=PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS,
@@ -10948,6 +11102,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
         reply_to=callback.message,
         ack_immediately=True,
         intended_mode=None,
+        force_exit_plan_ui=True,
     )
     if not success:
         await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
@@ -11007,6 +11162,7 @@ async def on_plan_develop_retry_callback(callback: CallbackQuery) -> None:
         reply_to=callback.message,
         ack_immediately=True,
         intended_mode=None,
+        force_exit_plan_ui=True,
     )
     if not success:
         await callback.answer("重试失败：模型未就绪，请稍后再试。", show_alert=True)

@@ -3140,6 +3140,144 @@ def test_dispatch_prompt_plan_mode_skips_switch_for_non_codex(monkeypatch, tmp_p
             pass
 
 
+def test_dispatch_prompt_force_exit_plan_ui_sends_btab_before_prompt(monkeypatch, tmp_path: Path):
+    """Implement 链路启用 force_exit_plan_ui 时，应先发送 BTab 再发送提示词。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS", 0.0)
+
+    operations: list[tuple[str, str]] = []
+
+    def fake_tmux_send_key(_session: str, key: str) -> None:
+        operations.append(("key", key))
+
+    def fake_tmux_send_line(_session: str, line: str) -> None:
+        operations.append(("line", line))
+
+    monkeypatch.setattr(bot, "tmux_send_key", fake_tmux_send_key)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda: "plan")
+    monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            704,
+            bot.PLAN_IMPLEMENT_EXEC_PROMPT,
+            reply_to=None,
+            ack_immediately=False,
+            force_exit_plan_ui=True,
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert operations[0] == ("key", bot.PLAN_EXECUTION_EXIT_PLAN_KEY)
+    assert operations[1] == ("line", bot.PLAN_IMPLEMENT_EXEC_PROMPT)
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def test_dispatch_prompt_force_exit_plan_ui_skips_btab_when_not_plan(monkeypatch, tmp_path: Path):
+    """终端已非 Plan 模式时，force_exit_plan_ui 不应重复发送 BTab。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda: "non_plan")
+    monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
+
+    sent_keys: list[str] = []
+    sent_lines: list[str] = []
+
+    def fake_tmux_send_key(_session: str, key: str) -> None:
+        sent_keys.append(key)
+
+    def fake_tmux_send_line(_session: str, line: str) -> None:
+        sent_lines.append(line)
+
+    monkeypatch.setattr(bot, "tmux_send_key", fake_tmux_send_key)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            705,
+            bot.PLAN_IMPLEMENT_EXEC_PROMPT,
+            reply_to=None,
+            ack_immediately=False,
+            force_exit_plan_ui=True,
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent_keys == []
+    assert sent_lines == [bot.PLAN_IMPLEMENT_EXEC_PROMPT]
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def test_handle_prompt_dispatch_defaults_to_plan_mode(monkeypatch):
     """直接 Telegram 文本消息：默认按 PLAN 推送。"""
 
@@ -3188,6 +3326,21 @@ def test_prepend_enforced_agents_notice_cases(raw_prompt: str, expected: str):
     """验证强制规约提示语在多种输入下的拼接与跳过逻辑（覆盖 ≥10 条输入）。"""
 
     assert bot._prepend_enforced_agents_notice(raw_prompt) == expected
+
+
+@pytest.mark.parametrize(
+    "raw_output,expected",
+    [
+        ("Plan mode (shift+tab to cycle)", "plan"),
+        ("Default mode (shift+tab to cycle)", "default"),
+        ("\x1b[32mPLAN mode (shift+tab to cycle)\x1b[0m", "plan"),
+        ("no mode marker", None),
+    ],
+)
+def test_extract_terminal_collaboration_mode(raw_output: str, expected: Optional[str]):
+    """终端模式解析：应兼容大小写与 ANSI。"""
+
+    assert bot._extract_terminal_collaboration_mode(raw_output) == expected
 
 
 @pytest.mark.parametrize(
