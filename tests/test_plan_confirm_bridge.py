@@ -337,6 +337,74 @@ def test_plan_develop_retry_dispatches_implement_prompt(monkeypatch: pytest.Monk
     assert callback.answers[-1] == ("已重试并推送到模型", False)
 
 
+def test_monitor_plan_execution_and_recover_disables_auto_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Yes 链路检测失败时，不应自动补发“进入开发阶段\\ndevelop”提示词。"""
+
+    chat_id = 301
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text("", encoding="utf-8")
+
+    async def fake_resolve(*args, **kwargs):
+        return "plan"
+
+    async def fake_dispatch(*args, **kwargs):  # pragma: no cover - 不应被调用
+        raise AssertionError("不应触发自动恢复补发提示词")
+
+    retry_calls: list[tuple[int, Path, int | None]] = []
+
+    async def fake_send_retry_prompt(*, chat_id: int, reply_to, user_id: int | None, session_path: Path):
+        retry_calls.append((chat_id, session_path, user_id))
+
+    monkeypatch.setattr(bot, "_resolve_plan_execution_signal", fake_resolve)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_plan_develop_retry_prompt", fake_send_retry_prompt)
+
+    asyncio.run(
+        bot._monitor_plan_execution_and_recover(
+            chat_id=chat_id,
+            session_path=session_file,
+            reply_to=None,
+            user_id=9,
+        )
+    )
+
+    assert retry_calls == [(chat_id, session_file, 9)]
+
+
+def test_monitor_plan_execution_and_recover_success_skips_retry_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Yes 链路已进入 develop 时，不应下发“重试进入开发”按钮。"""
+
+    chat_id = 302
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text("", encoding="utf-8")
+
+    async def fake_resolve(*args, **kwargs):
+        return "develop"
+
+    retry_calls: list[int] = []
+
+    async def fake_send_retry_prompt(**kwargs):
+        retry_calls.append(1)
+
+    monkeypatch.setattr(bot, "_resolve_plan_execution_signal", fake_resolve)
+    monkeypatch.setattr(bot, "_send_plan_develop_retry_prompt", fake_send_retry_prompt)
+
+    asyncio.run(
+        bot._monitor_plan_execution_and_recover(
+            chat_id=chat_id,
+            session_path=session_file,
+            reply_to=None,
+            user_id=9,
+        )
+    )
+
+    assert retry_calls == []
+
+
 def test_resolve_plan_execution_signal_prioritizes_terminal_plan(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

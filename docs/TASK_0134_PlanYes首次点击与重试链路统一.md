@@ -47,3 +47,21 @@ PYTHONPATH=. pytest -q
 - tmux 手册：  
   https://man7.org/linux/man-pages/man1/tmux.1.html
 
+---
+
+## 6. 二次优化（2026-02-11）
+
+### 6.1 变更背景
+- 用户反馈：`Implement the plan.` 触发后若中断，系统会自动再发一条 `进入开发阶段\ndevelop`，希望去掉这次自动发送。
+
+### 6.2 决策
+1. 禁用 Yes 链路自动恢复补发（不再自动发送 `PLAN_RECOVERY_DEVELOP_PROMPT`）。
+2. 保留失败后的“🔁 重试进入开发”按钮，交由用户手动触发重试。
+
+### 6.3 实现点
+- `bot.py`：`_monitor_plan_execution_and_recover(...)`
+  - 删除自动恢复循环（`_dispatch_prompt_to_model(...PLAN_RECOVERY_DEVELOP_PROMPT...)`）。
+  - 失败后直接下发重试按钮提示。
+- `tests/test_plan_confirm_bridge.py`
+  - 新增测试：失败时不触发自动补发，仅下发重试按钮。
+  - 新增测试：成功进入 develop 时不下发重试按钮。

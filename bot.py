@@ -8643,7 +8643,7 @@ async def _monitor_plan_execution_and_recover(
     reply_to: Optional[Message],
     user_id: Optional[int],
 ) -> None:
-    """监控 Yes 链路是否进入开发；失败时自动恢复并下发重试按钮。"""
+    """监控 Yes 链路是否进入开发；失败时仅下发“重试进入开发”按钮。"""
 
     current_task = asyncio.current_task()
     try:
@@ -8665,43 +8665,11 @@ async def _monitor_plan_execution_and_recover(
             return
 
         worker_log.warning(
-            "Plan Yes 链路未检测到开发信号，准备自动恢复",
+            "Plan Yes 链路未检测到开发信号，不执行自动恢复，改为提示手动重试",
             extra={"chat": chat_id, **_session_extra(path=current_path), "signal": signal},
         )
 
-        for attempt in range(1, PLAN_EXECUTION_AUTO_RECOVERY_MAX + 1):
-            success, rebound_path = await _dispatch_prompt_to_model(
-                chat_id,
-                PLAN_RECOVERY_DEVELOP_PROMPT,
-                reply_to=reply_to,
-                ack_immediately=False,
-                intended_mode=None,
-                reset_plan_execution_monitor=False,
-                force_exit_plan_ui=True,
-            )
-            if not success:
-                worker_log.warning(
-                    "Plan Yes 自动恢复推送失败",
-                    extra={"chat": chat_id, "attempt": str(attempt)},
-                )
-                break
-            if rebound_path is not None:
-                current_path = rebound_path
-            signal = await _resolve_plan_execution_signal(
-                current_path,
-                start_cursor=_initial_plan_execution_cursor(current_path),
-                timeout_seconds=PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS,
-                poll_interval_seconds=PLAN_EXECUTION_SIGNAL_POLL_INTERVAL_SECONDS,
-            )
-            if signal == "develop":
-                _drop_chat_plan_develop_retry_session(chat_id)
-                worker_log.info(
-                    "Plan Yes 自动恢复成功，已进入开发阶段",
-                    extra={"chat": chat_id, "attempt": str(attempt), **_session_extra(path=current_path)},
-                )
-                return
-
-        # 到这里说明自动恢复仍未成功：给用户可见告警和一键重试入口。
+        # 失败时给用户可见告警和一键重试入口（不再自动补发恢复提示词）。
         current_session_key = CHAT_SESSION_MAP.get(chat_id)
         if current_session_key and current_session_key != str(current_path):
             # 会话已切换，避免对旧链路继续告警。
