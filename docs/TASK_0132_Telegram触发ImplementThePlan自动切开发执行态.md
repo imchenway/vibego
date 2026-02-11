@@ -88,3 +88,44 @@ PYTHONPATH=. pytest -q
   https://core.telegram.org/bots/api#callbackquery
 - Telegram InlineKeyboardMarkup：
   https://core.telegram.org/bots/api#inlinekeyboardmarkup
+
+## 7. 二次增强（2026-02-11，稳定性补强）
+
+### 7.1 背景
+- 线上复现显示：虽然 `Shift+Tab` 单次发送成功，但仍可能停留在 `Plan mode`。
+- 根因倾向：
+  1) 单键切换在输入焦点/菜单态下不稳定；  
+  2) 模式探测正则仅兼容 `Plan mode (shift+tab to cycle)`，对 `Plan mode`（无后缀）存在识别盲区。
+
+### 7.2 代码增强（`bot.py`）
+- 新增配置：
+  - `PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST`（默认 `true`）
+  - `PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS`（默认 `BTab,BTab`）
+  - `PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS`（默认 `0.15`）
+  - `PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS`（默认 `2`）
+- `_maybe_force_exit_plan_ui(...)` 改为：
+  - 每轮执行 `Escape + BTab + BTab`
+  - 轮内按键间隔可配，轮后延迟可配
+  - 每轮后重新探测终端模式，最多重试多轮，直到 `non_plan`
+  - 日志增加 `round/max_rounds/switch_key_sequence/round_gap`
+- `TERMINAL_COLLABORATION_MODE_RE` 增强：
+  - 兼容 `Plan mode` 与 `Plan mode (shift+tab to cycle)`
+- `_extract_terminal_collaboration_mode(...)` 增加白名单：
+  - 仅接受 `plan/default`，避免把 `no mode marker` 误判为模式值。
+
+### 7.3 测试增强
+- `tests/test_task_description.py`
+  - `test_dispatch_prompt_force_exit_plan_ui_sends_key_sequence_before_prompt`
+  - `test_dispatch_prompt_force_exit_plan_ui_retries_multiple_rounds`
+  - `test_extract_terminal_collaboration_mode` 新增 `Plan mode` / `DEFAULT mode` 场景
+
+### 7.4 回归结果
+```bash
+# 相关回归（本次关注）
+PYTHONPATH=. pytest -q tests/test_plan_confirm_bridge.py tests/test_task_description.py -k "plan_confirm or plan_develop_retry or dispatch_prompt_force_exit_plan_ui or extract_terminal_collaboration_mode or resolve_plan_execution_signal"
+# 16 passed, 133 deselected
+
+# 全量回归
+PYTHONPATH=. pytest -q
+# 595 passed, 6 warnings
+```

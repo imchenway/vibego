@@ -382,6 +382,22 @@ PLAN_EXECUTION_SIGNAL_POLL_INTERVAL_SECONDS = max(_env_float("PLAN_EXECUTION_SIG
 PLAN_EXECUTION_AUTO_RECOVERY_MAX = max(_env_int("PLAN_EXECUTION_AUTO_RECOVERY_MAX", 1), 0)
 # Plan -> develop 强制切换：先发送 Shift+Tab（tmux 键名 BTab）再发送 develop 提示。
 PLAN_EXECUTION_EXIT_PLAN_KEY = (os.environ.get("PLAN_EXECUTION_EXIT_PLAN_KEY") or "BTab").strip() or "BTab"
+# 是否在发送 Shift+Tab 前先发送 Escape，避免焦点停留在输入态/菜单态。
+PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST = _env_bool("PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST", True)
+# 单轮切换中要发送的按键序列（逗号分隔）。默认连续两次 Shift+Tab，提升切换稳定性。
+PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS = tuple(
+    key.strip()
+    for key in (
+        os.environ.get("PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS")
+        or f"{PLAN_EXECUTION_EXIT_PLAN_KEY},{PLAN_EXECUTION_EXIT_PLAN_KEY}"
+    ).split(",")
+    if key.strip()
+)
+# 单轮按键序列中，相邻按键的等待时间（秒）。
+PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS = max(_env_float("PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS", 0.15), 0.0)
+# 最多执行多少轮“退出 Plan”尝试。
+PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS = max(_env_int("PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS", 2), 1)
+# 单轮按键序列发送完成后，等待终端模式稳定再探测。
 PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS = max(_env_float("PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS", 0.2), 0.0)
 PLAN_EXECUTION_MODE_PROBE_LINES = max(_env_int("PLAN_EXECUTION_MODE_PROBE_LINES", 80), 20)
 # 执行态信号关键词（命中任一视为已进入开发执行）
@@ -1434,7 +1450,8 @@ def _extract_terminal_collaboration_mode(raw_output: str) -> Optional[str]:
         match = TERMINAL_COLLABORATION_MODE_RE.search(line)
         if match:
             mode = (match.group(1) or "").strip().lower()
-            if mode:
+            # 仅接受已知模式，避免把普通句子（如 "no mode marker"）误判为模式值。
+            if mode in {"plan", "default"}:
                 return mode
     return None
 
@@ -1491,35 +1508,62 @@ async def _maybe_force_exit_plan_ui(
         )
         return before_mode
 
-    try:
-        tmux_send_key(TMUX_SESSION, PLAN_EXECUTION_EXIT_PLAN_KEY)
-    except subprocess.CalledProcessError as exc:
-        worker_log.warning(
-            "发送 Plan 退出按键失败，继续发送提示词：%s",
-            exc,
+    # 构造“退出 Plan”按键序列：
+    # 1) 可选 Escape（清理输入态/菜单态）
+    # 2) 一组 Shift+Tab（默认两次）
+    key_sequence: list[str] = []
+    if PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST:
+        key_sequence.append("Escape")
+    if PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS:
+        key_sequence.extend(PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS)
+    else:
+        key_sequence.append(PLAN_EXECUTION_EXIT_PLAN_KEY)
+
+    current_mode = before_mode
+    for round_index in range(1, PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS + 1):
+        try:
+            for key_index, key in enumerate(key_sequence):
+                tmux_send_key(TMUX_SESSION, key)
+                if (
+                    PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS > 0
+                    and key_index < len(key_sequence) - 1
+                ):
+                    await asyncio.sleep(PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS)
+        except subprocess.CalledProcessError as exc:
+            worker_log.warning(
+                "发送 Plan 退出按键失败，继续发送提示词：%s",
+                exc,
+                extra={
+                    "chat": chat_id,
+                    "before_mode": before_mode,
+                    "round": str(round_index),
+                    "switch_key_sequence": ",".join(key_sequence),
+                },
+            )
+            return current_mode
+
+        if PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS > 0:
+            await asyncio.sleep(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS)
+
+        current_mode = await _probe_plan_execution_terminal_mode()
+        worker_log.info(
+            "Plan 切换预命令已发送",
             extra={
                 "chat": chat_id,
                 "before_mode": before_mode,
-                "switch_key": PLAN_EXECUTION_EXIT_PLAN_KEY,
+                "after_mode": current_mode,
+                "round": str(round_index),
+                "max_rounds": str(PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS),
+                "switch_key_sequence": ",".join(key_sequence),
+                "round_gap": str(PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS),
+                "delay": str(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS),
             },
         )
-        return before_mode
+        if current_mode == "non_plan":
+            return current_mode
+        # 单轮后仍是 Plan / unknown，继续下一轮尝试。
 
-    if PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS > 0:
-        await asyncio.sleep(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS)
-
-    after_mode = await _probe_plan_execution_terminal_mode()
-    worker_log.info(
-        "Plan 切换预命令已发送",
-        extra={
-            "chat": chat_id,
-            "before_mode": before_mode,
-            "after_mode": after_mode,
-            "switch_key": PLAN_EXECUTION_EXIT_PLAN_KEY,
-            "delay": str(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS),
-        },
-    )
-    return after_mode
+    return current_mode
 
 
 async def _resume_session_watcher_if_needed(chat_id: int, *, reason: str) -> None:
@@ -6958,9 +7002,9 @@ def normalize_newlines(text: str) -> str:
 
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
-# 终端底部协作模式标识，例如：Plan mode (shift+tab to cycle)
+# 终端底部协作模式标识，例如：Plan mode / Plan mode (shift+tab to cycle)
 TERMINAL_COLLABORATION_MODE_RE = re.compile(
-    r"\b([a-z]+)\s+mode\s*\(shift\+tab\s+to\s+cycle\)",
+    r"\b([a-z]+)\s+mode(?:\s*\(shift\+tab\s+to\s+cycle\))?\b",
     re.IGNORECASE,
 )
 
