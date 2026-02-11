@@ -128,23 +128,11 @@ def _reset_runtime(monkeypatch):
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
-    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
-    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
-    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
-        if not task.done():
-            task.cancel()
-    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
     yield
     bot.REQUEST_INPUT_SESSIONS.clear()
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
-    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
-    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
-    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
-        if not task.done():
-            task.cancel()
-    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
 
 
 def test_extract_request_user_input_payload():

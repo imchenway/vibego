@@ -65,3 +65,37 @@ PYTHONPATH=. pytest -q
 - `tests/test_plan_confirm_bridge.py`
   - 新增测试：失败时不触发自动补发，仅下发重试按钮。
   - 新增测试：成功进入 develop 时不下发重试按钮。
+
+---
+
+## 7. 三次优化（2026-02-11，按最新决策移除检测链路）
+
+### 7.1 变更背景
+- Telegram 侧已在正常开发执行时，仍可能出现“⚠️ 未检测到进入开发阶段”提示，产生误告警。
+- 新决策：**完全移除**进入开发阶段检测链路；仅保留“推送成功/失败”回调提示。
+- 兼容要求：历史消息中的“🔁 重试进入开发”按钮仍可点击，点击后直接再次发送 `Implement the plan.`。
+
+### 7.2 本次实现
+1. 删除 Plan Yes / Retry 的执行态检测与告警链路：
+   - 移除 `_monitor_plan_execution_and_recover`、`_resolve_plan_execution_signal` 及相关扫描函数；
+   - 移除告警文案与“重试进入开发”按钮下发逻辑。
+2. 删除运行态状态容器与清理函数：
+   - `PLAN_DEVELOP_RETRY_SESSIONS`
+   - `CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS`
+   - `CHAT_PLAN_EXECUTION_MONITORS`
+3. 回调行为调整：
+   - `on_plan_confirm_callback`：Yes 成功后不再启动监控任务；
+   - `on_plan_develop_retry_callback`：改为历史回调兼容模式，不依赖 session，直接再次推送 `Implement the plan.`。
+4. 测试更新：
+   - `tests/test_plan_confirm_bridge.py`：删除检测链路相关测试，新增“无会话也可兼容旧重试按钮”断言；
+   - `tests/test_request_user_input_flow.py`：清理已删除状态容器的 fixture 清理代码。
+
+### 7.3 回归结果
+
+```bash
+PYTHONPATH=. pytest -q tests/test_plan_confirm_bridge.py tests/test_request_user_input_flow.py tests/test_task_description.py
+# 163 passed, 2 warnings
+
+PYTHONPATH=. pytest -q
+# 595 passed, 6 warnings
+```

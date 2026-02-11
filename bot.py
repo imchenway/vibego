@@ -369,17 +369,12 @@ PLAN_CONFIRM_CALLBACK_PREFIX = "pcf:"
 PLAN_CONFIRM_ACTION_YES = "yes"
 PLAN_CONFIRM_ACTION_NO = "no"
 PLAN_IMPLEMENT_PROMPT = "Implement the plan."
-# Plan 结束确认（Yes）首发执行提示：显式进入 develop，再继续实现。
+# 兼容历史提示词：保留旧常量，避免外部引用报错。
 PLAN_IMPLEMENT_EXEC_PROMPT = "develop\nImplement the plan."
-# 自动恢复提示：在疑似仍处于 PLAN 时，先强制要求进入开发阶段。
 PLAN_RECOVERY_DEVELOP_PROMPT = "进入开发阶段\ndevelop"
-# “进入开发失败”兜底重试按钮
+# 兼容历史“重试进入开发”按钮回调（旧消息仍可点击）。
 PLAN_DEVELOP_RETRY_CALLBACK_PREFIX = "pdr:"
 PLAN_DEVELOP_RETRY_ACTION_RETRY = "retry"
-# Yes 链路执行态检测与自动恢复参数
-PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS = max(_env_float("PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS", 12.0), 3.0)
-PLAN_EXECUTION_SIGNAL_POLL_INTERVAL_SECONDS = max(_env_float("PLAN_EXECUTION_SIGNAL_POLL_INTERVAL_SECONDS", 0.8), 0.2)
-PLAN_EXECUTION_AUTO_RECOVERY_MAX = max(_env_int("PLAN_EXECUTION_AUTO_RECOVERY_MAX", 1), 0)
 # Plan -> develop 强制切换：先发送 Shift+Tab（tmux 键名 BTab）再发送 develop 提示。
 PLAN_EXECUTION_EXIT_PLAN_KEY = (os.environ.get("PLAN_EXECUTION_EXIT_PLAN_KEY") or "BTab").strip() or "BTab"
 # 是否在发送 Shift+Tab 前先发送 Escape，避免焦点停留在输入态/菜单态。
@@ -408,28 +403,6 @@ PLAN_DEVELOP_RETRY_EXIT_PLAN_KEYS = tuple(
     if key.strip()
 )
 PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS = max(_env_int("PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS", 1), 1)
-# 执行态信号关键词（命中任一视为已进入开发执行）
-PLAN_EXECUTION_DEVELOP_KEYWORDS = (
-    "当前执行的阶段：develop",
-    "进入开发阶段",
-    "develop 阶段",
-    "开始开发",
-    "开始实现",
-    "已完成实现",
-    "apply_patch",
-    "pytest",
-)
-# 仍处于 PLAN 的信号关键词（命中任一视为可能未进入开发）
-PLAN_EXECUTION_STILL_PLAN_KEYWORDS = (
-    "待决策项",
-    "当前执行的阶段：vibe",
-    "当前执行的阶段：design",
-    "保持 plan 模式",
-    "stay in plan mode",
-    "强制处于 plan mode",
-    "plan mode 锁定",
-    "<proposed_plan>",
-)
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
@@ -539,16 +512,6 @@ class PlanConfirmSession:
     user_id: Optional[int]
     created_at: float
 
-
-@dataclass(**_DATACLASS_SLOT_KW)
-class PlanDevelopRetrySession:
-    """Plan 收口后进入开发失败时的重试会话。"""
-
-    token: str
-    chat_id: int
-    session_key: str
-    user_id: Optional[int]
-    created_at: float
 
 ENV_ISSUES: list[str] = []
 PRIMARY_WORKDIR: Optional[Path] = None
@@ -1877,7 +1840,6 @@ async def _dispatch_prompt_to_model(
     reply_to: Optional[Message],
     ack_immediately: bool = True,
     intended_mode: Optional[str] = None,
-    reset_plan_execution_monitor: bool = True,
     force_exit_plan_ui: bool = False,
     force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
     force_exit_plan_ui_max_rounds: Optional[int] = None,
@@ -1889,10 +1851,6 @@ async def _dispatch_prompt_to_model(
         _drop_request_input_session(stale_token)
     # 新提示词入模时，清理旧的 Plan 确认状态，避免跨轮次误触发。
     _drop_chat_plan_confirm_session(chat_id)
-    # 新提示词入模时，清理旧的“进入开发失败重试”状态与监控任务，避免跨轮次误报。
-    _drop_chat_plan_develop_retry_session(chat_id)
-    if reset_plan_execution_monitor:
-        _cancel_chat_plan_execution_monitor(chat_id)
 
     prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
     if prev_watcher is not None:
@@ -7158,12 +7116,6 @@ CHAT_ACTIVE_REQUEST_INPUT_TOKENS: Dict[int, str] = {}
 PLAN_CONFIRM_SESSIONS: Dict[str, PlanConfirmSession] = {}
 # plan confirm：每个 chat 当前生效 token（旧 token 自动失效）
 CHAT_ACTIVE_PLAN_CONFIRM_TOKENS: Dict[int, str] = {}
-# plan develop retry：token -> session
-PLAN_DEVELOP_RETRY_SESSIONS: Dict[str, PlanDevelopRetrySession] = {}
-# plan develop retry：每个 chat 当前生效 token（旧 token 自动失效）
-CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS: Dict[int, str] = {}
-# Plan Yes 链路执行态校验任务（每个 chat 仅保留一个）
-CHAT_PLAN_EXECUTION_MONITORS: Dict[int, asyncio.Task] = {}
 # 长轮询状态：用于延迟轮询机制
 CHAT_LONG_POLL_STATE: Dict[int, Dict[str, Any]] = {}
 CHAT_LONG_POLL_LOCK: Optional[asyncio.Lock] = None  # 在事件循环启动后初始化
@@ -7829,34 +7781,6 @@ def _drop_chat_plan_confirm_session(chat_id: int) -> None:
     _drop_plan_confirm_session(token)
 
 
-def _drop_plan_develop_retry_session(token: str) -> None:
-    """按 token 删除“进入开发失败重试”会话及其 chat 映射。"""
-
-    session = PLAN_DEVELOP_RETRY_SESSIONS.pop(token, None)
-    if session is None:
-        return
-    if CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.get(session.chat_id) == token:
-        CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.pop(session.chat_id, None)
-
-
-def _drop_chat_plan_develop_retry_session(chat_id: int) -> None:
-    """删除指定 chat 的当前“进入开发失败重试”会话。"""
-
-    token = CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.get(chat_id)
-    if not token:
-        return
-    _drop_plan_develop_retry_session(token)
-
-
-def _cancel_chat_plan_execution_monitor(chat_id: int) -> None:
-    """取消指定 chat 正在运行的 Plan 执行态监控任务。"""
-
-    task = CHAT_PLAN_EXECUTION_MONITORS.pop(chat_id, None)
-    if task is None or task.done():
-        return
-    task.cancel()
-
-
 def _build_plan_confirm_callback_data(token: str, action: str) -> str:
     """构造 Plan 结束确认按钮回调数据（遵循 Telegram 64 字节限制）。"""
 
@@ -8425,301 +8349,6 @@ async def _maybe_send_plan_confirm_prompt(chat_id: int, session_key: str) -> boo
         },
     )
     return True
-
-
-def _build_plan_develop_retry_keyboard(token: str) -> InlineKeyboardMarkup:
-    """构造“进入开发失败”后的重试按钮。"""
-
-    rows = [
-        [
-            InlineKeyboardButton(
-                text="🔁 重试进入开发",
-                callback_data=_build_plan_develop_retry_callback_data(token, PLAN_DEVELOP_RETRY_ACTION_RETRY),
-            )
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _upsert_plan_develop_retry_session(
-    *,
-    chat_id: int,
-    session_key: str,
-    user_id: Optional[int],
-) -> str:
-    """创建或替换指定 chat 的“进入开发失败重试”会话。"""
-
-    active_token = CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.get(chat_id)
-    if active_token:
-        _drop_plan_develop_retry_session(active_token)
-
-    token = uuid.uuid4().hex[:10]
-    session = PlanDevelopRetrySession(
-        token=token,
-        chat_id=chat_id,
-        session_key=session_key,
-        user_id=int(user_id) if isinstance(user_id, int) else None,
-        created_at=time.monotonic(),
-    )
-    PLAN_DEVELOP_RETRY_SESSIONS[token] = session
-    CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS[chat_id] = token
-    return token
-
-
-def _infer_plan_execution_signal(text: str) -> Literal["develop", "plan", "unknown"]:
-    """根据模型输出文本推断是否已进入开发阶段。"""
-
-    normalized = (text or "").strip().lower()
-    if not normalized:
-        return "unknown"
-    if any(keyword in normalized for keyword in PLAN_EXECUTION_DEVELOP_KEYWORDS):
-        return "develop"
-    if any(keyword in normalized for keyword in PLAN_EXECUTION_STILL_PLAN_KEYWORDS):
-        return "plan"
-    return "unknown"
-
-
-def _initial_plan_execution_cursor(session_path: Path) -> int:
-    """返回执行态检测起始游标（不污染全局 SESSION_OFFSETS）。"""
-
-    if session_path.suffix.lower() == ".json":
-        data = _read_gemini_session_json(session_path)
-        messages = data.get("messages") if isinstance(data, dict) else None
-        if isinstance(messages, list):
-            return len(messages)
-        return 0
-    try:
-        return session_path.stat().st_size
-    except FileNotFoundError:
-        return 0
-
-
-def _scan_plan_execution_signal(
-    session_path: Path,
-    cursor: int,
-) -> Tuple[int, Literal["develop", "plan", "unknown"]]:
-    """从会话增量中扫描执行态信号（仅供 Plan Yes 链路使用）。"""
-
-    if session_path.suffix.lower() == ".json":
-        data = _read_gemini_session_json(session_path)
-        if not isinstance(data, dict):
-            return cursor, "unknown"
-        messages = data.get("messages")
-        if not isinstance(messages, list):
-            return cursor, "unknown"
-        safe_cursor = max(int(cursor or 0), 0)
-        final_signal: Literal["develop", "plan", "unknown"] = "unknown"
-        for idx in range(safe_cursor, len(messages)):
-            item = messages[idx]
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") not in {"assistant", "gemini"}:
-                continue
-            content = item.get("content")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            signal = _infer_plan_execution_signal(content)
-            if signal == "develop":
-                return len(messages), "develop"
-            if signal == "plan":
-                final_signal = "plan"
-        return len(messages), final_signal
-
-    safe_cursor = max(int(cursor or 0), 0)
-    new_cursor = safe_cursor
-    final_signal: Literal["develop", "plan", "unknown"] = "unknown"
-    try:
-        with open(session_path, "r", encoding="utf-8", errors="ignore") as fh:
-            fh.seek(safe_cursor)
-            while True:
-                line = fh.readline()
-                if not line:
-                    break
-                new_cursor = fh.tell()
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                event_timestamp = event.get("timestamp")
-                if not isinstance(event_timestamp, str):
-                    event_timestamp = None
-                candidate = _extract_deliverable_payload(event, event_timestamp=event_timestamp)
-                if not candidate:
-                    continue
-                kind, payload_text, _metadata = candidate
-                if kind not in {DELIVERABLE_KIND_MESSAGE, DELIVERABLE_KIND_PLAN}:
-                    continue
-                signal = _infer_plan_execution_signal(payload_text)
-                if signal == "develop":
-                    return new_cursor, "develop"
-                if signal == "plan":
-                    final_signal = "plan"
-    except FileNotFoundError:
-        return safe_cursor, "unknown"
-    return new_cursor, final_signal
-
-
-async def _wait_for_plan_execution_signal(
-    session_path: Path,
-    *,
-    start_cursor: int,
-    timeout_seconds: float,
-    poll_interval_seconds: float,
-) -> Literal["develop", "plan", "unknown"]:
-    """在短窗口轮询会话增量，判断是否已从 PLAN 进入开发执行态。"""
-
-    cursor = max(int(start_cursor or 0), 0)
-    saw_plan = False
-    deadline = time.monotonic() + max(timeout_seconds, 0.1)
-    while True:
-        cursor, signal = _scan_plan_execution_signal(session_path, cursor)
-        if signal == "develop":
-            return "develop"
-        if signal == "plan":
-            saw_plan = True
-        if time.monotonic() >= deadline:
-            return "plan" if saw_plan else "unknown"
-        await asyncio.sleep(max(poll_interval_seconds, 0.1))
-
-
-async def _resolve_plan_execution_signal(
-    session_path: Path,
-    *,
-    start_cursor: int,
-    timeout_seconds: float,
-    poll_interval_seconds: float,
-) -> Literal["develop", "plan", "unknown"]:
-    """按“先终端模式、后模型回复”顺序判定是否进入开发执行态。"""
-
-    terminal_mode = await _probe_plan_execution_terminal_mode()
-    if terminal_mode == "plan":
-        return "plan"
-
-    response_signal = await _wait_for_plan_execution_signal(
-        session_path,
-        start_cursor=start_cursor,
-        timeout_seconds=timeout_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-    )
-    if response_signal != "unknown":
-        return response_signal
-
-    # 终端已非 Plan，但短窗口内尚无明确模型信号，按“已退出 Plan 锁定”视为开发可执行。
-    if terminal_mode == "non_plan":
-        return "develop"
-    return "unknown"
-
-
-async def _send_plan_develop_retry_prompt(
-    *,
-    chat_id: int,
-    reply_to: Optional[Message],
-    user_id: Optional[int],
-    session_path: Path,
-) -> None:
-    """发送“进入开发失败”告警及一键重试按钮。"""
-
-    token = _upsert_plan_develop_retry_session(
-        chat_id=chat_id,
-        session_key=str(session_path),
-        user_id=user_id,
-    )
-    await _reply_to_chat(
-        chat_id,
-        "⚠️ 未检测到进入开发阶段，模型可能仍停留在 PLAN 模式。\n可点击“重试进入开发”。",
-        reply_to=reply_to,
-        parse_mode=None,
-        reply_markup=_build_plan_develop_retry_keyboard(token),
-    )
-
-
-async def _monitor_plan_execution_and_recover(
-    *,
-    chat_id: int,
-    session_path: Optional[Path],
-    reply_to: Optional[Message],
-    user_id: Optional[int],
-) -> None:
-    """监控 Yes 链路是否进入开发；失败时仅下发“重试进入开发”按钮。"""
-
-    current_task = asyncio.current_task()
-    try:
-        if session_path is None:
-            return
-        current_path = session_path
-        signal = await _resolve_plan_execution_signal(
-            current_path,
-            start_cursor=_initial_plan_execution_cursor(current_path),
-            timeout_seconds=PLAN_EXECUTION_SIGNAL_TIMEOUT_SECONDS,
-            poll_interval_seconds=PLAN_EXECUTION_SIGNAL_POLL_INTERVAL_SECONDS,
-        )
-        if signal == "develop":
-            _drop_chat_plan_develop_retry_session(chat_id)
-            worker_log.info(
-                "Plan Yes 链路检测到已进入开发阶段",
-                extra={"chat": chat_id, **_session_extra(path=current_path)},
-            )
-            return
-
-        worker_log.warning(
-            "Plan Yes 链路未检测到开发信号，不执行自动恢复，改为提示手动重试",
-            extra={"chat": chat_id, **_session_extra(path=current_path), "signal": signal},
-        )
-
-        # 失败时给用户可见告警和一键重试入口（不再自动补发恢复提示词）。
-        current_session_key = CHAT_SESSION_MAP.get(chat_id)
-        if current_session_key and current_session_key != str(current_path):
-            # 会话已切换，避免对旧链路继续告警。
-            worker_log.info(
-                "Plan Yes 监控检测到会话已切换，跳过过期告警",
-                extra={
-                    "chat": chat_id,
-                    "expected_session": str(current_path),
-                    "current_session": current_session_key,
-                },
-            )
-            return
-        await _send_plan_develop_retry_prompt(
-            chat_id=chat_id,
-            reply_to=reply_to,
-            user_id=user_id,
-            session_path=current_path,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        worker_log.warning(
-            "Plan Yes 执行态监控异常：%s",
-            exc,
-            extra={"chat": chat_id},
-        )
-    finally:
-        if current_task is not None and CHAT_PLAN_EXECUTION_MONITORS.get(chat_id) is current_task:
-            CHAT_PLAN_EXECUTION_MONITORS.pop(chat_id, None)
-
-
-def _schedule_plan_execution_monitor(
-    *,
-    chat_id: int,
-    session_path: Optional[Path],
-    reply_to: Optional[Message],
-    user_id: Optional[int],
-) -> None:
-    """启动（或替换）Plan Yes 链路的执行态监控任务。"""
-
-    _cancel_chat_plan_execution_monitor(chat_id)
-    task = asyncio.create_task(
-        _monitor_plan_execution_and_recover(
-            chat_id=chat_id,
-            session_path=session_path,
-            reply_to=reply_to,
-            user_id=user_id,
-        )
-    )
-    CHAT_PLAN_EXECUTION_MONITORS[chat_id] = task
 
 
 async def _deliver_pending_messages(
@@ -11156,7 +10785,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
 
     actor_user_id = callback.from_user.id if callback.from_user else session.user_id
     _remember_chat_active_user(chat_id, actor_user_id)
-    success, session_path = await _dispatch_prompt_to_model(
+    success, _session_path = await _dispatch_prompt_to_model(
         chat_id,
         PLAN_IMPLEMENT_PROMPT,
         reply_to=callback.message,
@@ -11175,50 +10804,26 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
     with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
         if callback.message is not None:
             await callback.message.edit_reply_markup(reply_markup=None)
-    _schedule_plan_execution_monitor(
-        chat_id=chat_id,
-        session_path=session_path,
-        reply_to=callback.message,
-        user_id=actor_user_id,
-    )
 
 
 @router.callback_query(F.data.startswith(PLAN_DEVELOP_RETRY_CALLBACK_PREFIX))
 async def on_plan_develop_retry_callback(callback: CallbackQuery) -> None:
-    """处理“进入开发失败”后一键重试按钮。"""
+    """兼容处理历史“重试进入开发”按钮：直接再次推送 Implement。"""
 
     parsed = _parse_plan_develop_retry_callback_data(callback.data)
     if parsed is None:
         await callback.answer("交互参数无效", show_alert=True)
         return
 
-    token, action = parsed
-    session = PLAN_DEVELOP_RETRY_SESSIONS.get(token)
-    if session is None:
-        await callback.answer("该重试入口已失效，请重新触发。", show_alert=True)
-        return
-
-    chat_id = callback.message.chat.id if callback.message else callback.from_user.id
-    if chat_id != session.chat_id:
-        await callback.answer("会话不匹配，无法操作。", show_alert=True)
-        return
-
-    active_token = CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.get(chat_id)
-    if active_token and active_token != token:
-        await callback.answer("该重试入口已被新会话替换，请使用最新消息。", show_alert=True)
-        return
-
-    if session.user_id is not None and callback.from_user and callback.from_user.id != session.user_id:
-        await callback.answer("仅会话发起人可操作该按钮。", show_alert=True)
-        return
-
+    _token, action = parsed
     if action != PLAN_DEVELOP_RETRY_ACTION_RETRY:
         await callback.answer("暂不支持该操作。", show_alert=True)
         return
 
-    actor_user_id = callback.from_user.id if callback.from_user else session.user_id
+    chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+    actor_user_id = callback.from_user.id if callback.from_user else None
     _remember_chat_active_user(chat_id, actor_user_id)
-    success, session_path = await _dispatch_prompt_to_model(
+    success, _session_path = await _dispatch_prompt_to_model(
         chat_id,
         PLAN_IMPLEMENT_PROMPT,
         reply_to=callback.message,
@@ -11230,25 +10835,12 @@ async def on_plan_develop_retry_callback(callback: CallbackQuery) -> None:
     )
     if not success:
         await callback.answer("重试失败：模型未就绪，请稍后再试。", show_alert=True)
-        await _send_plan_develop_retry_prompt(
-            chat_id=chat_id,
-            reply_to=callback.message,
-            user_id=actor_user_id,
-            session_path=Path(session.session_key),
-        )
         return
 
-    _drop_plan_develop_retry_session(token)
     await callback.answer("已重试并推送到模型")
     with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
         if callback.message is not None:
             await callback.message.edit_reply_markup(reply_markup=None)
-    _schedule_plan_execution_monitor(
-        chat_id=chat_id,
-        session_path=session_path,
-        reply_to=callback.message,
-        user_id=actor_user_id,
-    )
 
 
 @router.callback_query(F.data.startswith(REQUEST_INPUT_CALLBACK_PREFIX))

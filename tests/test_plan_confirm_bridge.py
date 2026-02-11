@@ -63,21 +63,9 @@ def _reset_runtime():
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
-    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
-    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
-    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
-        if not task.done():
-            task.cancel()
-    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
     yield
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
-    bot.PLAN_DEVELOP_RETRY_SESSIONS.clear()
-    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS.clear()
-    for task in list(bot.CHAT_PLAN_EXECUTION_MONITORS.values()):
-        if not task.done():
-            task.cancel()
-    bot.CHAT_PLAN_EXECUTION_MONITORS.clear()
 
 
 def _build_assistant_message_event(text: str) -> dict:
@@ -177,7 +165,6 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
 
     dispatched: list[tuple[int, str, bool, tuple[str, ...] | None, int | None]] = []
-    monitor_calls: list[tuple[int, object | None, int | None]] = []
 
     async def fake_dispatch(
         chat_id: int,
@@ -201,11 +188,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
         )
         return True, None
 
-    def fake_schedule(*, chat_id: int, session_path, reply_to, user_id):
-        monitor_calls.append((chat_id, session_path, user_id))
-
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
-    monkeypatch.setattr(bot, "_schedule_plan_execution_monitor", fake_schedule)
 
     callback = DummyCallback(
         bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
@@ -223,7 +206,6 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
             bot.PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
         )
     ]
-    assert monitor_calls == [(chat_id, None, 9)]
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已确认并推送到模型", False)
@@ -271,21 +253,14 @@ def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
     assert callback.answers[-1] == ("已保持 Plan 模式", False)
 
 
-def test_plan_develop_retry_dispatches_implement_prompt(monkeypatch: pytest.MonkeyPatch):
+def test_plan_develop_retry_callback_dispatches_implement_prompt_without_session(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """兼容旧按钮：即便没有重试会话，也应再次推送 Implement。"""
+
     chat_id = 225
     token = "retrytok"
-    session = bot.PlanDevelopRetrySession(
-        token=token,
-        chat_id=chat_id,
-        session_key="session-retry",
-        user_id=12,
-        created_at=time.monotonic(),
-    )
-    bot.PLAN_DEVELOP_RETRY_SESSIONS[token] = session
-    bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS[chat_id] = token
-
     dispatched: list[tuple[int, str, bool, tuple[str, ...] | None, int | None]] = []
-    monitor_calls: list[tuple[int, object | None, int | None]] = []
 
     async def fake_dispatch(
         chat_id: int,
@@ -309,11 +284,7 @@ def test_plan_develop_retry_dispatches_implement_prompt(monkeypatch: pytest.Monk
         )
         return True, None
 
-    def fake_schedule(*, chat_id: int, session_path, reply_to, user_id):
-        monitor_calls.append((chat_id, session_path, user_id))
-
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
-    monkeypatch.setattr(bot, "_schedule_plan_execution_monitor", fake_schedule)
 
     callback = DummyCallback(
         bot._build_plan_develop_retry_callback_data(token, bot.PLAN_DEVELOP_RETRY_ACTION_RETRY),
@@ -331,137 +302,25 @@ def test_plan_develop_retry_dispatches_implement_prompt(monkeypatch: pytest.Monk
             bot.PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
         )
     ]
-    assert monitor_calls == [(chat_id, None, 12)]
-    assert token not in bot.PLAN_DEVELOP_RETRY_SESSIONS
-    assert chat_id not in bot.CHAT_ACTIVE_PLAN_DEVELOP_RETRY_TOKENS
     assert callback.answers[-1] == ("已重试并推送到模型", False)
 
 
-def test_monitor_plan_execution_and_recover_disables_auto_recovery(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    """Yes 链路检测失败时，不应自动补发“进入开发阶段\\ndevelop”提示词。"""
+def test_plan_develop_retry_callback_invalid_action(monkeypatch: pytest.MonkeyPatch):
+    chat_id = 226
+    dispatched: list[str] = []
 
-    chat_id = 301
-    session_file = tmp_path / "session.jsonl"
-    session_file.write_text("", encoding="utf-8")
+    async def fake_dispatch(*args, **kwargs):  # pragma: no cover - 不应触发
+        dispatched.append("called")
+        return True, None
 
-    async def fake_resolve(*args, **kwargs):
-        return "plan"
-
-    async def fake_dispatch(*args, **kwargs):  # pragma: no cover - 不应被调用
-        raise AssertionError("不应触发自动恢复补发提示词")
-
-    retry_calls: list[tuple[int, Path, int | None]] = []
-
-    async def fake_send_retry_prompt(*, chat_id: int, reply_to, user_id: int | None, session_path: Path):
-        retry_calls.append((chat_id, session_path, user_id))
-
-    monkeypatch.setattr(bot, "_resolve_plan_execution_signal", fake_resolve)
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
-    monkeypatch.setattr(bot, "_send_plan_develop_retry_prompt", fake_send_retry_prompt)
 
-    asyncio.run(
-        bot._monitor_plan_execution_and_recover(
-            chat_id=chat_id,
-            session_path=session_file,
-            reply_to=None,
-            user_id=9,
-        )
+    callback = DummyCallback(
+        bot._build_plan_develop_retry_callback_data("legacy", "noop"),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=7,
     )
+    asyncio.run(bot.on_plan_develop_retry_callback(callback))
 
-    assert retry_calls == [(chat_id, session_file, 9)]
-
-
-def test_monitor_plan_execution_and_recover_success_skips_retry_prompt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    """Yes 链路已进入 develop 时，不应下发“重试进入开发”按钮。"""
-
-    chat_id = 302
-    session_file = tmp_path / "session.jsonl"
-    session_file.write_text("", encoding="utf-8")
-
-    async def fake_resolve(*args, **kwargs):
-        return "develop"
-
-    retry_calls: list[int] = []
-
-    async def fake_send_retry_prompt(**kwargs):
-        retry_calls.append(1)
-
-    monkeypatch.setattr(bot, "_resolve_plan_execution_signal", fake_resolve)
-    monkeypatch.setattr(bot, "_send_plan_develop_retry_prompt", fake_send_retry_prompt)
-
-    asyncio.run(
-        bot._monitor_plan_execution_and_recover(
-            chat_id=chat_id,
-            session_path=session_file,
-            reply_to=None,
-            user_id=9,
-        )
-    )
-
-    assert retry_calls == []
-
-
-def test_resolve_plan_execution_signal_prioritizes_terminal_plan(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    """终端仍为 Plan 模式时，应直接判定为 plan（不等待模型回复）。"""
-
-    session_file = tmp_path / "session.jsonl"
-    session_file.write_text("", encoding="utf-8")
-
-    wait_calls: list[int] = []
-
-    async def fake_probe_terminal_mode():
-        return "plan"
-
-    async def fake_wait_signal(*args, **kwargs):
-        wait_calls.append(1)
-        return "develop"
-
-    monkeypatch.setattr(bot, "_probe_plan_execution_terminal_mode", fake_probe_terminal_mode)
-    monkeypatch.setattr(bot, "_wait_for_plan_execution_signal", fake_wait_signal)
-
-    signal = asyncio.run(
-        bot._resolve_plan_execution_signal(
-            session_file,
-            start_cursor=0,
-            timeout_seconds=0.1,
-            poll_interval_seconds=0.1,
-        )
-    )
-
-    assert signal == "plan"
-    assert not wait_calls
-
-
-def test_resolve_plan_execution_signal_uses_model_reply_after_non_plan_probe(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    """终端已退出 Plan 后，仍应继续读取模型回复信号。"""
-
-    session_file = tmp_path / "session.jsonl"
-    session_file.write_text("", encoding="utf-8")
-
-    async def fake_probe_terminal_mode():
-        return "non_plan"
-
-    async def fake_wait_signal(*args, **kwargs):
-        return "unknown"
-
-    monkeypatch.setattr(bot, "_probe_plan_execution_terminal_mode", fake_probe_terminal_mode)
-    monkeypatch.setattr(bot, "_wait_for_plan_execution_signal", fake_wait_signal)
-
-    signal = asyncio.run(
-        bot._resolve_plan_execution_signal(
-            session_file,
-            start_cursor=0,
-            timeout_seconds=0.1,
-            poll_interval_seconds=0.1,
-        )
-    )
-
-    assert signal == "develop"
+    assert not dispatched
+    assert callback.answers[-1] == ("暂不支持该操作。", True)
