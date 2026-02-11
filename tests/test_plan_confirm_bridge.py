@@ -176,7 +176,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     bot.PLAN_CONFIRM_SESSIONS[token] = session
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
 
-    dispatched: list[tuple[int, str, bool]] = []
+    dispatched: list[tuple[int, str, bool, tuple[str, ...] | None, int | None]] = []
     monitor_calls: list[tuple[int, object | None, int | None]] = []
 
     async def fake_dispatch(
@@ -187,8 +187,18 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
         ack_immediately: bool = True,
         intended_mode=None,
         force_exit_plan_ui: bool = False,
+        force_exit_plan_ui_key_sequence=None,
+        force_exit_plan_ui_max_rounds=None,
     ):
-        dispatched.append((chat_id, prompt, force_exit_plan_ui))
+        dispatched.append(
+            (
+                chat_id,
+                prompt,
+                force_exit_plan_ui,
+                tuple(force_exit_plan_ui_key_sequence) if force_exit_plan_ui_key_sequence is not None else None,
+                force_exit_plan_ui_max_rounds,
+            )
+        )
         return True, None
 
     def fake_schedule(*, chat_id: int, session_path, reply_to, user_id):
@@ -204,7 +214,15 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     )
     asyncio.run(bot.on_plan_confirm_callback(callback))
 
-    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_EXEC_PROMPT, True)]
+    assert dispatched == [
+        (
+            chat_id,
+            bot.PLAN_IMPLEMENT_PROMPT,
+            True,
+            bot._build_plan_develop_retry_exit_plan_key_sequence(),
+            bot.PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+        )
+    ]
     assert monitor_calls == [(chat_id, None, 9)]
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS

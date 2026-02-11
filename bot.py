@@ -10900,13 +10900,14 @@ async def _submit_request_input_session(
     summary_text = _build_request_input_submission_summary(session)
     session.submitted = True
     _drop_request_input_session(session.token)
+    summary_reply_markup = _build_worker_main_keyboard() if remove_reply_keyboard else None
 
     await _reply_to_chat(
         session.chat_id,
         summary_text,
         reply_to=reply_to,
         parse_mode=None,
-        reply_markup=ReplyKeyboardRemove() if remove_reply_keyboard else None,
+        reply_markup=summary_reply_markup,
     )
     # request_user_input 场景已通过“决策摘要”收口，避免重复发送中间工具结果代码块。
     if session_path is not None:
@@ -10956,10 +10957,10 @@ async def _submit_request_input_session_with_auto_retry(
     if remove_reply_keyboard:
         await _reply_to_chat(
             session.chat_id,
-            "自动提交失败，可点击“重试提交”继续。",
+            "已恢复主菜单，可点击“📋 任务列表”继续。",
             reply_to=reply_to,
             parse_mode=None,
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=_build_worker_main_keyboard(),
         )
     return False
 
@@ -11189,11 +11190,13 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
     _remember_chat_active_user(chat_id, actor_user_id)
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
-        PLAN_IMPLEMENT_EXEC_PROMPT,
+        PLAN_IMPLEMENT_PROMPT,
         reply_to=callback.message,
         ack_immediately=True,
         intended_mode=None,
         force_exit_plan_ui=True,
+        force_exit_plan_ui_key_sequence=_build_plan_develop_retry_exit_plan_key_sequence(),
+        force_exit_plan_ui_max_rounds=PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
     )
     if not success:
         await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)

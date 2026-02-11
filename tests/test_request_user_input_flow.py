@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -514,10 +514,13 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     assert ack_calls
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
     assert message.calls, "自定义文本成功提交后应发送收口消息"
-    assert isinstance(message.calls[-1][2], ReplyKeyboardRemove)
+    assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup)
+    main_keyboard_rows = message.calls[-1][2].keyboard
+    assert main_keyboard_rows
+    assert main_keyboard_rows[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
 
 
-def test_request_input_custom_text_submit_failure_clears_reply_keyboard(monkeypatch):
+def test_request_input_custom_text_submit_failure_restores_main_keyboard(monkeypatch):
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -548,9 +551,10 @@ def test_request_input_custom_text_submit_failure_clears_reply_keyboard(monkeypa
 
     assert handled is True
     assert session.submission_state == "failed"
-    assert message.calls, "失败后应提示重试并清理输入菜单"
+    assert message.calls, "失败后应提示重试并恢复主菜单"
     assert isinstance(message.calls[0][2], InlineKeyboardMarkup), "首条应保留重试提交按钮"
-    assert isinstance(message.calls[-1][2], ReplyKeyboardRemove), "最后一条应清理取消菜单"
+    assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup), "最后一条应恢复主菜单"
+    assert message.calls[-1][2].keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
 
 
 def test_request_input_custom_text_cancel_returns_question(monkeypatch):
