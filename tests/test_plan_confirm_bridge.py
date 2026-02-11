@@ -179,7 +179,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     )
     asyncio.run(bot.on_plan_confirm_callback(callback))
 
-    assert dispatched == [(chat_id, "Implement the plan.")]
+    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_PROMPT)]
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已确认并推送到模型", False)

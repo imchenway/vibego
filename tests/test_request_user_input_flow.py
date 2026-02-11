@@ -57,10 +57,15 @@ class DummyMessage:
         self.text = text
         self.caption = caption
         self.calls: list[tuple[str, object, object, dict]] = []
+        self.edited_reply_markup = 0
 
     async def answer(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
         self.calls.append((text, parse_mode, reply_markup, kwargs))
         return SimpleNamespace(message_id=self.message_id + len(self.calls), chat=self.chat)
+
+    async def edit_reply_markup(self, reply_markup=None):
+        self.edited_reply_markup += 1
+        return None
 
 
 class DummyCallback:
@@ -302,8 +307,7 @@ def test_request_input_submit_requires_all_answers(monkeypatch):
     asyncio.run(bot.on_request_user_input_callback(callback))
 
     assert callback.answers[-1] == ("请先完成全部题目后再提交。", True)
-    assert message.calls, "应引导到未完成题目"
-    assert "请选择风格" in message.calls[-1][0]
+    assert not message.calls, "未答完时仅提示，不额外发送跳题消息"
 
 
 def test_request_input_callback_expired_session():
@@ -354,7 +358,7 @@ def test_request_input_keyboard_hides_submit_button():
         created_at=time.monotonic(),
         expires_at=time.monotonic() + 600,
     )
-    keyboard = bot._build_request_input_keyboard(session)
+    keyboard = bot._build_request_input_keyboard(session, question_index=0)
     labels = [button.text for row in keyboard.inline_keyboard for button in row]
     assert any("D." in text for text in labels)
     assert not any("提交" in text for text in labels)
@@ -445,7 +449,7 @@ def test_request_input_custom_option_enters_text_mode():
     assert session.input_mode_question_id == "scope"
     assert callback.answers[-1] == ("请发送自定义决策文本", False)
     assert message.calls
-    assert "请发送本题的自定义决策文本" in message.calls[-1][0]
+    assert "请发送第 1 题的自定义决策文本" in message.calls[-1][0]
 
 
 def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
@@ -535,3 +539,104 @@ def test_request_input_custom_text_cancel_returns_question(monkeypatch):
     assert session.input_mode_question_id is None
     assert sent_questions == [session.token]
     assert session.token in bot.REQUEST_INPUT_SESSIONS
+
+
+def test_request_input_keyboard_includes_question_index_in_callback_data():
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="A"), bot.RequestInputOption(label="B")],
+    )
+    session = bot.RequestInputSession(
+        token="token_cb_index",
+        chat_id=1,
+        user_id=1,
+        call_id="call_cb_index",
+        session_key="s-cb-index",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+
+    keyboard = bot._build_request_input_keyboard(session, question_index=0)
+    first_button = keyboard.inline_keyboard[0][0]
+    custom_button = keyboard.inline_keyboard[-1][0]
+    assert first_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_OPTION}:0:0"
+    assert custom_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_CUSTOM}:0"
+
+
+def test_request_input_repeated_click_same_question_is_locked(monkeypatch):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_locked",
+        chat_id=188,
+        user_id=188,
+        call_id="call_locked",
+        session_key="s-locked",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": 0},
+        question_message_ids={"scope": 100},
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[188] = session.token
+
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_OPTION, 0, 1),
+        message=DummyMessage(chat_id=188, user_id=188),
+        user_id=188,
+    )
+
+    asyncio.run(bot.on_request_user_input_callback(callback))
+    assert callback.answers[-1] == ("第 1 题已锁定，不可修改。", True)
+    assert session.selected_option_indexes["scope"] == 0
+
+
+def test_request_input_auto_submit_failure_sends_retry_button(monkeypatch):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_retry",
+        chat_id=208,
+        user_id=208,
+        call_id="call_retry",
+        session_key="s-retry",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[208] = session.token
+
+    async def fake_dispatch(*_args, **_kwargs):
+        return False, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    message = DummyMessage(chat_id=208, user_id=208)
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_OPTION, 0, 1),
+        message=message,
+        user_id=208,
+    )
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert session.submission_state == "failed"
+    assert session.submit_retry_count == 1
+    assert callback.answers[-1] == ("自动提交失败，可点击“重试提交”继续。", True)
+    assert message.calls, "应发送重试提交提示"
+    retry_markup = message.calls[-1][2]
+    assert isinstance(retry_markup, InlineKeyboardMarkup)
+    retry_button = retry_markup.inline_keyboard[0][0]
+    assert retry_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_RETRY_SUBMIT}"

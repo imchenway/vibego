@@ -356,16 +356,19 @@ REQUEST_INPUT_ACTION_PREV = "prev"
 REQUEST_INPUT_ACTION_NEXT = "next"
 REQUEST_INPUT_ACTION_SUBMIT = "submit"
 REQUEST_INPUT_ACTION_CANCEL = "cancel"
+REQUEST_INPUT_ACTION_RETRY_SUBMIT = "retry_submit"
 REQUEST_INPUT_CUSTOM_OPTION_INDEX = -1
 REQUEST_INPUT_CUSTOM_LABEL = "输入自定义决策"
 REQUEST_INPUT_SESSION_TTL_SECONDS = max(_env_float("REQUEST_INPUT_SESSION_TTL_SECONDS", 900.0), 60.0)
 REQUEST_INPUT_MAX_QUESTIONS = max(_env_int("REQUEST_INPUT_MAX_QUESTIONS", 20), 1)
 REQUEST_INPUT_MAX_OPTIONS = max(_env_int("REQUEST_INPUT_MAX_OPTIONS", 10), 1)
+REQUEST_INPUT_SUBMIT_AUTO_RETRY_MAX = max(_env_int("REQUEST_INPUT_SUBMIT_AUTO_RETRY_MAX", 1), 0)
 ENABLE_REQUEST_USER_INPUT_UI = _env_bool("ENABLE_REQUEST_USER_INPUT_UI", True)
 # Plan 结束确认：透传为 Telegram 按钮（最小改造）
 PLAN_CONFIRM_CALLBACK_PREFIX = "pcf:"
 PLAN_CONFIRM_ACTION_YES = "yes"
 PLAN_CONFIRM_ACTION_NO = "no"
+PLAN_IMPLEMENT_PROMPT = "Implement the plan."
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
@@ -457,7 +460,10 @@ class RequestInputSession:
     expires_at: float
     selected_option_indexes: Dict[str, int] = field(default_factory=dict)
     custom_answers: Dict[str, str] = field(default_factory=dict)
+    question_message_ids: Dict[str, int] = field(default_factory=dict)
     input_mode_question_id: Optional[str] = None
+    submission_state: str = "idle"
+    submit_retry_count: int = 0
     submitted: bool = False
     cancelled: bool = False
 
@@ -1547,6 +1553,9 @@ def _prepend_enforced_agents_notice(raw_prompt: str) -> str:
 
     text = (raw_prompt or "").strip("\n")
     if not text:
+        return raw_prompt
+    # Plan 收口确认（Yes）要求严格透传固定提示词，不允许追加强制前缀。
+    if text == PLAN_IMPLEMENT_PROMPT:
         return raw_prompt
     # 约定：内部命令（如 /compact）不应被提示语破坏
     if text.lstrip().startswith("/"):
@@ -7582,11 +7591,11 @@ def _parse_plan_confirm_callback_data(data: Optional[str]) -> Optional[Tuple[str
     return token, action
 
 
-def _build_request_input_callback_data(token: str, action: str, value: Optional[int] = None) -> str:
+def _build_request_input_callback_data(token: str, action: str, *values: int) -> str:
     """构造 request_user_input 按钮回调数据（遵循 Telegram 64 字节限制）。"""
 
     parts = [REQUEST_INPUT_CALLBACK_PREFIX.rstrip(":"), token, action]
-    if value is not None:
+    for value in values:
         parts.append(str(value))
     payload = ":".join(parts)
     if len(payload.encode("utf-8")) > 64:
@@ -7595,7 +7604,7 @@ def _build_request_input_callback_data(token: str, action: str, value: Optional[
     return payload
 
 
-def _parse_request_input_callback_data(data: Optional[str]) -> Optional[Tuple[str, str, Optional[int]]]:
+def _parse_request_input_callback_data(data: Optional[str]) -> Optional[Tuple[str, str, List[int]]]:
     """解析 request_user_input 回调数据。"""
 
     if not data or not data.startswith(REQUEST_INPUT_CALLBACK_PREFIX):
@@ -7606,13 +7615,14 @@ def _parse_request_input_callback_data(data: Optional[str]) -> Optional[Tuple[st
     _, token, action, *rest = parts
     if not token:
         return None
-    numeric: Optional[int] = None
+    numeric_values: List[int] = []
     if rest:
-        candidate = (rest[0] or "").strip()
-        if not candidate.isdigit():
-            return None
-        numeric = int(candidate)
-    return token, action, numeric
+        for candidate_raw in rest:
+            candidate = (candidate_raw or "").strip()
+            if not candidate.isdigit():
+                return None
+            numeric_values.append(int(candidate))
+    return token, action, numeric_values
 
 
 def _truncate_button_label(text: str, *, limit: int = 18) -> str:
@@ -7777,20 +7787,22 @@ def _build_request_input_session(
     )
 
 
-def _render_request_input_question_text(session: RequestInputSession) -> str:
-    """渲染当前题目文案。"""
+def _render_request_input_question_text(session: RequestInputSession, *, question_index: int) -> str:
+    """渲染指定题目的完整文案（逐题独立消息）。"""
 
     total = len(session.questions)
-    index = max(0, min(session.current_index, total - 1))
+    index = max(0, min(question_index, total - 1))
     question = session.questions[index]
-    selected_index = session.selected_option_indexes.get(question.question_id)
-    answered_count = len(session.selected_option_indexes)
+    answered_count = sum(
+        1 for item in session.questions if _is_request_input_question_answered(session, item.question_id)
+    )
+    remaining_count = max(total - answered_count, 0)
     remaining_seconds = max(int(session.expires_at - time.monotonic()), 0)
     remaining_minutes = max(1, remaining_seconds // 60) if remaining_seconds else 0
 
     lines: List[str] = [
         "🧩 模型请求补充决策",
-        f"进度：第 {index + 1}/{total} 题（已答 {answered_count} 题）",
+        f"进度：第 {index + 1}/{total} 题（已答 {answered_count} 题，剩余 {remaining_count} 题）",
     ]
     if question.header:
         lines.append(f"分组：{question.header}")
@@ -7799,35 +7811,17 @@ def _render_request_input_question_text(session: RequestInputSession) -> str:
     lines.append("选项：")
     for option_index, option in enumerate(question.options):
         option_code = _request_input_option_code(option_index)
-        selected_flag = " ✅" if selected_index == option_index else ""
         suffix = f"（{option.description}）" if option.description else ""
-        lines.append(f"{option_code}. {option.label}{selected_flag}{suffix}")
+        lines.append(f"{option_code}. {option.label}{suffix}")
 
-    custom_selected_flag = " ✅" if selected_index == REQUEST_INPUT_CUSTOM_OPTION_INDEX else ""
-    lines.append(f"D. {REQUEST_INPUT_CUSTOM_LABEL}{custom_selected_flag}")
-
-    if selected_index is None:
-        lines.append("")
-        lines.append("当前选择：未选择")
-    elif selected_index == REQUEST_INPUT_CUSTOM_OPTION_INDEX:
-        custom_value = (session.custom_answers.get(question.question_id) or "").strip()
-        current = custom_value or "（待输入）"
-        lines.append("")
-        lines.append(f"当前选择：自定义 - {current}")
-    elif 0 <= selected_index < len(question.options):
-        selected_label = question.options[selected_index].label
-        lines.append("")
-        lines.append(f"当前选择：{selected_label}")
-    else:
-        lines.append("")
-        lines.append("当前选择：无效，请重新选择")
+    lines.append(f"D. {REQUEST_INPUT_CUSTOM_LABEL}")
 
     if session.input_mode_question_id == question.question_id:
         lines.append("")
         lines.append("📝 当前题处于自定义输入模式：请发送文本，或发送“取消”返回选项。")
 
     lines.append("")
-    lines.append("说明：仅当前会话发起人可操作。")
+    lines.append("说明：本题一旦作答即锁定不可修改；仅当前会话发起人可操作。")
     if remaining_minutes > 0:
         lines.append(f"有效期：剩余约 {remaining_minutes} 分钟")
     else:
@@ -7835,19 +7829,17 @@ def _render_request_input_question_text(session: RequestInputSession) -> str:
     return "\n".join(lines)
 
 
-def _build_request_input_keyboard(session: RequestInputSession) -> InlineKeyboardMarkup:
-    """构造 request_user_input 当前题目的交互按钮。"""
+def _build_request_input_keyboard(session: RequestInputSession, *, question_index: int) -> InlineKeyboardMarkup:
+    """构造指定题目的交互按钮（仅选项 + 自定义决策）。"""
 
     total = len(session.questions)
-    index = max(0, min(session.current_index, total - 1))
+    index = max(0, min(question_index, total - 1))
     question = session.questions[index]
-    selected = session.selected_option_indexes.get(question.question_id)
 
     rows: list[list[InlineKeyboardButton]] = []
     for option_index, option in enumerate(question.options):
-        marker = "✅ " if selected == option_index else ""
         option_code = _request_input_option_code(option_index)
-        label = f"{option_code}. {marker}{_truncate_button_label(option.label)}"
+        label = f"{option_code}. {_truncate_button_label(option.label)}"
         rows.append(
             [
                 InlineKeyboardButton(
@@ -7855,58 +7847,23 @@ def _build_request_input_keyboard(session: RequestInputSession) -> InlineKeyboar
                     callback_data=_build_request_input_callback_data(
                         session.token,
                         REQUEST_INPUT_ACTION_OPTION,
+                        index,
                         option_index,
                     ),
                 )
             ]
         )
 
-    custom_marker = "✅ " if selected == REQUEST_INPUT_CUSTOM_OPTION_INDEX else ""
     rows.append(
         [
             InlineKeyboardButton(
-                text=f"D. {custom_marker}{REQUEST_INPUT_CUSTOM_LABEL}",
+                text=f"D. {REQUEST_INPUT_CUSTOM_LABEL}",
                 callback_data=_build_request_input_callback_data(
                     session.token,
                     REQUEST_INPUT_ACTION_CUSTOM,
+                    index,
                 ),
             )
-        ]
-    )
-
-    nav_row: list[InlineKeyboardButton] = []
-    if index > 0:
-        nav_row.append(
-            InlineKeyboardButton(
-                text="⬅️ 上一步",
-                callback_data=_build_request_input_callback_data(
-                    session.token,
-                    REQUEST_INPUT_ACTION_PREV,
-                ),
-            )
-        )
-    if index < total - 1:
-        nav_row.append(
-            InlineKeyboardButton(
-                text="➡️ 下一步",
-                callback_data=_build_request_input_callback_data(
-                    session.token,
-                    REQUEST_INPUT_ACTION_NEXT,
-                ),
-            )
-        )
-    if nav_row:
-        rows.append(nav_row)
-
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="❌ 取消",
-                callback_data=_build_request_input_callback_data(
-                    session.token,
-                    REQUEST_INPUT_ACTION_CANCEL,
-                ),
-            ),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -7921,18 +7878,36 @@ def _build_request_input_custom_input_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def _send_request_input_question(session: RequestInputSession, *, reply_to: Optional[Message]) -> bool:
-    """向 Telegram 发送当前题目的交互消息。"""
+    """向 Telegram 发送当前待答题目的交互消息。"""
 
-    text = _render_request_input_question_text(session)
-    markup = _build_request_input_keyboard(session)
+    total = len(session.questions)
+    if total <= 0:
+        return False
+    index = max(0, min(session.current_index, total - 1))
+    question = session.questions[index]
+    text = _render_request_input_question_text(session, question_index=index)
+    markup = _build_request_input_keyboard(session, question_index=index)
+    sent_message: Optional[Message] = None
     try:
-        await _reply_to_chat(
-            session.chat_id,
-            text,
-            reply_to=reply_to,
-            parse_mode=None,
-            reply_markup=markup,
-        )
+        if reply_to is not None:
+            sent_message = await reply_to.answer(
+                text,
+                parse_mode=None,
+                reply_markup=markup,
+            )
+        else:
+            bot = current_bot()
+
+            async def _send() -> None:
+                nonlocal sent_message
+                sent_message = await bot.send_message(
+                    chat_id=session.chat_id,
+                    text=text,
+                    parse_mode=None,
+                    reply_markup=markup,
+                )
+
+            await _send_with_retry(_send)
     except TelegramBadRequest as exc:
         worker_log.warning(
             "发送 request_user_input 题目失败：%s",
@@ -7940,6 +7915,9 @@ async def _send_request_input_question(session: RequestInputSession, *, reply_to
             extra={"chat": session.chat_id, "token": session.token},
         )
         return False
+    message_id = getattr(sent_message, "message_id", None)
+    if isinstance(message_id, int):
+        session.question_message_ids[question.question_id] = message_id
     return True
 
 
@@ -10221,6 +10199,44 @@ def _build_request_input_submission_summary(session: RequestInputSession) -> str
     return "\n".join(lines)
 
 
+def _build_request_input_retry_submit_keyboard(token: str) -> InlineKeyboardMarkup:
+    """构造自动提交失败后的“重试提交”按钮。"""
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="🔁 重试提交",
+                callback_data=_build_request_input_callback_data(
+                    token,
+                    REQUEST_INPUT_ACTION_RETRY_SUBMIT,
+                ),
+            )
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_request_input_retry_prompt(
+    session: RequestInputSession,
+    *,
+    reply_to: Optional[Message],
+) -> None:
+    """在自动提交失败后提示用户手动重试。"""
+
+    text = "⚠️ 自动提交失败。请点击“重试提交”再次尝试。"
+    markup = _build_request_input_retry_submit_keyboard(session.token)
+    if reply_to is not None:
+        await reply_to.answer(text, parse_mode=None, reply_markup=markup)
+        return
+    await _reply_to_chat(
+        session.chat_id,
+        text,
+        reply_to=None,
+        parse_mode=None,
+        reply_markup=markup,
+    )
+
+
 async def _submit_request_input_session(
     session: RequestInputSession,
     *,
@@ -10264,6 +10280,45 @@ async def _submit_request_input_session(
     return True
 
 
+async def _submit_request_input_session_with_auto_retry(
+    session: RequestInputSession,
+    *,
+    reply_to: Optional[Message],
+    actor_user_id: Optional[int],
+    allow_auto_retry: bool,
+) -> bool:
+    """提交 request_user_input，会在自动提交链路中按约定做一次重试。"""
+
+    if session.submitted:
+        return True
+
+    session.submission_state = "submitting"
+    success = await _submit_request_input_session(
+        session,
+        reply_to=reply_to,
+        actor_user_id=actor_user_id,
+    )
+    if success:
+        session.submission_state = "submitted"
+        session.submit_retry_count = 0
+        return True
+
+    if allow_auto_retry and session.submit_retry_count < REQUEST_INPUT_SUBMIT_AUTO_RETRY_MAX:
+        session.submit_retry_count += 1
+        success = await _submit_request_input_session(
+            session,
+            reply_to=reply_to,
+            actor_user_id=actor_user_id,
+        )
+        if success:
+            session.submission_state = "submitted"
+            return True
+
+    session.submission_state = "failed"
+    await _send_request_input_retry_prompt(session, reply_to=reply_to)
+    return False
+
+
 def _get_request_input_session_for_chat(chat_id: int) -> Optional[RequestInputSession]:
     """获取 chat 当前有效的 request_user_input 会话。"""
 
@@ -10279,6 +10334,102 @@ def _get_request_input_session_for_chat(chat_id: int) -> Optional[RequestInputSe
         _drop_request_input_session(token)
         return None
     return session
+
+
+def _find_request_input_question_index_by_message_id(
+    session: RequestInputSession, message_id: Optional[int]
+) -> Optional[int]:
+    """根据消息 ID 反查题目下标。"""
+
+    if not isinstance(message_id, int):
+        return None
+    for index, question in enumerate(session.questions):
+        if session.question_message_ids.get(question.question_id) == message_id:
+            return index
+    return None
+
+
+def _resolve_request_input_question_index_for_callback(
+    session: RequestInputSession,
+    values: Sequence[int],
+    *,
+    callback_message: Optional[Message],
+) -> Optional[int]:
+    """解析回调里的题目下标，兼容旧版按钮数据。"""
+
+    total = len(session.questions)
+    if total <= 0:
+        return None
+
+    if values:
+        candidate = values[0]
+        if 0 <= candidate < total:
+            return candidate
+        return None
+
+    message_id = getattr(callback_message, "message_id", None)
+    inferred = _find_request_input_question_index_by_message_id(session, message_id)
+    if inferred is not None:
+        return inferred
+
+    if 0 <= session.current_index < total:
+        return session.current_index
+    return None
+
+
+def _resolve_request_input_option_selection(
+    session: RequestInputSession,
+    values: Sequence[int],
+    *,
+    callback_message: Optional[Message],
+) -> Optional[Tuple[int, int]]:
+    """解析选项按钮回调中的题目与选项下标。"""
+
+    if len(values) >= 2:
+        question_index = _resolve_request_input_question_index_for_callback(
+            session,
+            [values[0]],
+            callback_message=callback_message,
+        )
+        option_index = values[1]
+    elif len(values) == 1:
+        # 兼容旧版按钮：payload 里仅包含 option_index。
+        question_index = _resolve_request_input_question_index_for_callback(
+            session,
+            [],
+            callback_message=callback_message,
+        )
+        option_index = values[0]
+    else:
+        return None
+
+    if question_index is None:
+        return None
+
+    return question_index, option_index
+
+
+async def _lock_request_input_callback_message(message: Optional[Message]) -> None:
+    """移除已完成题目的按钮，减少重复点击噪音。"""
+
+    if message is None:
+        return
+    with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter, AttributeError):
+        await message.edit_reply_markup(reply_markup=None)
+
+
+async def _lock_request_input_question_markup(session: RequestInputSession, question_id: str) -> None:
+    """按题目映射移除按钮（用于自定义文本提交通道）。"""
+
+    message_id = session.question_message_ids.get(question_id)
+    if not isinstance(message_id, int):
+        return
+    bot = current_bot()
+    editor = getattr(bot, "edit_message_reply_markup", None)
+    if not callable(editor):
+        return
+    with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter, TypeError):
+        await editor(chat_id=session.chat_id, message_id=message_id, reply_markup=None)
 
 
 async def _handle_request_input_custom_text_message(message: Message) -> bool:
@@ -10318,29 +10469,37 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
         return True
 
     question = session.questions[question_index]
+    if _is_request_input_question_answered(session, question.question_id):
+        session.input_mode_question_id = None
+        await message.answer("该题已锁定，不可修改。", reply_markup=ReplyKeyboardRemove())
+        return True
+
     session.custom_answers[question.question_id] = trimmed
     session.selected_option_indexes[question.question_id] = REQUEST_INPUT_CUSTOM_OPTION_INDEX
     session.input_mode_question_id = None
+    await _lock_request_input_question_markup(session, question.question_id)
 
     next_unanswered = _next_unanswered_request_input_index(session, after_index=question_index)
     if next_unanswered is None:
-        success = await _submit_request_input_session(
+        success = await _submit_request_input_session_with_auto_retry(
             session,
             reply_to=message,
             actor_user_id=user_id,
+            allow_auto_retry=True,
         )
         if success:
             return True
         await message.answer(
-            "推送失败：模型未就绪，请点击任一选项重试或取消本次交互。",
+            "自动提交失败，可点击“重试提交”继续。",
             reply_markup=ReplyKeyboardRemove(),
         )
-        session.current_index = question_index
-        await _send_request_input_question(session, reply_to=message)
         return True
 
     session.current_index = next_unanswered
-    await message.answer("已保存自定义决策，已进入下一题。", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        f"已记录第 {question_index + 1} 题自定义决策，进入下一题。",
+        reply_markup=ReplyKeyboardRemove(),
+    )
     await _send_request_input_question(session, reply_to=message)
     return True
 
@@ -10390,7 +10549,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
     _remember_chat_active_user(chat_id, actor_user_id)
     success, _session_path = await _dispatch_prompt_to_model(
         chat_id,
-        "Implement the plan.",
+        PLAN_IMPLEMENT_PROMPT,
         reply_to=callback.message,
         ack_immediately=True,
         intended_mode=None,
@@ -10415,7 +10574,7 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
         await callback.answer("交互参数无效", show_alert=True)
         return
 
-    token, action, numeric = parsed
+    token, action, values = parsed
     _cleanup_expired_request_input_sessions()
     session = REQUEST_INPUT_SESSIONS.get(token)
     if session is None:
@@ -10449,70 +10608,114 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
         _drop_request_input_session(token)
         await callback.answer("该交互已取消。", show_alert=True)
         return
+    if session.submission_state == "submitting":
+        await callback.answer("正在提交，请稍候。", show_alert=True)
+        return
+
+    if action == REQUEST_INPUT_ACTION_RETRY_SUBMIT:
+        if session.submission_state != "failed":
+            await callback.answer("当前无需重试提交。", show_alert=True)
+            return
+        success = await _submit_request_input_session_with_auto_retry(
+            session,
+            reply_to=callback.message,
+            actor_user_id=callback.from_user.id if callback.from_user else None,
+            allow_auto_retry=False,
+        )
+        if success:
+            await callback.answer("已重试并推送到模型")
+            return
+        await callback.answer("重试失败，请稍后再次点击“重试提交”。", show_alert=True)
+        return
 
     if session.input_mode_question_id and action != REQUEST_INPUT_ACTION_CANCEL:
         await callback.answer("当前正在输入自定义决策，请先发送文本或发送“取消”。", show_alert=True)
         return
 
     if action == REQUEST_INPUT_ACTION_OPTION:
-        question = session.questions[session.current_index]
-        option_index = numeric if isinstance(numeric, int) else None
-        if option_index is None or option_index < 0 or option_index >= len(question.options):
+        resolved = _resolve_request_input_option_selection(
+            session,
+            values,
+            callback_message=callback.message,
+        )
+        if resolved is None:
+            await callback.answer("题目或选项无效，请重试。", show_alert=True)
+            return
+        question_index, option_index = resolved
+        if question_index < 0 or question_index >= len(session.questions):
+            await callback.answer("题目无效，请重试。", show_alert=True)
+            return
+        question = session.questions[question_index]
+        if option_index < 0 or option_index >= len(question.options):
             await callback.answer("选项无效，请重试。", show_alert=True)
             return
+        expected_message_id = session.question_message_ids.get(question.question_id)
+        callback_message_id = getattr(callback.message, "message_id", None)
+        if isinstance(expected_message_id, int) and isinstance(callback_message_id, int) and expected_message_id != callback_message_id:
+            await callback.answer("该题已更新，请使用最新题目消息。", show_alert=True)
+            return
+        if _is_request_input_question_answered(session, question.question_id):
+            await _lock_request_input_callback_message(callback.message)
+            await callback.answer(f"第 {question_index + 1} 题已锁定，不可修改。", show_alert=True)
+            return
+        session.current_index = question_index
         session.selected_option_indexes[question.question_id] = option_index
         session.custom_answers.pop(question.question_id, None)
         session.input_mode_question_id = None
+        await _lock_request_input_callback_message(callback.message)
         option_label = question.options[option_index].label
         next_unanswered = _next_unanswered_request_input_index(
             session,
-            after_index=session.current_index,
+            after_index=question_index,
         )
         if next_unanswered is None:
-            success = await _submit_request_input_session(
+            success = await _submit_request_input_session_with_auto_retry(
                 session,
                 reply_to=callback.message,
                 actor_user_id=callback.from_user.id if callback.from_user else None,
+                allow_auto_retry=True,
             )
             if not success:
-                await callback.answer("推送失败：模型未就绪，请点击任一选项重试。", show_alert=True)
-                await _send_request_input_question(session, reply_to=callback.message)
+                await callback.answer("自动提交失败，可点击“重试提交”继续。", show_alert=True)
                 return
             await callback.answer("已自动推送到模型")
             return
 
         session.current_index = next_unanswered
         await _send_request_input_question(session, reply_to=callback.message)
-        await callback.answer(f"已选择：{option_label}")
+        await callback.answer(f"已记录第 {question_index + 1} 题：{option_label}")
         return
 
     if action == REQUEST_INPUT_ACTION_CUSTOM:
-        question = session.questions[session.current_index]
+        question_index = _resolve_request_input_question_index_for_callback(
+            session,
+            values,
+            callback_message=callback.message,
+        )
+        if question_index is None or question_index < 0 or question_index >= len(session.questions):
+            await callback.answer("题目无效，请重试。", show_alert=True)
+            return
+        question = session.questions[question_index]
+        if _is_request_input_question_answered(session, question.question_id):
+            await _lock_request_input_callback_message(callback.message)
+            await callback.answer(f"第 {question_index + 1} 题已锁定，不可修改。", show_alert=True)
+            return
+        session.current_index = question_index
         session.input_mode_question_id = question.question_id
         await callback.answer("请发送自定义决策文本")
         if callback.message is not None:
             await callback.message.answer(
-                "请发送本题的自定义决策文本，发送“取消”可返回选项。",
+                f"请发送第 {question_index + 1} 题的自定义决策文本，发送“取消”可返回本题。",
                 reply_markup=_build_request_input_custom_input_keyboard(),
             )
         return
 
     if action == REQUEST_INPUT_ACTION_PREV:
-        if session.current_index <= 0:
-            await callback.answer("已经是第一题。")
-            return
-        session.current_index -= 1
-        await _send_request_input_question(session, reply_to=callback.message)
-        await callback.answer("已切换到上一题")
+        await callback.answer("当前交互不支持跳题，请按顺序作答。", show_alert=True)
         return
 
     if action == REQUEST_INPUT_ACTION_NEXT:
-        if session.current_index >= len(session.questions) - 1:
-            await callback.answer("已经是最后一题。")
-            return
-        session.current_index += 1
-        await _send_request_input_question(session, reply_to=callback.message)
-        await callback.answer("已切换到下一题")
+        await callback.answer("当前交互不支持跳题，请按顺序作答。", show_alert=True)
         return
 
     if action == REQUEST_INPUT_ACTION_CANCEL:
@@ -10527,19 +10730,17 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
     if action == REQUEST_INPUT_ACTION_SUBMIT:
         missing_index = _first_unanswered_request_input_index(session)
         if missing_index is not None:
-            session.current_index = missing_index
             await callback.answer("请先完成全部题目后再提交。", show_alert=True)
-            await _send_request_input_question(session, reply_to=callback.message)
             return
 
-        success = await _submit_request_input_session(
+        success = await _submit_request_input_session_with_auto_retry(
             session,
             reply_to=callback.message,
             actor_user_id=callback.from_user.id if callback.from_user else None,
+            allow_auto_retry=False,
         )
         if not success:
-            await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
-            await _send_request_input_question(session, reply_to=callback.message)
+            await callback.answer("提交失败，可点击“重试提交”继续。", show_alert=True)
             return
 
         await callback.answer("已提交并推送到模型")

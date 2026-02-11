@@ -2852,6 +2852,87 @@ def test_dispatch_prompt_skips_enforced_agents_notice_for_slash_command(monkeypa
     bot.CHAT_DELIVERED_OFFSETS.clear()
 
 
+def test_dispatch_prompt_skips_enforced_agents_notice_for_plan_implement_prompt(monkeypatch, tmp_path: Path):
+    """Plan 收口确认（Yes）的固定提示词必须原样透传，不能注入强制提示语。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent: dict[str, str] = {}
+
+    def fake_tmux_send_line(_session: str, line: str) -> None:
+        sent["line"] = line
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            779, bot.PLAN_IMPLEMENT_PROMPT, reply_to=None, ack_immediately=False
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent.get("line") == bot.PLAN_IMPLEMENT_PROMPT
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
 def test_dispatch_prompt_plan_mode_sends_plan_switch_for_codex(monkeypatch, tmp_path: Path):
     """Codex + PLAN 模式：应先发 /plan，再发正文。"""
 
@@ -3084,6 +3165,7 @@ def test_handle_prompt_dispatch_defaults_to_plan_mode(monkeypatch):
         ("  pwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\n  pwd"),
         ("/compact", "/compact"),
         (" /compact", " /compact"),
+        (bot.PLAN_IMPLEMENT_PROMPT, bot.PLAN_IMPLEMENT_PROMPT),
         ("", ""),
         ("\n", "\n"),
         (f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"),
