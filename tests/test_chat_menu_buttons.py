@@ -32,22 +32,25 @@ def test_worker_menu_button_handles_bad_request(caplog):
     assert mock_bot.set_chat_menu_button.await_count == 1
 
 
-def test_worker_keyboard_structure():
+def test_worker_keyboard_structure(monkeypatch):
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
     markup = bot._build_worker_main_keyboard()
     assert isinstance(markup, ReplyKeyboardMarkup)
     assert len(markup.keyboard) == 2
     assert len(markup.keyboard[0]) == 2
-    assert len(markup.keyboard[1]) == 1
+    assert len(markup.keyboard[1]) == 2
     for row in markup.keyboard:
         for button in row:
             assert isinstance(button, KeyboardButton)
 
 
-def test_worker_keyboard_button_text():
+def test_worker_keyboard_button_text(monkeypatch):
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
     markup = bot._build_worker_main_keyboard()
     assert markup.keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
     assert markup.keyboard[0][1].text == bot.WORKER_COMMANDS_BUTTON_TEXT
     assert markup.keyboard[1][0].text == bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT
+    assert markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF
 
 
 def test_worker_keyboard_resize_enabled():
@@ -279,6 +282,76 @@ def test_worker_terminal_snapshot_resumes_watcher_when_exited(monkeypatch, tmp_p
     bot.CHAT_SESSION_MAP.pop(chat_id, None)
     bot.CHAT_LAST_MESSAGE.pop(chat_id, None)
     bot.SESSION_OFFSETS.pop(session_key, None)
+
+
+def test_probe_worker_plan_mode_state_returns_off_when_no_mode_marker(monkeypatch):
+    monkeypatch.setattr(bot, "tmux_bin", lambda: "tmux")
+    monkeypatch.setattr(bot, "_tmux_cmd", lambda *args: list(args))
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: "这里没有任何模式标识",
+    )
+
+    assert bot._probe_worker_plan_mode_state() == "off"
+
+
+def test_probe_worker_plan_mode_state_returns_unknown_on_tmux_error(monkeypatch):
+    monkeypatch.setattr(bot, "tmux_bin", lambda: "tmux")
+    monkeypatch.setattr(bot, "_tmux_cmd", lambda *args: list(args))
+
+    def fake_check_output(*args, **kwargs):
+        raise subprocess.CalledProcessError(returncode=1, cmd="tmux")
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+    assert bot._probe_worker_plan_mode_state() == "unknown"
+
+
+def test_worker_plan_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
+    states = iter(["off", "on"])
+    sent_keys = []
+
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: next(states))
+    monkeypatch.setattr(
+        bot,
+        "tmux_send_key",
+        lambda session, key: sent_keys.append((session, key)),
+    )
+
+    message = _DummyMessage(bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF)
+    asyncio.run(bot.on_worker_plan_mode_button(message))
+
+    assert sent_keys == [(bot.TMUX_SESSION, bot.WORKER_PLAN_MODE_TOGGLE_KEY)]
+    assert len(message._answers) == 1
+    text, kwargs = message._answers[0]
+    assert "当前状态：ON" in text
+    reply_markup = kwargs.get("reply_markup")
+    assert isinstance(reply_markup, ReplyKeyboardMarkup)
+    assert reply_markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON
+
+
+def test_worker_plan_mode_button_unknown_still_attempts_toggle(monkeypatch):
+    states = iter(["unknown", "unknown"])
+    sent_keys = []
+
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: next(states))
+    monkeypatch.setattr(
+        bot,
+        "tmux_send_key",
+        lambda session, key: sent_keys.append((session, key)),
+    )
+
+    message = _DummyMessage(bot.WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN)
+    asyncio.run(bot.on_worker_plan_mode_button(message))
+
+    assert sent_keys == [(bot.TMUX_SESSION, bot.WORKER_PLAN_MODE_TOGGLE_KEY)]
+    assert len(message._answers) == 1
+    text, kwargs = message._answers[0]
+    assert "状态仍未知" in text
+    reply_markup = kwargs.get("reply_markup")
+    assert isinstance(reply_markup, ReplyKeyboardMarkup)
+    assert reply_markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN
 
 
 def test_master_projects_button_accepts_legacy_text(monkeypatch):

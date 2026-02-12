@@ -85,3 +85,55 @@ PYTHONPATH=. pytest -q tests/test_long_poll_mechanism.py tests/test_auto_compact
 - Telegram CallbackQuery：  
   https://core.telegram.org/bots/api#callbackquery
 
+---
+
+## 6) 2026-02-12 追加修复：终端输入框有文案但未发送（无回车）
+
+### 6.1 背景
+- 线上现象：偶发“提示词已进入 CLI 输入框，但没有真正发送”，看起来像卡在输入阶段。
+- 该问题不稳定复现，且可能缺少可观测信号；按决策采用黑盒兜底。
+
+### 6.2 决策（已确认）
+1. 范围：覆盖全部 `_dispatch_prompt_to_model` 入模链路（不仅限 request_user_input）。
+2. 方案：首发 Enter 后固定延迟 **2s** 再补发 **1 次 Enter**。
+3. 风险：接受极低概率重复提交，优先保证“发出去”。
+4. 失败提示：补发后仍异常时，Telegram 给出“手动按 Enter 再重试”的引导。
+5. 开关：增加 env 配置，默认开启，支持快速回退。
+
+### 6.3 代码改动
+- 文件：`bot.py`
+- 新增配置：
+  - `TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED`（默认 `true`）
+  - `TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS`（默认 `2.0`）
+- 改造 `tmux_send_line(...)`：
+  - 保留首发 `C-m`；
+  - 开关开启时，延迟后补发 1 次 `C-m`；
+  - 补发失败仅记录告警，不覆盖首发结果。
+- 改造 `_dispatch_prompt_to_model(...)`：
+  - `tmux` 报错提示追加人工兜底文案：`手动按 Enter 后重试一次推送`。
+
+### 6.4 测试改动
+- 新增：`tests/test_tmux_send_line.py`
+  1. 开启开关时会延迟补发第二次 Enter。
+  2. 关闭开关时不补发第二次 Enter（包含 ClaudeCode 分支）。
+  3. 第二次 Enter 失败不抛错（仅告警）。
+  4. `tmux` 推送异常时提示包含“手动按 Enter”。
+
+### 6.5 回归结果
+```bash
+# 基线（改动前，相关）
+PYTHONPATH=. pytest -q tests/test_request_user_input_flow.py tests/test_plan_confirm_bridge.py tests/test_task_description.py
+# 163 passed
+
+# 改动后（决策要求范围 + 新增测试）
+PYTHONPATH=. pytest -q tests/test_tmux_send_line.py tests/test_request_user_input_flow.py tests/test_plan_confirm_bridge.py tests/test_task_description.py
+# 167 passed
+
+# 全量回归
+PYTHONPATH=. pytest -q
+# 603 passed, 6 warnings
+```
+
+### 6.6 可验证资料（官方）
+- tmux `send-keys`（`C-m`）：  
+  https://man7.org/linux/man-pages/man1/tmux.1.html

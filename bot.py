@@ -318,6 +318,9 @@ PLAN_MODE_SWITCH_COMMAND = (os.environ.get("PLAN_MODE_SWITCH_COMMAND") or "/plan
 PLAN_MODE_SWITCH_DELAY_SECONDS = max(_env_float("PLAN_MODE_SWITCH_DELAY_SECONDS", 0.25), 0.0)
 # 直接 Telegram 文本消息默认按 PLAN 推送（先 /plan 再发正文）
 ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE = _env_bool("ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE", True)
+# tmux 注入兜底：部分终端偶发“文本已进输入框但未真正发送”，默认延迟补发一次 Enter。
+TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED = _env_bool("TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED", True)
+TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS = max(_env_float("TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS", 2.0), 0.0)
 
 PLAN_STATUS_LABELS = {
     "completed": "✅",
@@ -1368,13 +1371,39 @@ def tmux_send_line(session: str, line: str):
         if idx < len(chunks) - 1:
             subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-j"))
             time.sleep(0.05)
-    is_claudecode = _is_claudecode_model()
-    time.sleep(0.2 if is_claudecode else 0.05)
+    # 首次发送前，给不同模型一个轻量稳定窗口，避免输入事件丢失。
+    time.sleep(0.2 if _is_claudecode_model() else 0.05)
     subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
-    if is_claudecode:
-        # Claude Code 会偶尔忽略首个 Enter，额外发送一次确保队列入列
-        time.sleep(0.1)
+    if not TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED:
+        return
+
+    # 统一兜底：固定延迟后补发 1 次 Enter，覆盖“输入框有文案但未提交”的黑盒场景。
+    if TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS > 0:
+        time.sleep(TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS)
+    try:
         subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
+    except subprocess.CalledProcessError as exc:
+        # 兜底补发失败不应覆盖首发结果，只记录告警方便后续定位。
+        worker_log.warning(
+            "tmux 延迟补发 Enter 失败，已保留首发结果：%s",
+            exc,
+            extra={
+                "tmux_session": session,
+                "double_enter_enabled": str(TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED),
+                "double_enter_delay_seconds": str(TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS),
+                "double_enter_fallback_sent": "false",
+            },
+        )
+    else:
+        worker_log.debug(
+            "tmux 延迟补发 Enter 成功",
+            extra={
+                "tmux_session": session,
+                "double_enter_enabled": str(TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED),
+                "double_enter_delay_seconds": str(TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS),
+                "double_enter_fallback_sent": "true",
+            },
+        )
 
 
 def tmux_send_key(session: str, key: str) -> None:
@@ -1996,7 +2025,10 @@ async def _dispatch_prompt_to_model(
     except subprocess.CalledProcessError as exc:
         await _reply_to_chat(
             chat_id,
-            f"tmux错误：{exc}",
+            (
+                f"tmux错误：{exc}\n"
+                "若终端输入框仍停留未发送，请手动按 Enter 后重试一次推送。"
+            ),
             reply_to=reply_to,
         )
         return False, None
@@ -3423,6 +3455,13 @@ COMMAND_KEYWORDS.update(
 WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
 WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
 WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT = "💻 终端实况"
+WORKER_PLAN_MODE_BUTTON_PREFIX = "🧭 PLAN MODE:"
+WORKER_PLAN_MODE_BUTTON_TEXT_ON = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ON"
+WORKER_PLAN_MODE_BUTTON_TEXT_OFF = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} OFF"
+WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ?"
+WORKER_PLAN_MODE_TOGGLE_KEY = (os.environ.get("WORKER_PLAN_MODE_TOGGLE_KEY") or PLAN_EXECUTION_EXIT_PLAN_KEY).strip() or PLAN_EXECUTION_EXIT_PLAN_KEY
+WORKER_PLAN_MODE_PROBE_LINES = max(_env_int("WORKER_PLAN_MODE_PROBE_LINES", 80), 20)
+WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS = max(_env_float("WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS", 0.8), 0.1)
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 
 COMMAND_EXEC_PREFIX = "cmd:run:"
@@ -3462,8 +3501,48 @@ TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
 TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
 
 
-def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
-    """Worker 端常驻键盘，提供任务列表入口。"""
+def _probe_worker_plan_mode_state() -> Literal["on", "off", "unknown"]:
+    """探测 Worker 主键盘上的 PLAN MODE 状态。"""
+
+    timeout = max(WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS, 0.1)
+    try:
+        raw_output = subprocess.check_output(
+            _tmux_cmd(
+                tmux_bin(),
+                "capture-pane",
+                "-p",
+                "-t",
+                TMUX_SESSION,
+                "-S",
+                f"-{WORKER_PLAN_MODE_PROBE_LINES}",
+            ),
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        return "unknown"
+
+    # 约定：终端底部仅在 PLAN 模式显示 "Plan mode"；无标识时视为非 PLAN。
+    mode = _extract_terminal_collaboration_mode(raw_output)
+    if mode == "plan":
+        return "on"
+    return "off"
+
+
+def _build_worker_main_keyboard(
+    *,
+    plan_mode_state: Optional[Literal["on", "off", "unknown"]] = None,
+) -> ReplyKeyboardMarkup:
+    """Worker 端常驻键盘，提供任务列表与 PLAN MODE 切换入口。"""
+
+    resolved_plan_mode_state = plan_mode_state or _probe_worker_plan_mode_state()
+    if resolved_plan_mode_state == "on":
+        plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_ON
+    elif resolved_plan_mode_state == "off":
+        plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_OFF
+    else:
+        plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN
+
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -3472,6 +3551,7 @@ def _build_worker_main_keyboard() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text=WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT),
+                KeyboardButton(text=plan_mode_button_text),
             ]
         ],
         resize_keyboard=True,
@@ -10180,6 +10260,50 @@ async def on_task_list_button(message: Message) -> None:
 @router.message(F.text == WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
 async def on_tmux_snapshot_button(message: Message) -> None:
     await _handle_terminal_snapshot_request(message)
+
+
+async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
+    """处理主键盘 PLAN MODE 切换按钮。"""
+
+    chat_id = message.chat.id
+    before_state = await asyncio.to_thread(_probe_worker_plan_mode_state)
+
+    try:
+        await asyncio.to_thread(tmux_send_key, TMUX_SESSION, WORKER_PLAN_MODE_TOGGLE_KEY)
+    except FileNotFoundError:
+        await message.answer(
+            "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
+            reply_markup=_build_worker_main_keyboard(plan_mode_state="unknown"),
+        )
+        return
+    except subprocess.CalledProcessError:
+        await message.answer(
+            f"无法切换 PLAN MODE，请确认 tmux 会话 {TMUX_SESSION} 已启动。",
+            reply_markup=_build_worker_main_keyboard(plan_mode_state="unknown"),
+        )
+        return
+
+    after_state = await asyncio.to_thread(_probe_worker_plan_mode_state)
+    state_label = {
+        "on": "ON",
+        "off": "OFF",
+        "unknown": "?",
+    }.get(after_state, "?")
+
+    if before_state == "unknown" and after_state == "unknown":
+        summary = "已尝试切换 PLAN MODE，但当前状态仍未知，请先点击“终端实况”确认。"
+    else:
+        summary = f"已切换 PLAN MODE，当前状态：{state_label}"
+
+    await message.answer(
+        summary,
+        reply_markup=_build_worker_main_keyboard(plan_mode_state=after_state),
+    )
+
+
+@router.message(F.text.regexp(r"^🧭 PLAN MODE:"))
+async def on_worker_plan_mode_button(message: Message) -> None:
+    await _handle_worker_plan_mode_toggle_request(message)
 
 
 @router.message(Command("commands"))
