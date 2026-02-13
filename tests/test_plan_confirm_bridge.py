@@ -26,9 +26,13 @@ class DummyMessage:
     def __init__(self, *, chat_id: int = 1) -> None:
         self.chat = SimpleNamespace(id=chat_id)
         self.edited_reply_markup = False
+        self.answers: list[tuple[str, dict]] = []
 
     async def edit_reply_markup(self, reply_markup=None):
         self.edited_reply_markup = True
+
+    async def answer(self, text: str, **kwargs):
+        self.answers.append((text, kwargs))
 
 
 class DummyCallback:
@@ -63,9 +67,11 @@ def _reset_runtime():
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
     yield
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
 
 
 def _build_assistant_message_event(text: str) -> dict:
@@ -189,6 +195,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
         return True, None
 
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
 
     callback = DummyCallback(
         bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
@@ -209,6 +216,8 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已确认并推送到模型", False)
+    assert callback.message.answers
+    assert callback.message.answers[-1][0] == "已推送到模型，主菜单状态已刷新。"
 
 
 def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
@@ -239,6 +248,7 @@ def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
         return True, None
 
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "on")
 
     callback = DummyCallback(
         bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_NO),
@@ -251,6 +261,8 @@ def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已保持 Plan 模式", False)
+    assert callback.message.answers
+    assert callback.message.answers[-1][0] == "已保持 Plan 模式，主菜单状态已刷新。"
 
 
 def test_plan_develop_retry_callback_dispatches_implement_prompt_without_session(

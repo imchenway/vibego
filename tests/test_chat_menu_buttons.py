@@ -208,6 +208,9 @@ def test_worker_terminal_snapshot_success(monkeypatch):
     sent_text = mock_reply_large_text.await_args.args[1]
     assert "line-1" in sent_text
     assert bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT in sent_text
+    kwargs = mock_reply_large_text.await_args.kwargs
+    assert isinstance(kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+    assert isinstance(kwargs.get("attachment_reply_markup"), ReplyKeyboardMarkup)
 
 
 def test_worker_terminal_snapshot_handles_tmux_failure(monkeypatch):
@@ -306,6 +309,26 @@ def test_probe_worker_plan_mode_state_returns_unknown_on_tmux_error(monkeypatch)
     monkeypatch.setattr(subprocess, "check_output", fake_check_output)
 
     assert bot._probe_worker_plan_mode_state() == "unknown"
+
+
+def test_worker_main_keyboard_uses_cached_plan_mode_when_refresh_disabled(monkeypatch):
+    bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
+    bot._set_worker_plan_mode_state_cache("on")
+
+    def fail_probe():
+        raise AssertionError("不应触发探测")
+
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", fail_probe)
+    markup = bot._build_worker_main_keyboard(refresh_plan_mode_state=False)
+    assert markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON
+
+
+def test_refresh_worker_plan_mode_state_cache_updates_cache(monkeypatch):
+    bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
+    refreshed = bot._refresh_worker_plan_mode_state_cache(force_probe=True)
+    assert refreshed == "off"
+    assert bot._get_worker_plan_mode_state_cache() == "off"
 
 
 def test_worker_plan_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
