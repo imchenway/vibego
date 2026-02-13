@@ -3286,8 +3286,8 @@ def test_dispatch_prompt_force_exit_plan_ui_skips_btab_when_not_plan(monkeypatch
             pass
 
 
-def test_handle_prompt_dispatch_defaults_to_plan_mode(monkeypatch):
-    """直接 Telegram 文本消息：默认按 PLAN 推送。"""
+def test_handle_prompt_dispatch_uses_manual_mode_control(monkeypatch):
+    """直接 Telegram 文本消息：不再自动按 PLAN 推送。"""
 
     message = DummyMessage()
     message.text = "hello"
@@ -3309,7 +3309,7 @@ def test_handle_prompt_dispatch_defaults_to_plan_mode(monkeypatch):
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
     asyncio.run(bot._handle_prompt_dispatch(message, "hello"))
 
-    assert captured == [bot.PUSH_MODE_PLAN]
+    assert captured == [None]
 
 
 @pytest.mark.parametrize(

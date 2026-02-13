@@ -3422,12 +3422,13 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
 
     active_user_id = getattr(message.from_user, "id", None) if message.from_user else None
     _remember_chat_active_user(message.chat.id, active_user_id)
-    intended_mode = PUSH_MODE_PLAN if ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE else None
+    # 需求约定：普通 Telegram 文本消息不再自动注入 /plan。
+    # PLAN/YOLO 由用户在交互流程中显式选择，避免“默认强制切到 PLAN”。
     await _dispatch_prompt_to_model(
         message.chat.id,
         dispatch_prompt,
         reply_to=message,
-        intended_mode=intended_mode,
+        intended_mode=None,
     )
 
 BOT_COMMANDS: list[tuple[str, str]] = [
