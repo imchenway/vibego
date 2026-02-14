@@ -3,6 +3,7 @@ from pathlib import Path
 
 from bot import (
     WX_PREVIEW_COMMAND_NAME,
+    WX_UPLOAD_COMMAND_NAME,
     _detect_wx_preview_candidates,
     _resolve_miniprogram_app_dir,
     _wrap_wx_preview_command,
@@ -132,3 +133,12 @@ def test_default_global_command_uses_project_base() -> None:
     command_text = str(cmd["command"])
     assert 'PROJECT_PATH="${PROJECT_PATH:-$MODEL_WORKDIR}"' not in command_text
     assert 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}"' in command_text
+
+
+def test_default_global_upload_command_uses_project_base() -> None:
+    """确保上传命令默认使用 PROJECT_BASE 并指向 gen_upload.sh。"""
+
+    cmd = next(item for item in DEFAULT_GLOBAL_COMMANDS if item["name"] == WX_UPLOAD_COMMAND_NAME)
+    command_text = str(cmd["command"])
+    assert 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}"' in command_text
+    assert "gen_upload.sh" in command_text

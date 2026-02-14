@@ -45,6 +45,14 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
         "aliases": (),
         "timeout": 600,
     },
+    {
+        "name": "wx-dev-upload",
+        "title": "上传微信代码到体验版",
+        "command": 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}" bash "$ROOT_DIR/scripts/gen_upload.sh"',
+        "description": "调用微信开发者工具 CLI，将当前工作目录的小程序代码上传到微信服务（体验版）。支持通过 `wx-dev-upload --version <版本号>` 覆盖默认时间戳版本；二维码请在微信开发者管理后台查看。",
+        "aliases": (),
+        "timeout": 600,
+    },
 )
 
 

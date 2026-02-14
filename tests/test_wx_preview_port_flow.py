@@ -251,3 +251,132 @@ def test_gen_preview_prefers_python3_over_python(tmp_path: Path) -> None:
     assert output_qr.is_file()
     assert port_capture_file.is_file()
     assert port_capture_file.read_text(encoding="utf-8") == "45927"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-upload 脚本依赖 bash/Posix 环境")
+def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Path) -> None:
+    """确保上传脚本在 python 不可用时仍能用 python3 解析端口，并携带指定版本号。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_upload.sh"
+    assert script_path.is_file()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    dummy_python = bin_dir / "python"
+    dummy_python.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    dummy_python.chmod(0o755)
+
+    python3_wrapper = bin_dir / "python3"
+    python3_wrapper.write_text(
+        dedent(
+            f"""\
+            #!/bin/bash
+            exec "{sys.executable}" "$@"
+            """
+        ),
+        encoding="utf-8",
+    )
+    python3_wrapper.chmod(0o755)
+
+    fake_cli = bin_dir / "fake-wx-cli-upload"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+
+            command="$1"
+            shift
+            if [[ "$command" != "upload" ]]; then
+              echo "unexpected command: $command" >&2
+              exit 2
+            fi
+
+            version=""
+            port=""
+            while [[ $# -gt 0 ]]; do
+              if [[ "$1" == "--upload-version" ]]; then
+                version="$2"
+                shift 2
+                continue
+              fi
+              if [[ "$1" == "--port" ]]; then
+                port="$2"
+                shift 2
+                continue
+              fi
+              shift
+            done
+
+            if [[ -z "$version" ]]; then
+              echo "missing --upload-version" >&2
+              exit 2
+            fi
+            if [[ -z "$port" ]]; then
+              echo "missing --port" >&2
+              exit 2
+            fi
+
+            if [[ -n "${FAKE_WX_CLI_PORT_FILE:-}" ]]; then
+              printf '%s' "$port" > "$FAKE_WX_CLI_PORT_FILE"
+            fi
+            if [[ -n "${FAKE_WX_CLI_VERSION_FILE:-}" ]]; then
+              printf '%s' "$version" > "$FAKE_WX_CLI_VERSION_FILE"
+            fi
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+
+    ports_file = tmp_path / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps(
+            {
+                "projects": {"hyphamall": 45927},
+                "paths": {str(project_root.resolve()): 45927},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_NAME"] = "hyphamall"
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["WX_DEVTOOLS_PORTS_FILE"] = str(ports_file)
+    env["VERSION"] = "202602140001"
+    port_capture_file = tmp_path / "port.txt"
+    version_capture_file = tmp_path / "version.txt"
+    env["FAKE_WX_CLI_PORT_FILE"] = str(port_capture_file)
+    env["FAKE_WX_CLI_VERSION_FILE"] = str(version_capture_file)
+    env.pop("PORT", None)
+
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    assert proc.returncode == 0, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert port_capture_file.is_file()
+    assert version_capture_file.is_file()
+    assert port_capture_file.read_text(encoding="utf-8") == "45927"
+    assert version_capture_file.read_text(encoding="utf-8") == "202602140001"

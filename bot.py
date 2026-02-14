@@ -3485,11 +3485,13 @@ COMMAND_OUTPUT_MAX_CHARS = _env_int("COMMAND_OUTPUT_MAX_CHARS", 3500)
 COMMAND_STDERR_MAX_CHARS = _env_int("COMMAND_STDERR_MAX_CHARS", 1200)
 COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 5)
 WX_PREVIEW_COMMAND_NAME = "wx-dev-preview"
+WX_UPLOAD_COMMAND_NAME = "wx-dev-upload"
 WX_PREVIEW_CHOICE_PREFIX = "wxpreview:choose:"
 WX_PREVIEW_CANCEL = "wxpreview:cancel"
 WX_PREVIEW_PORT_USE_PREFIX = "wxpreview:port_use:"
 WX_PREVIEW_PORT_CANCEL = "wxpreview:port_cancel"
 WX_PREVIEW_PORT_STATE_KEY = "wx_preview_port"
+WX_UPLOAD_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 @dataclass
@@ -3832,28 +3834,51 @@ def _default_wx_preview_output_dir() -> Path:
     return Path("/tmp/Downloads")
 
 
-def _build_wx_preview_prompt(base: Path, candidates: Sequence[WxPreviewCandidate]) -> str:
-    """渲染候选目录提示文案。"""
+def _build_wx_preview_prompt(
+    base: Path,
+    candidates: Sequence[WxPreviewCandidate],
+    *,
+    command_name: str = WX_PREVIEW_COMMAND_NAME,
+    version_override: Optional[str] = None,
+) -> str:
+    """渲染微信开发命令候选目录提示文案。"""
 
-    output_dir = _default_wx_preview_output_dir()
-    sample_file = output_dir / f"wx-preview-{int(time.time())}.jpg"
     ports_file = CONFIG_DIR_PATH / "wx_devtools_ports.json"
-    lines = [
-        "*请选择要生成预览的小程序目录*",
-        f"扫描范围：当前目录及一层子目录（基准：`{_escape_markdown_text(str(base))}`）",
-        f"默认输出目录：`{_escape_markdown_text(str(output_dir))}`",
-        f"输出文件示例：`{_escape_markdown_text(str(sample_file))}`",
-        f"端口配置文件：`{_escape_markdown_text(str(ports_file))}`（未配置将无法执行）",
-        "",
-        "候选目录：",
-    ]
+    if command_name == WX_UPLOAD_COMMAND_NAME:
+        lines = [
+            "*请选择要上传代码的小程序目录*",
+            f"扫描范围：当前目录及一层子目录（基准：`{_escape_markdown_text(str(base))}`）",
+            f"端口配置文件：`{_escape_markdown_text(str(ports_file))}`（未配置将无法执行）",
+            (
+                f"上传版本号：`{_escape_markdown_text(version_override)}`（来自命令参数）"
+                if version_override
+                else "上传版本号：默认使用时间戳；可通过 `wx-dev-upload --version <版本号>` 覆盖。"
+            ),
+            "",
+            "候选目录：",
+        ]
+    else:
+        output_dir = _default_wx_preview_output_dir()
+        sample_file = output_dir / f"wx-preview-{int(time.time())}.jpg"
+        lines = [
+            "*请选择要生成预览的小程序目录*",
+            f"扫描范围：当前目录及一层子目录（基准：`{_escape_markdown_text(str(base))}`）",
+            f"默认输出目录：`{_escape_markdown_text(str(output_dir))}`",
+            f"输出文件示例：`{_escape_markdown_text(str(sample_file))}`",
+            f"端口配置文件：`{_escape_markdown_text(str(ports_file))}`（未配置将无法执行）",
+            "",
+            "候选目录：",
+        ]
     for idx, candidate in enumerate(candidates, start=1):
         label = "当前目录" if candidate.source == "current" else candidate.project_root.name
         lines.append(
             f"{idx}. {label} → `{_escape_markdown_text(str(candidate.project_root))}`"
             f"（app.json：`{_escape_markdown_text(str(candidate.app_dir))}`）"
         )
-    lines.append("_请选择其一或取消。_")
+    if command_name == WX_UPLOAD_COMMAND_NAME:
+        lines.append("_请选择其一后执行上传（二维码请在微信后台查看）。_")
+    else:
+        lines.append("_请选择其一或取消。_")
     return "\n".join(lines)
 
 
@@ -3876,7 +3901,7 @@ def _build_wx_preview_keyboard(candidates: Sequence[WxPreviewCandidate]) -> Inli
 
 
 def _wrap_wx_preview_command(command: CommandDefinition, project_root: Path) -> CommandDefinition:
-    """为 wx-dev-preview 注入 PROJECT_PATH/PROJECT_BASE。"""
+    """为微信开发命令注入 PROJECT_PATH/PROJECT_BASE。"""
 
     quoted_root = shlex.quote(str(project_root))
     return CommandDefinition(
@@ -3885,6 +3910,57 @@ def _wrap_wx_preview_command(command: CommandDefinition, project_root: Path) -> 
         name=command.name,
         title=command.title,
         command=f"PROJECT_PATH={quoted_root} PROJECT_BASE={quoted_root} {command.command}",
+        scope=command.scope,
+        description=command.description,
+        timeout=command.timeout,
+        enabled=command.enabled,
+        created_at=command.created_at,
+        updated_at=command.updated_at,
+        aliases=command.aliases,
+    )
+
+
+def _is_wx_devtools_command(command_name: Optional[str]) -> bool:
+    """判断是否为微信开发者工具相关命令。"""
+
+    return command_name in {WX_PREVIEW_COMMAND_NAME, WX_UPLOAD_COMMAND_NAME}
+
+
+def _collect_wx_command_env_overrides(command_text: str) -> Dict[str, str]:
+    """从命令字符串中提取可透传的环境变量覆盖项。"""
+
+    overrides: Dict[str, str] = {}
+    for key in ("VERSION",):
+        value = _extract_shell_env_value(command_text, key)
+        if value is None:
+            continue
+        cleaned = value.strip()
+        if cleaned:
+            overrides[key] = cleaned
+    return overrides
+
+
+def _apply_command_env_overrides(command: CommandDefinition, env_overrides: Optional[Dict[str, str]]) -> CommandDefinition:
+    """为命令注入额外环境变量（仅本次执行生效）。"""
+
+    if not env_overrides:
+        return command
+    safe_items: list[tuple[str, str]] = []
+    for key, value in env_overrides.items():
+        key_text = (key or "").strip()
+        value_text = (value or "").strip()
+        if not key_text or not value_text:
+            continue
+        safe_items.append((key_text, value_text))
+    if not safe_items:
+        return command
+    prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in safe_items)
+    return CommandDefinition(
+        id=command.id,
+        project_slug=command.project_slug,
+        name=command.name,
+        title=command.title,
+        command=f"{prefix} {command.command}",
         scope=command.scope,
         description=command.description,
         timeout=command.timeout,
@@ -3928,6 +4004,7 @@ _WX_PREVIEW_PORT_MISMATCH_RE = re.compile(
 _WX_PREVIEW_PROJECT_ROOT_PATTERNS = (
     # 从 wx-dev-preview 的输出中提取实际小程序目录
     re.compile(r"\[信息\]\s*生成预览，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
+    re.compile(r"\[信息\]\s*执行上传，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
     re.compile(r"小程序目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
     re.compile(r"项目目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
 )
@@ -4167,9 +4244,60 @@ def _extract_command_trigger(prompt: str) -> Optional[str]:
     if not prompt or prompt[0] not in COMMAND_TRIGGER_PREFIXES:
         return None
     token = prompt[1:].strip()
-    if not token or " " in token or "\n" in token or "\t" in token:
+    if not token:
         return None
-    return token
+    parts = token.split(maxsplit=1)
+    trigger = parts[0].strip()
+    if not trigger:
+        return None
+    return trigger
+
+
+def _extract_command_args(prompt: str) -> str:
+    """提取命令触发词后的原始参数文本。"""
+
+    if not prompt or prompt[0] not in COMMAND_TRIGGER_PREFIXES:
+        return ""
+    token = prompt[1:].strip()
+    if not token:
+        return ""
+    parts = token.split(maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    return parts[1].strip()
+
+
+def _parse_wx_upload_args(args_text: str) -> tuple[Optional[str], Optional[str]]:
+    """解析 wx-dev-upload 参数，仅支持 `--version <版本号>`。"""
+
+    raw = (args_text or "").strip()
+    if not raw:
+        return None, None
+    try:
+        tokens = shlex.split(raw, posix=True)
+    except ValueError:
+        return None, "参数解析失败，请检查引号是否闭合。"
+
+    version_override: Optional[str] = None
+    idx = 0
+    while idx < len(tokens):
+        token = (tokens[idx] or "").strip()
+        if token == "--version":
+            if version_override is not None:
+                return None, "参数 `--version` 重复，请仅保留一个。"
+            if idx + 1 >= len(tokens):
+                return None, "参数 `--version` 缺少值，请使用 `--version <版本号>`。"
+            candidate = (tokens[idx + 1] or "").strip()
+            if not candidate:
+                return None, "参数 `--version` 值不能为空。"
+            if not WX_UPLOAD_VERSION_PATTERN.match(candidate):
+                return None, "版本号仅支持字母、数字、点、下划线、中划线，长度 1-64。"
+            version_override = candidate
+            idx += 2
+            continue
+        return None, f"不支持的参数：`{_escape_markdown_text(token)}`。仅支持 `--version <版本号>`。"
+
+    return version_override, None
 
 
 def _limit_text(text: str, limit: int) -> tuple[str, bool]:
@@ -4252,10 +4380,11 @@ async def _maybe_handle_wx_preview(
     service: CommandService,
     history_detail_prefix: str,
     fsm_state: Optional[FSMContext],
+    env_overrides: Optional[Dict[str, str]] = None,
 ) -> bool:
-    """对 wx-dev-preview 进行目录扫描与 FSM 选择。"""
+    """对微信开发命令进行目录扫描与 FSM 选择。"""
 
-    if command.name != WX_PREVIEW_COMMAND_NAME:
+    if not _is_wx_devtools_command(command.name):
         return False
     if fsm_state is None or reply_message is None:
         return False
@@ -4279,6 +4408,8 @@ async def _maybe_handle_wx_preview(
             "scope": command.scope,
             "history_prefix": history_detail_prefix,
             "trigger": trigger,
+            "command_name": command.name,
+            "env_overrides": env_overrides or {},
             "candidates": [
                 {
                     "project_root": str(item.project_root),
@@ -4290,7 +4421,13 @@ async def _maybe_handle_wx_preview(
         }
     )
 
-    prompt = _build_wx_preview_prompt(base_dir, candidates)
+    version_override = (env_overrides or {}).get("VERSION")
+    prompt = _build_wx_preview_prompt(
+        base_dir,
+        candidates,
+        command_name=command.name,
+        version_override=version_override,
+    )
     markup = _build_wx_preview_keyboard(candidates)
     await _answer_with_markdown(reply_message, prompt, reply_markup=markup)
     return True
@@ -4424,7 +4561,7 @@ async def _execute_command_definition(
 
     wx_port_keyboard_rows: list[list[InlineKeyboardButton]] = []
     if (
-        command.name == WX_PREVIEW_COMMAND_NAME
+        _is_wx_devtools_command(command.name)
         and (
             _is_wx_preview_missing_port_error(exit_code, stderr_text)
             or _is_wx_preview_port_mismatch_error(exit_code, stderr_text)
@@ -4444,6 +4581,7 @@ async def _execute_command_definition(
                 command.command, "PROJECT_BASE"
             )
             project_root = Path(raw_project_root).expanduser() if raw_project_root else None
+        env_overrides = _collect_wx_command_env_overrides(command.command)
 
         await fsm_state.clear()
         await fsm_state.set_state(WxPreviewStates.waiting_port)
@@ -4453,7 +4591,9 @@ async def _execute_command_definition(
                     "command_id": command.id,
                     "scope": command.scope,
                     "trigger": trigger or "按钮",
+                    "command_name": command.name,
                     "project_root": str(project_root) if project_root is not None else "",
+                    "env_overrides": env_overrides,
                 }
             }
         )
@@ -4463,7 +4603,9 @@ async def _execute_command_definition(
             lines.append("*端口配置缺失（可恢复）*")
         else:
             lines.append("*端口配置不匹配（可恢复）*")
-        lines.append("`wx-dev-preview` 需要微信开发者工具 CLI 的 `--port`（IDE HTTP 服务端口）。")
+        lines.append(
+            f"`{_escape_markdown_text(command.name)}` 需要微信开发者工具 CLI 的 `--port`（IDE HTTP 服务端口）。"
+        )
         if mismatch_current_port is not None and mismatch_expected_port is not None:
             lines.append(
                 "检测到 IDE 当前端口为 "
@@ -4519,6 +4661,7 @@ async def _handle_command_trigger_message(message: Message, prompt: str, state: 
     """处理以别名触发的命令执行。"""
 
     trigger = _extract_command_trigger(prompt)
+    raw_args = _extract_command_args(prompt)
     if not trigger:
         return False
     if trigger in COMMAND_KEYWORDS:
@@ -4532,21 +4675,31 @@ async def _handle_command_trigger_message(message: Message, prompt: str, state: 
             return False
         service = GLOBAL_COMMAND_SERVICE
         history_prefix = COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX
-    if " " in prompt.strip():
-        await message.answer("命令暂不支持附带参数，请仅发送触发词。")
-        return True
+    env_overrides: Dict[str, str] = {}
+    if raw_args:
+        if command.name != WX_UPLOAD_COMMAND_NAME:
+            await message.answer("命令暂不支持附带参数，请仅发送触发词。")
+            return True
+        version_override, parse_error = _parse_wx_upload_args(raw_args)
+        if parse_error:
+            await _answer_with_markdown(message, parse_error)
+            return True
+        if version_override:
+            env_overrides["VERSION"] = version_override
+    command_for_execute = _apply_command_env_overrides(command, env_overrides)
     if await _maybe_handle_wx_preview(
-        command=command,
+        command=command_for_execute,
         reply_message=message,
         trigger=trigger,
         actor_user=message.from_user,
         service=service,
         history_detail_prefix=history_prefix,
         fsm_state=state,
+        env_overrides=env_overrides,
     ):
         return True
     await _execute_command_definition(
-        command=command,
+        command=command_for_execute,
         reply_message=message,
         trigger=trigger,
         actor_user=message.from_user,
@@ -11411,6 +11564,13 @@ async def on_wx_preview_choice(callback: CallbackQuery, state: FSMContext) -> No
     service = GLOBAL_COMMAND_SERVICE if scope == GLOBAL_COMMAND_SCOPE else COMMAND_SERVICE
     history_prefix = context.get("history_prefix") or COMMAND_HISTORY_DETAIL_PREFIX
     trigger = context.get("trigger") or "按钮"
+    command_name = (context.get("command_name") or "").strip() or WX_PREVIEW_COMMAND_NAME
+    raw_env_overrides = context.get("env_overrides") or {}
+    env_overrides = {
+        str(key).strip(): str(value).strip()
+        for key, value in raw_env_overrides.items()
+        if str(key).strip() and str(value).strip()
+    }
 
     try:
         command = await service.get_command(int(command_id))
@@ -11425,7 +11585,10 @@ async def on_wx_preview_choice(callback: CallbackQuery, state: FSMContext) -> No
         await state.clear()
         await callback.answer("目录已不存在，请重新触发命令。", show_alert=True)
         if callback.message:
-            await callback.message.answer("所选目录不存在，请重新执行 wx-dev-preview。")
+            await callback.message.answer(
+                f"所选目录不存在，请重新执行 `{_escape_markdown_text(command_name)}`。",
+                parse_mode=_parse_mode_value(),
+            )
         return
     app_dir = _resolve_miniprogram_app_dir(project_root)
     if app_dir is None:
@@ -11439,8 +11602,12 @@ async def on_wx_preview_choice(callback: CallbackQuery, state: FSMContext) -> No
         return
 
     command_override = _wrap_wx_preview_command(command, project_root)
+    command_override = _apply_command_env_overrides(command_override, env_overrides)
     await state.clear()
-    await callback.answer("开始生成预览…")
+    if command_override.name == WX_UPLOAD_COMMAND_NAME:
+        await callback.answer("开始执行上传…")
+    else:
+        await callback.answer("开始生成预览…")
     await _execute_command_definition(
         command=command_override,
         reply_message=callback.message,
@@ -11456,9 +11623,14 @@ async def on_wx_preview_choice(callback: CallbackQuery, state: FSMContext) -> No
 async def on_wx_preview_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     """取消 wx-dev-preview 交互。"""
 
+    data = await state.get_data()
+    command_name = ((data.get("wx_preview") or {}).get("command_name") or "").strip() or WX_PREVIEW_COMMAND_NAME
     await state.clear()
     if callback.message:
-        await callback.message.answer("已取消 wx-dev-preview 执行。")
+        await callback.message.answer(
+            f"已取消 `{_escape_markdown_text(command_name)}` 执行。",
+            parse_mode=_parse_mode_value(),
+        )
     await callback.answer("已取消")
 
 
@@ -11469,23 +11641,36 @@ async def _apply_wx_preview_port_and_retry(
     reply_message: Message,
     actor_user: Optional[User],
 ) -> None:
-    """保存端口映射并用指定端口重试 wx-dev-preview。"""
+    """保存端口映射并用指定端口重试微信开发命令。"""
 
     data = await state.get_data()
     context = data.get(WX_PREVIEW_PORT_STATE_KEY) or {}
     command_id = context.get("command_id")
     scope = context.get("scope") or "project"
     trigger = context.get("trigger") or "按钮"
+    command_name = (context.get("command_name") or "").strip() or WX_PREVIEW_COMMAND_NAME
     project_root_raw = (context.get("project_root") or "").strip()
+    raw_env_overrides = context.get("env_overrides") or {}
+    env_overrides = {
+        str(key).strip(): str(value).strip()
+        for key, value in raw_env_overrides.items()
+        if str(key).strip() and str(value).strip()
+    }
     if not project_root_raw:
         await state.clear()
-        await reply_message.answer("上下文已失效，请重新执行 wx-dev-preview。")
+        await reply_message.answer(
+            f"上下文已失效，请重新执行 `{_escape_markdown_text(command_name)}`。",
+            parse_mode=_parse_mode_value(),
+        )
         return
 
     project_root = Path(project_root_raw).expanduser()
     if not project_root.is_dir():
         await state.clear()
-        await reply_message.answer("所选目录已不存在，请重新执行 wx-dev-preview。")
+        await reply_message.answer(
+            f"所选目录已不存在，请重新执行 `{_escape_markdown_text(command_name)}`。",
+            parse_mode=_parse_mode_value(),
+        )
         return
 
     if not (1 <= port <= 65535):
@@ -11525,6 +11710,7 @@ async def _apply_wx_preview_port_and_retry(
         config_note = "端口配置写入失败，将仅本次使用该端口重试。"
 
     command_override = _wrap_wx_preview_command(command, project_root)
+    command_override = _apply_command_env_overrides(command_override, env_overrides)
     command_retry = CommandDefinition(
         id=command_override.id,
         project_slug=command_override.project_slug,
@@ -11547,7 +11733,7 @@ async def _apply_wx_preview_port_and_retry(
             [
                 f"已收到端口：`{port}`",
                 config_note,
-                "开始重试生成预览…",
+                ("开始重试上传…" if command_retry.name == WX_UPLOAD_COMMAND_NAME else "开始重试生成预览…"),
             ]
         ),
     )
@@ -11587,9 +11773,15 @@ async def on_wx_preview_port_use(callback: CallbackQuery, state: FSMContext) -> 
 async def on_wx_preview_port_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     """取消 wx-dev-preview 端口输入流程。"""
 
+    data = await state.get_data()
+    context = data.get(WX_PREVIEW_PORT_STATE_KEY) or {}
+    command_name = (context.get("command_name") or "").strip() or WX_PREVIEW_COMMAND_NAME
     await state.clear()
     if callback.message:
-        await callback.message.answer("已取消端口输入，可重新执行 wx-dev-preview。")
+        await callback.message.answer(
+            f"已取消端口输入，可重新执行 `{_escape_markdown_text(command_name)}`。",
+            parse_mode=_parse_mode_value(),
+        )
     await callback.answer("已取消")
 
 
