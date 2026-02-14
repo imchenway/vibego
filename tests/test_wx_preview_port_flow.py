@@ -297,6 +297,14 @@ def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Pat
               echo "unexpected command: $command" >&2
               exit 2
             fi
+            if [[ "${1:-}" == "--help" ]]; then
+              cat <<'EOF'
+Upload mini program
+  --upload-version  Version number
+  --upload-desc     Description of the uploaded version
+EOF
+              exit 0
+            fi
 
             version=""
             port=""
@@ -329,6 +337,7 @@ def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Pat
             if [[ -n "${FAKE_WX_CLI_VERSION_FILE:-}" ]]; then
               printf '%s' "$version" > "$FAKE_WX_CLI_VERSION_FILE"
             fi
+            echo "uploaded version: $version"
             """
         ),
         encoding="utf-8",
@@ -338,6 +347,10 @@ def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Pat
     project_root = tmp_path / "mini"
     project_root.mkdir()
     (project_root / "app.json").write_text("{}", encoding="utf-8")
+    (project_root / "project.config.json").write_text(
+        json.dumps({"appid": "wx_APPID_REDACTED"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     ports_file = tmp_path / "wx_devtools_ports.json"
     ports_file.write_text(
@@ -380,3 +393,230 @@ def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Pat
     assert version_capture_file.is_file()
     assert port_capture_file.read_text(encoding="utf-8") == "45927"
     assert version_capture_file.read_text(encoding="utf-8") == "202602140001"
+    assert "UPLOAD_VERSION: 202602140001" in stdout
+    assert "UPLOAD_APPID: wx_APPID_REDACTED" in stdout
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-upload 脚本依赖 bash/Posix 环境")
+def test_gen_upload_supports_new_cli_flags_and_info_output(tmp_path: Path) -> None:
+    """确保脚本可兼容新版 upload 参数，并使用 info-output 校验版本与 AppID。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_upload.sh"
+    assert script_path.is_file()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    fake_cli = bin_dir / "fake-wx-cli-upload-new"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+
+            command="$1"
+            shift
+            if [[ "$command" != "upload" ]]; then
+              echo "unexpected command: $command" >&2
+              exit 2
+            fi
+            if [[ "${1:-}" == "--help" ]]; then
+              cat <<'EOF'
+Upload mini program
+  --version      Version number
+  --desc         Description of the uploaded version
+  --info-output  write upload result into file
+EOF
+              exit 0
+            fi
+
+            version=""
+            desc=""
+            port=""
+            info_output=""
+            while [[ $# -gt 0 ]]; do
+              case "$1" in
+                --version)
+                  version="$2"
+                  shift 2
+                  ;;
+                --desc)
+                  desc="$2"
+                  shift 2
+                  ;;
+                --port)
+                  port="$2"
+                  shift 2
+                  ;;
+                --info-output)
+                  info_output="$2"
+                  shift 2
+                  ;;
+                *)
+                  shift
+                  ;;
+              esac
+            done
+
+            if [[ -z "$version" || -z "$desc" || -z "$port" || -z "$info_output" ]]; then
+              echo "missing required parameters" >&2
+              exit 2
+            fi
+            cat >"$info_output" <<EOF
+{"version":"$version","appid":"wx_APPID_REDACTED","desc":"$desc"}
+EOF
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+    (project_root / "project.config.json").write_text(
+        json.dumps({"appid": "wx_APPID_REDACTED"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    ports_file = tmp_path / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps(
+            {
+                "projects": {"hyphamall": 45927},
+                "paths": {str(project_root.resolve()): 45927},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_NAME"] = "hyphamall"
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["WX_DEVTOOLS_PORTS_FILE"] = str(ports_file)
+    env["VERSION"] = "202602140002"
+    env.pop("PORT", None)
+
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    assert proc.returncode == 0, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert "UPLOAD_VERSION: 202602140002" in stdout
+    assert "UPLOAD_APPID: wx_APPID_REDACTED" in stdout
+    assert "upload 参数探测：版本参数=--version，描述参数=--desc，支持 --info-output=1" in stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-upload 脚本依赖 bash/Posix 环境")
+def test_gen_upload_fails_when_reported_version_mismatches(tmp_path: Path) -> None:
+    """确保上传返回的版本号与命令参数不一致时，脚本返回失败。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_upload.sh"
+    assert script_path.is_file()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    fake_cli = bin_dir / "fake-wx-cli-upload-mismatch-version"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+
+            command="$1"
+            shift
+            if [[ "$command" != "upload" ]]; then
+              echo "unexpected command: $command" >&2
+              exit 2
+            fi
+            if [[ "${1:-}" == "--help" ]]; then
+              cat <<'EOF'
+Upload mini program
+  --version      Version number
+  --desc         Description of the uploaded version
+  --info-output  write upload result into file
+EOF
+              exit 0
+            fi
+            info_output=""
+            while [[ $# -gt 0 ]]; do
+              if [[ "$1" == "--info-output" ]]; then
+                info_output="$2"
+                shift 2
+                continue
+              fi
+              shift
+            done
+            cat >"$info_output" <<EOF
+{"version":"202602140003-MISMATCH","appid":"wx_APPID_REDACTED"}
+EOF
+            exit 0
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+    (project_root / "project.config.json").write_text(
+        json.dumps({"appid": "wx_APPID_REDACTED"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    ports_file = tmp_path / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps(
+            {
+                "projects": {"hyphamall": 45927},
+                "paths": {str(project_root.resolve()): 45927},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_NAME"] = "hyphamall"
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["WX_DEVTOOLS_PORTS_FILE"] = str(ports_file)
+    env["VERSION"] = "202602140003"
+    env.pop("PORT", None)
+
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    assert proc.returncode == 4, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert "版本号不一致" in stderr

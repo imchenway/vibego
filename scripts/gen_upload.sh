@@ -12,6 +12,15 @@ PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-6}"                             # 
 PROJECT_BASE="${PROJECT_BASE:-${MODEL_WORKDIR:-$PWD}}"                        # 探测起始目录
 UPLOAD_RETRY_ON_FAIL="${UPLOAD_RETRY_ON_FAIL:-1}"                             # 失败自动重试次数（不含首轮）
 UPLOAD_RETRY_DELAY_SECONDS="${UPLOAD_RETRY_DELAY_SECONDS:-1}"                 # 重试间隔秒数
+UPLOAD_VERSION_FLAG=""                                                         # upload 版本参数（运行时探测）
+UPLOAD_DESC_FLAG=""                                                            # upload 描述参数（运行时探测）
+UPLOAD_INFO_OUTPUT_SUPPORTED=0                                                 # 是否支持 --info-output
+LAST_UPLOAD_VERSION_FLAG=""                                                    # 最近一次成功使用的版本参数
+LAST_UPLOAD_DESC_FLAG=""                                                       # 最近一次成功使用的描述参数
+UPLOAD_RESULT_VERSION=""                                                       # 校验后的上传版本
+UPLOAD_RESULT_APPID=""                                                         # 校验后的上传 AppID
+UPLOAD_RESULT_VERSION_SOURCE=""                                                # 上传版本来源
+UPLOAD_RESULT_APPID_SOURCE=""                                                  # 上传 AppID 来源
 
 # 选择 Python 解释器：
 # - 优先外部显式指定：PYTHON_BIN / VIBEGO_PYTHON_BIN
@@ -315,39 +324,304 @@ _validate_project_root() {
   return 1
 }
 
+_extract_project_appid() {
+  local project_root="$1"
+  local cfg="$project_root/project.config.json"
+  local appid=""
+  [[ -f "$cfg" ]] || return 0
+
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    appid="$(
+      "$PYTHON_BIN" - "$cfg" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+cfg_path = sys.argv[1]
+try:
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    value = data.get("appid")
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+except Exception:
+    pass
+PY
+    )"
+  fi
+
+  if [[ -z "$appid" ]]; then
+    appid="$(sed -nE 's/.*"appid"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$cfg" | head -n 1)"
+  fi
+  [[ -n "$appid" ]] && printf '%s\n' "$appid"
+}
+
+_detect_upload_cli_capabilities() {
+  local help_text=""
+  local help_status=0
+
+  # 默认优先使用新版参数，探测失败时再走兼容兜底。
+  UPLOAD_VERSION_FLAG="--version"
+  UPLOAD_DESC_FLAG="--desc"
+  UPLOAD_INFO_OUTPUT_SUPPORTED=0
+
+  set +e
+  help_text="$("$CLI_BIN" upload --help 2>&1)"
+  help_status=$?
+  set -e
+
+  if grep -Fq -- "--upload-version" <<<"$help_text"; then
+    UPLOAD_VERSION_FLAG="--upload-version"
+  elif grep -Fq -- "--version" <<<"$help_text"; then
+    UPLOAD_VERSION_FLAG="--version"
+  fi
+
+  if grep -Fq -- "--upload-desc" <<<"$help_text"; then
+    UPLOAD_DESC_FLAG="--upload-desc"
+  elif grep -Fq -- "--desc" <<<"$help_text"; then
+    UPLOAD_DESC_FLAG="--desc"
+  fi
+
+  if grep -Fq -- "--info-output" <<<"$help_text"; then
+    UPLOAD_INFO_OUTPUT_SUPPORTED=1
+  fi
+
+  if [[ $help_status -ne 0 && -z "$help_text" ]]; then
+    echo "[警告] 未能读取 upload --help 输出，将按兼容参数组合重试。" >&2
+  fi
+}
+
+_extract_upload_info_fields() {
+  local info_file="$1"
+  if [[ -z "${PYTHON_BIN:-}" || -z "$info_file" || ! -s "$info_file" ]]; then
+    return 0
+  fi
+
+  "$PYTHON_BIN" - "$info_file" <<'PY' 2>/dev/null || true
+import json
+import re
+import sys
+
+path = sys.argv[1]
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+except Exception:
+    raise SystemExit(0)
+
+version = ""
+appid = ""
+wx_appid_pattern = re.compile(r"^wx[a-zA-Z0-9]{16}$")
+
+version_keys = {"version", "uploadversion", "compileversion"}
+appid_keys = {"appid", "miniappid", "miniprogramappid", "extappid"}
+
+def normalize_key(raw):
+    text = str(raw or "").strip().lower()
+    for ch in (" ", "-", "_", "."):
+        text = text.replace(ch, "")
+    return text
+
+def as_text(value):
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (str, int, float)):
+        text = str(value).strip()
+        return text
+    return ""
+
+def walk(node):
+    global version, appid
+    if isinstance(node, dict):
+        for k, v in node.items():
+            key = normalize_key(k)
+            value_text = as_text(v)
+            if not version and key in version_keys and value_text:
+                version = value_text
+            if not appid and key in appid_keys and value_text:
+                appid = value_text
+            if not appid and value_text and wx_appid_pattern.match(value_text):
+                appid = value_text
+            walk(v)
+    elif isinstance(node, list):
+        for item in node:
+            walk(item)
+    else:
+        value_text = as_text(node)
+        if not appid and value_text and wx_appid_pattern.match(value_text):
+            appid = value_text
+
+walk(payload)
+print(f"{version}\t{appid}")
+PY
+}
+
+_run_upload_cli_with_flags() {
+  local project_root="$1"
+  local version="$2"
+  local upload_desc="$3"
+  local port="$4"
+  local cli_log="$5"
+  local info_output="$6"
+  local version_flag="$7"
+  local desc_flag="$8"
+  local cmd=()
+  local status=1
+
+  cmd=(
+    "$CLI_BIN"
+    upload
+    --project "$project_root"
+    "$version_flag" "$version"
+    "$desc_flag" "$upload_desc"
+    --compile-condition '{}'
+    --robot 1
+    --port "$port"
+  )
+  if [[ "$UPLOAD_INFO_OUTPUT_SUPPORTED" -eq 1 && -n "$info_output" ]]; then
+    cmd+=(--info-output "$info_output")
+  fi
+
+  pushd "$project_root" >/dev/null
+  set +e
+  "${cmd[@]}" >"$cli_log" 2>&1
+  status=$?
+  set -e
+  popd >/dev/null
+  return "$status"
+}
+
 _run_upload_cli_once() {
   local project_root="$1"
   local version="$2"
   local upload_desc="$3"
   local port="$4"
   local cli_log="$5"
+  local info_output="$6"
+  local raw_candidates=()
+  local candidates=()
+  local candidate=""
+  local existing=""
+  local duplicated=0
+  local status=1
+  local version_flag=""
+  local desc_flag=""
 
-  pushd "$project_root" >/dev/null
-  set +e
-  "$CLI_BIN" upload \
-    --project "$project_root" \
-    --upload-version "$version" \
-    --upload-desc "$upload_desc" \
-    --compile-condition '{}' \
-    --robot 1 \
-    --port "$port" >"$cli_log" 2>&1
-  local status=$?
-  set -e
-  # 兼容部分旧版本 CLI：--upload-desc 可能不可用，降级到 --desc 重试当前轮次。
-  if [[ $status -ne 0 ]] && grep -Eiq "unknown (option|argument).*(--)?upload-desc|option '--upload-desc' is unknown" "$cli_log"; then
-    set +e
-    "$CLI_BIN" upload \
-      --project "$project_root" \
-      --upload-version "$version" \
-      --desc "$upload_desc" \
-      --compile-condition '{}' \
-      --robot 1 \
-      --port "$port" >"$cli_log" 2>&1
+  raw_candidates=(
+    "${UPLOAD_VERSION_FLAG}|${UPLOAD_DESC_FLAG}"
+    "--version|--desc"
+    "--upload-version|--upload-desc"
+  )
+
+  for candidate in "${raw_candidates[@]}"; do
+    duplicated=0
+    for existing in "${candidates[@]}"; do
+      if [[ "$existing" == "$candidate" ]]; then
+        duplicated=1
+        break
+      fi
+    done
+    if [[ $duplicated -eq 0 ]]; then
+      candidates+=("$candidate")
+    fi
+  done
+
+  for candidate in "${candidates[@]}"; do
+    version_flag="${candidate%%|*}"
+    desc_flag="${candidate##*|}"
+    if _run_upload_cli_with_flags "$project_root" "$version" "$upload_desc" "$port" "$cli_log" "$info_output" "$version_flag" "$desc_flag"; then
+      LAST_UPLOAD_VERSION_FLAG="$version_flag"
+      LAST_UPLOAD_DESC_FLAG="$desc_flag"
+      return 0
+    fi
     status=$?
-    set -e
+    # 参数不兼容常见表现：
+    # 1) Unknown option / argument
+    # 2) 将参数识别失败后提示缺少必填 version/desc
+    if grep -Eiq "unknown (option|argument)|option '.*' is unknown|unknown arguments|missing required arguments:.*(version|upload-version).*(desc|upload-desc)" "$cli_log"; then
+      echo "[提示] 当前 upload 参数组合不兼容：${version_flag} ${desc_flag}，尝试其他组合..." >&2
+      continue
+    fi
+    return "$status"
+  done
+
+  return "$status"
+}
+
+_verify_upload_result() {
+  local expected_version="$1"
+  local expected_appid="$2"
+  local info_output="$3"
+  local cli_log="$4"
+  local parsed_fields=""
+  local parsed_version=""
+  local parsed_appid=""
+  local actual_version=""
+  local actual_appid=""
+  local version_source=""
+  local appid_source=""
+
+  parsed_fields="$(_extract_upload_info_fields "$info_output")"
+  if [[ "$parsed_fields" == *$'\t'* ]]; then
+    parsed_version="${parsed_fields%%$'\t'*}"
+    parsed_appid="${parsed_fields#*$'\t'}"
   fi
-  popd >/dev/null
-  return $status
+  parsed_version="${parsed_version//$'\r'/}"
+  parsed_appid="${parsed_appid//$'\r'/}"
+
+  if [[ -n "$parsed_version" ]]; then
+    actual_version="$parsed_version"
+    version_source="info_output"
+  fi
+  if [[ -n "$parsed_appid" ]]; then
+    actual_appid="$parsed_appid"
+    appid_source="info_output"
+  fi
+
+  if [[ -z "$actual_version" && -n "$expected_version" && -f "$cli_log" ]] && grep -Fq -- "$expected_version" "$cli_log"; then
+    actual_version="$expected_version"
+    version_source="cli_log"
+  fi
+  if [[ -z "$actual_appid" && -f "$cli_log" ]]; then
+    actual_appid="$(grep -Eo 'wx[a-zA-Z0-9]{16}' "$cli_log" | head -n 1 || true)"
+    if [[ -n "$actual_appid" ]]; then
+      appid_source="cli_log"
+    fi
+  fi
+
+  if [[ -z "$actual_appid" && -n "$expected_appid" ]]; then
+    actual_appid="$expected_appid"
+    appid_source="project_config"
+  fi
+
+  if [[ -z "$actual_version" && -n "$expected_version" ]]; then
+    # 部分 CLI 版本的 info-output 不回传版本号，此时回退到命令入参版本进行核验。
+    actual_version="$expected_version"
+    version_source="command_arg"
+  fi
+
+  if [[ -z "$actual_version" ]]; then
+    echo "[错误] 上传结果校验失败：未解析到上传版本号，拒绝标记成功。" >&2
+    return 1
+  fi
+  if [[ "$actual_version" != "$expected_version" ]]; then
+    echo "[错误] 上传结果校验失败：版本号不一致（期望：$expected_version，实际：$actual_version）。" >&2
+    return 1
+  fi
+  if [[ -z "$actual_appid" ]]; then
+    echo "[错误] 上传结果校验失败：未解析到 AppID，拒绝标记成功。" >&2
+    return 1
+  fi
+  if [[ -n "$expected_appid" && "$actual_appid" != "$expected_appid" ]]; then
+    echo "[错误] 上传结果校验失败：AppID 不一致（期望：$expected_appid，实际：$actual_appid）。" >&2
+    return 1
+  fi
+
+  UPLOAD_RESULT_VERSION="$actual_version"
+  UPLOAD_RESULT_APPID="$actual_appid"
+  UPLOAD_RESULT_VERSION_SOURCE="$version_source"
+  UPLOAD_RESULT_APPID_SOURCE="$appid_source"
+  return 0
 }
 
 # 基础校验
@@ -363,6 +637,7 @@ if [[ -z "$RESOLVED_PROJECT_PATH" ]]; then
   exit 1
 fi
 _validate_project_root "$RESOLVED_PROJECT_PATH"
+EXPECTED_APPID="$(_extract_project_appid "$RESOLVED_PROJECT_PATH")"
 
 # 端口解析：必须为每个项目配置（或临时通过 PORT 显式指定）。
 if [[ -z "${PORT:-}" ]]; then
@@ -403,9 +678,12 @@ fi
 export http_proxy= https_proxy= all_proxy=
 export no_proxy="servicewechat.com,.weixin.qq.com"
 
+_detect_upload_cli_capabilities
+echo "[信息] upload 参数探测：版本参数=${UPLOAD_VERSION_FLAG}，描述参数=${UPLOAD_DESC_FLAG}，支持 --info-output=${UPLOAD_INFO_OUTPUT_SUPPORTED}" >&2
 echo "[信息] 执行上传，项目：${RESOLVED_PROJECT_PATH}，版本：${VERSION}，端口：${PORT}"
 
-CLI_LOG="$(mktemp -t wx-upload-cli)"
+CLI_LOG="$(mktemp -t wx-upload-cli.XXXXXX)"
+UPLOAD_INFO_FILE="$(mktemp -t wx-upload-info.XXXXXX.json)"
 MAX_ATTEMPTS=$((UPLOAD_RETRY_ON_FAIL + 1))
 if [[ $MAX_ATTEMPTS -lt 1 ]]; then
   MAX_ATTEMPTS=1
@@ -414,7 +692,9 @@ fi
 ATTEMPT=1
 CLI_STATUS=1
 while [[ $ATTEMPT -le $MAX_ATTEMPTS ]]; do
-  if _run_upload_cli_once "$RESOLVED_PROJECT_PATH" "$VERSION" "$UPLOAD_DESC" "$PORT" "$CLI_LOG"; then
+  : >"$CLI_LOG"
+  : >"$UPLOAD_INFO_FILE"
+  if _run_upload_cli_once "$RESOLVED_PROJECT_PATH" "$VERSION" "$UPLOAD_DESC" "$PORT" "$CLI_LOG" "$UPLOAD_INFO_FILE"; then
     CLI_STATUS=0
     break
   fi
@@ -432,5 +712,21 @@ if [[ $CLI_STATUS -ne 0 ]]; then
   exit "$CLI_STATUS"
 fi
 
-echo "[完成] 上传成功：项目：${RESOLVED_PROJECT_PATH}，版本：${VERSION}"
-echo "UPLOAD_VERSION: ${VERSION}"
+if ! _verify_upload_result "$VERSION" "$EXPECTED_APPID" "$UPLOAD_INFO_FILE" "$CLI_LOG"; then
+  echo "[错误] 上传命令退出成功，但结果校验失败，已拒绝标记成功。" >&2
+  if [[ -s "$CLI_LOG" ]]; then
+    echo "[调试] CLI 输出（末尾 80 行）：" >&2
+    tail -n 80 "$CLI_LOG" >&2 || true
+  fi
+  if [[ -s "$UPLOAD_INFO_FILE" ]]; then
+    echo "[调试] info-output 文件：$UPLOAD_INFO_FILE" >&2
+    tail -n 80 "$UPLOAD_INFO_FILE" >&2 || true
+  fi
+  exit 4
+fi
+
+echo "[完成] 上传成功：项目：${RESOLVED_PROJECT_PATH}，版本：${UPLOAD_RESULT_VERSION}，AppID：${UPLOAD_RESULT_APPID}"
+echo "[信息] 上传校验来源：version=${UPLOAD_RESULT_VERSION_SOURCE:-unknown}，appid=${UPLOAD_RESULT_APPID_SOURCE:-unknown}"
+echo "[信息] 上传参数组合：${LAST_UPLOAD_VERSION_FLAG} ${LAST_UPLOAD_DESC_FLAG}"
+echo "UPLOAD_VERSION: ${UPLOAD_RESULT_VERSION}"
+echo "UPLOAD_APPID: ${UPLOAD_RESULT_APPID}"
