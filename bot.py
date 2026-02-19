@@ -3463,6 +3463,9 @@ WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ?"
 WORKER_PLAN_MODE_TOGGLE_KEY = (os.environ.get("WORKER_PLAN_MODE_TOGGLE_KEY") or PLAN_EXECUTION_EXIT_PLAN_KEY).strip() or PLAN_EXECUTION_EXIT_PLAN_KEY
 WORKER_PLAN_MODE_PROBE_LINES = max(_env_int("WORKER_PLAN_MODE_PROBE_LINES", 80), 20)
 WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS = max(_env_float("WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS", 0.8), 0.1)
+WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS = max(_env_float("WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS", 0.12), 0.0)
+WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS = max(_env_int("WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS", 3), 0)
+WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS = max(_env_float("WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS", 0.12), 0.0)
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 # Worker 主菜单 PLAN MODE 状态缓存（按 tmux session 维度）。
 WORKER_PLAN_MODE_STATE_CACHE: Dict[str, Literal["on", "off", "unknown"]] = {}
@@ -3561,6 +3564,31 @@ async def _refresh_worker_plan_mode_state_cache_async(
     return await asyncio.to_thread(_refresh_worker_plan_mode_state_cache, force_probe=force_probe)
 
 
+async def _refresh_worker_plan_mode_state_after_toggle_async(
+    *,
+    before_state: Literal["on", "off", "unknown"],
+) -> Literal["on", "off", "unknown"]:
+    """切换 PLAN MODE 后短暂轮询，尽可能拿到稳定的新状态。"""
+
+    if WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS > 0:
+        await asyncio.sleep(WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS)
+
+    observed_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+    if before_state == "unknown":
+        return observed_state
+    if observed_state in {"on", "off"} and observed_state != before_state:
+        return observed_state
+
+    for _ in range(WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS):
+        if WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS > 0:
+            await asyncio.sleep(WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS)
+        observed_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+        if observed_state in {"on", "off"} and observed_state != before_state:
+            return observed_state
+
+    return observed_state
+
+
 def _probe_worker_plan_mode_state() -> Literal["on", "off", "unknown"]:
     """探测 Worker 主键盘上的 PLAN MODE 状态。"""
 
@@ -3591,12 +3619,18 @@ def _build_worker_main_keyboard(
     plan_mode_state: Optional[Literal["on", "off", "unknown"]] = None,
     refresh_plan_mode_state: bool = True,
 ) -> ReplyKeyboardMarkup:
-    """Worker 端常驻键盘，提供任务列表与 PLAN MODE 切换入口。"""
+    """Worker 端常驻键盘，提供任务列表与 PLAN MODE 切换入口。
 
-    if plan_mode_state is not None:
+    默认每次渲染都会强探测 tmux 中的实时状态，尽可能保证按钮状态正确。
+    仅当 refresh_plan_mode_state=False 时，才允许使用显式状态或缓存状态。
+    """
+
+    if refresh_plan_mode_state:
+        resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=True)
+    elif plan_mode_state is not None:
         resolved_plan_mode_state = _set_worker_plan_mode_state_cache(plan_mode_state)
     else:
-        resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=refresh_plan_mode_state)
+        resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=False)
     if resolved_plan_mode_state == "on":
         plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_ON
     elif resolved_plan_mode_state == "off":
@@ -10365,27 +10399,24 @@ async def _handle_terminal_snapshot_request(message: Message) -> None:
     lines = TMUX_SNAPSHOT_LINES
     started = time.monotonic()
     # “终端实况”是 PLAN MODE 状态的强校准触发点：优先按本次捕获结果回写缓存。
-    calibrated_plan_mode_state: Literal["on", "off", "unknown"] = "unknown"
 
     try:
         try:
             # 使用线程池执行 tmux 命令，避免阻塞 asyncio 事件循环，影响 watcher 推送。
             raw_output = await asyncio.to_thread(_capture_tmux_recent_lines, lines)
-            calibrated_plan_mode_state = _set_worker_plan_mode_state_cache(
-                _resolve_worker_plan_mode_state_from_output(raw_output)
-            )
+            _set_worker_plan_mode_state_cache(_resolve_worker_plan_mode_state_from_output(raw_output))
         except FileNotFoundError as exc:
             worker_log.warning(
                 "终端实况截取失败，未找到 tmux：%s",
                 exc,
                 extra={"chat": chat_id},
             )
-            calibrated_plan_mode_state = _set_worker_plan_mode_state_cache("unknown")
+            _set_worker_plan_mode_state_cache("unknown")
             await _reply_to_chat(
                 chat_id,
                 "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
                 reply_to=message,
-                reply_markup=_build_worker_main_keyboard(plan_mode_state=calibrated_plan_mode_state),
+                reply_markup=_build_worker_main_keyboard(),
             )
             return
         except subprocess.TimeoutExpired as exc:
@@ -10402,12 +10433,12 @@ async def _handle_terminal_snapshot_request(message: Message) -> None:
                 f"终端实况截取超时（{TMUX_SNAPSHOT_TIMEOUT_SECONDS:.1f} 秒），"
                 "请稍后重试或提高 TMUX_SNAPSHOT_TIMEOUT_SECONDS。"
             )
-            calibrated_plan_mode_state = _set_worker_plan_mode_state_cache("unknown")
+            _set_worker_plan_mode_state_cache("unknown")
             await _reply_to_chat(
                 chat_id,
                 timeout_text,
                 reply_to=message,
-                reply_markup=_build_worker_main_keyboard(plan_mode_state=calibrated_plan_mode_state),
+                reply_markup=_build_worker_main_keyboard(),
             )
             return
         except subprocess.CalledProcessError as exc:
@@ -10416,12 +10447,12 @@ async def _handle_terminal_snapshot_request(message: Message) -> None:
                 exc,
                 extra={"chat": chat_id, "tmux_session": TMUX_SESSION},
             )
-            calibrated_plan_mode_state = _set_worker_plan_mode_state_cache("unknown")
+            _set_worker_plan_mode_state_cache("unknown")
             await _reply_to_chat(
                 chat_id,
                 f"无法读取 tmux 会话 {TMUX_SESSION} 的输出，请确认 worker 已启动。",
                 reply_to=message,
-                reply_markup=_build_worker_main_keyboard(plan_mode_state=calibrated_plan_mode_state),
+                reply_markup=_build_worker_main_keyboard(),
             )
             return
 
@@ -10432,7 +10463,7 @@ async def _handle_terminal_snapshot_request(message: Message) -> None:
                 chat_id,
                 f"{header}\n\n暂无可展示的输出，请稍后再试。",
                 reply_to=message,
-                reply_markup=_build_worker_main_keyboard(plan_mode_state=calibrated_plan_mode_state),
+                reply_markup=_build_worker_main_keyboard(),
             )
             return
 
@@ -10448,11 +10479,12 @@ async def _handle_terminal_snapshot_request(message: Message) -> None:
             },
         )
         try:
+            main_keyboard = _build_worker_main_keyboard()
             await reply_large_text(
                 chat_id,
                 payload,
-                reply_markup=_build_worker_main_keyboard(plan_mode_state=calibrated_plan_mode_state),
-                attachment_reply_markup=_build_worker_main_keyboard(plan_mode_state=calibrated_plan_mode_state),
+                reply_markup=main_keyboard,
+                attachment_reply_markup=main_keyboard,
             )
         except (TelegramNetworkError, TelegramRetryAfter) as exc:
             worker_log.warning(
@@ -10494,7 +10526,6 @@ async def on_tmux_snapshot_button(message: Message) -> None:
 async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
     """处理主键盘 PLAN MODE 切换按钮。"""
 
-    chat_id = message.chat.id
     before_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
 
     try:
@@ -10503,32 +10534,35 @@ async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
         _set_worker_plan_mode_state_cache("unknown")
         await message.answer(
             "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
-            reply_markup=_build_worker_main_keyboard(plan_mode_state="unknown"),
+            reply_markup=_build_worker_main_keyboard(
+                plan_mode_state="unknown",
+                refresh_plan_mode_state=False,
+            ),
         )
         return
     except subprocess.CalledProcessError:
         _set_worker_plan_mode_state_cache("unknown")
         await message.answer(
             f"无法切换 PLAN MODE，请确认 tmux 会话 {TMUX_SESSION} 已启动。",
-            reply_markup=_build_worker_main_keyboard(plan_mode_state="unknown"),
+            reply_markup=_build_worker_main_keyboard(
+                plan_mode_state="unknown",
+                refresh_plan_mode_state=False,
+            ),
         )
         return
 
-    after_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+    after_state = await _refresh_worker_plan_mode_state_after_toggle_async(before_state=before_state)
     state_label = {
         "on": "ON",
         "off": "OFF",
         "unknown": "?",
     }.get(after_state, "?")
 
-    if before_state == "unknown" and after_state == "unknown":
-        summary = "已尝试切换 PLAN MODE，但当前状态仍未知，请先点击“终端实况”确认。"
-    else:
-        summary = f"已切换 PLAN MODE，当前状态：{state_label}"
+    summary = f"主菜单已刷新，当前 PLAN MODE：{state_label}"
 
     await message.answer(
         summary,
-        reply_markup=_build_worker_main_keyboard(plan_mode_state=after_state),
+        reply_markup=_build_worker_main_keyboard(),
     )
 
 
@@ -11128,18 +11162,11 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
 
     if action == PLAN_CONFIRM_ACTION_NO:
         _drop_plan_confirm_session(token)
-        refreshed_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+        await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
         await callback.answer("已保持 Plan 模式")
         with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
             if callback.message is not None:
                 await callback.message.edit_reply_markup(reply_markup=None)
-                await callback.message.answer(
-                    "已保持 Plan 模式，主菜单状态已刷新。",
-                    reply_markup=_build_worker_main_keyboard(
-                        plan_mode_state=refreshed_state,
-                        refresh_plan_mode_state=False,
-                    ),
-                )
         return
 
     if action != PLAN_CONFIRM_ACTION_YES:
@@ -11163,18 +11190,11 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
         return
 
     _drop_plan_confirm_session(token)
-    refreshed_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+    await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
     await callback.answer("已确认并推送到模型")
     with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
         if callback.message is not None:
             await callback.message.edit_reply_markup(reply_markup=None)
-            await callback.message.answer(
-                "已推送到模型，主菜单状态已刷新。",
-                reply_markup=_build_worker_main_keyboard(
-                    plan_mode_state=refreshed_state,
-                    refresh_plan_mode_state=False,
-                ),
-            )
 
 
 @router.callback_query(F.data.startswith(PLAN_DEVELOP_RETRY_CALLBACK_PREFIX))
@@ -13156,13 +13176,9 @@ async def on_task_push_model_choice(message: Message, state: FSMContext) -> None
     resolved = _resolve_reply_choice(raw_text, options=[PUSH_MODE_PLAN, PUSH_MODE_YOLO, "取消"])
     if resolved == "取消" or _is_cancel_message(raw_text):
         await state.clear()
-        refreshed_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
         await message.answer(
             "已取消推送到模型。",
-            reply_markup=_build_worker_main_keyboard(
-                plan_mode_state=refreshed_state,
-                refresh_plan_mode_state=False,
-            ),
+            reply_markup=_build_worker_main_keyboard(),
         )
         return
 
@@ -15060,7 +15076,6 @@ async def on_media_message(message: Message) -> None:
 async def on_start(m: Message):
     # 首次收到消息时自动记录 chat_id 到 state 文件
     _auto_record_chat_id(m.chat.id)
-    plan_mode_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
 
     await m.answer(
         (
@@ -15069,10 +15084,7 @@ async def on_start(m: Message):
             "或使用任务功能来组织需求与执行记录。\n\n"
             "主菜单已准备好，祝你使用愉快！"
         ),
-        reply_markup=_build_worker_main_keyboard(
-            plan_mode_state=plan_mode_state,
-            refresh_plan_mode_state=False,
-        ),
+        reply_markup=_build_worker_main_keyboard(),
     )
     worker_log.info("收到 /start，chat_id=%s", m.chat.id, extra=_session_extra())
     if ENV_ISSUES:

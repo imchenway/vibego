@@ -216,8 +216,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已确认并推送到模型", False)
-    assert callback.message.answers
-    assert callback.message.answers[-1][0] == "已推送到模型，主菜单状态已刷新。"
+    assert callback.message.answers == []
 
 
 def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
@@ -261,8 +260,7 @@ def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已保持 Plan 模式", False)
-    assert callback.message.answers
-    assert callback.message.answers[-1][0] == "已保持 Plan 模式，主菜单状态已刷新。"
+    assert callback.message.answers == []
 
 
 def test_plan_develop_retry_callback_dispatches_implement_prompt_without_session(

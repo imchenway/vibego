@@ -323,6 +323,15 @@ def test_worker_main_keyboard_uses_cached_plan_mode_when_refresh_disabled(monkey
     assert markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON
 
 
+def test_worker_main_keyboard_force_probe_even_with_explicit_state(monkeypatch):
+    bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
+
+    markup = bot._build_worker_main_keyboard(plan_mode_state="on")
+    assert markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF
+    assert bot._get_worker_plan_mode_state_cache() == "off"
+
+
 def test_refresh_worker_plan_mode_state_cache_updates_cache(monkeypatch):
     bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
@@ -331,10 +340,25 @@ def test_refresh_worker_plan_mode_state_cache_updates_cache(monkeypatch):
     assert bot._get_worker_plan_mode_state_cache() == "off"
 
 
+def test_refresh_worker_plan_mode_state_after_toggle_retries_until_changed(monkeypatch):
+    states = iter(["off", "off", "on"])
+
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS", 2)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: next(states))
+
+    refreshed = asyncio.run(bot._refresh_worker_plan_mode_state_after_toggle_async(before_state="off"))
+    assert refreshed == "on"
+
+
 def test_worker_plan_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
-    states = iter(["off", "on"])
+    states = iter(["off", "on", "on"])
     sent_keys = []
 
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS", 0)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS", 0.0)
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: next(states))
     monkeypatch.setattr(
         bot,
@@ -348,16 +372,19 @@ def test_worker_plan_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
     assert sent_keys == [(bot.TMUX_SESSION, bot.WORKER_PLAN_MODE_TOGGLE_KEY)]
     assert len(message._answers) == 1
     text, kwargs = message._answers[0]
-    assert "当前状态：ON" in text
+    assert "当前 PLAN MODE：ON" in text
     reply_markup = kwargs.get("reply_markup")
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
     assert reply_markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON
 
 
 def test_worker_plan_mode_button_unknown_still_attempts_toggle(monkeypatch):
-    states = iter(["unknown", "unknown"])
+    states = iter(["unknown", "unknown", "unknown"])
     sent_keys = []
 
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS", 0)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS", 0.0)
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: next(states))
     monkeypatch.setattr(
         bot,
@@ -371,7 +398,7 @@ def test_worker_plan_mode_button_unknown_still_attempts_toggle(monkeypatch):
     assert sent_keys == [(bot.TMUX_SESSION, bot.WORKER_PLAN_MODE_TOGGLE_KEY)]
     assert len(message._answers) == 1
     text, kwargs = message._answers[0]
-    assert "状态仍未知" in text
+    assert "当前 PLAN MODE：?" in text
     reply_markup = kwargs.get("reply_markup")
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
     assert reply_markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN
