@@ -299,6 +299,30 @@ def test_probe_worker_plan_mode_state_returns_off_when_no_mode_marker(monkeypatc
     assert bot._probe_worker_plan_mode_state() == "off"
 
 
+def test_probe_worker_plan_mode_state_ignores_non_status_plan_mode_phrase(monkeypatch):
+    monkeypatch.setattr(bot, "tmux_bin", lambda: "tmux")
+    monkeypatch.setattr(bot, "_tmux_cmd", lambda *args: list(args))
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: "请点击按钮：No, stay in Plan mode\n这里是普通会话内容",
+    )
+
+    assert bot._probe_worker_plan_mode_state() == "off"
+
+
+def test_probe_worker_plan_mode_state_detects_status_line_plan_mode(monkeypatch):
+    monkeypatch.setattr(bot, "tmux_bin", lambda: "tmux")
+    monkeypatch.setattr(bot, "_tmux_cmd", lambda *args: list(args))
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: "普通日志行\nmodel · xhigh · ~/hypha/mall · 80% · Plan mode\n",
+    )
+
+    assert bot._probe_worker_plan_mode_state() == "on"
+
+
 def test_probe_worker_plan_mode_state_returns_unknown_on_tmux_error(monkeypatch):
     monkeypatch.setattr(bot, "tmux_bin", lambda: "tmux")
     monkeypatch.setattr(bot, "_tmux_cmd", lambda *args: list(args))
@@ -353,7 +377,7 @@ def test_refresh_worker_plan_mode_state_after_toggle_retries_until_changed(monke
 
 
 def test_worker_plan_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
-    states = iter(["off", "on", "on"])
+    states = iter(["off", "on"])
     sent_keys = []
 
     monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS", 0.0)

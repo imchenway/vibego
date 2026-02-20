@@ -3466,6 +3466,11 @@ WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS = max(_env_float("WORKER_PLAN_MODE_PROBE_
 WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS = max(_env_float("WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS", 0.12), 0.0)
 WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS = max(_env_int("WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS", 3), 0)
 WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS = max(_env_float("WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS", 0.12), 0.0)
+WORKER_PLAN_MODE_STATUS_TAIL_LINES = max(_env_int("WORKER_PLAN_MODE_STATUS_TAIL_LINES", 8), 1)
+WORKER_PLAN_MODE_STATUS_LINE_RE = re.compile(
+    r"\b(?P<mode>plan|default)\s+mode(?:\s*\(shift\+tab\s+to\s+cycle\))?\s*$",
+    re.IGNORECASE,
+)
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 # Worker 主菜单 PLAN MODE 状态缓存（按 tmux session 维度）。
 WORKER_PLAN_MODE_STATE_CACHE: Dict[str, Literal["on", "off", "unknown"]] = {}
@@ -3519,9 +3524,27 @@ def _worker_plan_mode_cache_key() -> str:
 def _resolve_worker_plan_mode_state_from_output(raw_output: str) -> Literal["on", "off"]:
     """根据 tmux 输出文本解析 Worker 侧 PLAN MODE 状态。"""
 
-    mode = _extract_terminal_collaboration_mode(raw_output)
-    if mode == "plan":
-        return "on"
+    text = normalize_newlines(raw_output or "")
+    text = strip_ansi(text)
+    lines = [(line or "").strip() for line in text.splitlines() if (line or "").strip()]
+    if not lines:
+        return "off"
+
+    # 仅扫描尾部若干行，避免把历史消息中的“Plan mode”误判为当前状态。
+    tail_lines = lines[-WORKER_PLAN_MODE_STATUS_TAIL_LINES:]
+    for line in reversed(tail_lines):
+        match = WORKER_PLAN_MODE_STATUS_LINE_RE.search(line)
+        if not match:
+            continue
+        lowered = line.lower()
+        starts_with_mode = lowered.startswith("plan mode") or lowered.startswith("default mode")
+        has_status_hint = ("·" in line) or bool(re.search(r"\b\d{1,3}%\b", lowered))
+        if not (starts_with_mode or has_status_hint):
+            continue
+        mode = (match.group("mode") or "").strip().lower()
+        if mode == "plan":
+            return "on"
+        return "off"
     return "off"
 
 
@@ -10562,7 +10585,10 @@ async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
 
     await message.answer(
         summary,
-        reply_markup=_build_worker_main_keyboard(),
+        reply_markup=_build_worker_main_keyboard(
+            plan_mode_state=after_state,
+            refresh_plan_mode_state=False,
+        ),
     )
 
 
