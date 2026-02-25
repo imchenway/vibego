@@ -194,7 +194,7 @@ _PARSE_MODE_CANDIDATES: Dict[str, Optional[ParseMode]] = {
 }
 
 # 阶段提示统一追加 agents.md 信息，确保推送记录要求一致。
-AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/TASK_0001）。以下是需要执行的任务描述以及其对应的执行历史摘要："
+AGENTS_PHASE_SUFFIX = "，最后列出当前所触发的 agents.md 的阶段、任务名称、任务编码（例：/VG_TASK_0001）。以下是需要执行的任务描述以及其对应的执行历史摘要："
 # 推送到模型的阶段提示（vibe 与测试），合并统一后缀确保输出一致。
 VIBE_PHASE_PROMPT = f"进入vibe阶段{AGENTS_PHASE_SUFFIX}"
 TEST_PHASE_PROMPT = f"进入测试阶段{AGENTS_PHASE_SUFFIX}"
@@ -737,9 +737,9 @@ def _normalize_legacy_markdown(text: str) -> str:
 
 _LEGACY_FENCE_LINE_RE = re.compile(r"^(\s*)```.*$")
 _LEGACY_STAR_BULLET_RE = re.compile(r"^(\s*)\*\s+")
-_TASK_CODE_TOKEN_RE = re.compile(r"(?<![\w`])/?TASK_\d{4,}(?![\w`])", re.IGNORECASE)
+_TASK_CODE_TOKEN_RE = re.compile(r"(?<![\w`])/?(?:VG_TASK|TASK)_\d{4,}(?![\w`])", re.IGNORECASE)
 _TASK_SUMMARY_REQUEST_TOKEN_RE = re.compile(
-    r"(?<![\w`])/?task_summary_request_TASK_\d{4,}(?![\w`])",
+    r"(?<![\w`])/?task_summary_request_(?:VG_TASK|TASK)_\d{4,}(?![\w`])",
     re.IGNORECASE,
 )
 
@@ -3510,8 +3510,8 @@ class WxPreviewCandidate:
     app_dir: Path
     source: Literal["current", "child"]
 
-TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
-TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
+TASK_ID_VALID_PATTERN = re.compile(r"^VG_TASK_[A-Z0-9_]+$")
+TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 VG_TASK_0001"
 
 
 def _worker_plan_mode_cache_key() -> str:
@@ -5397,7 +5397,7 @@ def _is_cancel_message(value: Optional[str]) -> bool:
 
 
 _MARKDOWN_ESCAPE_RE = re.compile(r"([_*\[\]()~`>#+=|{}.!])")
-TASK_REFERENCE_PATTERN = re.compile(r"/?TASK[_]?\d{4,}")
+TASK_REFERENCE_PATTERN = re.compile(r"/?VG_TASK_\d{4,}")
 
 
 def _escape_markdown_text(value: Optional[str]) -> str:
@@ -5775,9 +5775,7 @@ def _normalize_task_id(value: Optional[str]) -> Optional[str]:
         candidate = candidate.split("@", 1)[0]
     if candidate.lower() in COMMAND_KEYWORDS:
         return None
-    normalized = TaskService._convert_task_id_token(candidate.upper())
-    if not normalized or not normalized.startswith("TASK_"):
-        return None
+    normalized = candidate.upper()
     if not TASK_ID_VALID_PATTERN.fullmatch(normalized):
         return None
     return normalized
@@ -10138,7 +10136,7 @@ async def on_help_command(message: Message) -> None:
         "- /task_show — 查看某个任务详情\n"
         "- /task_update — 快速更新任务字段\n"
         "- /task_note — 添加任务备注\n"
-        "- /attach TASK_0001 — 为任务上传附件\n"
+        "- /attach VG_TASK_0001 — 为任务上传附件\n"
         "- /commands — 管理自定义命令（新增/执行/编辑）\n"
         "- /task_delete — 归档或恢复任务\n"
         "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
@@ -10153,11 +10151,11 @@ async def on_tasks_help(message: Message) -> None:
         "*任务管理命令*\n"
         "- /task_new 标题 | type=需求 — 创建任务\n"
         "- /task_list [status=test] [limit=10] [offset=0] — 列出任务\n"
-        "- /task_show TASK_0001 — 查看详情\n"
-        "- /task_update TASK_0001 status=test | priority=2 | type=缺陷 — 更新字段\n"
-        "- /task_note TASK_0001 备注内容 | type=research — 添加备注\n"
-        "- /attach TASK_0001 — 上传附件并绑定\n"
-        "- /task_delete TASK_0001 — 归档任务（再次执行可恢复）\n"
+        "- /task_show VG_TASK_0001 — 查看详情\n"
+        "- /task_update VG_TASK_0001 status=test | priority=2 | type=缺陷 — 更新字段\n"
+        "- /task_note VG_TASK_0001 备注内容 | type=research — 添加备注\n"
+        "- /attach VG_TASK_0001 — 上传附件并绑定\n"
+        "- /task_delete VG_TASK_0001 — 归档任务（再次执行可恢复）\n"
         "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
         "建议：使用 `/task_new`、`/task_show` 等命令触发后按按钮完成后续步骤。"
     )
@@ -12348,7 +12346,7 @@ async def on_task_list_search_keyword(message: Message, state: FSMContext) -> No
 async def on_task_show(message: Message) -> None:
     args = _extract_command_args(message.text)
     if not args:
-        await _answer_with_markdown(message, "用法：/task_show TASK_0001")
+        await _answer_with_markdown(message, "用法：/task_show VG_TASK_0001")
         return
     task_id = _normalize_task_id(args)
     if not task_id:
@@ -12357,9 +12355,9 @@ async def on_task_show(message: Message) -> None:
     await _reply_task_detail_message(message, task_id)
 
 
-@router.message(F.text.regexp(r"^/TASK_[A-Z0-9_]+(?:@[\w_]+)?(?:\s|$)"))
+@router.message(F.text.regexp(r"^/VG_TASK_[A-Z0-9_]+(?:@[\w_]+)?(?:\s|$)"))
 async def on_task_quick_command(message: Message) -> None:
-    """处理直接使用 /TASK_XXXX 调用的快捷查询命令。"""
+    """处理直接使用 /VG_TASK_XXXX 调用的快捷查询命令。"""
     raw_text = (message.text or "").strip()
     if not raw_text:
         await _answer_with_markdown(message, TASK_ID_USAGE_TIP)
@@ -12408,7 +12406,7 @@ async def on_task_new(message: Message, state: FSMContext) -> None:
                 if not normalized_related:
                     await _answer_with_markdown(
                         message,
-                        "关联任务 ID 无效，请使用 related=TASK_0001（或 rel=TASK_0001）",
+                        "关联任务 ID 无效，请使用 related=VG_TASK_0001（或 rel=VG_TASK_0001）",
                     )
                     return
                 related_task = await TASK_SERVICE.get_task(normalized_related)
@@ -12525,7 +12523,7 @@ async def _build_related_task_select_view(*, page: int) -> tuple[str, InlineKeyb
     lines = [
         "请选择关联前置任务（按更新时间倒序）：",
         f"页码 {normalized_page}/{total_pages} · 每页 {limit} 条 · 总数 {total}",
-        "可点击按钮选择，或直接输入 TASK_0001（也支持 /TASK_0001）；也可输入 1 跳过、2 取消创建任务（或在菜单栏点击）。",
+        "可点击按钮选择，或直接输入 VG_TASK_0001（也支持 /VG_TASK_0001）；也可输入 1 跳过、2 取消创建任务（或在菜单栏点击）。",
     ]
     if not tasks:
         lines.append("当前没有可选任务，可输入 1 跳过继续创建缺陷任务（或在菜单栏点击“跳过”）。")
@@ -12711,7 +12709,7 @@ async def on_task_create_related_task_text(message: Message, state: FSMContext) 
         data = await state.get_data()
         page = int(data.get("related_page", 1) or 1)
         text, markup = await _build_related_task_select_view(page=page)
-        await message.answer("任务编号无效，请点击按钮选择或输入 TASK_0001；也可输入 1 跳过、2 取消创建任务。")
+        await message.answer("任务编号无效，请点击按钮选择或输入 VG_TASK_0001；也可输入 1 跳过、2 取消创建任务。")
         await _answer_with_markdown(message, text, reply_markup=markup)
         return
     task = await TASK_SERVICE.get_task(normalized_task_id)
@@ -13612,7 +13610,7 @@ async def on_task_note(message: Message, state: FSMContext) -> None:
         parts = body.split(" ", 1)
         task_id = parts[0].strip() if parts and parts[0].strip() else extra.get("id")
         if not task_id:
-            await _answer_with_markdown(message, "请提供任务 ID，例如：/task_note TASK_0001 内容")
+            await _answer_with_markdown(message, "请提供任务 ID，例如：/task_note VG_TASK_0001 内容")
             return
         normalized_task_id = _normalize_task_id(task_id)
         if not normalized_task_id:
@@ -13705,7 +13703,7 @@ async def _start_attachment_collection(
 async def on_attach_command(message: Message, state: FSMContext) -> None:
     args = _extract_command_args(message.text)
     if not args:
-        await _answer_with_markdown(message, "请提供任务 ID，例如：/attach TASK_0001")
+        await _answer_with_markdown(message, "请提供任务 ID，例如：/attach VG_TASK_0001")
         return
     normalized_task_id = _normalize_task_id(args)
     if not normalized_task_id:
@@ -13794,7 +13792,7 @@ async def on_task_update(message: Message) -> None:
     if not args:
         await _answer_with_markdown(
             message,
-            "用法：/task_update TASK_0001 status=test | priority=2 | description=调研内容",
+            "用法：/task_update VG_TASK_0001 status=test | priority=2 | description=调研内容",
         )
         return
     body, extra = parse_structured_text(args)
@@ -13871,7 +13869,7 @@ async def on_task_update(message: Message) -> None:
 async def on_task_delete(message: Message) -> None:
     args = _extract_command_args(message.text)
     if not args:
-        await _answer_with_markdown(message, "用法：/task_delete TASK_0001 [restore=yes]")
+        await _answer_with_markdown(message, "用法：/task_delete VG_TASK_0001 [restore=yes]")
         return
     parts = args.split()
     task_id_raw = parts[0].strip()
@@ -13996,7 +13994,7 @@ async def on_task_summary_command(message: Message) -> None:
 
     raw_text = (message.text or "").strip()
     if not raw_text:
-        await message.answer("请提供任务 ID，例如：/task_summary_request_TASK_0001")
+        await message.answer("请提供任务 ID，例如：/task_summary_request_VG_TASK_0001")
         return
     token = raw_text.split()[0]
     command_part, _, _bot = token.partition("@")
@@ -14006,11 +14004,11 @@ async def on_task_summary_command(message: Message) -> None:
         None,
     )
     if prefix is None:
-        await message.answer("请提供任务 ID，例如：/task_summary_request_TASK_0001")
+        await message.answer("请提供任务 ID，例如：/task_summary_request_VG_TASK_0001")
         return
     task_segment = command_part[len(prefix) :].strip()
     if not task_segment:
-        await message.answer("请提供任务 ID，例如：/task_summary_request_TASK_0001")
+        await message.answer("请提供任务 ID，例如：/task_summary_request_VG_TASK_0001")
         return
     normalized_task_id = _normalize_task_id(task_segment)
     if not normalized_task_id:

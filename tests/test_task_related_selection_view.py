@@ -54,11 +54,11 @@ def test_related_task_select_view_sorts_by_updated_at_desc_and_paginates(monkeyp
         and row[0].callback_data.startswith(f"{bot.TASK_RELATED_SELECT_PREFIX}:")
     ]
     assert selected_rows_1 == [
-        "TASK_0006",
-        "TASK_0005",
-        "TASK_0004",
-        "TASK_0003",
-        "TASK_0002",
+        "VG_TASK_0006",
+        "VG_TASK_0005",
+        "VG_TASK_0004",
+        "VG_TASK_0003",
+        "VG_TASK_0002",
     ]
 
     nav_buttons_1 = [
@@ -89,7 +89,7 @@ def test_related_task_select_view_sorts_by_updated_at_desc_and_paginates(monkeyp
         and row[0].callback_data
         and row[0].callback_data.startswith(f"{bot.TASK_RELATED_SELECT_PREFIX}:")
     ]
-    assert selected_rows_2 == ["TASK_0001"]
+    assert selected_rows_2 == ["VG_TASK_0001"]
 
     nav_buttons_2 = [
         button.callback_data

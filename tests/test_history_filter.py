@@ -10,7 +10,7 @@ def _make_task() -> TaskRecord:
     """构造简易任务对象。"""
 
     return TaskRecord(
-        id="TASK_0001",
+        id="VG_TASK_0001",
         project_slug="demo",
         title="测试任务",
         status="research",
@@ -20,7 +20,7 @@ def _make_task() -> TaskRecord:
         due_date=None,
         description="",
         parent_id=None,
-        root_id="TASK_0001",
+        root_id="VG_TASK_0001",
         depth=0,
         lineage="0001",
         archived=False,
@@ -33,7 +33,7 @@ def _make_history(event_type: str, field: str, *, new_value: str = "-", payload:
     payload_text = json.dumps(payload, ensure_ascii=False) if payload is not None else None
     return TaskHistoryRecord(
         id=1,
-        task_id="TASK_0001",
+        task_id="VG_TASK_0001",
         field=field,
         old_value=None,
         new_value=new_value,
@@ -53,7 +53,7 @@ def test_history_context_filters_attachment_events(monkeypatch):
 
     monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
 
-    history_text, count = asyncio.run(bot._build_history_context_for_model("TASK_0001"))
+    history_text, count = asyncio.run(bot._build_history_context_for_model("VG_TASK_0001"))
 
     assert count == 1
     assert "attachment" not in history_text
@@ -78,7 +78,7 @@ def test_render_history_skips_attachment_events(monkeypatch):
     monkeypatch.setattr(bot.TASK_SERVICE, "list_notes", fake_list_notes)
     monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
 
-    text, _, _, _ = asyncio.run(bot._render_task_history("TASK_0001", page=0))
+    text, _, _, _ = asyncio.run(bot._render_task_history("VG_TASK_0001", page=0))
 
     assert "attachment" not in text
     assert "历史正文" in text

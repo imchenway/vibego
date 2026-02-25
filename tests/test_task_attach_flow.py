@@ -76,7 +76,7 @@ def test_attach_media_group_binds_once(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
 
     task = bot.TaskRecord(
-        id="TASK_0001",
+        id="VG_TASK_0001",
         project_slug="demo",
         title="测试",
         status="research",
@@ -86,14 +86,14 @@ def test_attach_media_group_binds_once(monkeypatch, tmp_path):
         due_date=None,
         description=None,
         parent_id=None,
-        root_id="TASK_0001",
+        root_id="VG_TASK_0001",
         depth=0,
         lineage="0001",
         archived=False,
     )
 
     async def fake_get_task(task_id: str):
-        return task if task_id == "TASK_0001" else None
+        return task if task_id == "VG_TASK_0001" else None
 
     async def fake_render(task_id: str):
         return "detail", ReplyKeyboardMarkup(keyboard=[])
@@ -148,7 +148,7 @@ def test_attach_media_group_binds_once(monkeypatch, tmp_path):
 
     state = DummyState(
         data={
-            "task_id": "TASK_0001",
+            "task_id": "VG_TASK_0001",
             "processed_media_groups": [],
         },
         state=TaskAttachmentStates.waiting_files,

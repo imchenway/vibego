@@ -88,7 +88,7 @@ def test_task_list_view_contains_create_button(monkeypatch):
 
 def test_task_list_view_renders_entries_without_task_type_icons(monkeypatch):
     task = TaskRecord(
-        id="TASK_9001",
+        id="VG_TASK_9001",
         project_slug="demo",
         title="修复登录问题",
         status="research",
@@ -98,7 +98,7 @@ def test_task_list_view_renders_entries_without_task_type_icons(monkeypatch):
         due_date=None,
         description="",
         parent_id=None,
-        root_id="TASK_9001",
+        root_id="VG_TASK_9001",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",
@@ -171,7 +171,7 @@ def test_task_list_view_sorts_by_updated_at_desc(monkeypatch, tmp_path):
         )
 
     # 更新最早创建的任务，使其 updated_at 最新，应在列表中置顶。
-    asyncio.run(service.update_task("TASK_0001", actor="tester", title="任务1（已更新）"))
+    asyncio.run(service.update_task("VG_TASK_0001", actor="tester", title="任务1（已更新）"))
 
     _text, markup = asyncio.run(bot._build_task_list_view(status=None, page=1, limit=10))
     task_ids = [
@@ -181,12 +181,12 @@ def test_task_list_view_sorts_by_updated_at_desc(monkeypatch, tmp_path):
         if button.callback_data and button.callback_data.startswith("task:detail:")
     ]
     assert task_ids[:6] == [
-        "TASK_0001",
-        "TASK_0006",
-        "TASK_0005",
-        "TASK_0004",
-        "TASK_0003",
-        "TASK_0002",
+        "VG_TASK_0001",
+        "VG_TASK_0006",
+        "VG_TASK_0005",
+        "VG_TASK_0004",
+        "VG_TASK_0003",
+        "VG_TASK_0002",
     ]
 
 
@@ -263,7 +263,7 @@ def test_worker_create_button_triggers_task_new(monkeypatch):
 def test_compose_task_button_label_truncates_but_keeps_status():
     long_title = "这是一个非常长的任务标题，用于验证状态图标仍然保留在按钮末尾，不会被截断或丢失"
     task = TaskRecord(
-        id="TASK_LONG",
+        id="VG_TASK_LONG",
         project_slug="demo",
         title=long_title,
         status="test",
@@ -273,7 +273,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
         due_date=None,
         description="",
         parent_id=None,
-        root_id="TASK_LONG",
+        root_id="VG_TASK_LONG",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",
@@ -400,7 +400,7 @@ def test_compose_task_button_label_truncates_but_keeps_status():
 )
 def test_compose_task_button_label_various_cases(case):
     task = TaskRecord(
-        id=f"TASK_CASE_{case['name']}",
+        id=f"VG_TASK_CASE_{case['name']}",
         project_slug="demo",
         title=case["title"],
         status=case["status"],
@@ -410,7 +410,7 @@ def test_compose_task_button_label_various_cases(case):
         due_date=None,
         description="",
         parent_id=None,
-        root_id=f"TASK_CASE_{case['name']}",
+        root_id=f"VG_TASK_CASE_{case['name']}",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",
@@ -443,7 +443,7 @@ def test_task_list_search_flow(monkeypatch):
     state, _storage = make_state(message)
 
     task = TaskRecord(
-        id="TASK_0001",
+        id="VG_TASK_0001",
         project_slug="demo",
         title="修复登录问题",
         status="research",
@@ -453,7 +453,7 @@ def test_task_list_search_flow(monkeypatch):
         due_date=None,
         description="登录接口异常",
         parent_id=None,
-        root_id="TASK_0001",
+        root_id="VG_TASK_0001",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",
@@ -511,7 +511,7 @@ def test_compose_task_button_label_does_not_include_task_type_icons():
     """列表按钮不应包含任务类型图标（📌🐞🛠️⚠️/⚪），避免列表信息噪声。"""
     for task_type in [*bot.TASK_TYPE_EMOJIS.keys(), None]:
         task = TaskRecord(
-            id=f"TASK_{task_type or 'none'}",
+            id=f"VG_TASK_{task_type or 'none'}",
             project_slug="demo",
             title="按钮标题",
             status="research",
@@ -521,7 +521,7 @@ def test_compose_task_button_label_does_not_include_task_type_icons():
             due_date=None,
             description="",
             parent_id=None,
-            root_id=f"TASK_{task_type or 'none'}",
+            root_id=f"VG_TASK_{task_type or 'none'}",
             depth=0,
             lineage="0001",
             created_at="2025-01-01T00:00:00+08:00",
@@ -615,7 +615,7 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
 
     # 创建包含特殊字符的任务
     task = TaskRecord(
-        id="TASK_0001",
+        id="VG_TASK_0001",
         project_slug="demo",
         title="修复登录-问题 (v2.0) [紧急]",
         status="research",
@@ -624,8 +624,8 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
         tags=(),
         due_date=None,
         description="登录接口异常! 需要修复 test_case.example",
-        parent_id="TASK_0000",
-        root_id="TASK_0001",
+        parent_id="VG_TASK_0000",
+        root_id="VG_TASK_0001",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",
@@ -639,7 +639,7 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
     # 后续由 _prepare_model_payload() 统一转义
     assert "修复登录-问题 (v2.0) [紧急]" in detail_text
     assert "登录接口异常! 需要修复 test_case.example" in detail_text
-    assert "TASK_0000" in detail_text
+    assert "VG_TASK_0000" in detail_text
     assert "📊 状态：" not in detail_text
     expected_type = bot._strip_task_type_emoji(bot._format_task_type("defect"))
     assert f"📂 类型：{expected_type}" in detail_text
@@ -658,7 +658,7 @@ def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
     monkeypatch.setattr(bot, "_IS_MARKDOWN", True)
 
     task = TaskRecord(
-        id="TASK_0002",
+        id="VG_TASK_0002",
         project_slug="demo",
         title="修复_登录问题",
         status="test",
@@ -668,7 +668,7 @@ def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
         due_date=None,
         description="测试*描述*",
         parent_id=None,
-        root_id="TASK_0002",
+        root_id="VG_TASK_0002",
         depth=0,
         lineage="0002",
         created_at="2025-01-01T00:00:00+08:00",
@@ -702,7 +702,7 @@ def test_format_task_detail_various_special_chars(monkeypatch, title, status, ta
     monkeypatch.setattr(bot, "_IS_MARKDOWN", False)
 
     task = TaskRecord(
-        id="TASK_TEST",
+        id="VG_TASK_TEST",
         project_slug="demo",
         title=title,
         status=status,
@@ -712,7 +712,7 @@ def test_format_task_detail_various_special_chars(monkeypatch, title, status, ta
         due_date=None,
         description=description,
         parent_id=None,
-        root_id="TASK_TEST",
+        root_id="VG_TASK_TEST",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",

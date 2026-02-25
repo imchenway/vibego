@@ -21,7 +21,8 @@ from .models import (
     shanghai_now_iso,
 )
 
-TASK_PREFIX = "TASK_"
+VIBEGO_TASK_PREFIX = "VG_TASK_"
+VIBEGO_TASK_ID_VALID_PATTERN = re.compile(r"^VG_TASK_[A-Z0-9_]+$")
 DEFAULT_LIMIT = 10
 
 
@@ -280,103 +281,9 @@ class TaskService:
             )
 
     async def _migrate_task_ids_to_underscore(self, db: aiosqlite.Connection) -> None:
-        """将历史任务 ID 的连字符/点号改写为下划线格式，保障 Telegram 命令可点击。"""
+        """历史任务 ID 迁移已冻结：不再自动改写旧数据，避免占用与回溯语义变化。"""
 
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            """
-            SELECT id FROM tasks
-            WHERE project_slug = ?
-              AND (
-                  instr(id, '-') > 0
-                  OR instr(id, '.') > 0
-                  OR (substr(id, 1, 4) = 'TASK' AND substr(id, 5, 1) != '_')
-              )
-            LIMIT 1
-            """,
-            (self.project_slug,),
-        ) as cursor:
-            legacy_row = await cursor.fetchone()
-        if not legacy_row:
-            return
-
-        logger.info("检测到旧版任务 ID，开始迁移: project=%s", self.project_slug)
-        await db.execute("PRAGMA foreign_keys = OFF")
-        await db.execute("PRAGMA defer_foreign_keys = ON")
-        mapping: Dict[str, str] = {}
-        try:
-            async with db.execute(
-                """
-                SELECT id FROM tasks
-                WHERE project_slug = ?
-                ORDER BY LENGTH(id) DESC
-                """,
-                (self.project_slug,),
-            ) as cursor:
-                rows = await cursor.fetchall()
-
-            existing_ids = {row["id"] for row in rows}
-
-            for row in rows:
-                old_id = row["id"]
-                new_id = self._canonical_task_id(old_id)
-                if new_id == old_id:
-                    continue
-                if new_id is None:
-                    logger.error(
-                        "任务 ID 迁移检测到无法规范化的值: project=%s value=%s",
-                        self.project_slug,
-                        old_id,
-                    )
-                    raise ValueError("任务 ID 迁移失败：存在无法规范化的 ID")
-                if new_id != old_id and new_id in existing_ids:
-                    logger.error(
-                        "任务 ID 迁移检测到潜在冲突: project=%s old=%s new=%s",
-                        self.project_slug,
-                        old_id,
-                        new_id,
-                    )
-                    raise ValueError("任务 ID 迁移冲突：目标 ID 已存在")
-                if new_id in mapping.values() or new_id in mapping:
-                    logger.error(
-                        "任务 ID 迁移检测到冲突: project=%s old=%s new=%s",
-                        self.project_slug,
-                        old_id,
-                        new_id,
-                    )
-                    raise ValueError("任务 ID 迁移冲突")
-                mapping[old_id] = new_id
-
-            if not mapping:
-                return
-
-            await db.executemany(
-                "UPDATE tasks SET id = ? WHERE id = ?",
-                [(new_id, old_id) for old_id, new_id in mapping.items()],
-            )
-            await db.executemany(
-                "UPDATE tasks SET parent_id = ? WHERE parent_id = ?",
-                [(new_id, old_id) for old_id, new_id in mapping.items()],
-            )
-            await db.executemany(
-                "UPDATE tasks SET root_id = ? WHERE root_id = ?",
-                [(new_id, old_id) for old_id, new_id in mapping.items()],
-            )
-            for table in ("task_notes", "task_history"):
-                await db.executemany(
-                    f"UPDATE {table} SET task_id = ? WHERE task_id = ?",
-                    [(new_id, old_id) for old_id, new_id in mapping.items()],
-                )
-        finally:
-            await db.execute("PRAGMA foreign_keys = ON")
-            await db.execute("PRAGMA defer_foreign_keys = OFF")
-
-        self._write_id_migration_report(mapping)
-        logger.info(
-            "任务 ID 迁移完成: project=%s changed=%s",
-            self.project_slug,
-            len(mapping),
-        )
+        return
 
     async def _archive_legacy_child_tasks(self, db: aiosqlite.Connection) -> None:
         """归档遗留的子任务，防止其继续出现在任务列表中。"""
@@ -448,8 +355,8 @@ class TaskService:
                 db.row_factory = aiosqlite.Row
                 await db.execute("PRAGMA foreign_keys = ON")
                 await db.execute("BEGIN IMMEDIATE")
-                root_seq = await self._next_root_sequence(db)
-                task_id = f"{TASK_PREFIX}{root_seq:04d}"
+                root_seq = await self._next_root_sequence(db, task_prefix=VIBEGO_TASK_PREFIX)
+                task_id = f"{VIBEGO_TASK_PREFIX}{root_seq:04d}"
                 lineage = f"{root_seq:04d}"
                 now = shanghai_now_iso()
                 tags_json = json.dumps(list(tags)) if tags else "[]"
@@ -1024,29 +931,25 @@ class TaskService:
 
     @staticmethod
     def _convert_task_id_token(value: Optional[str]) -> Optional[str]:
-        """统一任务 ID 的分隔符，兼容历史格式。"""
+        """将任务 ID 规范为 Vibego 新前缀格式；不再做自动纠错。"""
 
         if value is None:
             return None
-        token = value.replace("-", "_").replace(".", "_")
-        token = re.sub(r"_+", "_", token)
-        if token.startswith("TASK"):
-            suffix = token[4:]
-            if suffix and not suffix.startswith("_"):
-                # 旧格式 TASK0001/TASK0001_1 需要补下划线
-                token = f"TASK_{suffix}"
-            else:
-                token = f"TASK{suffix}"
+        token = value.strip().upper()
+        if not token:
+            return None
+        if not VIBEGO_TASK_ID_VALID_PATTERN.fullmatch(token):
+            return None
         return token
 
     def _canonical_task_id(self, value: Optional[str]) -> Optional[str]:
-        """将外部传入的任务 ID 规范化为统一格式。"""
+        """将外部传入的任务 ID 规范化为 Vibego 任务编码。"""
 
         if value is None:
             return None
         token = value.strip()
         if not token:
-            return token
+            return None
         token = token.upper()
         return self._convert_task_id_token(token)
 
@@ -1090,12 +993,15 @@ class TaskService:
         ) as cursor:
             return await cursor.fetchone()
 
-    async def _next_root_sequence(self, db: aiosqlite.Connection) -> int:
-        """自增并返回 root 任务序列号。"""
+    async def _next_root_sequence(self, db: aiosqlite.Connection, *, task_prefix: str) -> int:
+        """按前缀维度自增并返回 root 任务序列号。"""
+
+        # 序列按“项目 + 前缀”隔离，保证 TASK_* 与 VG_TASK_* 互不影响。
+        sequence_scope = f"{self.project_slug}::{task_prefix}"
 
         async with db.execute(
             "SELECT last_root FROM task_sequences WHERE project_slug = ?",
-            (self.project_slug,),
+            (sequence_scope,),
         ) as cursor:
             row = await cursor.fetchone()
         if row:
@@ -1108,7 +1014,7 @@ class TaskService:
             VALUES(?, ?)
             ON CONFLICT(project_slug) DO UPDATE SET last_root = excluded.last_root
             """,
-            (self.project_slug, new_value),
+            (sequence_scope, new_value),
         )
         return new_value
 
