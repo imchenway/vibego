@@ -110,7 +110,7 @@ def _make_task(*, task_id: str, title: str, status: str) -> TaskRecord:
 def test_bug_report_callback_enters_defect_report_flow(monkeypatch):
     """点击“报告缺陷”应进入“创建缺陷任务”新流程（等待输入标题）。"""
 
-    origin = _make_task(task_id="VG_TASK_0001", title="触发任务", status="research")
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
     async def fake_get_task(task_id: str):
         assert task_id == origin.id
@@ -119,7 +119,7 @@ def test_bug_report_callback_enters_defect_report_flow(monkeypatch):
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
 
     message = DummyMessage()
-    callback = DummyCallback("task:bug_report:VG_TASK_0001", message)
+    callback = DummyCallback("task:bug_report:TASK_0001", message)
     state = DummyState()
 
     asyncio.run(bot.on_task_bug_report(callback, state))
@@ -134,7 +134,7 @@ def test_bug_report_callback_enters_defect_report_flow(monkeypatch):
 def test_defect_report_description_advances_to_confirm_when_only_attachments(monkeypatch, tmp_path: Path):
     """描述阶段仅发送附件（无文字）应直接进入确认阶段，并保留已收集附件。"""
 
-    origin = _make_task(task_id="VG_TASK_0001", title="触发任务", status="research")
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
     async def fake_get_task(task_id: str):
         assert task_id == origin.id
@@ -180,7 +180,7 @@ def test_defect_report_description_advances_to_confirm_when_only_attachments(mon
 def test_defect_report_description_can_skip_to_confirm(monkeypatch):
     """描述阶段选择“跳过”后应进入确认阶段，并允许描述为空。"""
 
-    origin = _make_task(task_id="VG_TASK_0001", title="触发任务", status="research")
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
     async def fake_get_task(task_id: str):
         assert task_id == origin.id
@@ -215,7 +215,7 @@ def test_defect_report_description_can_skip_to_confirm(monkeypatch):
 def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, tmp_path: Path):
     """确认创建后应创建缺陷任务、绑定附件，并展示新任务详情。"""
 
-    origin = _make_task(task_id="VG_TASK_0001", title="触发任务", status="research")
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
     async def fake_get_task(task_id: str):
         assert task_id == origin.id
@@ -226,7 +226,7 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
     async def fake_create_root_task(**kwargs):
         created_args.update(kwargs)
         return TaskRecord(
-            id="VG_TASK_9999",
+            id="TASK_9999",
             project_slug="demo",
             title=kwargs["title"],
             status=kwargs["status"],
@@ -237,7 +237,7 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
             description=kwargs.get("description") or "",
             related_task_id=kwargs.get("related_task_id"),
             parent_id=None,
-            root_id="VG_TASK_9999",
+            root_id="TASK_9999",
             depth=0,
             lineage="9999",
             archived=False,
@@ -259,7 +259,7 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
         return [], "", processed
 
     async def fake_render_task_detail(task_id: str):
-        assert task_id == "VG_TASK_9999"
+        assert task_id == "TASK_9999"
         return "DETAIL", InlineKeyboardMarkup(inline_keyboard=[])
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
@@ -288,7 +288,7 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
     assert state.state is None
     assert created_args["task_type"] == "defect"
     assert created_args["related_task_id"] == origin.id
-    assert bind_calls and bind_calls[0][0] == "VG_TASK_9999"
+    assert bind_calls and bind_calls[0][0] == "TASK_9999"
     assert logged_actions and logged_actions[0]["task_id"] == origin.id
     assert message.calls and any("缺陷任务详情" in call["text"] for call in message.calls)
 
@@ -296,7 +296,7 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
 def test_defect_report_confirm_allows_empty_description(monkeypatch, tmp_path: Path):
     """确认创建时允许描述为空。"""
 
-    origin = _make_task(task_id="VG_TASK_0001", title="触发任务", status="research")
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
     async def fake_get_task(task_id: str):
         assert task_id == origin.id
@@ -307,7 +307,7 @@ def test_defect_report_confirm_allows_empty_description(monkeypatch, tmp_path: P
     async def fake_create_root_task(**kwargs):
         created_args.update(kwargs)
         return TaskRecord(
-            id="VG_TASK_9998",
+            id="TASK_9998",
             project_slug="demo",
             title=kwargs["title"],
             status=kwargs["status"],
@@ -318,7 +318,7 @@ def test_defect_report_confirm_allows_empty_description(monkeypatch, tmp_path: P
             description=kwargs.get("description") or "",
             related_task_id=kwargs.get("related_task_id"),
             parent_id=None,
-            root_id="VG_TASK_9998",
+            root_id="TASK_9998",
             depth=0,
             lineage="9998",
             archived=False,
@@ -331,7 +331,7 @@ def test_defect_report_confirm_allows_empty_description(monkeypatch, tmp_path: P
         return None
 
     async def fake_render_task_detail(task_id: str):
-        assert task_id == "VG_TASK_9998"
+        assert task_id == "TASK_9998"
         return "DETAIL", InlineKeyboardMarkup(inline_keyboard=[])
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)

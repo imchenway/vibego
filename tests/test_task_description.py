@@ -103,8 +103,8 @@ def _make_task(
         tags=(),
         due_date=None,
         description="",
-        parent_id=None if depth == 0 else "VG_TASK_PARENT",
-        root_id="VG_TASK_ROOT",
+        parent_id=None if depth == 0 else "TASK_PARENT",
+        root_id="TASK_ROOT",
         depth=depth,
         lineage="0001" if depth == 0 else "0001.0001",
         archived=False,
@@ -119,7 +119,7 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
     [
         (
             _make_task(
-                task_id="VG_TASK_0001",
+                task_id="TASK_0001",
                 title="调研任务",
                 status="research",
                 task_type="requirement",
@@ -128,7 +128,7 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
         ),
         (
             _make_task(
-                task_id="VG_TASK_0002",
+                task_id="TASK_0002",
                 title="",
                 status="research",
                 task_type="defect",
@@ -137,7 +137,7 @@ TYPE_REQUIREMENT = bot._format_task_type("requirement")
         ),
         (
             _make_task(
-                task_id="VG_TASK_0003",
+                task_id="TASK_0003",
                 title="子任务",
                 status="research",
                 depth=1,
@@ -214,7 +214,7 @@ def test_normalize_task_type_variants(raw, expected):
 
 
 def test_format_task_detail_without_history():
-    task = _make_task(task_id="VG_TASK_0100", title="测试任务", status="research", task_type="requirement")
+    task = _make_task(task_id="TASK_0100", title="测试任务", status="research", task_type="requirement")
     notes = (
         TaskNoteRecord(
             id=1,
@@ -229,7 +229,7 @@ def test_format_task_detail_without_history():
     lines = result.splitlines()
     assert lines[0] == "📝 标题：" + bot._escape_markdown_text("测试任务")
     expected_meta = (
-        f"🏷️ 任务编码：/VG\\_TASK\\_0100"
+        f"🏷️ 任务编码：/TASK\\_0100"
         f" · 📂 类型：{bot._strip_task_type_emoji(bot._format_task_type('requirement'))}"
     )
     assert lines[1] == expected_meta
@@ -245,7 +245,7 @@ def test_format_task_detail_without_history():
 
 
 def test_format_task_detail_misc_note_without_label():
-    task = _make_task(task_id="VG_TASK_0110", title="无标签任务", status="research")
+    task = _make_task(task_id="TASK_0110", title="无标签任务", status="research")
     notes = (
         TaskNoteRecord(
             id=1,
@@ -307,9 +307,9 @@ def test_task_note_flow_defaults_to_misc(monkeypatch, tmp_path: Path):
 def test_task_history_callback(monkeypatch):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=123)
-    callback = DummyCallback("task:history:VG_TASK_0200", message)
+    callback = DummyCallback("task:history:TASK_0200", message)
 
-    task = _make_task(task_id="VG_TASK_0200", title="历史任务", status="test")
+    task = _make_task(task_id="TASK_0200", title="历史任务", status="test")
 
     async def fake_get_task(task_id: str):
         assert task_id == task.id
@@ -361,7 +361,7 @@ def test_task_history_callback(monkeypatch):
     sent_text, parse_mode_value, reply_markup, _kwargs = message.calls[-1]
     assert parse_mode_value is not None
     assert sent_text.startswith("```\n")
-    assert "任务 VG_TASK_0200 事件历史" in sent_text
+    assert "任务 TASK_0200 事件历史" in sent_text
     assert "标题：历史任务" in sent_text
     title_line_variants = ["- **更新标题** · 01-01 00:00", "- *更新标题* · 01-01 00:00"]
     assert any(fragment in sent_text for fragment in title_line_variants)
@@ -379,13 +379,13 @@ def test_task_history_callback(monkeypatch):
 
 def test_push_model_success(monkeypatch, tmp_path: Path):
     message = DummyMessage()
-    callback = DummyCallback("task:push_model:VG_TASK_0001", message)
+    callback = DummyCallback("task:push_model:TASK_0001", message)
     message.chat = SimpleNamespace(id=1)
     message.from_user = SimpleNamespace(id=1)
     state, _storage = make_state(message)
 
     task = TaskRecord(
-        id="VG_TASK_0001",
+        id="TASK_0001",
         project_slug="demo",
         title="调研任务",
         status="research",
@@ -395,7 +395,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         due_date=None,
         description="需要调研的事项",
         parent_id=None,
-        root_id="VG_TASK_0001",
+        root_id="TASK_0001",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",
@@ -404,7 +404,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
     )
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_0001"
+        assert task_id == "TASK_0001"
         return task
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
@@ -482,7 +482,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert "进入vibe阶段" not in lines[0]
         assert "进入测试阶段" not in lines[0]
         assert "任务标题：调研任务" in payload
-        assert "任务编码：/VG_TASK_0001" in payload
+        assert "任务编码：/TASK_0001" in payload
         assert "\\_" not in payload
         assert "任务描述：\n~~~\n需要调研的事项\n~~~" in payload
         assert "任务备注：" not in payload
@@ -514,7 +514,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
     asyncio.run(state.set_state(bot.TaskPushStates.waiting_supplement))
     asyncio.run(
         state.update_data(
-            task_id="VG_TASK_0001",
+            task_id="TASK_0001",
             actor="Tester",
             chat_id=message.chat.id,
             origin_message=None,
@@ -524,7 +524,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
     )
 
     task = _make_task(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         title="调研任务",
         status="research",
         task_type="requirement",
@@ -569,11 +569,11 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
     """点击“跳过补充”回调时，应透传已选的 PLAN/YOLO 模式。"""
 
     message = DummyMessage()
-    callback = DummyCallback("task:push_model_skip:VG_TASK_0099", message)
+    callback = DummyCallback("task:push_model_skip:TASK_0099", message)
     state, _storage = make_state(message)
     asyncio.run(
         state.update_data(
-            task_id="VG_TASK_0099",
+            task_id="TASK_0099",
             chat_id=message.chat.id,
             origin_message=message,
             actor="Tester#1",
@@ -582,14 +582,14 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
     )
 
     task = _make_task(
-        task_id="VG_TASK_0099",
+        task_id="TASK_0099",
         title="调研任务",
         status="research",
         task_type="requirement",
     )
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_0099"
+        assert task_id == "TASK_0099"
         return task
 
     recorded_modes: list[str | None] = []
@@ -635,7 +635,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
     asyncio.run(state.set_state(bot.TaskPushStates.waiting_supplement))
     asyncio.run(
         state.update_data(
-            task_id="VG_TASK_0001",
+            task_id="TASK_0001",
             actor="Tester",
             chat_id=message.chat.id,
             origin_message=None,
@@ -645,7 +645,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
     )
 
     task = _make_task(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         title="调研任务",
         status="research",
         task_type="requirement",
@@ -715,7 +715,7 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
     asyncio.run(state.set_state(bot.TaskPushStates.waiting_supplement))
     asyncio.run(
         state.update_data(
-            task_id="VG_TASK_0001",
+            task_id="TASK_0001",
             actor="Tester",
             chat_id=message.chat.id,
             origin_message=None,
@@ -724,7 +724,7 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
     )
 
     task = _make_task(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         title="调研任务",
         status="research",
         task_type="requirement",
@@ -781,13 +781,13 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
 
 def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
     message = DummyMessage()
-    callback = DummyCallback("task:push_model:VG_TASK_0001", message)
+    callback = DummyCallback("task:push_model:TASK_0001", message)
     message.chat = SimpleNamespace(id=1)
     message.from_user = SimpleNamespace(id=1)
     state, _storage = make_state(message)
 
     task = _make_task(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         title="调研任务",
         status="research",
         task_type="requirement",
@@ -868,13 +868,13 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
 
 def test_push_model_test_push(monkeypatch, tmp_path: Path):
     message = DummyMessage()
-    callback = DummyCallback("task:push_model:VG_TASK_0002", message)
+    callback = DummyCallback("task:push_model:TASK_0002", message)
     message.chat = SimpleNamespace(id=1)
     message.from_user = SimpleNamespace(id=1)
     state, _storage = make_state(message)
 
     task = TaskRecord(
-        id="VG_TASK_0002",
+        id="TASK_0002",
         project_slug="demo",
         title="测试任务",
         status="test",
@@ -884,7 +884,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         due_date=None,
         description="",
         parent_id=None,
-        root_id="VG_TASK_0002",
+        root_id="TASK_0002",
         depth=0,
         lineage="0002",
         created_at="2025-01-01T00:00:00+08:00",
@@ -982,13 +982,13 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
     """推送到模型：当任务存在关联任务时，仅包含关联任务编码（不再展开关联任务详情）。"""
 
     message = DummyMessage()
-    callback = DummyCallback("task:push_model:VG_TASK_0002", message)
+    callback = DummyCallback("task:push_model:TASK_0002", message)
     message.chat = SimpleNamespace(id=1)
     message.from_user = SimpleNamespace(id=1)
     state, _storage = make_state(message)
 
     task = TaskRecord(
-        id="VG_TASK_0002",
+        id="TASK_0002",
         project_slug="demo",
         title="测试任务",
         status="test",
@@ -997,9 +997,9 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
         tags=(),
         due_date=None,
         description="主任务描述",
-        related_task_id="VG_TASK_0001",
+        related_task_id="TASK_0001",
         parent_id=None,
-        root_id="VG_TASK_0002",
+        root_id="TASK_0002",
         depth=0,
         lineage="0002",
         created_at="2025-01-01T00:00:00+08:00",
@@ -1007,7 +1007,7 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
         archived=False,
     )
     related = TaskRecord(
-        id="VG_TASK_0001",
+        id="TASK_0001",
         project_slug="demo",
         title="关联任务标题",
         status="research",
@@ -1017,7 +1017,7 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
         due_date=None,
         description="关联任务描述",
         parent_id=None,
-        root_id="VG_TASK_0001",
+        root_id="TASK_0001",
         depth=0,
         lineage="0001",
         created_at="2025-01-01T00:00:00+08:00",
@@ -1026,9 +1026,9 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
     )
 
     async def fake_get_task(task_id: str):
-        if task_id == "VG_TASK_0002":
+        if task_id == "TASK_0002":
             return task
-        if task_id == "VG_TASK_0001":
+        if task_id == "TASK_0001":
             return related
         return None
 
@@ -1083,22 +1083,22 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
     assert recorded
     _chat_id, payload, _reply_to = recorded[0]
     assert "任务标题：测试任务" in payload
-    assert "关联任务编码：/VG_TASK_0001" in payload
+    assert "关联任务编码：/TASK_0001" in payload
     assert "关联任务信息：" not in payload
     assert "任务标题：关联任务标题" not in payload
-    assert "任务编码：/VG_TASK_0001" not in [line.strip() for line in payload.splitlines()]
+    assert "任务编码：/TASK_0001" not in [line.strip() for line in payload.splitlines()]
     assert "任务描述：关联任务描述" not in payload
 
 
 def test_push_model_done_push(monkeypatch, tmp_path: Path):
     message = DummyMessage()
-    callback = DummyCallback("task:push_model:VG_TASK_0004", message)
+    callback = DummyCallback("task:push_model:TASK_0004", message)
     message.chat = SimpleNamespace(id=1)
     message.from_user = SimpleNamespace(id=1)
     state, _storage = make_state(message)
 
     task = TaskRecord(
-        id="VG_TASK_0004",
+        id="TASK_0004",
         project_slug="demo",
         title="完成任务",
         status="done",
@@ -1108,7 +1108,7 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
         due_date=None,
         description="",
         parent_id=None,
-        root_id="VG_TASK_0004",
+        root_id="TASK_0004",
         depth=0,
         lineage="0004",
         created_at="2025-01-01T00:00:00+08:00",
@@ -1173,7 +1173,7 @@ def test_history_context_respects_limits(monkeypatch):
     history_items = [
         TaskHistoryRecord(
             id=index + 1,
-            task_id="VG_TASK_1000",
+            task_id="TASK_1000",
             field="title",
             old_value=f"旧值{index}",
             new_value=f"新值{index}",
@@ -1191,7 +1191,7 @@ def test_history_context_respects_limits(monkeypatch):
     monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
 
     async def scenario():
-        return await bot._build_history_context_for_model("VG_TASK_1000")
+        return await bot._build_history_context_for_model("TASK_1000")
 
     context, count = asyncio.run(scenario())
     assert count == bot.MODEL_HISTORY_MAX_ITEMS
@@ -1217,9 +1217,9 @@ def test_push_model_missing_task(monkeypatch):
 
 
 def test_build_bug_report_intro_plain_task_id():
-    task = _make_task(task_id="VG_TASK_0055", title="编辑描述任务", status="test")
+    task = _make_task(task_id="TASK_0055", title="编辑描述任务", status="test")
     intro = bot._build_bug_report_intro(task)
-    assert "/VG_TASK_0055" in intro
+    assert "/TASK_0055" in intro
     assert "\\_" not in intro
 
 
@@ -1232,10 +1232,10 @@ def test_bug_report_description_binds_attachments(monkeypatch, tmp_path: Path):
     message.date = datetime.now(bot.UTC)
     state, _storage = make_state(message)
     asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_description))
-    asyncio.run(state.update_data(task_id="VG_TASK_0001", reporter="Reporter"))
+    asyncio.run(state.update_data(task_id="TASK_0001", reporter="Reporter"))
 
     task = _make_task(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         title="缺陷任务",
         status="research",
         task_type="defect",
@@ -1281,7 +1281,7 @@ def test_bug_report_description_binds_attachments(monkeypatch, tmp_path: Path):
 
 
 def test_build_bug_preview_plain_task_id():
-    task = _make_task(task_id="VG_TASK_0055", title="编辑描述任务", status="test")
+    task = _make_task(task_id="TASK_0055", title="编辑描述任务", status="test")
     preview = bot._build_bug_preview_text(
         task=task,
         description="缺陷描述",
@@ -1289,7 +1289,7 @@ def test_build_bug_preview_plain_task_id():
         logs="日志",
         reporter="Tester#007",
     )
-    assert "任务编码：/VG_TASK_0055" in preview
+    assert "任务编码：/TASK_0055" in preview
     assert "\\_" not in preview
 
 
@@ -1304,7 +1304,7 @@ def test_bug_report_logs_binds_attachments(monkeypatch, tmp_path: Path):
     asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_logs))
     asyncio.run(
         state.update_data(
-            task_id="VG_TASK_0001",
+            task_id="TASK_0001",
             description="缺陷描述",
             reproduction="步骤",
             reporter="Reporter",
@@ -1312,7 +1312,7 @@ def test_bug_report_logs_binds_attachments(monkeypatch, tmp_path: Path):
     )
 
     task = _make_task(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         title="缺陷任务",
         status="research",
         task_type="defect",
@@ -1368,14 +1368,14 @@ def test_bug_report_reproduction_binds_attachments(monkeypatch, tmp_path: Path):
     asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_reproduction))
     asyncio.run(
         state.update_data(
-            task_id="VG_TASK_0002",
+            task_id="TASK_0002",
             description="缺陷描述",
             reporter="Reporter",
         )
     )
 
     task = _make_task(
-        task_id="VG_TASK_0002",
+        task_id="TASK_0002",
         title="缺陷任务",
         status="research",
         task_type="defect",
@@ -1428,7 +1428,7 @@ def test_bug_report_auto_push_success(monkeypatch, tmp_path: Path):
     state, _storage = make_state(message)
 
     task = _make_task(
-        task_id="VG_TASK_AUTO",
+        task_id="TASK_AUTO",
         title="自动推送任务",
         status="research",
         task_type="requirement",
@@ -1536,7 +1536,7 @@ def test_bug_report_auto_push_preview_fallback_on_too_long(monkeypatch, tmp_path
     state, _storage = make_state(message)
 
     task = _make_task(
-        task_id="VG_TASK_AUTO_LONG",
+        task_id="TASK_AUTO_LONG",
         title="自动推送长预览任务",
         status="research",
         task_type="requirement",
@@ -1625,7 +1625,7 @@ def test_bug_report_confirm_accepts_extra_attachments(monkeypatch, tmp_path: Pat
     asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_confirm))
     asyncio.run(
         state.update_data(
-            task_id="VG_TASK_CONFIRM",
+            task_id="TASK_CONFIRM",
             description="缺陷描述",
             reproduction="步骤",
             logs="日志",
@@ -1634,7 +1634,7 @@ def test_bug_report_confirm_accepts_extra_attachments(monkeypatch, tmp_path: Pat
     )
 
     task = _make_task(
-        task_id="VG_TASK_CONFIRM",
+        task_id="TASK_CONFIRM",
         title="缺陷任务",
         status="research",
         task_type="defect",
@@ -1702,10 +1702,10 @@ def test_bug_report_album_aggregates_attachments_once(monkeypatch, tmp_path: Pat
 
     state, _storage = make_state(message1)
     asyncio.run(state.set_state(bot.TaskBugReportStates.waiting_description))
-    asyncio.run(state.update_data(task_id="VG_TASK_0001", reporter="Reporter"))
+    asyncio.run(state.update_data(task_id="TASK_0001", reporter="Reporter"))
 
     task = _make_task(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         title="缺陷任务",
         status="research",
         task_type="defect",
@@ -1828,7 +1828,7 @@ def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp
     state, _storage = make_state(message)
 
     task = _make_task(
-        task_id="VG_TASK_SKIP",
+        task_id="TASK_SKIP",
         title="不支持任务",
         status="unknown",
         task_type="requirement",
@@ -1914,7 +1914,7 @@ def test_handle_model_response_ignores_non_summary(monkeypatch, tmp_path: Path):
             session_key=str(session_path),
             session_path=session_path,
             event_offset=1,
-            content="普通回复 /VG_TASK_0001",
+            content="普通回复 /TASK_0001",
         )
 
     asyncio.run(scenario())
@@ -1943,7 +1943,7 @@ def test_handle_model_response_keeps_summary_history(monkeypatch, tmp_path: Path
 
     bot.PENDING_SUMMARIES.clear()
     bot.PENDING_SUMMARIES[session_key] = bot.PendingSummary(
-        task_id="VG_TASK_0001",
+        task_id="TASK_0001",
         request_id=request_id,
         actor="tester",
         session_key=session_key,
@@ -1965,7 +1965,7 @@ def test_handle_model_response_keeps_summary_history(monkeypatch, tmp_path: Path
     assert logged, "摘要应写入历史"
     payload = logged[0]
     assert payload["event_type"] == "model_summary"
-    assert payload["task_id"] == "VG_TASK_0001"
+    assert payload["task_id"] == "TASK_0001"
     assert not logged_replies, "摘要流程不应触发 model_reply 落库"
     bot.PENDING_SUMMARIES.clear()
 
@@ -1985,7 +1985,7 @@ def test_handle_model_response_accepts_escaped_summary_tag(monkeypatch, tmp_path
 
     bot.PENDING_SUMMARIES.clear()
     bot.PENDING_SUMMARIES[session_key] = bot.PendingSummary(
-        task_id="VG_TASK_0002",
+        task_id="TASK_0002",
         request_id=request_id,
         actor="tester",
         session_key=session_key,
@@ -2016,32 +2016,32 @@ def test_handle_model_response_accepts_escaped_summary_tag(monkeypatch, tmp_path
 
 def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     message = DummyMessage()
-    message.text = "/task_summary_request_VG_TASK_0200"
+    message.text = "/task_summary_request_TASK_0200"
     message.chat = SimpleNamespace(id=200)
     message.from_user = SimpleNamespace(id=200, full_name="Tester")
 
     base_task = TaskRecord(
-        id="VG_TASK_0200",
+        id="TASK_0200",
         project_slug="demo",
         title="摘要任务",
         status="research",
         priority=2,
         description="说明",
         parent_id=None,
-        root_id="VG_TASK_0200",
+        root_id="TASK_0200",
         depth=0,
         lineage="0200",
         archived=False,
     )
     updated_task = TaskRecord(
-        id="VG_TASK_0200",
+        id="TASK_0200",
         project_slug="demo",
         title="摘要任务",
         status="test",
         priority=2,
         description="说明",
         parent_id=None,
-        root_id="VG_TASK_0200",
+        root_id="TASK_0200",
         depth=0,
         lineage="0200",
         archived=False,
@@ -2052,7 +2052,7 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     log_calls: list[tuple] = []
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_0200"
+        assert task_id == "TASK_0200"
         return base_task
 
     async def fake_update_task(task_id: str, *, actor, status=None, **kwargs):
@@ -2095,7 +2095,7 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     assert dispatch_calls, "应向模型推送摘要请求"
     prompt_text = dispatch_calls[0][1]
     assert prompt_text.startswith(
-        "进入摘要阶段...\n任务编码：/VG_TASK_0200\nSUMMARY_REQUEST_ID::"
+        "进入摘要阶段...\n任务编码：/TASK_0200\nSUMMARY_REQUEST_ID::"
     )
     assert message.calls, "应向用户提示处理结果"
     reply_text, _, _, _ = message.calls[-1]
@@ -2107,19 +2107,19 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
 
 def test_task_summary_command_skips_status_when_already_test(monkeypatch, tmp_path: Path):
     message = DummyMessage()
-    message.text = "/task_summary_request_VG_TASK_0300"
+    message.text = "/task_summary_request_TASK_0300"
     message.chat = SimpleNamespace(id=300)
     message.from_user = SimpleNamespace(id=300, full_name="Tester")
 
     task = TaskRecord(
-        id="VG_TASK_0300",
+        id="TASK_0300",
         project_slug="demo",
         title="已有测试任务",
         status="test",
         priority=2,
         description="说明",
         parent_id=None,
-        root_id="VG_TASK_0300",
+        root_id="TASK_0300",
         depth=0,
         lineage="0300",
         archived=False,
@@ -2165,7 +2165,7 @@ def test_task_summary_command_skips_status_when_already_test(monkeypatch, tmp_pa
 
 
 def test_model_quick_reply_keyboard_includes_task_to_test_button():
-    markup = bot._build_model_quick_reply_keyboard(task_id="VG_TASK_0001")
+    markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0001")
     assert isinstance(markup, InlineKeyboardMarkup)
     callbacks = [
         button.callback_data
@@ -2173,35 +2173,35 @@ def test_model_quick_reply_keyboard_includes_task_to_test_button():
         for button in row
         if getattr(button, "callback_data", None)
     ]
-    assert any(value == f"{bot.MODEL_TASK_TO_TEST_PREFIX}VG_TASK_0001" for value in callbacks)
+    assert any(value == f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0001" for value in callbacks)
 
 
 def test_model_task_to_test_callback_updates_status(monkeypatch):
     message = DummyMessage()
-    callback = DummyCallback("model:task_to_test:VG_TASK_0600", message)
+    callback = DummyCallback("model:task_to_test:TASK_0600", message)
 
     base_task = TaskRecord(
-        id="VG_TASK_0600",
+        id="TASK_0600",
         project_slug="demo",
         title="准备测试",
         status="research",
         priority=2,
         description="说明",
         parent_id=None,
-        root_id="VG_TASK_0600",
+        root_id="TASK_0600",
         depth=0,
         lineage="0600",
         archived=False,
     )
     updated_task = TaskRecord(
-        id="VG_TASK_0600",
+        id="TASK_0600",
         project_slug="demo",
         title="准备测试",
         status="test",
         priority=2,
         description="说明",
         parent_id=None,
-        root_id="VG_TASK_0600",
+        root_id="TASK_0600",
         depth=0,
         lineage="0600",
         archived=False,
@@ -2210,7 +2210,7 @@ def test_model_task_to_test_callback_updates_status(monkeypatch):
     updates: list[tuple] = []
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_0600"
+        assert task_id == "TASK_0600"
         return base_task
 
     async def fake_update_task(task_id: str, *, actor, status=None, **kwargs):
@@ -2250,17 +2250,17 @@ def test_model_task_to_test_callback_updates_status(monkeypatch):
 
 def test_model_task_to_test_callback_skips_when_already_test(monkeypatch):
     message = DummyMessage()
-    callback = DummyCallback("model:task_to_test:VG_TASK_0601", message)
+    callback = DummyCallback("model:task_to_test:TASK_0601", message)
 
     task = TaskRecord(
-        id="VG_TASK_0601",
+        id="TASK_0601",
         project_slug="demo",
         title="已在测试",
         status="test",
         priority=2,
         description="说明",
         parent_id=None,
-        root_id="VG_TASK_0601",
+        root_id="TASK_0601",
         depth=0,
         lineage="0601",
         archived=False,
@@ -2285,7 +2285,7 @@ def test_model_task_to_test_callback_skips_when_already_test(monkeypatch):
 
 def test_model_task_to_test_callback_handles_missing_task(monkeypatch):
     message = DummyMessage()
-    callback = DummyCallback("model:task_to_test:VG_TASK_0602", message)
+    callback = DummyCallback("model:task_to_test:TASK_0602", message)
 
     async def fake_get_task(task_id: str):
         return None
@@ -2301,7 +2301,7 @@ def test_model_task_to_test_callback_handles_missing_task(monkeypatch):
 
 def test_model_task_to_test_callback_rejects_invalid_task_id():
     message = DummyMessage()
-    callback = DummyCallback("model:task_to_test:BAD_VG_TASK_ID", message)
+    callback = DummyCallback("model:task_to_test:BAD_TASK_ID", message)
 
     async def scenario() -> None:
         await bot.on_model_task_to_test(callback)
@@ -2312,7 +2312,7 @@ def test_model_task_to_test_callback_rejects_invalid_task_id():
 
 def test_task_summary_command_handles_missing_task(monkeypatch):
     message = DummyMessage()
-    message.text = "/task_summary_request_VG_TASK_0400"
+    message.text = "/task_summary_request_TASK_0400"
     message.chat = SimpleNamespace(id=400)
     message.from_user = SimpleNamespace(id=400, full_name="Tester")
 
@@ -2331,7 +2331,7 @@ def test_task_summary_command_handles_missing_task(monkeypatch):
 
 def test_task_summary_command_accepts_alias_without_underscores(monkeypatch):
     message = DummyMessage()
-    message.text = "/tasksummaryrequestVG_TASK_0500"
+    message.text = "/tasksummaryrequestTASK_0500"
     message.chat = SimpleNamespace(id=500)
     message.from_user = SimpleNamespace(id=500, full_name="Tester")
 
@@ -2347,7 +2347,7 @@ def test_task_summary_command_accepts_alias_without_underscores(monkeypatch):
         await bot.on_task_summary_command(message)
 
     asyncio.run(scenario())
-    assert captured.get("task_id") == "VG_TASK_0500"
+    assert captured.get("task_id") == "TASK_0500"
     reply_text, _, _, _ = message.calls[-1]
     assert reply_text == "任务不存在"
 
@@ -2363,7 +2363,7 @@ def test_task_summary_command_alias_requires_task_id():
 
     asyncio.run(scenario())
     reply_text, _, _, _ = message.calls[-1]
-    assert reply_text == "请提供任务 ID，例如：/task_summary_request_VG_TASK_0001"
+    assert reply_text == "请提供任务 ID，例如：/task_summary_request_TASK_0001"
 
 
 def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
@@ -3484,7 +3484,7 @@ def test_extract_terminal_collaboration_mode(raw_output: str, expected: Optional
 )
 def test_build_model_push_payload_cases(status, description, expected_checks):
     task = TaskRecord(
-        id="VG_TASK_CHECK",
+        id="TASK_CHECK",
         project_slug="demo",
         title="案例任务",
         status=status,
@@ -3494,7 +3494,7 @@ def test_build_model_push_payload_cases(status, description, expected_checks):
         due_date=None,
         description=description,
         parent_id=None,
-        root_id="VG_TASK_CHECK",
+        root_id="TASK_CHECK",
         depth=0,
         lineage="0000",
         created_at="2025-01-01T00:00:00+08:00",
@@ -3520,7 +3520,7 @@ def test_build_model_push_payload_cases(status, description, expected_checks):
 
 def test_build_model_push_payload_with_supplement():
     task = TaskRecord(
-        id="VG_TASK_CHECK_SUP",
+        id="TASK_CHECK_SUP",
         project_slug="demo",
         title="补充示例",
         status="test",
@@ -3530,7 +3530,7 @@ def test_build_model_push_payload_with_supplement():
         due_date=None,
         description="原始描述",
         parent_id=None,
-        root_id="VG_TASK_CHECK_SUP",
+        root_id="TASK_CHECK_SUP",
         depth=0,
         lineage="0000",
         created_at="2025-01-01T00:00:00+08:00",
@@ -3544,7 +3544,7 @@ def test_build_model_push_payload_with_supplement():
     lines = payload.splitlines()
     assert lines[0] == bot.VIBE_PHASE_PROMPT
     assert "任务描述：\n~~~\n原始描述\n~~~" in payload
-    assert "任务编码：/VG_TASK_CHECK_SUP" in payload
+    assert "任务编码：/TASK_CHECK_SUP" in payload
     assert "\\_" not in payload
     assert "任务备注：" not in payload
     assert "补充任务描述：\n~~~\n补充内容\n~~~" in payload
@@ -3562,7 +3562,7 @@ def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, 
     """推送到模型：任务上下文超长时应自动转为本地附件提示词，避免直接注入超长文本。"""
 
     task = TaskRecord(
-        id="VG_TASK_PUSH_LONG",
+        id="TASK_PUSH_LONG",
         project_slug="demo",
         title="超长推送任务",
         status="research",
@@ -3572,7 +3572,7 @@ def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, 
         due_date=None,
         description="X" * (bot.TELEGRAM_MESSAGE_LIMIT + 300),
         parent_id=None,
-        root_id="VG_TASK_PUSH_LONG",
+        root_id="TASK_PUSH_LONG",
         depth=0,
         lineage="0000",
         created_at="2025-01-01T00:00:00+08:00",
@@ -3655,7 +3655,7 @@ def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, 
 
 def test_build_model_push_payload_without_history_formatting():
     task = TaskRecord(
-        id="VG_TASK_NO_HISTORY",
+        id="TASK_NO_HISTORY",
         project_slug="demo",
         title="无历史任务",
         status="research",
@@ -3665,7 +3665,7 @@ def test_build_model_push_payload_without_history_formatting():
         due_date=None,
         description="描述B",
         parent_id=None,
-        root_id="VG_TASK_NO_HISTORY",
+        root_id="TASK_NO_HISTORY",
         depth=0,
         lineage="0000",
         created_at="2025-01-01T00:00:00+08:00",
@@ -3683,7 +3683,7 @@ def test_build_model_push_payload_without_history_formatting():
 
 def test_build_model_push_payload_with_notes():
     task = TaskRecord(
-        id="VG_TASK_CHECK_NOTES",
+        id="TASK_CHECK_NOTES",
         project_slug="demo",
         title="备注任务",
         status="research",
@@ -3693,7 +3693,7 @@ def test_build_model_push_payload_with_notes():
         due_date=None,
         description="描述B",
         parent_id=None,
-        root_id="VG_TASK_CHECK_NOTES",
+        root_id="TASK_CHECK_NOTES",
         depth=0,
         lineage="0000",
         created_at="2025-01-01T00:00:00+08:00",
@@ -3727,7 +3727,7 @@ def test_build_model_push_payload_with_notes():
 
 def test_build_model_push_payload_skips_bug_notes():
     task = TaskRecord(
-        id="VG_TASK_SKIP_BUG",
+        id="TASK_SKIP_BUG",
         project_slug="demo",
         title="缺陷备注忽略",
         status="test",
@@ -3737,7 +3737,7 @@ def test_build_model_push_payload_skips_bug_notes():
         due_date=None,
         description="描述C",
         parent_id=None,
-        root_id="VG_TASK_SKIP_BUG",
+        root_id="TASK_SKIP_BUG",
         depth=0,
         lineage="0000",
         created_at="2025-01-01T00:00:00+08:00",
@@ -3772,7 +3772,7 @@ def test_build_model_push_payload_skips_bug_notes():
 
 
 def test_build_model_push_payload_removes_legacy_bug_header():
-    task = _make_task(task_id="VG_TASK_LEGACY", title="兼容旧标题", status="test")
+    task = _make_task(task_id="TASK_LEGACY", title="兼容旧标题", status="test")
     legacy_history = "缺陷记录（最近 3 条）：\n2025-01-02 10:00 | 已同步历史记录"
 
     payload = bot._build_model_push_payload(task, history=legacy_history)
@@ -3797,14 +3797,14 @@ def _extract_reply_labels(markup: ReplyKeyboardMarkup | None) -> list[str]:
 
 def test_task_desc_edit_shows_menu_options(monkeypatch):
     message = DummyMessage()
-    callback = DummyCallback("task:desc_edit:VG_TASK_EDIT", message)
+    callback = DummyCallback("task:desc_edit:TASK_EDIT", message)
     state, _storage = make_state(message)
 
-    task = _make_task(task_id="VG_TASK_EDIT", title="示例任务", status="research")
+    task = _make_task(task_id="TASK_EDIT", title="示例任务", status="research")
     task.description = "原始描述"
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_EDIT"
+        assert task_id == "TASK_EDIT"
         return task
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
@@ -3816,7 +3816,7 @@ def test_task_desc_edit_shows_menu_options(monkeypatch):
     state_value, data = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
-    assert data.get("task_id") == "VG_TASK_EDIT"
+    assert data.get("task_id") == "TASK_EDIT"
     assert data.get("current_description") == "原始描述"
     assert callback.answers and callback.answers[-1] == (None, False)
     assert len(message.calls) >= 3, "应先展示菜单与原描述再提示输入"
@@ -3835,17 +3835,17 @@ def test_task_desc_edit_shows_menu_options(monkeypatch):
 def test_task_edit_description_redirects_to_fsm(monkeypatch):
     message = DummyMessage()
     state, _storage = make_state(message)
-    task = _make_task(task_id="VG_TASK_EDIT", title="示例任务", status="research")
+    task = _make_task(task_id="TASK_EDIT", title="示例任务", status="research")
     task.description = "原始描述"
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_EDIT"
+        assert task_id == "TASK_EDIT"
         return task
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="VG_TASK_EDIT", actor="Tester#1")
+        await state.update_data(task_id="TASK_EDIT", actor="Tester#1")
         await state.set_state(bot.TaskEditStates.waiting_field_choice)
         message.text = "描述"
         await bot.on_edit_field_choice(message, state)
@@ -3854,7 +3854,7 @@ def test_task_edit_description_redirects_to_fsm(monkeypatch):
     state_value, data = asyncio.run(scenario())
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
-    assert data.get("task_id") == "VG_TASK_EDIT"
+    assert data.get("task_id") == "TASK_EDIT"
     assert data.get("current_description") == "原始描述"
     assert len(message.calls) >= 3
     first_text, _, first_markup, _ = message.calls[0]
@@ -3867,7 +3867,7 @@ def test_task_desc_reprompt_menu_replays_prompt():
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="VG_TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         message.text = f"1. {bot.TASK_DESC_REPROMPT_TEXT}"
         await bot.on_task_desc_input(message, state)
@@ -3888,7 +3888,7 @@ def test_task_desc_input_clear_menu_enters_confirm():
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="VG_TASK_EDIT", actor="Tester#1", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="旧描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         message.text = bot.TASK_DESC_CLEAR_TEXT
         await bot.on_task_desc_input(message, state)
@@ -3913,7 +3913,7 @@ def test_task_desc_input_moves_to_confirm():
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="VG_TASK_EDIT", actor="Tester#1", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="旧描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state(), await state.get_data()
@@ -3934,7 +3934,7 @@ def test_task_desc_input_cancel_text():
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        await state.update_data(task_id="VG_TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state()
@@ -3951,7 +3951,7 @@ def test_task_desc_input_cancel_menu_button():
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        await state.update_data(task_id="VG_TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state()
@@ -3968,7 +3968,7 @@ def test_task_desc_input_too_long_converts_to_attachment_and_enters_confirm():
     state, _storage = make_state(message)
 
     async def scenario() -> str | None:
-        await state.update_data(task_id="VG_TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_input(message, state)
         return await state.get_state()
@@ -3989,7 +3989,7 @@ def test_task_desc_confirm_updates_description(monkeypatch):
     message = DummyMessage()
     state, _storage = make_state(message)
 
-    updated_task = _make_task(task_id="VG_TASK_EDIT", title="描述任务", status="research")
+    updated_task = _make_task(task_id="TASK_EDIT", title="描述任务", status="research")
     update_calls: list[tuple[str, str, str]] = []
 
     async def fake_update(task_id: str, *, actor: str, description: str):
@@ -3998,7 +3998,7 @@ def test_task_desc_confirm_updates_description(monkeypatch):
         return updated_task
 
     async def fake_render(task_id: str):
-        assert task_id == "VG_TASK_EDIT"
+        assert task_id == "TASK_EDIT"
         return "任务详情：示例", ReplyKeyboardMarkup(keyboard=[])
 
     monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update)
@@ -4007,7 +4007,7 @@ def test_task_desc_confirm_updates_description(monkeypatch):
     async def scenario() -> str | None:
         message.text = bot.TASK_DESC_CONFIRM_TEXT
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="最终描述",
             actor="Tester#1",
             current_description="旧描述",
@@ -4019,7 +4019,7 @@ def test_task_desc_confirm_updates_description(monkeypatch):
     state_value = asyncio.run(scenario())
 
     assert state_value is None
-    assert update_calls == [("VG_TASK_EDIT", "Tester#1", "最终描述")]
+    assert update_calls == [("TASK_EDIT", "Tester#1", "最终描述")]
     assert message.calls and "任务描述已更新" in message.calls[0][0]
     assert any("任务描述已更新：" in text for text, *_ in message.calls)
 
@@ -4044,11 +4044,11 @@ def test_task_desc_retry_returns_to_input(monkeypatch):
     message = DummyMessage()
     state, _storage = make_state(message)
 
-    task = _make_task(task_id="VG_TASK_EDIT", title="描述任务", status="research")
+    task = _make_task(task_id="TASK_EDIT", title="描述任务", status="research")
     task.description = "原始描述"
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_EDIT"
+        assert task_id == "TASK_EDIT"
         return task
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
@@ -4056,7 +4056,7 @@ def test_task_desc_retry_returns_to_input(monkeypatch):
     async def scenario() -> tuple[str | None, dict]:
         message.text = bot.TASK_DESC_RETRY_TEXT
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="草稿描述",
             actor="Tester#1",
             current_description="旧描述",
@@ -4083,7 +4083,7 @@ def test_task_desc_confirm_missing_description_reprompts():
     async def scenario() -> tuple[str | None, dict]:
         message.text = bot.TASK_DESC_CONFIRM_TEXT
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             current_description="仍为旧描述",
             actor="Tester#1",
         )
@@ -4114,7 +4114,7 @@ def test_task_desc_retry_task_missing(monkeypatch):
     async def scenario() -> str | None:
         message.text = bot.TASK_DESC_RETRY_TEXT
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="草稿描述",
             actor="Tester#1",
             current_description="旧描述",
@@ -4141,7 +4141,7 @@ def test_task_desc_confirm_update_failure(monkeypatch):
     async def scenario() -> str | None:
         message.text = bot.TASK_DESC_CONFIRM_TEXT
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="异常描述",
             actor="Tester#1",
             current_description="旧描述",
@@ -4162,7 +4162,7 @@ def test_task_desc_confirm_unknown_message_prompts_menu():
 
     async def scenario() -> str | None:
         message.text = "随便输入"
-        await state.update_data(task_id="VG_TASK_EDIT", new_description="草稿", actor="Tester#1")
+        await state.update_data(task_id="TASK_EDIT", new_description="草稿", actor="Tester#1")
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
         return await state.get_state()
@@ -4180,7 +4180,7 @@ def test_task_desc_confirm_cancel_menu_exits():
 
     async def scenario() -> str | None:
         message.text = bot.TASK_DESC_CANCEL_TEXT
-        await state.update_data(task_id="VG_TASK_EDIT", new_description="草稿")
+        await state.update_data(task_id="TASK_EDIT", new_description="草稿")
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
         return await state.get_state()
@@ -4193,11 +4193,11 @@ def test_task_desc_confirm_cancel_menu_exits():
 
 def test_task_desc_legacy_callback_reprompts_input():
     message = DummyMessage()
-    callback = DummyCallback(f"{bot.TASK_DESC_INPUT_CALLBACK}:VG_TASK_EDIT", message)
+    callback = DummyCallback(f"{bot.TASK_DESC_INPUT_CALLBACK}:TASK_EDIT", message)
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="VG_TASK_EDIT", current_description="旧描述")
+        await state.update_data(task_id="TASK_EDIT", current_description="旧描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_content)
         await bot.on_task_desc_legacy_callback(callback, state)
         return await state.get_state(), await state.get_data()
@@ -4215,11 +4215,11 @@ def test_task_desc_legacy_callback_reprompts_input():
 
 def test_task_desc_legacy_callback_replays_confirm():
     message = DummyMessage()
-    callback = DummyCallback(f"{bot.TASK_DESC_CONFIRM_CALLBACK}:VG_TASK_EDIT", message)
+    callback = DummyCallback(f"{bot.TASK_DESC_CONFIRM_CALLBACK}:TASK_EDIT", message)
     state, _storage = make_state(message)
 
     async def scenario() -> tuple[str | None, dict]:
-        await state.update_data(task_id="VG_TASK_EDIT", new_description="草稿描述")
+        await state.update_data(task_id="TASK_EDIT", new_description="草稿描述")
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_legacy_callback(callback, state)
         return await state.get_state(), await state.get_data()
@@ -4236,7 +4236,7 @@ def test_task_desc_legacy_callback_replays_confirm():
 def test_format_history_description_push_model_includes_supplement():
     record = TaskHistoryRecord(
         id=1,
-        task_id="VG_TASK_001",
+        task_id="TASK_001",
         field="",
         old_value=None,
         new_value="旧补充",
@@ -4260,21 +4260,20 @@ def test_format_history_description_push_model_includes_supplement():
 
 
 def test_normalize_task_id_accepts_legacy_variants():
-    assert bot._normalize_task_id("/VG_TASK_0001") == "VG_TASK_0001"
-    assert bot._normalize_task_id("/vg_task_0001@demo_bot") == "VG_TASK_0001"
+    assert bot._normalize_task_id("/TASK-0001") == "TASK_0001"
+    assert bot._normalize_task_id("TASK-0002.3") == "TASK_0002_3"
+    assert bot._normalize_task_id("/TASK0035") == "TASK_0035"
     assert bot._normalize_task_id("/task_show") is None
-    assert bot._normalize_task_id("/TASK-0001") is None
-    assert bot._normalize_task_id("TASK-0002.3") is None
-    assert bot._normalize_task_id("/TASK0035") is None
+    assert bot._normalize_task_id("/TASK_0001@demo_bot") == "TASK_0001"
 
 
 def test_format_task_command_respects_markdown_escape(monkeypatch):
     monkeypatch.setattr(bot, "_IS_MARKDOWN", True)
     monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", False)
-    assert bot._format_task_command("VG_TASK_0001") == "/VG\\_TASK\\_0001"
+    assert bot._format_task_command("TASK_0001") == "/TASK\\_0001"
     monkeypatch.setattr(bot, "_IS_MARKDOWN", False)
     monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", True)
-    assert bot._format_task_command("VG_TASK_0001") == "/VG_TASK_0001"
+    assert bot._format_task_command("TASK_0001") == "/TASK_0001"
 
 
 def test_is_cancel_message_handles_menu_button():
@@ -4285,7 +4284,7 @@ def test_is_cancel_message_handles_menu_button():
 
 def test_on_text_handles_quick_task_lookup(monkeypatch):
     message = DummyMessage()
-    message.text = "/VG_TASK_0007"
+    message.text = "/TASK_0007"
     state, _storage = make_state(message)
     calls: list[tuple[DummyMessage, str]] = []
 
@@ -4296,7 +4295,7 @@ def test_on_text_handles_quick_task_lookup(monkeypatch):
 
     asyncio.run(bot.on_text(message, state))
 
-    assert calls == [(message, "VG_TASK_0007")]
+    assert calls == [(message, "TASK_0007")]
 
 
 def test_on_text_ignores_regular_commands(monkeypatch):
@@ -4509,7 +4508,7 @@ def test_on_text_skips_text_paste_aggregation_for_short_messages(monkeypatch):
 
 def test_on_task_quick_command_handles_slash_task(monkeypatch):
     message = DummyMessage()
-    message.text = "/VG_TASK_0042"
+    message.text = "/TASK_0042"
     calls: list[tuple[DummyMessage, str]] = []
 
     async def fake_reply(detail_message: DummyMessage, task_id: str) -> None:
@@ -4519,21 +4518,11 @@ def test_on_task_quick_command_handles_slash_task(monkeypatch):
 
     asyncio.run(bot.on_task_quick_command(message))
 
-    assert calls == [(message, "VG_TASK_0042")]
+    assert calls == [(message, "TASK_0042")]
 
 
 def test_task_service_migrates_legacy_ids(tmp_path: Path):
-    async def _scenario() -> tuple[
-        Optional[TaskRecord],
-        Optional[TaskRecord],
-        Optional[TaskRecord],
-        list[TaskNoteRecord],
-        list[TaskHistoryRecord],
-        bool,
-        dict,
-        list[str],
-        TaskRecord,
-    ]:
+    async def _scenario() -> tuple[TaskRecord, TaskRecord, TaskRecord, list[TaskNoteRecord], list[TaskHistoryRecord], str, dict]:
         db_path = tmp_path / "legacy.db"
         first_service = TaskService(db_path, "legacy")
         await first_service.initialize()
@@ -4658,16 +4647,6 @@ def test_task_service_migrates_legacy_ids(tmp_path: Path):
         second_root = await migrated_service.get_task("TASK0002")
         notes = await migrated_service.list_notes("TASK-0001")
         history = await migrated_service.list_history("TASK-0001")
-        new_root = await migrated_service.create_root_task(
-            title="新任务",
-            status="research",
-            priority=3,
-            task_type="task",
-            tags=(),
-            due_date=None,
-            description="",
-            actor="tester",
-        )
 
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -4676,52 +4655,23 @@ def test_task_service_migrates_legacy_ids(tmp_path: Path):
             ) as cursor:
                 row = await cursor.fetchone()
             child_sequence_exists = row is not None
-            async with db.execute(
-                "SELECT id FROM tasks WHERE project_slug = ? ORDER BY id ASC",
-                ("legacy",),
-            ) as cursor:
-                ids = [record["id"] for record in await cursor.fetchall()]
 
         report_dir = db_path.parent / "backups"
         reports = list(report_dir.glob("legacy_id_migration_*.json"))
         report_data = json.loads(reports[0].read_text()) if reports else {}
 
-        return (
-            root,
-            child,
-            second_root,
-            notes,
-            history,
-            child_sequence_exists,
-            report_data,
-            ids,
-            new_root,
-        )
+        return root, child, second_root, notes, history, child_sequence_exists, report_data
 
-    (
-        root,
-        child,
-        second_root,
-        notes,
-        history,
-        child_sequence_exists,
-        report_data,
-        ids,
-        new_root,
-    ) = asyncio.run(_scenario())
+    root, child, second_root, notes, history, child_sequence_exists, report_data = asyncio.run(_scenario())
 
-    # 新策略：历史 ID 不自动迁移，旧 TASK* 记录不会被改写为新前缀。
-    assert root is None
-    assert child is None
-    assert second_root is None
-    assert notes == []
-    assert history == []
+    assert root and root.id == "TASK_0001"
+    assert child and child.id == "TASK_0001_1"
+    assert child.archived is True
+    assert second_root and second_root.id == "TASK_0002"
+    assert notes and notes[0].task_id == "TASK_0001"
+    assert history and history[0].task_id == "TASK_0001"
     assert not child_sequence_exists
-    assert report_data == {}
-    assert "TASK-0001" in ids
-    assert "TASK-0001.1" in ids
-    assert "TASK0002" in ids
-    assert new_root.id == "VG_TASK_0001"
+    assert report_data.get("changed") == 3
 
 
 def test_task_list_outputs_detail_buttons(monkeypatch, tmp_path: Path):
@@ -4812,7 +4762,7 @@ def test_task_desc_confirm_numeric_input_1_confirms(monkeypatch):
     async def scenario() -> str | None:
         message.text = "1"  # 输入数字1，应该对应第一个选项"确认更新"
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="新的描述内容",
             actor="Tester#1",
             current_description="旧描述",
@@ -4824,7 +4774,7 @@ def test_task_desc_confirm_numeric_input_1_confirms(monkeypatch):
     state_value = asyncio.run(scenario())
 
     assert state_value is None, "确认后应清空状态"
-    assert update_calls == [("VG_TASK_EDIT", "Tester#1", "新的描述内容")], "应调用更新任务"
+    assert update_calls == [("TASK_EDIT", "Tester#1", "新的描述内容")], "应调用更新任务"
     assert message.calls and "任务描述已更新" in message.calls[0][0]
 
 
@@ -4833,11 +4783,11 @@ def test_task_desc_confirm_numeric_input_2_retries(monkeypatch):
     message = DummyMessage()
     state, _storage = make_state(message)
 
-    task = _make_task(task_id="VG_TASK_EDIT", title="描述任务", status="research")
+    task = _make_task(task_id="TASK_EDIT", title="描述任务", status="research")
     task.description = "原始描述"
 
     async def fake_get_task(task_id: str):
-        assert task_id == "VG_TASK_EDIT"
+        assert task_id == "TASK_EDIT"
         return task
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
@@ -4845,7 +4795,7 @@ def test_task_desc_confirm_numeric_input_2_retries(monkeypatch):
     async def scenario() -> tuple[str | None, dict]:
         message.text = "2"  # 输入数字2，应该对应第二个选项"重新输入"
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="草稿描述",
             actor="Tester#1",
             current_description="旧描述",
@@ -4872,7 +4822,7 @@ def test_task_desc_confirm_numeric_input_3_cancels():
     async def scenario() -> str | None:
         message.text = "3"  # 输入数字3，应该对应第三个选项"取消"
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="草稿描述",
             actor="Tester#1",
             current_description="旧描述",
@@ -4918,7 +4868,7 @@ def test_task_desc_confirm_numeric_input_with_prefix():
     async def scenario() -> str | None:
         message.text = "1. ✅ 确认更新"  # 带序号和emoji的完整按钮文本
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="新的描述内容",
             actor="Tester#1",
             current_description="旧描述",
@@ -4940,7 +4890,7 @@ def test_task_desc_confirm_numeric_input_with_prefix():
     state_value = asyncio.run(scenario())
 
     assert state_value is None, "确认后应清空状态"
-    assert update_calls == [("VG_TASK_EDIT", "Tester#1", "新的描述内容")], "应调用更新任务"
+    assert update_calls == [("TASK_EDIT", "Tester#1", "新的描述内容")], "应调用更新任务"
     assert message.calls and "任务描述已更新" in message.calls[0][0]
 
 
@@ -4952,7 +4902,7 @@ def test_task_desc_confirm_text_input_still_works():
     async def scenario() -> str | None:
         message.text = "取消"  # 直接输入文本
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="草稿描述",
             actor="Tester#1",
             current_description="旧描述",
@@ -4975,7 +4925,7 @@ def test_task_desc_confirm_invalid_numeric_input():
     async def scenario() -> str | None:
         message.text = "99"  # 超出范围的数字
         await state.update_data(
-            task_id="VG_TASK_EDIT",
+            task_id="TASK_EDIT",
             new_description="草稿描述",
             actor="Tester#1",
             current_description="旧描述",

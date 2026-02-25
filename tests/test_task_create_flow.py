@@ -394,7 +394,7 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
     assert "log.txt（text/plain）→ ./data/log.txt" in summary
 
     created_task = bot.TaskRecord(
-        id="VG_TASK_1234",
+        id="TASK_1234",
         project_slug="demo",
         title="测试标题",
         status="research",
@@ -404,7 +404,7 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
         due_date=None,
         description="任务描述",
         parent_id=None,
-        root_id="VG_TASK_1234",
+        root_id="TASK_1234",
         depth=0,
         lineage="0001",
         archived=False,
@@ -494,7 +494,7 @@ def test_task_create_album_keeps_text_and_collects_followup_attachments(monkeypa
     assert len(state.data.get("pending_attachments", [])) == 2
 
     created_task = bot.TaskRecord(
-        id="VG_TASK_5678",
+        id="TASK_5678",
         project_slug="demo",
         title="测试标题",
         status="research",
@@ -504,7 +504,7 @@ def test_task_create_album_keeps_text_and_collects_followup_attachments(monkeypa
         due_date=None,
         description="描述文本",
         parent_id=None,
-        root_id="VG_TASK_5678",
+        root_id="TASK_5678",
         depth=0,
         lineage="0001",
         archived=False,
@@ -713,7 +713,7 @@ def test_bind_serialized_attachments_dedupes_by_path(monkeypatch, attachments, e
     """按 path 去重，避免重复写库。"""
 
     task = bot.TaskRecord(
-        id="VG_TASK_9999",
+        id="TASK_9999",
         project_slug="demo",
         title="测试",
         status="research",
@@ -723,7 +723,7 @@ def test_bind_serialized_attachments_dedupes_by_path(monkeypatch, attachments, e
         due_date=None,
         description=None,
         parent_id=None,
-        root_id="VG_TASK_9999",
+        root_id="TASK_9999",
         depth=0,
         lineage="0001",
         archived=False,
@@ -765,7 +765,7 @@ def test_task_create_confirm_uses_default_priority(monkeypatch):
 
     async def fake_create_root_task(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(id="VG_TASK_9999")
+        return SimpleNamespace(id="TASK_9999")
 
     async def fake_render_detail(task_id):
         return "详情文本", None
@@ -828,7 +828,7 @@ def test_task_create_confirm_cancel_via_number():
 
 def test_task_child_command_reports_deprecation():
     state = DummyState(data={"stage": "child"}, state="waiting")
-    message = DummyMessage("/task_child VG_TASK_0001 新子任务")
+    message = DummyMessage("/task_child TASK_0001 新子任务")
 
     asyncio.run(bot.on_task_child(message, state))
 
@@ -839,7 +839,7 @@ def test_task_child_command_reports_deprecation():
 
 
 def test_task_children_command_reports_deprecation():
-    message = DummyMessage("/task_children VG_TASK_0001")
+    message = DummyMessage("/task_children TASK_0001")
 
     asyncio.run(bot.on_task_children(message))
 
@@ -848,7 +848,7 @@ def test_task_children_command_reports_deprecation():
 
 
 def test_task_add_child_callback_reports_deprecation():
-    callback = DummyCallback(DummyMessage(""), "task:add_child:VG_TASK_0001")
+    callback = DummyCallback(DummyMessage(""), "task:add_child:TASK_0001")
     state = DummyState(data={"stage": "child"}, state="waiting")
 
     asyncio.run(bot.on_add_child_callback(callback, state))
@@ -862,7 +862,7 @@ def test_task_add_child_callback_reports_deprecation():
 
 
 def test_task_list_children_callback_reports_deprecation():
-    callback = DummyCallback(DummyMessage(""), "task:list_children:VG_TASK_0001")
+    callback = DummyCallback(DummyMessage(""), "task:list_children:TASK_0001")
 
     asyncio.run(bot.on_list_children_callback(callback))
 
