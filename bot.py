@@ -300,6 +300,8 @@ MODEL_SESSION_GLOB = os.environ.get("MODEL_SESSION_GLOB", "rollout-*.jsonl").str
 SESSION_POLL_TIMEOUT = float(os.environ.get("SESSION_POLL_TIMEOUT", "2"))
 WATCH_MAX_WAIT = float(os.environ.get("WATCH_MAX_WAIT", "0"))
 WATCH_INTERVAL = float(os.environ.get("WATCH_INTERVAL", "2"))
+# Telegram 消息补偿轮询：每条入站消息触发一次，按 1/3/10/30/90 分钟检测是否有遗漏输出。
+MESSAGE_RECOVERY_POLL_DELAYS_SECONDS: tuple[float, ...] = (60.0, 180.0, 600.0, 1800.0, 5400.0)
 SEND_RETRY_ATTEMPTS = int(os.environ.get("SEND_RETRY_ATTEMPTS", "3"))
 TMUX_SNAPSHOT_LINES = _env_int("TMUX_SNAPSHOT_LINES", 5)
 TMUX_SNAPSHOT_MAX_LINES = _env_int("TMUX_SNAPSHOT_MAX_LINES", 500)
@@ -536,6 +538,9 @@ class TextPasteAggregationMiddleware(BaseMiddleware):
     """
 
     async def __call__(self, handler: Callable[[Any, Dict[str, Any]], Awaitable[Any]], event: Any, data: Dict[str, Any]) -> Any:
+        # 任意 Telegram Message 入站都触发一次补偿轮询（同 chat 覆盖旧任务）。
+        if isinstance(event, Message) and not _is_text_paste_synthetic_message(event):
+            await _schedule_message_recovery_poll(event, source="telegram_message")
         if not ENABLE_TEXT_PASTE_AGGREGATION:
             return await handler(event, data)
         if not isinstance(event, Message):
@@ -2118,23 +2123,28 @@ async def _dispatch_prompt_to_model(
     if ack_immediately or pointer_switched:
         await _send_session_ack(chat_id, session_path, reply_to=reply_to)
 
+    quick_poll_delivered = False
     if SESSION_POLL_TIMEOUT > 0:
         start_time = time.monotonic()
         while time.monotonic() - start_time < SESSION_POLL_TIMEOUT:
             delivered = await _deliver_pending_messages(chat_id, session_path)
             if delivered:
-                return True, session_path
+                quick_poll_delivered = True
+                break
             await asyncio.sleep(0.3)
 
     # 中断旧的延迟轮询（如果存在）
     await _interrupt_long_poll(chat_id)
 
+    # 即时轮询已命中时，恢复 watcher 直接进入延迟轮询，避免重复添加“完成前缀”。
+    start_in_long_poll = quick_poll_delivered or (session_key in (CHAT_LAST_MESSAGE.get(chat_id) or {}))
     watcher_task = asyncio.create_task(
         _watch_and_notify(
             chat_id,
             session_path,
             max_wait=WATCH_MAX_WAIT,
             interval=WATCH_INTERVAL,
+            start_in_long_poll=start_in_long_poll,
         )
     )
     CHAT_WATCHERS[chat_id] = watcher_task
@@ -2442,9 +2452,11 @@ class PendingTextPasteState:
 
 TEXT_PASTE_STATE: dict[int, PendingTextPasteState] = {}
 TEXT_PASTE_LOCK = asyncio.Lock()
-# 合成消息保护：聚合完成后会注入一条“合成消息”走原有 handler/FSM；这里避免再次被聚合中间件吞掉。
+# 合成消息保护：内部会注入“合成消息”复用既有 handler/FSM（含长文本聚合、回调兜底命令）。
+# 这类消息不应再触发“文本聚合/补偿轮询”等入站逻辑，否则会产生误触发与递归。
 TEXT_PASTE_SYNTHETIC_GUARD: dict[tuple[int, int], float] = {}
 TEXT_PASTE_SYNTHETIC_GUARD_TTL_SECONDS = 60.0
+INTERNAL_SYNTHETIC_MESSAGE_ID_OFFSET = 10_000_000
 
 ATTACHMENT_USAGE_HINT = (
     "请按需读取附件：图片可使用 Codex 的 view_image 功能或 Claude Code 的文件引用能力；"
@@ -2453,7 +2465,7 @@ ATTACHMENT_USAGE_HINT = (
 
 
 def _mark_text_paste_synthetic_message(chat_id: int, message_id: int) -> None:
-    """标记某条 message_id 为“合成消息”，在短 TTL 内跳过再次聚合。"""
+    """标记某条 message_id 为“内部合成消息”，在短 TTL 内跳过入站二次处理。"""
 
     now = time.monotonic()
     TEXT_PASTE_SYNTHETIC_GUARD[(chat_id, message_id)] = now
@@ -2465,7 +2477,7 @@ def _mark_text_paste_synthetic_message(chat_id: int, message_id: int) -> None:
 
 
 def _is_text_paste_synthetic_message(message: Message) -> bool:
-    """判断当前消息是否为聚合后注入的“合成消息”。"""
+    """判断当前消息是否为内部注入的“合成消息”。"""
 
     try:
         chat_id = int(message.chat.id)
@@ -2479,6 +2491,13 @@ def _is_text_paste_synthetic_message(message: Message) -> bool:
         TEXT_PASTE_SYNTHETIC_GUARD.pop((chat_id, message_id), None)
         return False
     return True
+
+
+def _build_internal_synthetic_message_id(origin_message_id: int) -> int:
+    """为内部合成消息生成远离真实 Telegram 序列的 message_id，避免与真实消息冲突。"""
+
+    base = max(int(origin_message_id or 0), 0)
+    return base + INTERNAL_SYNTHETIC_MESSAGE_ID_OFFSET
 
 _FS_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -3110,7 +3129,7 @@ async def _feed_synthetic_text_update(origin_message: Message, *, text: str) -> 
 
     origin_message_id = int(getattr(origin_message, "message_id", 0) or 0)
     # 关键：使用远大于真实 Telegram message_id 的编号，避免与真实消息冲突导致误判为“合成消息”。
-    synthetic_message_id = origin_message_id + 10_000_000
+    synthetic_message_id = _build_internal_synthetic_message_id(origin_message_id)
 
     entities: Optional[list[MessageEntity]] = None
     if stripped.startswith("/"):
@@ -7453,6 +7472,7 @@ CHAT_PLAN_TEXT: Dict[int, str] = {}
 CHAT_PLAN_COMPLETION: Dict[int, bool] = {}
 CHAT_DELIVERED_HASHES: Dict[int, Dict[str, set[str]]] = {}
 CHAT_DELIVERED_OFFSETS: Dict[int, Dict[str, set[int]]] = {}
+CHAT_MESSAGE_RECOVERY_POLL_TASKS: Dict[int, asyncio.Task] = {}
 CHAT_REPLY_COUNT: Dict[int, Dict[str, int]] = {}
 CHAT_COMPACT_STATE: Dict[int, Dict[str, Dict[str, Any]]] = {}
 # 记录每个 chat 最近一次向模型发起请求的用户（用于按钮权限校验）。
@@ -9081,15 +9101,16 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
 
     CHAT_SESSION_MAP[chat_id] = session_key
 
+    delivered_in_recheck = False
     try:
         delivered = await _deliver_pending_messages(chat_id, session_path)
         if delivered:
+            delivered_in_recheck = True
             worker_log.info(
                 "[session-map] chat=%s 已即时发送 pending 输出",
                 chat_id,
                 extra=_session_extra(path=session_path),
             )
-            return session_path
     except Exception as exc:  # noqa: BLE001
         worker_log.warning(
             "推送后检查 Codex 事件失败: %s",
@@ -9106,12 +9127,14 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
     # 中断旧的延迟轮询（如果存在）
     await _interrupt_long_poll(chat_id)
 
+    start_in_long_poll = delivered_in_recheck or (session_key in (CHAT_LAST_MESSAGE.get(chat_id) or {}))
     CHAT_WATCHERS[chat_id] = asyncio.create_task(
         _watch_and_notify(
             chat_id,
             session_path,
             max_wait=WATCH_MAX_WAIT,
             interval=WATCH_INTERVAL,
+            start_in_long_poll=start_in_long_poll,
         )
     )
     return session_path
@@ -9292,6 +9315,180 @@ async def _interrupt_long_poll(chat_id: int) -> None:
                 "标记延迟轮询为待中断",
                 extra={"chat": chat_id},
             )
+
+
+async def _probe_new_model_message_once(
+    chat_id: int,
+    *,
+    trigger_message_id: int,
+    round_index: int,
+    source: str,
+) -> bool:
+    """执行一次补偿检测：若本轮成功向 Telegram 发送了新的模型消息则返回 True。"""
+
+    session_key = CHAT_SESSION_MAP.get(chat_id)
+    if not session_key:
+        worker_log.debug(
+            "补偿轮询跳过：chat 未绑定会话",
+            extra={
+                "chat": chat_id,
+                "source": source,
+                "trigger_message_id": str(trigger_message_id),
+                "round": str(round_index),
+            },
+        )
+        return False
+
+    session_path = resolve_path(session_key)
+    if not session_path.exists():
+        worker_log.debug(
+            "补偿轮询跳过：会话文件不存在",
+            extra={
+                "chat": chat_id,
+                "source": source,
+                "trigger_message_id": str(trigger_message_id),
+                "round": str(round_index),
+                **_session_extra(key=session_key),
+            },
+        )
+        return False
+
+    before_last = _get_last_message(chat_id, session_key)
+    before_offsets = len(_get_delivered_offsets(chat_id, session_key))
+
+    try:
+        await _deliver_pending_messages(chat_id, session_path, add_completion_header=False)
+    except Exception as exc:  # noqa: BLE001 - 补偿检测不能影响主流程
+        worker_log.warning(
+            "补偿轮询检测失败：%s",
+            exc,
+            extra={
+                "chat": chat_id,
+                "source": source,
+                "trigger_message_id": str(trigger_message_id),
+                "round": str(round_index),
+                **_session_extra(path=session_path),
+            },
+        )
+        return False
+
+    after_last = _get_last_message(chat_id, session_key)
+    after_offsets = len(_get_delivered_offsets(chat_id, session_key))
+    hit = bool(after_last is not None and after_last != before_last)
+    if not hit and before_last is None and after_last:
+        # 兜底：首次消息命中时，文本可能与 before 一致为空值，这里结合偏移变化补判一次。
+        hit = after_offsets > before_offsets
+
+    worker_log.info(
+        "补偿轮询完成一次检测",
+        extra={
+            "chat": chat_id,
+            "source": source,
+            "trigger_message_id": str(trigger_message_id),
+            "round": str(round_index),
+            "hit": str(hit),
+            "offset_delta": str(after_offsets - before_offsets),
+            **_session_extra(path=session_path),
+        },
+    )
+    return hit
+
+
+async def _run_message_recovery_poll(
+    chat_id: int,
+    *,
+    trigger_message_id: int,
+    source: str,
+) -> None:
+    """执行 Telegram 入站消息触发的补偿轮询（1/3/10/30/90 分钟）。"""
+
+    current_task = asyncio.current_task()
+    if current_task is None:
+        return
+
+    try:
+        for round_index, delay_seconds in enumerate(MESSAGE_RECOVERY_POLL_DELAYS_SECONDS, start=1):
+            await asyncio.sleep(max(delay_seconds, 0.0))
+            active_task = CHAT_MESSAGE_RECOVERY_POLL_TASKS.get(chat_id)
+            if active_task is not current_task:
+                # 有更新的消息已覆盖当前轮询任务，旧任务安静退出。
+                return
+
+            hit = await _probe_new_model_message_once(
+                chat_id,
+                trigger_message_id=trigger_message_id,
+                round_index=round_index,
+                source=source,
+            )
+            if hit:
+                worker_log.info(
+                    "补偿轮询命中新消息，提前结束后续检测",
+                    extra={
+                        "chat": chat_id,
+                        "source": source,
+                        "trigger_message_id": str(trigger_message_id),
+                        "round": str(round_index),
+                    },
+                )
+                return
+    except asyncio.CancelledError:
+        worker_log.debug(
+            "补偿轮询任务被覆盖取消",
+            extra={
+                "chat": chat_id,
+                "source": source,
+                "trigger_message_id": str(trigger_message_id),
+            },
+        )
+        raise
+    finally:
+        active_task = CHAT_MESSAGE_RECOVERY_POLL_TASKS.get(chat_id)
+        if active_task is current_task:
+            CHAT_MESSAGE_RECOVERY_POLL_TASKS.pop(chat_id, None)
+
+
+async def _cancel_message_recovery_poll(chat_id: int) -> None:
+    """取消指定 chat 现有的补偿轮询任务（若存在）。"""
+
+    task = CHAT_MESSAGE_RECOVERY_POLL_TASKS.pop(chat_id, None)
+    if task is None:
+        return
+    if task.done():
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+async def _schedule_message_recovery_poll(message: Message, *, source: str) -> None:
+    """为入站 Telegram Message 安排补偿轮询任务（同 chat 新消息覆盖旧任务）。"""
+
+    if _is_text_paste_synthetic_message(message):
+        return
+    chat = getattr(message, "chat", None)
+    if chat is None:
+        return
+    chat_id = int(chat.id)
+    trigger_message_id = int(getattr(message, "message_id", 0) or 0)
+
+    await _cancel_message_recovery_poll(chat_id)
+    task = asyncio.create_task(
+        _run_message_recovery_poll(
+            chat_id,
+            trigger_message_id=trigger_message_id,
+            source=source,
+        )
+    )
+    CHAT_MESSAGE_RECOVERY_POLL_TASKS[chat_id] = task
+    worker_log.debug(
+        "已安排补偿轮询任务",
+        extra={
+            "chat": chat_id,
+            "source": source,
+            "trigger_message_id": str(trigger_message_id),
+            "rounds": str(len(MESSAGE_RECOVERY_POLL_DELAYS_SECONDS)),
+        },
+    )
 
 
 async def _watch_and_notify(
@@ -12094,9 +12291,10 @@ async def _dispatch_task_new_command(source_message: Message, actor: Optional[Us
     entities = [
         MessageEntity(type="bot_command", offset=0, length=len(command_text)),
     ]
+    synthetic_message_id = _build_internal_synthetic_message_id(source_message.message_id)
     synthetic_message = source_message.model_copy(
         update={
-            "message_id": source_message.message_id + 1,
+            "message_id": synthetic_message_id,
             "date": now,
             "edit_date": None,
             "text": command_text,
@@ -12108,6 +12306,7 @@ async def _dispatch_task_new_command(source_message: Message, actor: Optional[Us
         update_id=int(time.time() * 1000),
         message=synthetic_message,
     )
+    _mark_text_paste_synthetic_message(int(source_message.chat.id), synthetic_message_id)
     await dp.feed_update(bot_instance, update)
 
 
@@ -14681,9 +14880,10 @@ async def _fallback_task_detail_back(callback: CallbackQuery) -> None:
     entities = [
         MessageEntity(type="bot_command", offset=0, length=len(command_text)),
     ]
+    synthetic_message_id = _build_internal_synthetic_message_id(message.message_id)
     synthetic_message = message.model_copy(
         update={
-            "message_id": message.message_id + 1,
+            "message_id": synthetic_message_id,
             "date": now,
             "edit_date": None,
             "text": command_text,
@@ -14695,6 +14895,7 @@ async def _fallback_task_detail_back(callback: CallbackQuery) -> None:
         update_id=int(time.time() * 1000),
         message=synthetic_message,
     )
+    _mark_text_paste_synthetic_message(int(message.chat.id), synthetic_message_id)
     await dp.feed_update(bot, update)
 
 
