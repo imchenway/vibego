@@ -82,6 +82,67 @@ def test_quick_reply_partial_enters_supplement_state():
     asyncio.run(_scenario())
 
 
+def test_quick_reply_all_dispatches_prompt_and_restores_main_keyboard(monkeypatch, tmp_path: Path):
+    """点击“全部按推荐”后应推送固定提示，并恢复主菜单键盘。"""
+
+    origin = DummyMessage()
+    callback = DummyCallback(bot.MODEL_QUICK_REPLY_ALL_CALLBACK, origin)
+
+    recorded: list[tuple[int, str, object, bool]] = []
+    previews: list[tuple[int, str, object, object]] = []
+    ack_calls: list[tuple[int, Path, object]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        recorded.append((chat_id, prompt, reply_to, ack_immediately))
+        return True, tmp_path / "session_quick_all.jsonl"
+
+    async def fake_preview(chat_id: int, preview_block: str, *, reply_to, parse_mode, reply_markup):
+        previews.append((chat_id, preview_block, parse_mode, reply_markup))
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        ack_calls.append((chat_id, session_path, reply_to))
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    async def _scenario() -> None:
+        await bot.on_model_quick_reply_all(callback)
+        assert recorded, "应推送到模型"
+        chat_id, prompt, reply_to, ack_immediately = recorded[-1]
+        assert chat_id == origin.chat.id
+        assert prompt == "待决策项全部按模型推荐"
+        assert reply_to is origin
+        assert ack_immediately is False
+        assert previews, "应回显推送预览"
+        assert isinstance(previews[-1][3], ReplyKeyboardMarkup), "预览消息应恢复主菜单键盘"
+        assert ack_calls, "应发送 session ack"
+
+    asyncio.run(_scenario())
+
+
+def test_quick_reply_all_dispatch_failure_restores_main_keyboard(monkeypatch):
+    """“全部按推荐”推送失败时，也应恢复主菜单。"""
+
+    origin = DummyMessage()
+    callback = DummyCallback(bot.MODEL_QUICK_REPLY_ALL_CALLBACK, origin)
+
+    async def fake_dispatch(*_args, **_kwargs):
+        return False, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    async def _scenario() -> None:
+        await bot.on_model_quick_reply_all(callback)
+        assert callback.answers and callback.answers[-1] == ("推送失败：模型未就绪", True)
+        assert origin.calls, "失败时应补发提示并恢复主菜单"
+        text, _, reply_markup, _ = origin.calls[-1]
+        assert "推送失败" in text
+        assert isinstance(reply_markup, ReplyKeyboardMarkup)
+
+    asyncio.run(_scenario())
+
+
 def test_quick_reply_partial_supplement_dispatches_prompt(monkeypatch, tmp_path: Path):
     """补充阶段输入文案后，应推送“未提及按推荐 + 用户补充说明”到模型。"""
 

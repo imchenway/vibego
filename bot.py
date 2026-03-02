@@ -10821,6 +10821,11 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     )
     if not success:
         await callback.answer("推送失败：模型未就绪", show_alert=True)
+        if callback.message is not None:
+            await callback.message.answer(
+                "推送失败：模型未就绪，请稍后再试。",
+                reply_markup=_build_worker_main_keyboard(),
+            )
         return
 
     await callback.answer("已推送到模型")
@@ -10830,7 +10835,7 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
         preview_block,
         reply_to=origin_message,
         parse_mode=preview_parse_mode,
-        reply_markup=None,
+        reply_markup=_build_worker_main_keyboard(),
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
@@ -11513,6 +11518,7 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
             reply_to=callback.message,
             actor_user_id=callback.from_user.id if callback.from_user else None,
             allow_auto_retry=False,
+            remove_reply_keyboard=True,
         )
         if success:
             await callback.answer("已重试并推送到模型")
@@ -11566,6 +11572,7 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
                 reply_to=callback.message,
                 actor_user_id=callback.from_user.id if callback.from_user else None,
                 allow_auto_retry=True,
+                remove_reply_keyboard=True,
             )
             if not success:
                 await callback.answer("自动提交失败，可点击“重试提交”继续。", show_alert=True)
@@ -11630,6 +11637,7 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
             reply_to=callback.message,
             actor_user_id=callback.from_user.id if callback.from_user else None,
             allow_auto_retry=False,
+            remove_reply_keyboard=True,
         )
         if not success:
             await callback.answer("提交失败，可点击“重试提交”继续。", show_alert=True)

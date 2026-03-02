@@ -262,6 +262,9 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     assert '{"answers":{"scope":{"answers":["两页"]},"style":{"answers":["胶囊"]}}}' in prompt
     assert not preview_calls, "提交后不应再发送中间推送代码块预览"
     assert ack_calls, "应发送 session ack"
+    assert callback.message.calls, "提交成功后应回显决策摘要并恢复主菜单"
+    summary_reply_markup = callback.message.calls[-1][2]
+    assert isinstance(summary_reply_markup, ReplyKeyboardMarkup)
     assert callback.answers[-1] == ("已提交并推送到模型", False)
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
     assert 10 not in bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS
@@ -412,6 +415,9 @@ def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_pa
 
     assert dispatched, "选项作答完成后应自动推送"
     assert '{"answers":{"scope":{"answers":["两页都改"]}}}' in dispatched[-1]
+    assert callback.message.calls, "自动提交后应恢复主菜单"
+    auto_summary_reply_markup = callback.message.calls[-1][2]
+    assert isinstance(auto_summary_reply_markup, ReplyKeyboardMarkup)
     assert callback.answers[-1] == ("已自动推送到模型", False)
     assert not preview_calls, "自动提交后不应再发送中间推送代码块预览"
     assert ack_calls
@@ -678,7 +684,8 @@ def test_request_input_auto_submit_failure_sends_retry_button(monkeypatch):
     assert session.submit_retry_count == 1
     assert callback.answers[-1] == ("自动提交失败，可点击“重试提交”继续。", True)
     assert message.calls, "应发送重试提交提示"
-    retry_markup = message.calls[-1][2]
+    retry_markup = message.calls[0][2]
     assert isinstance(retry_markup, InlineKeyboardMarkup)
     retry_button = retry_markup.inline_keyboard[0][0]
     assert retry_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_RETRY_SUBMIT}"
+    assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup), "失败兜底后应恢复主菜单"
