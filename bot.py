@@ -347,7 +347,8 @@ TEXT_PASTE_AGGREGATION_DELAY = max(_env_float("TEXT_PASTE_AGGREGATION_DELAY", 0.
 TEXT_PASTE_PREFIX_MAX_CHARS = max(_env_int("TEXT_PASTE_PREFIX_MAX_CHARS", 120), 0)
 TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS = max(_env_int("TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200), 0)
 # 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
-ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先阅读并严格遵守 $HOME/.config/vibego/AGENTS.md 的全部规约以及当前目录下的所有AGENTS.md 内容，如出现部分内容的冲突请以当前目录下的规约为准。如未特殊指定模式，则默认进入 PLAN 模式。"
+ENFORCED_AGENTS_NOTICE = "【强制规约】你必须先读取 $HOME/.config/vibego/AGENTS.md、当前根目录 AGENTS.md、以及所有受影响子项目目录下最近的 AGENTS.md 与 AGENTS.evidence.json；如冲突以更近目录为准。
+                                本次任务继续走 vibe -> design -> develop；无论 PLAN 还是 YOLO，都必须严格执行 TDD 门禁：先识别影响面，先跑受影响子项目 baseline（Verified 的 test / coverage / typecheck / build），baseline 不绿或 coverage 未达 Required Engineering Gate 就先修基线；新需求必须先补测试并确认失败，再写代码；写完后重新执行受影响测试、全量 test、coverage、typecheck/build，并连续两次通过且 coverage 恢复到目标值（默认 100%）；未达标可自动修复但最多 5 轮，超过即 fail-closed。测试资产属于长期验证资产，不得削弱、跳过或扩大 exclusions。最后输出影响项目、改动文件、测试清单、命令结果、coverage 结果、风险与回滚点。如未特殊指定模式，则默认进入 PLAN 模式。"
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
 MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
