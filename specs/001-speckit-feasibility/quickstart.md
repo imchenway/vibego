@@ -111,7 +111,8 @@ bash .specify/scripts/bash/update-agent-context.sh codex
 ```
 
 注意：
-- 该脚本会修改仓库内 `AGENTS.md`（在文件末尾追加 Active Technologies / Recent Changes 等段落）。
+
+- 该脚本会修改仓库内 `AGENTS-template.md`（在文件末尾追加 Active Technologies / Recent Changes 等段落）。
 - 输出中不得包含任何敏感信息（token、chat_id 等）；如需要示例，请用占位符代替。
 
 ## 安全提示（必读）

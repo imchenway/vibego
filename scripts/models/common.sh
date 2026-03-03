@@ -192,7 +192,7 @@ PY
 
 sync_vibego_agents_for_model() {
   local model_key="${1:-}"
-  local template="${2:-$ROOT_DIR/AGENTS.md}"
+  local template="${2:-$ROOT_DIR/AGENTS-template.md}"
   if [[ -z "$model_key" ]]; then
     return 0
   fi

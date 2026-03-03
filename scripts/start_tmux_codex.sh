@@ -88,7 +88,7 @@ ensure_dir "$(dirname "$SESSION_BINDER_LOG")"
 ensure_dir "$(dirname "$SESSION_BINDER_PID_FILE")"
 
 if [[ "${VIBEGO_AGENTS_SYNCED:-0}" != "1" ]]; then
-  AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$ROOT_DIR/AGENTS.md}"
+  AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$ROOT_DIR/AGENTS-template.md}"
   if [[ ! -f "$AGENTS_TEMPLATE_FILE" ]]; then
     echo "[start-tmux] 未找到 AGENTS 模板文件: $AGENTS_TEMPLATE_FILE" >&2
     exit 1

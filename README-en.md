@@ -41,7 +41,8 @@ Use the official Telegram BotFather guide (<https://core.telegram.org/bots#botfa
 Before continuing, make sure Codex / ClaudeCode CLIs are installed and logged in, and that you have a Telegram bot token
 ready.
 
-- The startup scripts automatically inject the repository-level [AGENTS.md](AGENTS.md) into `$HOME/.codex/AGENTS.md`
+- The startup scripts automatically inject the repository-level [AGENTS-template.md](AGENTS-template.md) into
+  `$HOME/.codex/AGENTS.md`
   and `$HOME/.claude/CLAUDE.md` between `<!-- vibego-agents:start -->` / `<!-- vibego-agents:end -->`; if the target
   file is missing it is created, otherwise your custom content stays outside the markers and a `.vibego.bak` backup is
   kept for safety.
@@ -126,7 +127,7 @@ Default session files (verifiable on disk):
 | `GEMINI_SESSION_ROOT` | Session root (default `~/.gemini/tmp`) |
 | `GEMINI_SESSION_GLOB` | Session file pattern (default `session-*.json`) |
 
-On startup, vibego syncs the repository `AGENTS.md` block into `~/.gemini/GEMINI.md` between the
+On startup, vibego syncs the repository `AGENTS-template.md` block into `~/.gemini/GEMINI.md` between the
 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` markers so Gemini CLI can inherit the same enforced rules.
 
 ## aiogram Worker Behaviour

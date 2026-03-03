@@ -45,7 +45,7 @@ include = ["vibego_cli", "vibego_cli.*", "tasks", "scripts", "scripts.*", "comma
 "scripts" = ["*.sh", "models/*.sh"]
 
 [tool.setuptools.data-files]
-"" = ["AGENTS.md", "AGENTS-en.md"]
+"" = ["AGENTS-template.md", "AGENTS-en.md"]
 
 [tool.bumpversion]
 current_version = "1.5.47"

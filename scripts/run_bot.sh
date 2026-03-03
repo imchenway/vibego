@@ -148,15 +148,15 @@ if [[ ! -d "$MODEL_WORKDIR" ]]; then
   exit 1
 fi
 
-# 优先使用包根目录的 AGENTS.md，若缺失则回退到虚拟环境根目录（pipx 安装时 data_files 会落在此处）
-DEFAULT_AGENTS_TEMPLATE="$SOURCE_ROOT/AGENTS.md"
+# 优先使用包根目录的 AGENTS-template.md，若缺失则回退到虚拟环境根目录（pipx 安装时 data_files 会落在此处）
+DEFAULT_AGENTS_TEMPLATE="$SOURCE_ROOT/AGENTS-template.md"
 if [[ ! -f "$DEFAULT_AGENTS_TEMPLATE" ]]; then
   VENV_ROOT_FROM_SOURCE="$(cd "$SOURCE_ROOT/../../.." && pwd)"
-  CANDIDATE_VENV_TEMPLATE="$VENV_ROOT_FROM_SOURCE/AGENTS.md"
+  CANDIDATE_VENV_TEMPLATE="$VENV_ROOT_FROM_SOURCE/AGENTS-template.md"
   if [[ -f "$CANDIDATE_VENV_TEMPLATE" ]]; then
     DEFAULT_AGENTS_TEMPLATE="$CANDIDATE_VENV_TEMPLATE"
-  elif [[ -n "${VIRTUAL_ENV:-}" && -f "$VIRTUAL_ENV/AGENTS.md" ]]; then
-    DEFAULT_AGENTS_TEMPLATE="$VIRTUAL_ENV/AGENTS.md"
+  elif [[ -n "${VIRTUAL_ENV:-}" && -f "$VIRTUAL_ENV/AGENTS-template.md" ]]; then
+    DEFAULT_AGENTS_TEMPLATE="$VIRTUAL_ENV/AGENTS-template.md"
   fi
 fi
 AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$DEFAULT_AGENTS_TEMPLATE}"

@@ -42,7 +42,9 @@ source ~/.config/vibego/runtime/venv/bin/activate
 
 执行该步骤之前，确保您的终端已经安装并登录了 codex / claudeCode / gemini（按需），且已经准备好了 telegram bot token。
 
-- `demo` 启动脚本会在运行前自动把仓库根目录的 [AGENTS.md](AGENTS.md) 写入 `$HOME/.codex/AGENTS.md` / `$HOME/.claude/CLAUDE.md` 的 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` 区块；若文件原本不存在会直接创建，存在则保留你已有内容并备份为 `.vibego.bak`，方便进一步自定义
+- `demo` 启动脚本会在运行前自动把仓库根目录的 [AGENTS-template.md](AGENTS-template.md) 写入 `$HOME/.codex/AGENTS.md` /
+  `$HOME/.claude/CLAUDE.md` 的 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->`
+  区块；若文件原本不存在会直接创建，存在则保留你已有内容并备份为 `.vibego.bak`，方便进一步自定义
 
 ```bash
 pipx install vibego  # 或者 pip install --user vibego
@@ -140,7 +142,8 @@ Gemini 基于官方 `gemini-cli`（Homebrew 包名 `gemini-cli`，命令为 `gem
 | `GEMINI_SESSION_ROOT` | 会话根目录，默认 `~/.gemini/tmp` |
 | `GEMINI_SESSION_GLOB` | 会话文件匹配，默认 `session-*.json` |
 
-启动时会自动把仓库根目录的 `AGENTS.md` 同步到 `~/.gemini/GEMINI.md` 的 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` 区块，
+启动时会自动把仓库根目录的 `AGENTS-template.md` 同步到 `~/.gemini/GEMINI.md` 的
+`<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` 区块，
 用于让 Gemini CLI 自动继承 vibego 的强制规约。
 
 ## aiogram Worker 行为
