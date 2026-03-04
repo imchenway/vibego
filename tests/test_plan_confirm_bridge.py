@@ -67,10 +67,12 @@ def _reset_runtime():
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS.clear()
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.PLAN_CONFIRM_PROCESSING_TOKENS.clear()
     bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
     yield
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
+    bot.PLAN_CONFIRM_PROCESSING_TOKENS.clear()
     bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
 
 
@@ -217,6 +219,76 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已确认并推送到模型", False)
     assert callback.message.answers == []
+
+
+def test_plan_confirm_yes_is_idempotent_under_concurrent_clicks(monkeypatch: pytest.MonkeyPatch):
+    """同一个 Plan Yes token 并发点击时，最多只允许一次实际派发。"""
+
+    chat_id = 127
+    token = "tok-concurrent"
+    session = bot.PlanConfirmSession(
+        token=token,
+        chat_id=chat_id,
+        session_key="session-key",
+        user_id=21,
+        created_at=time.monotonic(),
+    )
+    bot.PLAN_CONFIRM_SESSIONS[token] = session
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
+
+    dispatched: list[tuple[int, str]] = []
+    second_dispatch_seen = asyncio.Event()
+
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        intended_mode=None,
+        force_exit_plan_ui: bool = False,
+        force_exit_plan_ui_key_sequence=None,
+        force_exit_plan_ui_max_rounds=None,
+    ):
+        dispatched.append((chat_id, prompt))
+        if len(dispatched) == 1:
+            try:
+                await asyncio.wait_for(second_dispatch_seen.wait(), timeout=0.05)
+            except asyncio.TimeoutError:
+                pass
+        else:
+            second_dispatch_seen.set()
+        return True, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
+
+    callback1 = DummyCallback(
+        bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=21,
+    )
+    callback2 = DummyCallback(
+        bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=21,
+    )
+
+    async def _run() -> None:
+        await asyncio.gather(
+            bot.on_plan_confirm_callback(callback1),
+            bot.on_plan_confirm_callback(callback2),
+        )
+
+    asyncio.run(_run())
+
+    # 期望：并发点击只能派发一次（当前缺陷实现下会触发两次）。
+    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_PROMPT)]
+    all_answers = callback1.answers + callback2.answers
+    assert ("已确认并推送到模型", False) in all_answers
+    assert ("正在处理中，请勿重复点击。", False) in all_answers
+    assert token not in bot.PLAN_CONFIRM_SESSIONS
+    assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
 
 
 def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):

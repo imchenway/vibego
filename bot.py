@@ -7496,6 +7496,8 @@ CHAT_ACTIVE_REQUEST_INPUT_TOKENS: Dict[int, str] = {}
 PLAN_CONFIRM_SESSIONS: Dict[str, PlanConfirmSession] = {}
 # plan confirm：每个 chat 当前生效 token（旧 token 自动失效）
 CHAT_ACTIVE_PLAN_CONFIRM_TOKENS: Dict[int, str] = {}
+# Plan Yes 并发点击幂等保护：记录当前正在处理中的确认 token。
+PLAN_CONFIRM_PROCESSING_TOKENS: set[str] = set()
 # 长轮询状态：用于延迟轮询机制
 CHAT_LONG_POLL_STATE: Dict[int, Dict[str, Any]] = {}
 CHAT_LONG_POLL_LOCK: Optional[asyncio.Lock] = None  # 在事件循环启动后初始化
@@ -8146,10 +8148,32 @@ def _drop_plan_confirm_session(token: str) -> None:
     """按 token 删除 Plan 结束确认会话及其 chat 映射。"""
 
     session = PLAN_CONFIRM_SESSIONS.pop(token, None)
+    PLAN_CONFIRM_PROCESSING_TOKENS.discard(token)
     if session is None:
         return
     if CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.get(session.chat_id) == token:
         CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.pop(session.chat_id, None)
+
+
+def _claim_plan_confirm_processing_token(token: str) -> bool:
+    """尝试抢占 Plan Yes 处理令牌（返回 True 表示可继续处理）。"""
+
+    normalized = (token or "").strip()
+    if not normalized:
+        return False
+    if normalized in PLAN_CONFIRM_PROCESSING_TOKENS:
+        return False
+    PLAN_CONFIRM_PROCESSING_TOKENS.add(normalized)
+    return True
+
+
+def _release_plan_confirm_processing_token(token: str) -> None:
+    """释放 Plan Yes 处理令牌，避免后续点击被误判为并发。"""
+
+    normalized = (token or "").strip()
+    if not normalized:
+        return
+    PLAN_CONFIRM_PROCESSING_TOKENS.discard(normalized)
 
 
 def _drop_chat_plan_confirm_session(chat_id: int) -> None:
@@ -11412,28 +11436,35 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
         await callback.answer("暂不支持该操作。", show_alert=True)
         return
 
-    actor_user_id = callback.from_user.id if callback.from_user else session.user_id
-    _remember_chat_active_user(chat_id, actor_user_id)
-    success, _session_path = await _dispatch_prompt_to_model(
-        chat_id,
-        PLAN_IMPLEMENT_PROMPT,
-        reply_to=callback.message,
-        ack_immediately=True,
-        intended_mode=None,
-        force_exit_plan_ui=True,
-        force_exit_plan_ui_key_sequence=_build_plan_develop_retry_exit_plan_key_sequence(),
-        force_exit_plan_ui_max_rounds=PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
-    )
-    if not success:
-        await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
+    if not _claim_plan_confirm_processing_token(token):
+        await callback.answer("正在处理中，请勿重复点击。")
         return
 
-    _drop_plan_confirm_session(token)
-    await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
-    await callback.answer("已确认并推送到模型")
-    with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
-        if callback.message is not None:
-            await callback.message.edit_reply_markup(reply_markup=None)
+    actor_user_id = callback.from_user.id if callback.from_user else session.user_id
+    _remember_chat_active_user(chat_id, actor_user_id)
+    try:
+        success, _session_path = await _dispatch_prompt_to_model(
+            chat_id,
+            PLAN_IMPLEMENT_PROMPT,
+            reply_to=callback.message,
+            ack_immediately=True,
+            intended_mode=None,
+            force_exit_plan_ui=True,
+            force_exit_plan_ui_key_sequence=_build_plan_develop_retry_exit_plan_key_sequence(),
+            force_exit_plan_ui_max_rounds=PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+        )
+        if not success:
+            await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
+            return
+
+        _drop_plan_confirm_session(token)
+        await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+        await callback.answer("已确认并推送到模型")
+        with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
+            if callback.message is not None:
+                await callback.message.edit_reply_markup(reply_markup=None)
+    finally:
+        _release_plan_confirm_processing_token(token)
 
 
 @router.callback_query(F.data.startswith(PLAN_DEVELOP_RETRY_CALLBACK_PREFIX))

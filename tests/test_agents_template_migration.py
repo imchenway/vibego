@@ -14,11 +14,11 @@ def _read_text(rel_path: str) -> str:
     return (ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def test_enforced_notice_points_to_agents_template() -> None:
-    """强制规约文案应要求读取 AGENTS-template.md。"""
+def test_enforced_notice_points_to_agents_md() -> None:
+    """强制规约文案应要求读取当前根目录 AGENTS.md。"""
 
-    assert "当前根目录 AGENTS-template.md" in bot.ENFORCED_AGENTS_NOTICE
-    assert "当前根目录 AGENTS.md" not in bot.ENFORCED_AGENTS_NOTICE
+    assert "当前根目录 AGENTS.md" in bot.ENFORCED_AGENTS_NOTICE
+    assert "当前根目录 AGENTS-template.md" not in bot.ENFORCED_AGENTS_NOTICE
 
 
 def test_shell_defaults_use_agents_template() -> None:

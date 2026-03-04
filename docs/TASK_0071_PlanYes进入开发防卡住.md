@@ -95,3 +95,80 @@ PYTHONPATH=. pytest -q
   https://man7.org/linux/man-pages/man1/tmux.1.html
 - OpenAI Chat/Developer 指令层级（官方文档）：
   https://platform.openai.com/docs/guides/chat-completions
+
+---
+
+## 8. 四次修复（2026-03-04）：Plan Yes 并发点击导致重复发送
+
+### 8.1 问题现象
+
+- 用户反馈在同一会话中，Telegram 会重复收到“💭 codex思考中，正在持续监听模型响应结果中”。
+- 日志证据（同一 session 同秒重复）：
+    - `~/.config/vibego/logs/codex/hyphamall/run_bot.log`（锚点：`23:46:27 ... ack sent` 连续两条）
+    - `~/.config/vibego/logs/codex/hyphamall/run_bot.log`（锚点：`23:46:47 ... 检测到待发送的模型事件` 连续两条）
+
+### 8.2 根因判断
+
+- `on_plan_confirm_callback` 在 Yes 分支中，`_dispatch_prompt_to_model(...)` 与 `_drop_plan_confirm_session(token)`
+  之间存在并发窗口；
+- 同一 token 并发点击可同时通过校验并触发两次派发，导致重复 ack 与重复监听。
+
+### 8.3 代码改动
+
+- `bot.py`
+    1) 新增并发幂等状态：
+        - `PLAN_CONFIRM_PROCESSING_TOKENS: set[str]`
+    2) 新增令牌函数：
+        - `_claim_plan_confirm_processing_token(token)`
+        - `_release_plan_confirm_processing_token(token)`
+    3) `on_plan_confirm_callback(...)`（Yes）：
+        - 派发前先 claim，失败则回包：`正在处理中，请勿重复点击。`
+        - 派发流程置于 `try/finally`，确保 release；
+    4) `_drop_plan_confirm_session(token)`：
+        - 同步 `discard` processing token，避免脏状态残留。
+
+### 8.4 测试改动（TDD）
+
+- 先红：
+    - `tests/test_plan_confirm_bridge.py::test_plan_confirm_yes_is_idempotent_under_concurrent_clicks`
+    - 改代码前失败：并发触发出现两次 dispatch。
+- 再绿：
+    - 新增用例通过，确保并发点击仅一次派发，另一条返回“正在处理中，请勿重复点击。”
+- 同步清理：
+    - `tests/test_plan_confirm_bridge.py` fixture 增加 `PLAN_CONFIRM_PROCESSING_TOKENS.clear()`。
+
+### 8.5 Baseline Repair（本次触发）
+
+- 全量回归首次执行发现基线失败：
+    - `tests/test_agents_template_migration.py::test_enforced_notice_points_to_agents_template`
+- 原因：当前 `bot.ENFORCED_AGENTS_NOTICE` 文案已明确要求读取 `当前根目录 AGENTS.md`。
+- 修复：
+    - 将该用例更新为 `test_enforced_notice_points_to_agents_md`，断言与当前强制规约一致。
+
+### 8.6 回归结果
+
+```bash
+# TDD 红灯（先失败）
+python3.11 -m pytest -q tests/test_plan_confirm_bridge.py -k "idempotent_under_concurrent_clicks"
+# 1 failed
+
+# 受影响用例
+python3.11 -m pytest -q tests/test_plan_confirm_bridge.py tests/test_agents_template_migration.py
+# 11 passed
+
+# 全量回归（两轮一致）
+python3.11 -m pytest -q
+# 631 passed, 6 warnings
+
+python3.11 -m pytest -q
+# 631 passed, 6 warnings
+```
+
+### 8.7 风险与回滚
+
+- 风险：
+    - 幂等状态为内存态，进程重启后不保留（可接受，属瞬时交互态）。
+- 回滚点：
+    - 回滚 `bot.py` 中 `PLAN_CONFIRM_PROCESSING_TOKENS` 与 claim/release 逻辑；
+    - 回滚 `tests/test_plan_confirm_bridge.py` 并发幂等用例；
+    - 如需恢复旧断言，再回滚 `tests/test_agents_template_migration.py` 对应测试。
