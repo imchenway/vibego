@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiohttp import BasicAuth
+from aiohttp import BasicAuth, ClientError
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -49,7 +49,12 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllChatAdministrators,
 )
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
@@ -3282,6 +3287,36 @@ async def cmd_restart(message: Message) -> None:
     await _process_restart_request(message)
 
 
+async def _send_message_with_retry(
+    bot: Bot,
+    *,
+    chat_id: int,
+    text: str,
+    retries: int = 3,
+    base_delay: float = 0.8,
+    **kwargs: Any,
+) -> None:
+    """发送消息时对瞬时网络异常进行有限重试，降低“偶发无响应”概率。"""
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(retries):
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            return
+        except TelegramRetryAfter as exc:
+            last_exc = exc
+            if attempt >= retries - 1:
+                break
+            await asyncio.sleep(max(float(exc.retry_after), base_delay))
+        except (TelegramNetworkError, ClientError, asyncio.TimeoutError, OSError) as exc:
+            last_exc = exc
+            if attempt >= retries - 1:
+                break
+            await asyncio.sleep(base_delay * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+
+
 async def _send_projects_overview_to_chat(
     bot: Bot,
     chat_id: int,
@@ -3296,14 +3331,19 @@ async def _send_projects_overview_to_chat(
         text, markup = _projects_overview(manager)
     except Exception as exc:
         log.exception("生成项目概览失败: %s", exc)
-        await bot.send_message(
-            chat_id=chat_id,
-            text="项目列表生成失败，请稍后再试。",
-            reply_to_message_id=reply_to_message_id,
-        )
+        try:
+            await _send_message_with_retry(
+                bot,
+                chat_id=chat_id,
+                text="项目列表生成失败，请稍后再试。",
+                reply_to_message_id=reply_to_message_id,
+            )
+        except Exception as send_exc:
+            log.error("项目列表失败提示发送失败: %s", send_exc)
         return
     try:
-        await bot.send_message(
+        await _send_message_with_retry(
+            bot,
             chat_id=chat_id,
             text=text,
             reply_markup=markup,
@@ -3311,18 +3351,26 @@ async def _send_projects_overview_to_chat(
         )
     except TelegramBadRequest as exc:
         log.error("发送项目概览失败: %s", exc)
-        await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_to_message_id=reply_to_message_id,
-        )
+        try:
+            await _send_message_with_retry(
+                bot,
+                chat_id=chat_id,
+                text=text,
+                reply_to_message_id=reply_to_message_id,
+            )
+        except Exception as send_exc:
+            log.error("项目概览降级发送失败: %s", send_exc)
     except Exception as exc:
         log.exception("发送项目概览触发异常: %s", exc)
-        await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_to_message_id=reply_to_message_id,
-        )
+        try:
+            await _send_message_with_retry(
+                bot,
+                chat_id=chat_id,
+                text=text,
+                reply_to_message_id=reply_to_message_id,
+            )
+        except Exception as send_exc:
+            log.error("项目概览重试后仍失败: %s", send_exc)
     else:
         log.info("已发送项目概览，按钮=%s", "无" if markup is None else "有")
 
@@ -3471,6 +3519,18 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
     elif action == "switch_all_to":
         target_model = identifier
         project_slug = "*"
+
+    async def _answer_callback_safely(text: Optional[str] = None, *, show_alert: bool = False) -> None:
+        """安全答复 callback，避免网络抖动导致主流程被中断。"""
+
+        try:
+            await callback.answer(text, show_alert=show_alert)
+        except Exception as exc:
+            log.warning(
+                "回调答复失败(忽略): %s",
+                exc,
+                extra={"project": project_slug or "*"},
+            )
 
     if action == "refresh":
         # 刷新列表属于全局操作，不依赖具体项目 slug
@@ -3628,9 +3688,11 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
 
     try:
         if action == "stop_all":
+            await _answer_callback_safely("正在停止全部项目，请稍候…")
             await manager.stop_all(update_state=True)
             log.info("按钮操作成功: user=%s 停止全部项目", user_id)
         elif action == "start_all":
+            await _answer_callback_safely("全部项目启动中，请稍候…")
             # 为所有项目自动记录启动者的 chat_id
             if callback.message and callback.message.chat:
                 for project_cfg in manager.configs:
@@ -3645,7 +3707,6 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
                         )
             await manager.run_all()
             log.info("按钮操作成功: user=%s 启动全部项目", user_id)
-            await callback.answer("全部项目已启动，正在刷新列表…")
         elif action == "restart_master":
             if callback.message is None:
                 log.error("重启按钮回调缺少 message 对象", extra={"user": user_id})
@@ -3659,6 +3720,7 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
             log.info("按钮操作成功: user=%s 重启 master", user_id)
             return  # 重启后不刷新项目列表，避免产生额外噪音
         elif action == "run":
+            await _answer_callback_safely("项目启动中，请稍候…")
             # 自动记录启动者的 chat_id
             if callback.message and callback.message.chat:
                 current_state = manager.state_store.data.get(cfg.project_slug)
@@ -3678,8 +3740,8 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
                 chosen,
                 extra={"project": cfg.project_slug, "model": chosen},
             )
-            await callback.answer("项目已启动，正在刷新列表…")
         elif action == "stop":
+            await _answer_callback_safely("项目停止中，请稍候…")
             await manager.stop_worker(cfg)
             log.info(
                 "按钮操作成功: user=%s 停止 %s",
@@ -3687,7 +3749,6 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
                 cfg.display_name,
                 extra={"project": cfg.project_slug},
             )
-            await callback.answer("项目已停止，正在刷新列表…")
         elif action == "switch_all_to":
             model_map = dict(SWITCHABLE_MODELS)
             if target_model not in model_map:
@@ -3795,7 +3856,7 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
         )
         if callback.message:
             await callback.message.answer(f"操作失败: {exc}")
-        await callback.answer("操作失败", show_alert=True)
+        await _answer_callback_safely("操作失败", show_alert=True)
         return
 
     await _refresh_project_overview(callback.message, manager)
