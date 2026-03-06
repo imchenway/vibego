@@ -350,7 +350,7 @@ TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS = max(_env_int("TEXT_PASTE_PREFIX_FOLLOWUP_
 ENFORCED_AGENTS_NOTICE = (
     "【强制规约】你必须先读取 $HOME/.config/vibego/AGENTS.md、当前根目录 AGENTS.md、"
     "以及所有受影响子项目目录下最近的 AGENTS.md 与 AGENTS.evidence.json；如冲突以更近目录为准。\n"
-    "本次任务继续走 vibe -> design -> develop；无论 PLAN 还是 YOLO，都必须严格执行 TDD 门禁：\n"
+    "本次任务继续走 vibe -> design -> develop；无论 PLAN 还是 YOLO，都必须严格执行 TDD 门禁。\n"
     "如未特殊指定模式，则默认进入 PLAN 模式。"
 )
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
