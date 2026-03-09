@@ -351,7 +351,8 @@ ENFORCED_AGENTS_NOTICE = (
     "【强制规约】你必须先读取 $HOME/.config/vibego/AGENTS.md、当前根目录 AGENTS.md、"
     "以及所有受影响子项目目录下最近的 AGENTS.md 与 AGENTS.evidence.json；如冲突以更近目录为准。\n"
     "本次任务继续走 vibe -> design -> develop；无论 PLAN 还是 YOLO，都必须严格执行 TDD 门禁。\n"
-    "如未特殊指定模式，则默认进入 PLAN 模式。"
+    "如未特殊指定模式，则默认进入 PLAN 模式。\n"
+    "以下是用户需求描述："
 )
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
 MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
@@ -2392,7 +2393,9 @@ ATTACHMENT_STORAGE_ROOT = (DATA_ROOT / "telegram").expanduser()
 ATTACHMENT_STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 _ATTACHMENT_TOTAL_MB = max(_env_int("TELEGRAM_ATTACHMENT_MAX_TOTAL_MB", 512), 16)
 ATTACHMENT_TOTAL_LIMIT_BYTES = _ATTACHMENT_TOTAL_MB * 1024 * 1024
-MEDIA_GROUP_AGGREGATION_DELAY = max(_env_float("TELEGRAM_MEDIA_GROUP_DELAY", 0.8), 0.1)
+# 普通 Telegram 图文混合/相册偶发会出现后续图片稍晚到达的情况；
+# 默认将 quiet window 提升到 1.5 秒，优先保证同一组输入只触发一次推送。
+MEDIA_GROUP_AGGREGATION_DELAY = max(_env_float("TELEGRAM_MEDIA_GROUP_DELAY", 1.5), 0.1)
 
 
 @dataclass
@@ -4547,8 +4550,6 @@ async def _execute_command_definition(
     exit_code: Optional[int] = None
     duration = 0.0
     status = "success"
-    photo_sent = False
-    photo_note: Optional[str] = None
     try:
         exit_code, stdout_text, stderr_text, duration = await _run_shell_command(command.command, command.timeout)
         status = "success" if exit_code == 0 else "failed"
@@ -4578,31 +4579,14 @@ async def _execute_command_definition(
         finished_at=finished_at,
     )
 
-    # 额外处理：若命令输出标记了图片文件，则尝试直接发送到 Telegram。
+    # 先记录图片路径，待摘要消息发送完成后再作为最后一条消息回传到 Telegram。
+    photo_path: Optional[Path] = None
     if reply_message is not None and stdout_text:
-        photo_path = None
         photo_match = re.search(r"^TG_PHOTO_FILE:\s*(.+)$", stdout_text, flags=re.MULTILINE)
         if photo_match:
             candidate = Path(photo_match.group(1).strip())
             if candidate.is_file():
                 photo_path = candidate
-        if photo_path is not None:
-            try:
-                bot = current_bot()
-                await _send_with_retry(
-                    lambda: bot.send_photo(
-                        chat_id=reply_message.chat.id,
-                        photo=FSInputFile(str(photo_path)),
-                        caption=f"{display_name} 的预览二维码",
-                    )
-                )
-                photo_sent = True
-                photo_note = f"二维码图片已发送：{photo_path}"
-            except Exception as exc:  # noqa: BLE001
-                worker_log.warning(
-                    "命令输出图片发送失败",
-                    extra={"error": str(exc), **_session_extra(), "photo": str(photo_path)},
-                )
 
     status_label = {
         "success": "✅ 成功",
@@ -4619,8 +4603,6 @@ async def _execute_command_definition(
         f"耗时：{duration:.2f}s / 超时：{command.timeout}s",
         f"状态：{status_label}",
     ]
-    if photo_note:
-        lines.append(photo_note)
     if exit_code is not None:
         lines.append(f"退出码：{exit_code}")
     if stdout_text:
@@ -4736,6 +4718,35 @@ async def _execute_command_definition(
         "\n".join(lines),
         reply_markup=summary_markup,
     )
+    # 按用户体验要求，二维码图片放在摘要之后发送；若图片发送失败则降级为文件发送。
+    if reply_message is not None and photo_path is not None:
+        bot = current_bot()
+        try:
+            await _send_with_retry(
+                lambda: bot.send_photo(
+                    chat_id=reply_message.chat.id,
+                    photo=FSInputFile(str(photo_path)),
+                    caption=f"{display_name} 的预览二维码",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            worker_log.warning(
+                "命令输出图片发送失败",
+                extra={"error": str(exc), **_session_extra(), "photo": str(photo_path)},
+            )
+            try:
+                await _send_with_retry(
+                    lambda: bot.send_document(
+                        chat_id=reply_message.chat.id,
+                        document=FSInputFile(str(photo_path)),
+                        caption=f"{display_name} 的预览二维码（图片发送失败，已降级为文件）",
+                    )
+                )
+            except Exception as fallback_exc:  # noqa: BLE001
+                worker_log.warning(
+                    "命令输出图片降级文件发送失败",
+                    extra={"error": str(fallback_exc), **_session_extra(), "photo": str(photo_path)},
+                )
 
 
 async def _handle_command_trigger_message(message: Message, prompt: str, state: Optional[FSMContext]) -> bool:

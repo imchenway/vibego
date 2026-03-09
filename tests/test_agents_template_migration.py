@@ -21,6 +21,18 @@ def test_enforced_notice_points_to_agents_md() -> None:
     assert "当前根目录 AGENTS-template.md" not in bot.ENFORCED_AGENTS_NOTICE
 
 
+def test_enforced_notice_adds_user_requirement_header_before_prompt() -> None:
+    """强制规约文案应在 PLAN 提示后引出“用户需求描述”，并与正文保留一行空行。"""
+
+    injected = bot._prepend_enforced_agents_notice("pwd")
+    lines = injected.splitlines()
+
+    assert lines[-4] == "如未特殊指定模式，则默认进入 PLAN 模式。"
+    assert lines[-3] == "以下是用户需求描述："
+    assert lines[-2] == ""
+    assert lines[-1] == "pwd"
+
+
 def test_shell_defaults_use_agents_template() -> None:
     """启动脚本默认模板路径应切换为 AGENTS-template.md。"""
 

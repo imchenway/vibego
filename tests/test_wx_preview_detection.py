@@ -133,6 +133,8 @@ def test_default_global_command_uses_project_base() -> None:
     command_text = str(cmd["command"])
     assert 'PROJECT_PATH="${PROJECT_PATH:-$MODEL_WORKDIR}"' not in command_text
     assert 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}"' in command_text
+    assert 'OUTPUT_QR="${OUTPUT_QR:-/tmp/wx-preview-$(date +%s).jpg}"' in command_text
+    assert "$HOME/Downloads" not in command_text
 
 
 def test_default_global_upload_command_uses_project_base() -> None:

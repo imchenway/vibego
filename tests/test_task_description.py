@@ -1820,6 +1820,71 @@ def test_bug_report_album_aggregates_attachments_once(monkeypatch, tmp_path: Pat
     assert push_calls[0][2] == "Reporter"
 
 
+def test_on_media_message_album_with_small_gap_dispatches_once(monkeypatch, tmp_path: Path):
+    """普通聊天相册第二张稍晚到达时，仍应聚合为一次 prompt。"""
+
+    bot.MEDIA_GROUP_STATE.clear()
+
+    message1 = DummyMessage()
+    message1.media_group_id = "chat_album_gap"
+    message1.caption = "图文说明"
+    message1.message_id = 200
+    message1.bot = SimpleNamespace(username="tester_bot")
+    message1.date = datetime.now(bot.UTC)
+
+    message2 = DummyMessage()
+    message2.media_group_id = "chat_album_gap"
+    message2.message_id = 201
+    message2.bot = message1.bot
+    message2.date = message1.date
+
+    async def fake_collect(msg, _target_dir):
+        if msg is message1:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="a1.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "a1.jpg",
+                    relative_path="./data/a1.jpg",
+                )
+            ]
+        if msg is message2:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="a2.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "a2.jpg",
+                    relative_path="./data/a2.jpg",
+                )
+            ]
+        return []
+
+    dispatched_prompts: list[str] = []
+
+    async def fake_handle(_message, prompt: str) -> None:
+        dispatched_prompts.append(prompt)
+
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    async def scenario() -> None:
+        await bot.on_media_message(message1)
+        await asyncio.sleep(0.85)
+        await bot.on_media_message(message2)
+        await asyncio.sleep(bot.MEDIA_GROUP_AGGREGATION_DELAY + 0.2)
+
+    asyncio.run(scenario())
+
+    assert len(dispatched_prompts) == 1
+    assert "图文说明" in dispatched_prompts[0]
+    assert "a1.jpg" in dispatched_prompts[0]
+    assert "a2.jpg" in dispatched_prompts[0]
+    assert not bot.MEDIA_GROUP_STATE
+
+
 def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=654)

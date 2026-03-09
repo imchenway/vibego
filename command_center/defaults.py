@@ -40,8 +40,8 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
     {
         "name": "wx-dev-preview",
         "title": "生成微信开发预览二维码",
-        "command": 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}" OUTPUT_QR="${OUTPUT_QR:-$HOME/Downloads/wx-preview-$(date +%s).jpg}" bash "$ROOT_DIR/scripts/gen_preview.sh"',
-        "description": "调用微信开发者工具 CLI，在当前工作目录生成预览二维码并回传 Telegram（需本机已登录 IDE 并开启服务端口；需在 vibego 配置目录的 config/wx_devtools_ports.json 为当前项目配置 IDE 服务端口，或临时设置 PORT）。默认将二维码输出到 ~/Downloads。",
+        "command": 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}" OUTPUT_QR="${OUTPUT_QR:-/tmp/wx-preview-$(date +%s).jpg}" bash "$ROOT_DIR/scripts/gen_preview.sh"',
+        "description": "调用微信开发者工具 CLI，在当前工作目录生成预览二维码并回传 Telegram（需本机已登录 IDE 并开启服务端口；需在 vibego 配置目录的 config/wx_devtools_ports.json 为当前项目配置 IDE 服务端口，或临时设置 PORT）。默认将二维码输出到 /tmp，避免 macOS Downloads 权限影响回传。",
         "aliases": (),
         "timeout": 600,
     },
