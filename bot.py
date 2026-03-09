@@ -506,6 +506,7 @@ class RequestInputSession:
     selected_option_indexes: Dict[str, int] = field(default_factory=dict)
     custom_answers: Dict[str, str] = field(default_factory=dict)
     question_message_ids: Dict[str, int] = field(default_factory=dict)
+    processed_media_groups: set[str] = field(default_factory=set)
     input_mode_question_id: Optional[str] = None
     submission_state: str = "idle"
     submit_retry_count: int = 0
@@ -8588,6 +8589,20 @@ def _build_request_input_output_payload(session: RequestInputSession) -> Dict[st
     return {"answers": answers}
 
 
+def _request_input_message_has_media(message: Message) -> bool:
+    """判断当前 request_input 自定义输入消息是否携带媒体附件。"""
+
+    return bool(
+        getattr(message, "photo", None)
+        or getattr(message, "document", None)
+        or getattr(message, "video", None)
+        or getattr(message, "audio", None)
+        or getattr(message, "voice", None)
+        or getattr(message, "animation", None)
+        or getattr(message, "video_note", None)
+    )
+
+
 def _build_request_input_submission_prompt(call_id: str, output_payload: Mapping[str, Any]) -> str:
     """构造回推到模型的提示词（结构化 JSON + call_id 绑定）。"""
 
@@ -11062,17 +11077,6 @@ def _next_unanswered_request_input_index(session: RequestInputSession, *, after_
     return _first_unanswered_request_input_index(session)
 
 
-def _trim_request_input_answer_preview(value: str, *, limit: int = 60) -> str:
-    """压缩答案回显，避免 Telegram 单行过长影响阅读。"""
-
-    cleaned = re.sub(r"\s+", " ", (value or "").strip())
-    if not cleaned:
-        return "-"
-    if len(cleaned) <= limit:
-        return cleaned
-    return f"{cleaned[: max(limit - 1, 1)]}…"
-
-
 def _build_request_input_submission_summary(session: RequestInputSession) -> str:
     """构建“已推送”后的决策摘要回显。"""
 
@@ -11085,11 +11089,49 @@ def _build_request_input_submission_summary(session: RequestInputSession) -> str
         answer_text = "未作答"
         if selected_index == REQUEST_INPUT_CUSTOM_OPTION_INDEX:
             custom_text = session.custom_answers.get(question.question_id) or ""
-            answer_text = f"自定义：{_trim_request_input_answer_preview(custom_text)}"
+            answer_text = f"自定义：{custom_text}"
         elif isinstance(selected_index, int) and 0 <= selected_index < len(question.options):
             answer_text = question.options[selected_index].label
         lines.append(f"{index}. {question.question} -> {answer_text}")
     return "\n".join(lines)
+
+
+async def _send_request_input_submission_summary_message(
+    session: RequestInputSession,
+    *,
+    summary_text: str,
+    reply_to: Optional[Message],
+    remove_reply_keyboard: bool,
+) -> None:
+    """发送 request_input 决策摘要，超长时自动降级为附件，避免业务层截断。"""
+
+    summary_reply_markup = _build_worker_main_keyboard() if remove_reply_keyboard else None
+    try:
+        await _reply_to_chat(
+            session.chat_id,
+            summary_text,
+            reply_to=reply_to,
+            parse_mode=None,
+            reply_markup=summary_reply_markup,
+        )
+        return
+    except TelegramBadRequest as exc:
+        reason = _extract_bad_request_message(exc).lower()
+        if "message is too long" not in reason:
+            raise
+        worker_log.warning(
+            "request_input 决策摘要超出 Telegram 限制，已降级为附件发送",
+            extra={"chat": session.chat_id, "length": str(len(summary_text))},
+        )
+
+    await reply_large_text(
+        session.chat_id,
+        summary_text,
+        parse_mode=None,
+        preformatted=True,
+        reply_markup=summary_reply_markup,
+        attachment_reply_markup=summary_reply_markup,
+    )
 
 
 def _build_request_input_retry_submit_keyboard(token: str) -> InlineKeyboardMarkup:
@@ -11154,14 +11196,11 @@ async def _submit_request_input_session(
     summary_text = _build_request_input_submission_summary(session)
     session.submitted = True
     _drop_request_input_session(session.token)
-    summary_reply_markup = _build_worker_main_keyboard() if remove_reply_keyboard else None
-
-    await _reply_to_chat(
-        session.chat_id,
-        summary_text,
+    await _send_request_input_submission_summary_message(
+        session,
+        summary_text=summary_text,
         reply_to=reply_to,
-        parse_mode=None,
-        reply_markup=summary_reply_markup,
+        remove_reply_keyboard=remove_reply_keyboard,
     )
     # request_user_input 场景已通过“决策摘要”收口，避免重复发送中间工具结果代码块。
     if session_path is not None:
@@ -11345,15 +11384,32 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
         return True
 
     raw_text = message.text or message.caption or ""
+    attachments: list[TelegramSavedAttachment] = []
+    if _request_input_message_has_media(message):
+        attachment_dir = _attachment_dir_for_message(message)
+        media_group_id = getattr(message, "media_group_id", None)
+        if media_group_id:
+            attachments, raw_text, processed_groups = await _collect_generic_media_group(
+                message,
+                attachment_dir,
+                processed=set(session.processed_media_groups),
+            )
+            session.processed_media_groups = processed_groups
+            # 媒体组的后续消息会重复触发 handler；若本次已被其他消息消费，则直接吞掉。
+            if not attachments and not raw_text:
+                return True
+        else:
+            attachments = await _collect_saved_attachments(message, attachment_dir)
+
     token = _normalize_choice_token(raw_text)
-    if _is_cancel_message(token):
+    if not attachments and _is_cancel_message(token):
         session.input_mode_question_id = None
         await message.answer("已取消自定义输入，返回当前题目。", reply_markup=ReplyKeyboardRemove())
         await _send_request_input_question(session, reply_to=message)
         return True
 
     trimmed = raw_text.strip()
-    if not trimmed:
+    if not trimmed and not attachments:
         await message.answer(
             "自定义决策不能为空，请重新输入或发送“取消”。",
             reply_markup=_build_request_input_custom_input_keyboard(),
@@ -11374,7 +11430,10 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
         await message.answer("该题已锁定，不可修改。", reply_markup=ReplyKeyboardRemove())
         return True
 
-    session.custom_answers[question.question_id] = trimmed
+    if attachments:
+        session.custom_answers[question.question_id] = _build_prompt_with_attachments(trimmed or None, attachments)
+    else:
+        session.custom_answers[question.question_id] = trimmed
     session.selected_option_indexes[question.question_id] = REQUEST_INPUT_CUSTOM_OPTION_INDEX
     session.input_mode_question_id = None
     await _lock_request_input_question_markup(session, question.question_id)

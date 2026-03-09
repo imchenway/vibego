@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,20 @@ class DummyMessage:
     async def edit_reply_markup(self, reply_markup=None):
         self.edited_reply_markup += 1
         return None
+
+
+def _make_saved_attachment(tmp_path: Path, name: str = "photo.jpg") -> bot.TelegramSavedAttachment:
+    """构造 request_input 自定义决策可复用的附件对象。"""
+
+    absolute_path = tmp_path / name
+    absolute_path.write_bytes(b"fake-binary")
+    return bot.TelegramSavedAttachment(
+        kind="photo",
+        display_name=name,
+        mime_type="image/jpeg",
+        absolute_path=absolute_path,
+        relative_path=f"./data/telegram/demo/2026-03-09/{name}",
+    )
 
 
 class DummyCallback:
@@ -514,6 +529,105 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     assert main_keyboard_rows[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
 
 
+def test_request_input_custom_media_message_auto_submits_with_attachment_prompt(monkeypatch, tmp_path: Path):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_custom_media_submit",
+        chat_id=266,
+        user_id=266,
+        call_id="call_custom_media_submit",
+        session_key="s-custom-media-submit",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        input_mode_question_id="scope",
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[266] = session.token
+
+    dispatched: list[str] = []
+    ack_calls: list[str] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        assert chat_id == 266
+        dispatched.append(prompt)
+        return True, tmp_path / "custom_media_submit.jsonl"
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        ack_calls.append(str(session_path))
+
+    async def fake_collect(*_args, **_kwargs):
+        return [_make_saved_attachment(tmp_path)]
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    message = DummyMessage(chat_id=266, user_id=266, caption="请按图片里的方案调整")
+    message.photo = [SimpleNamespace(file_id="p1")]
+    handled = asyncio.run(bot._handle_request_input_custom_text_message(message))
+
+    assert handled is True
+    assert dispatched, "图文混合自定义决策应自动推送"
+    prompt = dispatched[-1]
+    assert "请按图片里的方案调整" in prompt
+    assert "附件列表（文件位于项目工作目录" in prompt
+    assert "./data/telegram/demo/2026-03-09/photo.jpg" in prompt
+    assert ack_calls
+
+
+def test_request_input_custom_media_only_auto_submits_with_attachment_prompt(monkeypatch, tmp_path: Path):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_custom_media_only_submit",
+        chat_id=366,
+        user_id=366,
+        call_id="call_custom_media_only_submit",
+        session_key="s-custom-media-only-submit",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        input_mode_question_id="scope",
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[366] = session.token
+
+    dispatched: list[str] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        assert chat_id == 366
+        dispatched.append(prompt)
+        return True, None
+
+    async def fake_collect(*_args, **_kwargs):
+        return [_make_saved_attachment(tmp_path, "diagram.jpg")]
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+
+    message = DummyMessage(chat_id=366, user_id=366, caption=None)
+    message.photo = [SimpleNamespace(file_id="p2")]
+    handled = asyncio.run(bot._handle_request_input_custom_text_message(message))
+
+    assert handled is True
+    assert dispatched, "纯附件自定义决策应自动推送"
+    prompt = dispatched[-1]
+    assert "附件列表（文件位于项目工作目录" in prompt
+    assert "./data/telegram/demo/2026-03-09/diagram.jpg" in prompt
+
+
 def test_request_input_custom_text_submit_failure_restores_main_keyboard(monkeypatch):
     question = bot.RequestInputQuestion(
         question_id="scope",
@@ -549,6 +663,88 @@ def test_request_input_custom_text_submit_failure_restores_main_keyboard(monkeyp
     assert isinstance(message.calls[0][2], InlineKeyboardMarkup), "首条应保留重试提交按钮"
     assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup), "最后一条应恢复主菜单"
     assert message.calls[-1][2].keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
+
+
+def test_request_input_submission_summary_keeps_full_custom_text():
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    custom_text = "这是一个很长的自定义决策说明，用于确认摘要不能再被六十字符裁切。" * 3
+    session = bot.RequestInputSession(
+        token="token_summary_full",
+        chat_id=466,
+        user_id=466,
+        call_id="call_summary_full",
+        session_key="s-summary-full",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": bot.REQUEST_INPUT_CUSTOM_OPTION_INDEX},
+        custom_answers={"scope": custom_text},
+    )
+
+    summary = bot._build_request_input_submission_summary(session)
+
+    assert custom_text in summary
+    assert "…" not in summary
+
+
+def test_request_input_submit_falls_back_to_long_text_attachment_without_truncation(monkeypatch, tmp_path: Path):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    custom_text = "超长自定义说明" * 500
+    session = bot.RequestInputSession(
+        token="token_summary_attachment",
+        chat_id=566,
+        user_id=566,
+        call_id="call_summary_attachment",
+        session_key="s-summary-attachment",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": bot.REQUEST_INPUT_CUSTOM_OPTION_INDEX},
+        custom_answers={"scope": custom_text},
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[566] = session.token
+
+    fallback_calls: list[tuple[str, object, object]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        assert chat_id == 566
+        return True, tmp_path / "custom_summary_attachment.jsonl"
+
+    async def fake_reply(*_args, **_kwargs):
+        raise TelegramBadRequest(method="sendMessage", message="Bad Request: message is too long")
+
+    async def fake_reply_large_text(chat_id: int, text: str, *, parse_mode=None, preformatted=False, reply_markup=None, attachment_reply_markup=None):
+        fallback_calls.append((text, reply_markup, attachment_reply_markup))
+        return text
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+    monkeypatch.setattr(bot, "reply_large_text", fake_reply_large_text)
+    monkeypatch.setattr(bot, "_send_session_ack", lambda *args, **kwargs: asyncio.sleep(0))
+
+    success = asyncio.run(
+        bot._submit_request_input_session(
+            session,
+            reply_to=DummyMessage(chat_id=566, user_id=566, text="超长说明"),
+            actor_user_id=566,
+            remove_reply_keyboard=True,
+        )
+    )
+
+    assert success is True
+    assert fallback_calls, "超长摘要应走 reply_large_text 降级，而不是裁切"
+    assert custom_text in fallback_calls[-1][0]
 
 
 def test_request_input_custom_text_cancel_returns_question(monkeypatch):
