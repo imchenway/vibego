@@ -22,6 +22,7 @@ class BranchRef:
     name: str
     source: str  # local / remote
     remote: Optional[str] = None
+    is_current: bool = False
 
 
 @dataclass(slots=True)
@@ -184,7 +185,22 @@ def discover_git_repos(base_dir: Path, *, max_depth: int = 4) -> list[tuple[str,
     return filtered
 
 
-def list_branch_refs(repo_path: Path) -> list[BranchRef]:
+def get_current_branch_state(repo_path: Path) -> tuple[str, Optional[str]]:
+    """读取仓库当前分支展示文案与可高亮的本地分支名。"""
+
+    symbolic = _run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=repo_path)
+    current_branch = symbolic.stdout.strip()
+    if symbolic.returncode == 0 and current_branch:
+        return current_branch, current_branch
+
+    detached = _run_git(["rev-parse", "--verify", "HEAD"], cwd=repo_path)
+    if detached.returncode == 0:
+        return "Detached HEAD", None
+
+    return "读取失败", None
+
+
+def list_branch_refs(repo_path: Path, *, current_local_branch: Optional[str] = None) -> list[BranchRef]:
     """列出单仓库的本地+远端分支。"""
 
     refs: list[BranchRef] = []
@@ -193,7 +209,7 @@ def list_branch_refs(repo_path: Path) -> list[BranchRef]:
         for line in local.stdout.splitlines():
             name = line.strip()
             if name:
-                refs.append(BranchRef(name=name, source="local"))
+                refs.append(BranchRef(name=name, source="local", is_current=(name == current_local_branch)))
 
     remote = _run_git(["for-each-ref", "--format=%(refname:short)", "refs/remotes"], cwd=repo_path)
     if remote.returncode == 0:
@@ -207,7 +223,14 @@ def list_branch_refs(repo_path: Path) -> list[BranchRef]:
     dedup: dict[tuple[str, str], BranchRef] = {}
     for ref in refs:
         dedup[(ref.source, ref.name)] = ref
-    return sorted(dedup.values(), key=lambda item: (0 if item.source == "local" else 1, item.name.casefold()))
+    return sorted(
+        dedup.values(),
+        key=lambda item: (
+            0 if item.is_current else 1,
+            0 if item.source == "local" else 1,
+            item.name.casefold(),
+        ),
+    )
 
 
 def build_parallel_branch_name(task_id: str, title: str) -> str:

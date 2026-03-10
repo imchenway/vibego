@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
 import bot  # noqa: E402
-from parallel_runtime import build_parallel_commit_message  # noqa: E402
+from parallel_runtime import BranchRef, build_parallel_commit_message  # noqa: E402
 from tasks import TaskRecord  # noqa: E402
 
 
@@ -164,3 +164,66 @@ def test_parallel_commit_message_uses_task_type_prefix():
     assert "任务编码: /TASK_0001" in body
     assert "任务标题: 调研任务" in body
     assert "仓库: web-base" in body
+
+
+def test_parallel_branch_title_shows_current_branch():
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=None,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="feature/demo", source="local"),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            )
+        ],
+        selections={},
+        current_branch_labels={"backend-java": "develop"},
+    )
+
+    title = bot._build_parallel_branch_title(session, 0)
+
+    assert "当前仓库：backend-java" in title
+    assert "当前分支：develop" in title
+
+
+def test_parallel_branch_keyboard_marks_current_branch_and_keeps_it_first():
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=None,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="feature/demo", source="local"),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            )
+        ],
+        selections={},
+        current_branch_labels={"backend-java": "develop"},
+    )
+
+    markup = bot._build_parallel_branch_keyboard(session, repo_index=0, page=0)
+    branch_rows = [row for row in markup.inline_keyboard if row and row[0].callback_data and row[0].callback_data.startswith(bot.PARALLEL_BRANCH_SELECT_PREFIX)]
+
+    assert branch_rows[0][0].text.startswith("📍 develop")
+    assert "（当前）" in branch_rows[0][0].text

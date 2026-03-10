@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from parallel_runtime import RepoBranchSelection, discover_git_repos, prepare_parallel_workspace
+from parallel_runtime import (
+    RepoBranchSelection,
+    discover_git_repos,
+    get_current_branch_state,
+    list_branch_refs,
+    prepare_parallel_workspace,
+)
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -85,3 +91,48 @@ def test_prepare_parallel_workspace_rejects_overlapping_relative_paths(tmp_path:
                 ),
             ],
         )
+
+
+def test_get_current_branch_state_marks_current_local_branch_first(tmp_path: Path) -> None:
+    """应识别当前本地分支，并在分支列表中置顶且标记为当前。"""
+
+    repo = tmp_path / "repo"
+    _init_repo(repo, {"README.md": "demo\n"})
+    _git(repo, "checkout", "-b", "develop")
+    _git(repo, "branch", "feature/demo")
+
+    current_label, current_local_branch = get_current_branch_state(repo)
+    branches = list_branch_refs(repo, current_local_branch=current_local_branch)
+
+    assert current_label == "develop"
+    assert current_local_branch == "develop"
+    assert branches[0].name == "develop"
+    assert branches[0].is_current is True
+
+
+def test_get_current_branch_state_returns_detached_head_when_not_on_branch(tmp_path: Path) -> None:
+    """Detached HEAD 应展示专用文案，且不标记任何当前分支。"""
+
+    repo = tmp_path / "repo"
+    _init_repo(repo, {"README.md": "demo\n"})
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "--detach", head_sha)
+
+    current_label, current_local_branch = get_current_branch_state(repo)
+    branches = list_branch_refs(repo, current_local_branch=current_local_branch)
+
+    assert current_label == "Detached HEAD"
+    assert current_local_branch is None
+    assert all(branch.is_current is False for branch in branches)
+
+
+def test_get_current_branch_state_returns_read_failure_for_non_repo(tmp_path: Path) -> None:
+    """非 Git 目录读取当前分支失败时，应返回统一兜底文案。"""
+
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir(parents=True, exist_ok=True)
+
+    current_label, current_local_branch = get_current_branch_state(plain_dir)
+
+    assert current_label == "读取失败"
+    assert current_local_branch is None

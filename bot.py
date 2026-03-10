@@ -109,6 +109,7 @@ from parallel_runtime import (
     commit_parallel_repos,
     delete_parallel_workspace,
     discover_git_repos,
+    get_current_branch_state,
     list_branch_refs,
     merge_parallel_repos,
     prepare_parallel_workspace,
@@ -7366,8 +7367,10 @@ async def _begin_parallel_launch(
         return
 
     repo_options: list[tuple[str, Path, str, list[BranchRef]]] = []
+    current_branch_labels: dict[str, str] = {}
     for repo_key, repo_path, relative_path in repos:
-        branches = list_branch_refs(repo_path)
+        current_branch_label, current_local_branch = get_current_branch_state(repo_path)
+        branches = list_branch_refs(repo_path, current_local_branch=current_local_branch)
         if not branches:
             if origin_message is not None:
                 await origin_message.answer(
@@ -7376,6 +7379,7 @@ async def _begin_parallel_launch(
                 )
             return
         repo_options.append((repo_key, repo_path, relative_path, branches))
+        current_branch_labels[repo_key] = current_branch_label
 
     token = _create_parallel_launch_token()
     session = ParallelLaunchSession(
@@ -7388,6 +7392,7 @@ async def _begin_parallel_launch(
         supplement=supplement,
         repo_options=repo_options,
         selections={},
+        current_branch_labels=current_branch_labels,
     )
     PARALLEL_LAUNCH_SESSIONS[token] = session
     if origin_message is not None:
@@ -7955,6 +7960,7 @@ class ParallelLaunchSession:
     supplement: Optional[str]
     repo_options: list[tuple[str, Path, str, list[BranchRef]]]
     selections: dict[str, BranchRef]
+    current_branch_labels: dict[str, str]
     created_at: float = field(default_factory=time.time)
 
 
@@ -8136,15 +8142,32 @@ async def _delete_parallel_session_workspace(task_id: str) -> None:
 
 
 def _build_parallel_branch_title(session: ParallelLaunchSession, repo_index: int) -> str:
-    repo_key, _repo_path, rel, branches = session.repo_options[repo_index]
+    repo_key, _repo_path, rel, _branches = session.repo_options[repo_index]
+    current_branch_label = session.current_branch_labels.get(repo_key, "读取失败")
     lines = [
         f"并行任务：/{session.task.id} {session.task.title}",
         f"当前仓库：{rel or '.'}",
+        f"当前分支：{current_branch_label}",
         "请选择该仓库的基线分支（本地 + 远端）：",
     ]
     if repo_index > 0:
         lines.append(f"已选择仓库：{repo_index}/{len(session.repo_options)}")
     return "\n".join(lines)
+
+
+def _format_parallel_branch_button_label(branch: BranchRef, *, limit: int = 48) -> str:
+    """格式化分支按钮文案，优先保留“当前”标记。"""
+
+    prefix = "🌐 " if branch.source == "remote" else "📍 "
+    suffix = "（当前）" if branch.is_current else ""
+    available = max(limit - len(prefix) - len(suffix), 1)
+    name = branch.name
+    if len(name) > available:
+        if available <= 1:
+            name = "…"
+        else:
+            name = name[: available - 1] + "…"
+    return f"{prefix}{name}{suffix}"
 
 
 def _build_parallel_branch_keyboard(
@@ -8162,11 +8185,10 @@ def _build_parallel_branch_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     for offset, branch in enumerate(chunk):
         branch_idx = start + offset
-        label = ("🌐 " if branch.source == "remote" else "📍 ") + branch.name
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=label[:48],
+                    text=_format_parallel_branch_button_label(branch),
                     callback_data=f"{PARALLEL_BRANCH_SELECT_PREFIX}{session.token}:{repo_index}:{branch_idx}",
                 )
             ]
