@@ -377,3 +377,58 @@ def test_parallel_branch_confirm_callback_edits_same_message_to_processing(monke
 
     assert message.edits, "点击开始并行处理应先覆盖原消息为处理中提示"
     assert message.edits[0][0] == "正在创建并行副本并启动并行 CLI，请稍候……"
+
+
+def test_parallel_branch_confirm_callback_replaces_processing_message_with_summary(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", lambda **_kwargs: [])
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert len(message.edits) >= 2, "成功后应继续覆盖同一条消息为摘要"
+    assert message.edits[0][0] == "正在创建并行副本并启动并行 CLI，请稍候……"
+    assert "已创建并行开发副本（原目录未改动）：" in message.edits[-1][0]
+    assert not message.calls, "成功收口不应再额外新增摘要消息"

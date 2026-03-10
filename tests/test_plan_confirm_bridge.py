@@ -69,11 +69,17 @@ def _reset_runtime():
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
     bot.PLAN_CONFIRM_PROCESSING_TOKENS.clear()
     bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
+    bot.PARALLEL_SESSION_TASK_BINDINGS.clear()
+    bot.PARALLEL_SESSION_CONTEXTS.clear()
+    bot.PARALLEL_TASK_SESSION_MAP.clear()
     yield
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
     bot.PLAN_CONFIRM_PROCESSING_TOKENS.clear()
     bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
+    bot.PARALLEL_SESSION_TASK_BINDINGS.clear()
+    bot.PARALLEL_SESSION_CONTEXTS.clear()
+    bot.PARALLEL_TASK_SESSION_MAP.clear()
 
 
 def _build_assistant_message_event(text: str) -> dict:
@@ -219,6 +225,126 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已确认并推送到模型", False)
     assert callback.message.answers == []
+
+
+def test_parallel_plan_confirm_yes_dispatches_bound_parallel_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """并行 CLI 发出的 Implement the plan，点 Yes 后必须继续发回对应并行会话。"""
+
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent_messages: list[dict] = []
+
+        async def send_message(self, chat_id: int, text: str, parse_mode=None, reply_markup=None):
+            self.sent_messages.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "reply_markup": reply_markup,
+                }
+            )
+            return SimpleNamespace(message_id=len(self.sent_messages), chat=SimpleNamespace(id=chat_id))
+
+    chat_id = 188
+    session_key = "parallel-plan-session"
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0093",
+        tmux_session="vibe-par-demo",
+        pointer_file=tmp_path / "pointer.txt",
+        workspace_root=tmp_path / "workspace",
+    )
+    bot.PARALLEL_SESSION_TASK_BINDINGS[session_key] = "TASK_0093"
+    bot.PARALLEL_SESSION_CONTEXTS[session_key] = dispatch_context
+    bot.PARALLEL_TASK_SESSION_MAP["TASK_0093"] = session_key
+    bot.CHAT_ACTIVE_USERS[chat_id] = 9
+
+    async def fake_send_with_retry(coro_factory, *, attempts=bot.SEND_RETRY_ATTEMPTS):
+        await coro_factory()
+
+    monkeypatch.setattr(bot, "_bot", DummyBot())
+    monkeypatch.setattr(bot, "_send_with_retry", fake_send_with_retry)
+
+    created = asyncio.run(bot._maybe_send_plan_confirm_prompt(chat_id, session_key))
+
+    assert created is True
+    token = bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id]
+
+    captured_contexts: list[object] = []
+
+    async def fake_dispatch(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        intended_mode=None,
+        force_exit_plan_ui: bool = False,
+        force_exit_plan_ui_key_sequence=None,
+        force_exit_plan_ui_max_rounds=None,
+        dispatch_context=None,
+    ):
+        assert prompt == bot.PLAN_IMPLEMENT_PROMPT
+        captured_contexts.append(dispatch_context)
+        return True, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
+
+    callback = DummyCallback(
+        bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=9,
+    )
+
+    asyncio.run(bot.on_plan_confirm_callback(callback))
+
+    assert captured_contexts == [dispatch_context]
+    assert callback.answers[-1] == ("已确认并推送到模型", False)
+
+
+def test_parallel_plan_confirm_yes_fails_closed_when_context_stale(monkeypatch: pytest.MonkeyPatch):
+    """并行 Plan Confirm 若上下文已失效，必须 fail-closed，不能回落到原生 CLI。"""
+
+    chat_id = 189
+    token = "tok-par-stale"
+    bot.PLAN_CONFIRM_SESSIONS[token] = SimpleNamespace(
+        token=token,
+        chat_id=chat_id,
+        session_key="parallel-plan-session",
+        user_id=9,
+        created_at=time.monotonic(),
+        parallel_task_id="TASK_0093",
+        parallel_dispatch_context=None,
+    )
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
+
+    dispatched: list[tuple[int, str]] = []
+
+    async def fake_dispatch(*args, **kwargs):
+        dispatched.append((args[0], args[1]))
+        return True, None
+
+    async def fake_resolve_parallel_dispatch_context(task_id: str | None, token: str | None):
+        assert task_id == "TASK_0093"
+        assert token is None
+        return "TASK_0093", None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_resolve_parallel_dispatch_context", fake_resolve_parallel_dispatch_context)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
+
+    callback = DummyCallback(
+        bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=9,
+    )
+
+    asyncio.run(bot.on_plan_confirm_callback(callback))
+
+    assert not dispatched
+    assert callback.answers[-1] == ("并行会话已失效，请在最新并行消息中重试。", True)
+    assert callback.message.answers
+    assert "并行会话已失效" in callback.message.answers[-1][0]
 
 
 def test_plan_confirm_yes_is_idempotent_under_concurrent_clicks(monkeypatch: pytest.MonkeyPatch):

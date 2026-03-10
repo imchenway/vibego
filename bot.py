@@ -566,6 +566,8 @@ class PlanConfirmSession:
     session_key: str
     user_id: Optional[int]
     created_at: float
+    parallel_task_id: Optional[str] = None
+    parallel_dispatch_context: Optional["ParallelDispatchContext"] = None
 
 
 ENV_ISSUES: list[str] = []
@@ -7632,6 +7634,17 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
 
     await callback.answer("并行分支已创建")
     if callback.message is not None:
+        summary_lines = [
+            "已创建并行开发副本（原目录未改动）：",
+            f"- 任务：/{task.id} {task.title}",
+        ]
+        for repo in selections:
+            summary_lines.append(f"- {repo.relative_path or '.'} -> {repo.selected_ref}")
+        await _render_parallel_branch_flow_message(
+            callback.message,
+            "\n".join(summary_lines),
+            reply_markup=None,
+        )
         preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
         await _send_model_push_preview(
             session.chat_id,
@@ -7640,13 +7653,6 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
             parse_mode=preview_parse_mode,
             reply_markup=_build_worker_main_keyboard(),
         )
-        summary_lines = [
-            "已创建并行开发副本（原目录未改动）：",
-            f"- 任务：/{task.id} {task.title}",
-        ]
-        for repo in selections:
-            summary_lines.append(f"- {repo.relative_path or '.'} -> {repo.selected_ref}")
-        await callback.message.answer("\n".join(summary_lines), reply_markup=_build_worker_main_keyboard())
         if session_path is not None:
             await _send_session_ack(session.chat_id, session_path, reply_to=session.origin_message or callback.message)
 
@@ -8213,6 +8219,14 @@ async def _resolve_parallel_request_input_context(
     if isinstance(dispatch_context, ParallelDispatchContext):
         return task_id, dispatch_context
     return await _resolve_parallel_dispatch_context(task_id, None)
+
+
+async def _resolve_parallel_plan_confirm_context(
+    session_key: str,
+) -> tuple[Optional[str], Optional[ParallelDispatchContext]]:
+    """根据 Plan Confirm 所属 session_key 回溯并行上下文。"""
+
+    return await _resolve_parallel_request_input_context(session_key)
 
 
 def _parallel_tmux_session_exists(session_name: str) -> bool:
@@ -9765,12 +9779,15 @@ async def _maybe_send_plan_confirm_prompt(chat_id: int, session_key: str) -> boo
 
     token = uuid.uuid4().hex[:10]
     owner_user_id = CHAT_ACTIVE_USERS.get(chat_id)
+    parallel_task_id, parallel_dispatch_context = await _resolve_parallel_plan_confirm_context(session_key)
     session = PlanConfirmSession(
         token=token,
         chat_id=chat_id,
         session_key=session_key,
         user_id=int(owner_user_id) if isinstance(owner_user_id, int) else None,
         created_at=time.monotonic(),
+        parallel_task_id=_normalize_task_id(parallel_task_id),
+        parallel_dispatch_context=parallel_dispatch_context,
     )
 
     bot = current_bot()
@@ -12891,15 +12908,34 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
     actor_user_id = callback.from_user.id if callback.from_user else session.user_id
     _remember_chat_active_user(chat_id, actor_user_id)
     try:
+        dispatch_kwargs: dict[str, Any] = {
+            "reply_to": callback.message,
+            "ack_immediately": True,
+            "intended_mode": None,
+            "force_exit_plan_ui": True,
+            "force_exit_plan_ui_key_sequence": _build_plan_develop_retry_exit_plan_key_sequence(),
+            "force_exit_plan_ui_max_rounds": PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+        }
+        dispatch_context = getattr(session, "parallel_dispatch_context", None)
+        parallel_task_id = _normalize_task_id(getattr(session, "parallel_task_id", None))
+        is_parallel_plan_confirm = isinstance(dispatch_context, ParallelDispatchContext) or bool(parallel_task_id)
+        if not isinstance(dispatch_context, ParallelDispatchContext) and parallel_task_id:
+            _resolved_task_id, dispatch_context = await _resolve_parallel_dispatch_context(parallel_task_id, None)
+            parallel_task_id = _normalize_task_id(_resolved_task_id) or parallel_task_id
+        if is_parallel_plan_confirm and not isinstance(dispatch_context, ParallelDispatchContext):
+            await callback.answer("并行会话已失效，请在最新并行消息中重试。", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "并行会话已失效，请回到最新并行消息重新操作。",
+                    reply_markup=_build_worker_main_keyboard(),
+                )
+            return
+        if isinstance(dispatch_context, ParallelDispatchContext):
+            dispatch_kwargs["dispatch_context"] = dispatch_context
         success, _session_path = await _dispatch_prompt_to_model(
             chat_id,
             PLAN_IMPLEMENT_PROMPT,
-            reply_to=callback.message,
-            ack_immediately=True,
-            intended_mode=None,
-            force_exit_plan_ui=True,
-            force_exit_plan_ui_key_sequence=_build_plan_develop_retry_exit_plan_key_sequence(),
-            force_exit_plan_ui_max_rounds=PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+            **dispatch_kwargs,
         )
         if not success:
             await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
