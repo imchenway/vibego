@@ -1928,47 +1928,55 @@ async def _dispatch_prompt_to_model(
     # 新提示词入模时，清理旧的 Plan 确认状态，避免跨轮次误触发。
     _drop_chat_plan_confirm_session(chat_id)
 
-    prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
-    if prev_watcher is not None:
-        if not prev_watcher.done():
-            prev_watcher.cancel()
-            worker_log.info(
-                "[session-map] chat=%s cancel previous watcher",
-                chat_id,
-                extra=_session_extra(),
-            )
-            try:
-                await prev_watcher
-            except asyncio.CancelledError:
+    is_parallel_dispatch = dispatch_context is not None
+    parallel_task_id = _normalize_task_id(dispatch_context.task_id) if dispatch_context is not None else None
+
+    if not is_parallel_dispatch:
+        prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
+        if prev_watcher is not None:
+            if not prev_watcher.done():
+                prev_watcher.cancel()
                 worker_log.info(
-                    "[session-map] chat=%s previous watcher cancelled",
+                    "[session-map] chat=%s cancel previous watcher",
                     chat_id,
                     extra=_session_extra(),
                 )
-            except Exception as exc:  # noqa: BLE001
-                worker_log.warning(
-                    "[session-map] chat=%s previous watcher exited with error: %s",
+                try:
+                    await prev_watcher
+                except asyncio.CancelledError:
+                    worker_log.info(
+                        "[session-map] chat=%s previous watcher cancelled",
+                        chat_id,
+                        extra=_session_extra(),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    worker_log.warning(
+                        "[session-map] chat=%s previous watcher exited with error: %s",
+                        chat_id,
+                        exc,
+                        extra=_session_extra(),
+                    )
+            else:
+                worker_log.debug(
+                    "[session-map] chat=%s previous watcher already done",
                     chat_id,
-                    exc,
                     extra=_session_extra(),
                 )
-        else:
-            worker_log.debug(
-                "[session-map] chat=%s previous watcher already done",
-                chat_id,
-                extra=_session_extra(),
-            )
     session_path: Optional[Path] = None
-    existing = CHAT_SESSION_MAP.get(chat_id)
+    existing = PARALLEL_TASK_SESSION_MAP.get(parallel_task_id or "") if is_parallel_dispatch else CHAT_SESSION_MAP.get(chat_id)
     if existing:
         candidate = Path(existing)
         if candidate.exists():
             session_path = candidate
         else:
-            CHAT_SESSION_MAP.pop(chat_id, None)
+            if is_parallel_dispatch and parallel_task_id:
+                PARALLEL_TASK_SESSION_MAP.pop(parallel_task_id, None)
+                PARALLEL_SESSION_CONTEXTS.pop(existing, None)
+            else:
+                CHAT_SESSION_MAP.pop(chat_id, None)
             _reset_delivered_hashes(chat_id, existing)
             _reset_delivered_offsets(chat_id, existing)
-    else:
+    elif not is_parallel_dispatch:
         _reset_delivered_hashes(chat_id)
         _reset_delivered_offsets(chat_id)
 
@@ -1991,12 +1999,12 @@ async def _dispatch_prompt_to_model(
                 extra=_session_extra(path=session_path),
             )
         elif session_path != pointer_target:
-            previous_key = CHAT_SESSION_MAP.get(chat_id)
+            previous_key = existing
             if previous_key:
                 _reset_delivered_hashes(chat_id, previous_key)
                 _reset_delivered_offsets(chat_id, previous_key)
                 SESSION_OFFSETS.pop(previous_key, None)
-            else:
+            elif not is_parallel_dispatch:
                 _reset_delivered_hashes(chat_id)
                 _reset_delivered_offsets(chat_id)
             session_path = pointer_target
@@ -2159,12 +2167,17 @@ async def _dispatch_prompt_to_model(
             extra=_session_extra(key=session_key),
         )
 
-    CHAT_SESSION_MAP[chat_id] = session_key
-    if dispatch_context is not None:
-        _bind_parallel_session_task(session_key, dispatch_context.task_id)
-    _clear_last_message(chat_id)
-    _reset_compact_tracking(chat_id)
-    CHAT_FAILURE_NOTICES.pop(chat_id, None)
+    if is_parallel_dispatch:
+        assert dispatch_context is not None and parallel_task_id is not None
+        _bind_parallel_session_task(session_key, parallel_task_id)
+        _bind_parallel_dispatch_context(session_key, dispatch_context)
+        _clear_last_message(chat_id, session_key)
+        _reset_compact_tracking(chat_id, session_key)
+    else:
+        CHAT_SESSION_MAP[chat_id] = session_key
+        _clear_last_message(chat_id)
+        _reset_compact_tracking(chat_id)
+        CHAT_FAILURE_NOTICES.pop(chat_id, None)
     worker_log.info(
         "[session-map] chat=%s bound to %s",
         chat_id,
@@ -2185,21 +2198,30 @@ async def _dispatch_prompt_to_model(
                 break
             await asyncio.sleep(0.3)
 
-    # 中断旧的延迟轮询（如果存在）
-    await _interrupt_long_poll(chat_id)
-
-    # 即时轮询已命中时，恢复 watcher 直接进入延迟轮询，避免重复添加“完成前缀”。
     start_in_long_poll = quick_poll_delivered or (session_key in (CHAT_LAST_MESSAGE.get(chat_id) or {}))
-    watcher_task = asyncio.create_task(
-        _watch_and_notify(
+    if is_parallel_dispatch:
+        assert parallel_task_id is not None
+        await _start_parallel_task_watcher(
+            parallel_task_id,
             chat_id,
             session_path,
-            max_wait=WATCH_MAX_WAIT,
-            interval=WATCH_INTERVAL,
             start_in_long_poll=start_in_long_poll,
         )
-    )
-    CHAT_WATCHERS[chat_id] = watcher_task
+    else:
+        # 中断旧的延迟轮询（如果存在）
+        await _interrupt_long_poll(chat_id)
+
+        # 即时轮询已命中时，恢复 watcher 直接进入延迟轮询，避免重复添加“完成前缀”。
+        watcher_task = asyncio.create_task(
+            _watch_and_notify(
+                chat_id,
+                session_path,
+                max_wait=WATCH_MAX_WAIT,
+                interval=WATCH_INTERVAL,
+                start_in_long_poll=start_in_long_poll,
+            )
+        )
+        CHAT_WATCHERS[chat_id] = watcher_task
     return True, session_path
 
 
@@ -3773,6 +3795,7 @@ def _build_model_quick_reply_keyboard(
     task_id: Optional[str] = None,
     parallel_task_title: Optional[str] = None,
     enable_parallel_actions: bool = False,
+    parallel_callback_payload: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     """构建“模型答案消息”底部的快捷回复按钮（InlineKeyboard）。"""
 
@@ -3780,8 +3803,9 @@ def _build_model_quick_reply_keyboard(
     all_callback = MODEL_QUICK_REPLY_ALL_CALLBACK
     partial_callback = MODEL_QUICK_REPLY_PARTIAL_CALLBACK
     if enable_parallel_actions and normalized_task_id:
-        all_callback = f"{MODEL_QUICK_REPLY_ALL_TASK_PREFIX}{normalized_task_id}"
-        partial_callback = f"{MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX}{normalized_task_id}"
+        payload = (parallel_callback_payload or normalized_task_id).strip()
+        all_callback = f"{MODEL_QUICK_REPLY_ALL_TASK_PREFIX}{payload}"
+        partial_callback = f"{MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX}{payload}"
 
     rows: list[list[InlineKeyboardButton]] = [
         [
@@ -3803,7 +3827,7 @@ def _build_model_quick_reply_keyboard(
             [
                 InlineKeyboardButton(
                     text=f"↩️ 回复 { _format_task_command(normalized_task_id) }".strip()[:40],
-                    callback_data=f"{PARALLEL_REPLY_CALLBACK_PREFIX}{normalized_task_id}",
+                    callback_data=f"{PARALLEL_REPLY_CALLBACK_PREFIX}{(parallel_callback_payload or normalized_task_id).strip()}",
                 ),
                 InlineKeyboardButton(
                     text="⬆️ 提交并行分支",
@@ -7899,6 +7923,10 @@ def tmux_capture_since(log_path: Path | str, start_pos: int, idle: float = 2.0, 
 SESSION_OFFSETS: Dict[str, int] = {}
 CHAT_SESSION_MAP: Dict[int, str] = {}
 CHAT_WATCHERS: Dict[int, asyncio.Task] = {}
+PARALLEL_TASK_SESSION_MAP: Dict[str, str] = {}
+PARALLEL_TASK_WATCHERS: Dict[str, asyncio.Task] = {}
+PARALLEL_SESSION_CONTEXTS: Dict[str, "ParallelDispatchContext"] = {}
+PARALLEL_CALLBACK_BINDINGS: Dict[str, Any] = {}
 CHAT_LAST_MESSAGE: Dict[int, Dict[str, str]] = {}
 CHAT_FAILURE_NOTICES: Dict[int, float] = {}
 CHAT_PLAN_MESSAGES: Dict[int, int] = {}
@@ -7977,6 +8005,18 @@ class ParallelDispatchContext:
     workspace_root: Path
 
 
+@dataclass
+class ParallelCallbackBinding:
+    """描述并行消息底部按钮到并行上下文的精确路由绑定。"""
+
+    token: str
+    task_id: str
+    session_key: str
+    dispatch_context: ParallelDispatchContext
+    title_snapshot: Optional[str] = None
+    created_at: float = field(default_factory=time.time)
+
+
 def _bind_session_task(session_key: str, task_id: str) -> None:
     """将 session_key 与 task_id 绑定，便于从会话回溯当前任务。"""
 
@@ -7995,20 +8035,112 @@ def _bind_parallel_session_task(session_key: str, task_id: str) -> None:
     if not key or not normalized_task_id:
         return
     PARALLEL_SESSION_TASK_BINDINGS[key] = normalized_task_id
+    PARALLEL_TASK_SESSION_MAP[normalized_task_id] = key
+
+
+def _bind_parallel_dispatch_context(session_key: str, dispatch_context: ParallelDispatchContext) -> None:
+    """缓存并行会话的精确派发上下文，避免回落到原生会话。"""
+
+    key = (session_key or "").strip()
+    task_id = _normalize_task_id(dispatch_context.task_id)
+    if not key or not task_id:
+        return
+    PARALLEL_SESSION_CONTEXTS[key] = dispatch_context
+    PARALLEL_TASK_SESSION_MAP[task_id] = key
+
+
+def _build_parallel_callback_payload(task_id: str, token: str) -> str:
+    """构造并行按钮的 session-scoped payload。"""
+
+    return f"{task_id}:{token}"
+
+
+def _parse_parallel_callback_payload(raw_payload: str) -> tuple[Optional[str], Optional[str]]:
+    """解析并行按钮 payload，兼容旧版仅 task_id 的数据格式。"""
+
+    payload = (raw_payload or "").strip()
+    if not payload:
+        return None, None
+    task_id = _normalize_task_id(payload)
+    if task_id:
+        return task_id, None
+    task_part, _, token = payload.partition(":")
+    task_id = _normalize_task_id(task_part)
+    if task_id and token.strip():
+        return task_id, token.strip()
+    return None, None
+
+
+def _ensure_parallel_callback_binding(
+    session_key: str,
+    dispatch_context: ParallelDispatchContext,
+    *,
+    title_snapshot: Optional[str] = None,
+) -> str:
+    """为并行消息生成稳定 token，便于按钮精准路由。"""
+
+    token = hashlib.sha1(f"{dispatch_context.task_id}:{session_key}".encode("utf-8")).hexdigest()[:10]
+    PARALLEL_CALLBACK_BINDINGS[token] = ParallelCallbackBinding(
+        token=token,
+        task_id=dispatch_context.task_id,
+        session_key=session_key,
+        dispatch_context=dispatch_context,
+        title_snapshot=title_snapshot,
+    )
+    return token
+
+
+async def _resolve_parallel_dispatch_context(
+    task_id: Optional[str],
+    token: Optional[str],
+) -> tuple[Optional[str], Optional[ParallelDispatchContext]]:
+    """按 token 优先、task_id 兜底解析并行派发上下文。"""
+
+    if token:
+        binding = PARALLEL_CALLBACK_BINDINGS.get(token)
+        if binding is not None:
+            resolved_task_id = _normalize_task_id(getattr(binding, "task_id", task_id))
+            dispatch_context = getattr(binding, "dispatch_context", None)
+            if isinstance(dispatch_context, ParallelDispatchContext):
+                return resolved_task_id, dispatch_context
+
+    normalized_task_id = _normalize_task_id(task_id)
+    if not normalized_task_id:
+        return None, None
+
+    session_key = PARALLEL_TASK_SESSION_MAP.get(normalized_task_id)
+    if session_key:
+        dispatch_context = PARALLEL_SESSION_CONTEXTS.get(session_key)
+        if dispatch_context is not None:
+            return normalized_task_id, dispatch_context
+
+    session = await _get_active_parallel_session_for_task(normalized_task_id)
+    if session is None:
+        return normalized_task_id, None
+    dispatch_context = _parallel_dispatch_context_from_session(session)
+    return normalized_task_id, dispatch_context
 
 
 def _clear_parallel_reply_target(chat_id: int) -> None:
     CHAT_PARALLEL_REPLY_TARGETS.pop(chat_id, None)
 
 
-def _set_parallel_reply_target(chat_id: int, task_id: str) -> None:
+def _set_parallel_reply_target(
+    chat_id: int,
+    task_id: str,
+    *,
+    dispatch_context: Optional[ParallelDispatchContext] = None,
+    token: Optional[str] = None,
+) -> None:
     CHAT_PARALLEL_REPLY_TARGETS[chat_id] = {
         "task_id": task_id,
+        "dispatch_context": dispatch_context,
+        "token": token,
         "expires_at": time.time() + 600,
     }
 
 
-def _consume_parallel_reply_target(chat_id: int) -> Optional[str]:
+def _consume_parallel_reply_target(chat_id: int) -> Optional[dict[str, Any]]:
     payload = CHAT_PARALLEL_REPLY_TARGETS.get(chat_id)
     if not payload:
         return None
@@ -8018,7 +8150,13 @@ def _consume_parallel_reply_target(chat_id: int) -> Optional[str]:
         return None
     task_id = _normalize_task_id(payload.get("task_id"))
     _clear_parallel_reply_target(chat_id)
-    return task_id
+    if not task_id:
+        return None
+    return {
+        "task_id": task_id,
+        "dispatch_context": payload.get("dispatch_context"),
+        "token": payload.get("token"),
+    }
 
 
 async def _get_active_parallel_session_for_task(task_id: str) -> Optional[ParallelSessionRecord]:
@@ -8127,6 +8265,11 @@ async def _delete_parallel_session_workspace(task_id: str) -> None:
     session = await _get_active_parallel_session_for_task(task_id)
     if session is None:
         return
+    watcher = PARALLEL_TASK_WATCHERS.pop(task_id, None)
+    if watcher is not None and not watcher.done():
+        watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher
     delete_parallel_workspace(
         workspace_root=Path(session.workspace_root),
         tmux_session=session.tmux_session,
@@ -8134,6 +8277,17 @@ async def _delete_parallel_session_workspace(task_id: str) -> None:
     )
     meta_root = _parallel_runtime_root(task_id)
     shutil.rmtree(meta_root, ignore_errors=True)
+    session_key = PARALLEL_TASK_SESSION_MAP.pop(task_id, None)
+    if session_key:
+        PARALLEL_SESSION_CONTEXTS.pop(session_key, None)
+        PARALLEL_SESSION_TASK_BINDINGS.pop(session_key, None)
+        stale_tokens = [
+            token
+            for token, binding in PARALLEL_CALLBACK_BINDINGS.items()
+            if _normalize_task_id(getattr(binding, "task_id", None)) == task_id
+        ]
+        for token in stale_tokens:
+            PARALLEL_CALLBACK_BINDINGS.pop(token, None)
     await PARALLEL_SESSION_STORE.update_status(
         task_id,
         status="deleted",
@@ -9496,14 +9650,25 @@ async def _deliver_pending_messages(
     bound_task_id = SESSION_TASK_BINDINGS.get(session_key)
     parallel_task_id = PARALLEL_SESSION_TASK_BINDINGS.get(session_key)
     parallel_title = None
+    parallel_dispatch_context = None
+    parallel_callback_payload = None
     if parallel_task_id:
         parallel_session = await _get_active_parallel_session_for_task(parallel_task_id)
         if parallel_session is not None:
             parallel_title = parallel_session.title_snapshot
+        resolved_task_id, parallel_dispatch_context = await _resolve_parallel_dispatch_context(parallel_task_id, None)
+        if resolved_task_id and parallel_dispatch_context is not None:
+            token = _ensure_parallel_callback_binding(
+                session_key,
+                parallel_dispatch_context,
+                title_snapshot=parallel_title,
+            )
+            parallel_callback_payload = _build_parallel_callback_payload(resolved_task_id, token)
     quick_reply_markup = _build_model_quick_reply_keyboard(
         task_id=bound_task_id or parallel_task_id,
         parallel_task_title=parallel_title,
         enable_parallel_actions=bool(parallel_task_id),
+        parallel_callback_payload=parallel_callback_payload,
     )
     delivered_hashes = _get_delivered_hashes(chat_id, session_key)
     delivered_offsets = _get_delivered_offsets(chat_id, session_key)
@@ -10453,6 +10618,110 @@ async def _watch_and_notify(
                     "监听任务退出，已清理延迟轮询状态",
                     extra={"chat": chat_id},
                 )
+
+
+async def _watch_parallel_and_notify(
+    task_id: str,
+    chat_id: int,
+    session_path: Path,
+    max_wait: float,
+    interval: float,
+    *,
+    start_in_long_poll: bool = False,
+) -> None:
+    """监听单个并行会话，不干扰同 chat 的原生会话 watcher。"""
+
+    start = time.monotonic()
+    first_delivery_done = bool(start_in_long_poll)
+    current_interval = 3.0 if first_delivery_done else interval
+    long_poll_rounds = 0
+    long_poll_max_rounds = 600
+
+    try:
+        while True:
+            await asyncio.sleep(current_interval)
+
+            if not first_delivery_done and max_wait > 0 and time.monotonic() - start > max_wait:
+                worker_log.warning(
+                    "[parallel-session] task=%s 长时间未获取到模型输出，停止轮询",
+                    task_id,
+                    extra={"chat": chat_id, **_session_extra(path=session_path)},
+                )
+                return
+
+            if not session_path.exists():
+                continue
+
+            try:
+                delivered = await _deliver_pending_messages(
+                    chat_id,
+                    session_path,
+                    add_completion_header=not first_delivery_done,
+                )
+            except Exception as exc:  # noqa: BLE001
+                worker_log.error(
+                    "并行会话消息发送时发生未预期异常",
+                    exc_info=exc,
+                    extra={"chat": chat_id, "task_id": task_id, **_session_extra(path=session_path)},
+                )
+                delivered = False
+
+            if delivered and not first_delivery_done:
+                first_delivery_done = True
+                current_interval = 3.0
+                worker_log.info(
+                    "并行会话首次发送成功，启动延迟轮询模式",
+                    extra={"chat": chat_id, "task_id": task_id, **_session_extra(path=session_path)},
+                )
+                continue
+
+            if first_delivery_done:
+                if delivered:
+                    long_poll_rounds = 0
+                else:
+                    long_poll_rounds += 1
+                    if long_poll_rounds >= long_poll_max_rounds:
+                        worker_log.info(
+                            "并行会话延迟轮询达到最大次数，停止监听",
+                            extra={"chat": chat_id, "task_id": task_id, **_session_extra(path=session_path)},
+                        )
+                        return
+                continue
+
+            if delivered:
+                return
+    finally:
+        current_task = asyncio.current_task()
+        active_task = PARALLEL_TASK_WATCHERS.get(task_id)
+        if active_task is current_task:
+            PARALLEL_TASK_WATCHERS.pop(task_id, None)
+
+
+async def _start_parallel_task_watcher(
+    task_id: str,
+    chat_id: int,
+    session_path: Path,
+    *,
+    start_in_long_poll: bool,
+) -> None:
+    """启动或替换指定并行任务的 watcher。"""
+
+    prev_watcher = PARALLEL_TASK_WATCHERS.get(task_id)
+    if prev_watcher is not None and not prev_watcher.done():
+        prev_watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await prev_watcher
+    watcher_task = asyncio.create_task(
+        _watch_parallel_and_notify(
+            task_id,
+            chat_id,
+            session_path,
+            max_wait=WATCH_MAX_WAIT,
+            interval=WATCH_INTERVAL,
+            start_in_long_poll=start_in_long_poll,
+        )
+    )
+    PARALLEL_TASK_WATCHERS[task_id] = watcher_task
 
 
 def _read_pointer_path(pointer: Path) -> Optional[Path]:
@@ -11577,13 +11846,20 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     prompt = "待决策项全部按模型推荐"
     _remember_chat_active_user(chat_id, callback.from_user.id if callback.from_user else None)
     task_id = None
+    token = None
     if callback.data and callback.data.startswith(MODEL_QUICK_REPLY_ALL_TASK_PREFIX):
-        task_id = _normalize_task_id(callback.data[len(MODEL_QUICK_REPLY_ALL_TASK_PREFIX) :].strip())
+        task_id, token = _parse_parallel_callback_payload(callback.data[len(MODEL_QUICK_REPLY_ALL_TASK_PREFIX) :].strip())
     dispatch_context = None
-    if task_id:
-        session = await _get_active_parallel_session_for_task(task_id)
-        if session is not None:
-            dispatch_context = _parallel_dispatch_context_from_session(session)
+    if task_id or token:
+        task_id, dispatch_context = await _resolve_parallel_dispatch_context(task_id, token)
+        if dispatch_context is None:
+            await callback.answer("并行会话已失效，请在最新并行消息中重试。", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "并行会话已失效，请回到最新并行消息重新操作。",
+                    reply_markup=_build_worker_main_keyboard(),
+                )
+            return
 
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": origin_message,
@@ -11629,15 +11905,33 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
         await callback.answer("当前有进行中的流程，请先完成或发送“取消”。", show_alert=True)
         return
 
+    parallel_task_id = None
+    parallel_token = None
+    parallel_dispatch_context = None
+    if callback.data and callback.data.startswith(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX):
+        parallel_task_id, parallel_token = _parse_parallel_callback_payload(
+            callback.data[len(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX) :].strip()
+        )
+        if parallel_task_id or parallel_token:
+            parallel_task_id, parallel_dispatch_context = await _resolve_parallel_dispatch_context(
+                parallel_task_id,
+                parallel_token,
+            )
+            if parallel_dispatch_context is None:
+                await callback.answer("并行会话已失效，请在最新并行消息中重试。", show_alert=True)
+                if origin_message is not None:
+                    await origin_message.answer(
+                        "并行会话已失效，请回到最新并行消息重新操作。",
+                        reply_markup=_build_worker_main_keyboard(),
+                    )
+                return
+
     await state.clear()
     await state.update_data(
         chat_id=chat_id,
         origin_message=origin_message,
-        parallel_task_id=(
-            _normalize_task_id(callback.data[len(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX) :].strip())
-            if callback.data and callback.data.startswith(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX)
-            else None
-        ),
+        parallel_task_id=parallel_task_id,
+        parallel_dispatch_context=parallel_dispatch_context,
         # 用于后续超时清理或排查问题（单位：秒）。
         started_at=time.time(),
     )
@@ -11690,21 +11984,26 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith(PARALLEL_REPLY_CALLBACK_PREFIX))
 async def on_parallel_reply_callback(callback: CallbackQuery) -> None:
-    raw_task_id = (callback.data or "")[len(PARALLEL_REPLY_CALLBACK_PREFIX) :].strip()
-    task_id = _normalize_task_id(raw_task_id)
+    payload = (callback.data or "")[len(PARALLEL_REPLY_CALLBACK_PREFIX) :].strip()
+    task_id, token = _parse_parallel_callback_payload(payload)
     if not task_id:
         await callback.answer("任务 ID 无效", show_alert=True)
         return
-    session = await _get_active_parallel_session_for_task(task_id)
-    if session is None:
+    resolved_task_id, dispatch_context = await _resolve_parallel_dispatch_context(task_id, token)
+    if dispatch_context is None:
         await callback.answer("未找到活动中的并行会话", show_alert=True)
         return
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
-    _set_parallel_reply_target(chat_id, task_id)
+    _set_parallel_reply_target(
+        chat_id,
+        resolved_task_id or task_id,
+        dispatch_context=dispatch_context,
+        token=token,
+    )
     await callback.answer("已进入回复模式")
     if callback.message is not None:
         await callback.message.answer(
-            f"已进入 /{task_id} 回复模式。\n你下一条消息将自动补上 /{task_id} 前缀。",
+            f"已进入 /{resolved_task_id or task_id} 回复模式。\n你下一条消息将自动补上 /{resolved_task_id or task_id} 前缀。",
             reply_markup=_build_worker_main_keyboard(),
         )
 
@@ -11885,9 +12184,11 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
             prompt = _build_quick_reply_partial_prompt(trimmed)
 
     _remember_chat_active_user(chat_id, message.from_user.id if message.from_user else None)
-    dispatch_context = None
+    dispatch_context = data.get("parallel_dispatch_context")
+    if not isinstance(dispatch_context, ParallelDispatchContext):
+        dispatch_context = None
     parallel_task_id = _normalize_task_id(data.get("parallel_task_id"))
-    if parallel_task_id:
+    if parallel_task_id and dispatch_context is None:
         session = await _get_active_parallel_session_for_task(parallel_task_id)
         if session is not None:
             dispatch_context = _parallel_dispatch_context_from_session(session)
@@ -16405,16 +16706,20 @@ async def on_text(m: Message, state: FSMContext):
             dispatch_context=_parallel_dispatch_context_from_session(session),
         )
         return
-    reply_task_id = _consume_parallel_reply_target(m.chat.id)
-    if reply_task_id:
-        session = await _get_active_parallel_session_for_task(reply_task_id)
-        if session is None:
-            await m.answer(f"/{reply_task_id} 的并行会话已失效，请重新点击回复按钮。", reply_markup=_build_worker_main_keyboard())
-            return
+    reply_target = _consume_parallel_reply_target(m.chat.id)
+    if reply_target:
+        reply_task_id = _normalize_task_id(reply_target.get("task_id"))
+        dispatch_context = reply_target.get("dispatch_context")
+        if not isinstance(dispatch_context, ParallelDispatchContext):
+            session = await _get_active_parallel_session_for_task(reply_task_id or "")
+            if session is None:
+                await m.answer(f"/{reply_task_id} 的并行会话已失效，请重新点击回复按钮。", reply_markup=_build_worker_main_keyboard())
+                return
+            dispatch_context = _parallel_dispatch_context_from_session(session)
         await _handle_prompt_dispatch(
             m,
             f"/{reply_task_id} {prompt}",
-            dispatch_context=_parallel_dispatch_context_from_session(session),
+            dispatch_context=dispatch_context,
         )
         return
     task_id_candidate = _normalize_task_id(prompt)
