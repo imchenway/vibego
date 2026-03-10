@@ -92,7 +92,7 @@ def test_quick_reply_all_dispatches_prompt_and_restores_main_keyboard(monkeypatc
     previews: list[tuple[int, str, object, object]] = []
     ack_calls: list[tuple[int, Path, object]] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         recorded.append((chat_id, prompt, reply_to, ack_immediately))
         return True, tmp_path / "session_quick_all.jsonl"
 
@@ -154,7 +154,7 @@ def test_quick_reply_partial_supplement_dispatches_prompt(monkeypatch, tmp_path:
     previews: list[tuple[int, str, object, object]] = []
     ack_calls: list[tuple[int, Path, object]] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         recorded.append((chat_id, prompt, reply_to, ack_immediately))
         return True, tmp_path / "session.jsonl"
 
@@ -199,7 +199,7 @@ def test_quick_reply_partial_skip_sends_all_recommended(monkeypatch, tmp_path: P
 
     recorded: list[str] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         recorded.append(prompt)
         return True, tmp_path / "session.jsonl"
 

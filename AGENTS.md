@@ -7,7 +7,7 @@
 
 1. **严格证据模式**：所有“仓库事实”必须附带 `文件路径 + 锚点`；找不到证据只允许写 `TODO`。
 2. **Fail-Closed**：证据冲突无法裁决时，不下结论，进入 `TODO & Known Issues` 并阻断后续实现决策。
-3. **写入范围限制**：当前任务仅允许写入 `./AGENTS.md`（本文件）。
+3. **写入范围限制**：当前任务允许写入**受影响的实现文件、对应测试文件、`docs/` 任务文档以及必要的 `AGENTS.md` 证据更新**；禁止修改无关业务文件。
 4. **冲突裁决优先级**：`CI/脚本 > README > 构建配置 > 代码`。
 5. **现实优先**：若本文件与仓库现实冲突，先更新本文件再继续开发。
 6. **验证资产保护**：单元测试/测试用例/覆盖率规则属于长期验证资产，后续需求与修复均不得削弱。
@@ -29,6 +29,7 @@
 | 关键依赖        | `aiogram`, `aiohttp-socks`, `aiosqlite`, `markdown-it-py`                                                                                                                 | `pyproject.toml`（锚点：`dependencies = [`）                                                                                                                                                                                                   |
 | 模型运行形态      | 支持 `codex / claudecode / gemini`                                                                                                                                          | `scripts/run_bot.sh`（锚点：`--model 启动指定模型 (codex                                                                                                                                                                                            |claudecode|gemini)`）；`README.md`（锚点：`模型切换`） |
 | 数据存储        | SQLite（项目配置 + 任务/命令数据）                                                                                                                                                    | `project_repository.py`（锚点：`sqlite3.connect`, `CREATE TABLE IF NOT EXISTS projects`）；`tasks/service.py`（锚点：`aiosqlite.connect`, `CREATE TABLE IF NOT EXISTS tasks`）；`command_center/service.py`（锚点：`CREATE TABLE IF NOT EXISTS commands`） |
+| 并行开发运行时     | 支持任务级并行会话持久化与 Git 独立副本辅助                                                                                                                                                | `parallel_runtime.py`（锚点：`class ParallelSessionStore`, `prepare_parallel_workspace`, `build_parallel_commit_message`）                                                                                                                   |
 | 迁移方式        | 应用内代码迁移（`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE`）                                                                                                                     | `tasks/service.py`（锚点：`_create_tables`, `ALTER TABLE ...`）；`command_center/service.py`（锚点：`_ensure_scope_column`）                                                                                                                         |
 | 日志格式        | 结构化上下文：`agent/project/model/session`                                                                                                                                      | `logging_setup.py`（锚点：`LOG_FORMAT = "%(asctime)s ... [%(agent)] [%(project)] [%(model)] [%(session)]"`）                                                                                                                                   |
 | CLI 子命令     | `init/start/stop/status/doctor/commands-seed`                                                                                                                             | `vibego_cli/main.py`（锚点：`subparsers.add_parser("...")`）                                                                                                                                                                                   |
@@ -45,6 +46,7 @@
 | `vibego_cli/`             | 本地 CLI：`init/start/stop/status/doctor` 管理入口 | `vibego_cli/main.py`（锚点：`build_parser` + `subparsers.add_parser`）               |
 | `tasks/`                  | 任务领域模型与持久化服务（SQLite）                        | `tasks/models.py`（锚点：`TaskRecord`）；`tasks/service.py`（锚点：`class TaskService`）   |
 | `command_center/`         | 通用命令中心（命令定义、别名、历史）                          | `command_center/service.py`（锚点：`class CommandService`）                          |
+| `parallel_runtime.py`     | 并行开发运行时：任务级会话存储、分支/提交/合并/删除目录辅助             | `parallel_runtime.py`（锚点：`class ParallelSessionStore`, `commit_parallel_repos`） |
 | `scripts/`                | 运维脚本：启动/停止 worker、发布、依赖检查                   | `README.md`（锚点：`目录结构`）；`scripts/run_bot.sh`/`scripts/stop_bot.sh`               |
 | `tests/`                  | pytest 自动化测试资产                              | `tests/conftest.py`（锚点：`import pytest`）；`tests/test_vibego_cli_runtime_venv.py` |
 | `docs/`                   | 历史任务文档与回溯记录                                 | 目录扫描（锚点：`./docs/TASK_*.md`）                                                     |
@@ -330,4 +332,3 @@ develop 阶段必须强制执行：
 7. **Conflicts（按优先级裁决后）**
     - 当前无“同一事实互相矛盾且无法裁决”的硬冲突；仅存在“打包最低版本 3.9 与 CLI 运行建议/检查 3.11+”的口径差异，已在
       Facts 中并列标注。
-

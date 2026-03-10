@@ -96,6 +96,23 @@ from command_center import (
     resolve_global_command_db,
 )
 from command_center.prompts import build_field_prompt_text
+from parallel_runtime import (
+    BranchRef,
+    ParallelCommitResult,
+    ParallelMergeResult,
+    ParallelRepoRecord,
+    ParallelSessionRecord,
+    ParallelSessionStore,
+    RepoBranchSelection,
+    RepoOperationResult,
+    build_parallel_branch_name,
+    commit_parallel_repos,
+    delete_parallel_workspace,
+    discover_git_repos,
+    list_branch_refs,
+    merge_parallel_repos,
+    prepare_parallel_workspace,
+)
 
 # Python 3.10 才支持 dataclass slots，这里动态传参以兼容旧版本。
 _DATACLASS_SLOT_KW = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -204,6 +221,8 @@ BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。\n
 # 推送到模型模式（PLAN / YOLO）
 PUSH_MODE_PLAN = "PLAN"
 PUSH_MODE_YOLO = "YOLO"
+PUSH_TARGET_CURRENT = "当前 CLI 处理"
+PUSH_TARGET_PARALLEL = "新建分支 + 新 CLI 并行处理"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -357,8 +376,21 @@ ENFORCED_AGENTS_NOTICE = (
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
 MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
+MODEL_QUICK_REPLY_ALL_TASK_PREFIX = "model:quick_reply:all:"
+MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX = "model:quick_reply:partial:"
 # 模型答案消息底部：一键将任务切换到“测试”（不依赖提示词/摘要输出）
 MODEL_TASK_TO_TEST_PREFIX = "model:task_to_test:"
+PARALLEL_REPLY_CALLBACK_PREFIX = "parallel:reply:"
+PARALLEL_COMMIT_CALLBACK_PREFIX = "parallel:commit:"
+PARALLEL_MERGE_CALLBACK_PREFIX = "parallel:merge:"
+PARALLEL_MERGE_SKIP_CALLBACK_PREFIX = "parallel:merge_skip:"
+PARALLEL_DELETE_CALLBACK_PREFIX = "parallel:delete:"
+PARALLEL_DELETE_CONFIRM_CALLBACK_PREFIX = "parallel:delete_confirm:"
+PARALLEL_DELETE_CANCEL_CALLBACK_PREFIX = "parallel:delete_cancel:"
+PARALLEL_BRANCH_SELECT_PREFIX = "parallel:branch_select:"
+PARALLEL_BRANCH_PAGE_PREFIX = "parallel:branch_page:"
+PARALLEL_BRANCH_CANCEL_PREFIX = "parallel:branch_cancel:"
+PARALLEL_BRANCH_CONFIRM_PREFIX = "parallel:branch_confirm:"
 # request_user_input：Telegram 按钮回调前缀（需控制总长度 <= 64 字节）
 REQUEST_INPUT_CALLBACK_PREFIX = "rui:"
 REQUEST_INPUT_ACTION_OPTION = "opt"
@@ -1846,13 +1878,14 @@ async def _maybe_send_plan_switch_command(
     chat_id: int,
     intended_mode: Optional[str],
     prompt: str,
+    tmux_session: Optional[str] = None,
 ) -> bool:
     """按条件先向 tmux 发送 /plan，再短暂等待模式切换稳定。"""
 
     if not _should_send_plan_switch_command(intended_mode=intended_mode, prompt=prompt):
         return False
     try:
-        tmux_send_line(TMUX_SESSION, PLAN_MODE_SWITCH_COMMAND)
+        tmux_send_line(tmux_session or TMUX_SESSION, PLAN_MODE_SWITCH_COMMAND)
     except subprocess.CalledProcessError as exc:
         worker_log.warning(
             "发送 PLAN 预命令失败，继续发送正文：%s",
@@ -1884,6 +1917,7 @@ async def _dispatch_prompt_to_model(
     force_exit_plan_ui: bool = False,
     force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
     force_exit_plan_ui_max_rounds: Optional[int] = None,
+    dispatch_context: Optional[ParallelDispatchContext] = None,
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
 
@@ -1938,7 +1972,10 @@ async def _dispatch_prompt_to_model(
         _reset_delivered_offsets(chat_id)
 
     pointer_path: Optional[Path] = None
-    if CODEX_SESSION_FILE_PATH:
+    pointer_override = dispatch_context.pointer_file if dispatch_context is not None else None
+    if pointer_override is not None:
+        pointer_path = resolve_path(pointer_override)
+    elif CODEX_SESSION_FILE_PATH:
         pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
     pointer_target = _read_pointer_path(pointer_path) if pointer_path is not None else None
     pointer_switched = False
@@ -1978,7 +2015,11 @@ async def _dispatch_prompt_to_model(
         )
 
     # 统一以 MODEL_WORKDIR 作为目标工作目录（Gemini/Codex/ClaudeCode 皆由 run_bot.sh 注入）
-    target_cwd_raw = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
+    target_cwd_raw = (
+        str(dispatch_context.workspace_root)
+        if dispatch_context is not None
+        else (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
+    )
     target_cwd = target_cwd_raw or None
     if pointer_path is not None and not SESSION_BIND_STRICT:
         current_cwd = _read_session_meta_cwd(session_path) if session_path else None
@@ -2023,6 +2064,7 @@ async def _dispatch_prompt_to_model(
         chat_id=chat_id,
         intended_mode=intended_mode,
         prompt=prompt,
+        tmux_session=dispatch_context.tmux_session if dispatch_context is not None else None,
     )
     await _maybe_force_exit_plan_ui(
         chat_id=chat_id,
@@ -2033,7 +2075,7 @@ async def _dispatch_prompt_to_model(
     )
 
     try:
-        tmux_send_line(TMUX_SESSION, _prepend_enforced_agents_notice(prompt))
+        tmux_send_line(dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION, _prepend_enforced_agents_notice(prompt))
     except subprocess.CalledProcessError as exc:
         await _reply_to_chat(
             chat_id,
@@ -2117,6 +2159,8 @@ async def _dispatch_prompt_to_model(
         )
 
     CHAT_SESSION_MAP[chat_id] = session_key
+    if dispatch_context is not None:
+        _bind_parallel_session_task(session_key, dispatch_context.task_id)
     _clear_last_message(chat_id)
     _reset_compact_tracking(chat_id)
     CHAT_FAILURE_NOTICES.pop(chat_id, None)
@@ -2224,6 +2268,7 @@ async def _push_task_to_model(
     actor: Optional[str],
     is_bug_report: bool = False,
     push_mode: Optional[str] = None,
+    dispatch_context: Optional[ParallelDispatchContext] = None,
 ) -> tuple[bool, str, Optional[Path]]:
     """推送任务信息到模型，并附带补充描述。
 
@@ -2273,14 +2318,21 @@ async def _push_task_to_model(
         reply_to=reply_to,
     )
     _remember_chat_active_user(chat_id, _extract_actor_user_id(actor))
+    dispatch_kwargs: dict[str, Any] = {
+        "reply_to": reply_to,
+        "ack_immediately": False,
+    }
+    if dispatch_context is not None:
+        dispatch_kwargs["dispatch_context"] = dispatch_context
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         dispatch_prompt,
-        reply_to=reply_to,
-        ack_immediately=False,
+        **dispatch_kwargs,
     )
     if success and session_path is not None:
         _bind_session_task(str(session_path), task.id)
+        if dispatch_context is not None:
+            _bind_parallel_session_task(str(session_path), task.id)
     has_supplement = bool((supplement or "").strip())
     result_status = "success" if success else "failed"
     payload: dict[str, Any] = {
@@ -2380,6 +2432,7 @@ DATA_ROOT.mkdir(parents=True, exist_ok=True)
 PROJECT_SLUG = (PROJECT_NAME or "default").replace("/", "-") or "default"
 TASK_DB_PATH = DATA_ROOT / f"{PROJECT_SLUG}.db"
 TASK_SERVICE = TaskService(TASK_DB_PATH, PROJECT_SLUG)
+PARALLEL_SESSION_STORE = ParallelSessionStore(TASK_DB_PATH, PROJECT_SLUG)
 COMMAND_SERVICE = CommandService(TASK_DB_PATH, PROJECT_SLUG)
 # 通用命令独立存放在全局数据库，worker 只读运行并将执行历史标记到自身项目
 GLOBAL_COMMAND_DB_PATH = resolve_global_command_db(CONFIG_ROOT_PATH)
@@ -3394,7 +3447,12 @@ async def _enqueue_media_group_message(message: Message, text_part: Optional[str
         state.finalize_task = asyncio.create_task(_finalize_media_group_after_delay(media_group_id))
 
 
-async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
+async def _handle_prompt_dispatch(
+    message: Message,
+    prompt: str,
+    *,
+    dispatch_context: Optional[ParallelDispatchContext] = None,
+) -> None:
     """统一封装向模型推送提示词的流程。"""
 
     if ENV_ISSUES:
@@ -3452,11 +3510,16 @@ async def _handle_prompt_dispatch(message: Message, prompt: str) -> None:
     _remember_chat_active_user(message.chat.id, active_user_id)
     # 需求约定：普通 Telegram 文本消息不再自动注入 /plan。
     # PLAN/YOLO 由用户在交互流程中显式选择，避免“默认强制切到 PLAN”。
+    dispatch_kwargs: dict[str, Any] = {
+        "reply_to": message,
+        "intended_mode": None,
+    }
+    if dispatch_context is not None:
+        dispatch_kwargs["dispatch_context"] = dispatch_context
     await _dispatch_prompt_to_model(
         message.chat.id,
         dispatch_prompt,
-        reply_to=message,
-        intended_mode=None,
+        **dispatch_kwargs,
     )
 
 BOT_COMMANDS: list[tuple[str, str]] = [
@@ -3704,16 +3767,49 @@ def _build_worker_main_keyboard(
     )
 
 
-def _build_model_quick_reply_keyboard(*, task_id: Optional[str] = None) -> InlineKeyboardMarkup:
+def _build_model_quick_reply_keyboard(
+    *,
+    task_id: Optional[str] = None,
+    parallel_task_title: Optional[str] = None,
+    enable_parallel_actions: bool = False,
+) -> InlineKeyboardMarkup:
     """构建“模型答案消息”底部的快捷回复按钮（InlineKeyboard）。"""
+
+    normalized_task_id = _normalize_task_id(task_id) if task_id else None
+    all_callback = MODEL_QUICK_REPLY_ALL_CALLBACK
+    partial_callback = MODEL_QUICK_REPLY_PARTIAL_CALLBACK
+    if enable_parallel_actions and normalized_task_id:
+        all_callback = f"{MODEL_QUICK_REPLY_ALL_TASK_PREFIX}{normalized_task_id}"
+        partial_callback = f"{MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX}{normalized_task_id}"
 
     rows: list[list[InlineKeyboardButton]] = [
         [
-            InlineKeyboardButton(text="✅ 全部按推荐", callback_data=MODEL_QUICK_REPLY_ALL_CALLBACK),
-            InlineKeyboardButton(text="🧩 部分按推荐（需补充）", callback_data=MODEL_QUICK_REPLY_PARTIAL_CALLBACK),
+            InlineKeyboardButton(text="✅ 全部按推荐", callback_data=all_callback),
+            InlineKeyboardButton(text="🧩 部分按推荐（需补充）", callback_data=partial_callback),
         ]
     ]
-    normalized_task_id = _normalize_task_id(task_id) if task_id else None
+    if enable_parallel_actions and normalized_task_id:
+        title_text = (parallel_task_title or normalized_task_id).strip() or normalized_task_id
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🏷 { _format_task_command(normalized_task_id) } {title_text}".strip()[:64],
+                    callback_data=f"task:detail:{normalized_task_id}",
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"↩️ 回复 { _format_task_command(normalized_task_id) }".strip()[:40],
+                    callback_data=f"{PARALLEL_REPLY_CALLBACK_PREFIX}{normalized_task_id}",
+                ),
+                InlineKeyboardButton(
+                    text="⬆️ 提交并行分支",
+                    callback_data=f"{PARALLEL_COMMIT_CALLBACK_PREFIX}{normalized_task_id}",
+                ),
+            ]
+        )
     if normalized_task_id:
         rows.append(
             [
@@ -3724,6 +3820,45 @@ def _build_model_quick_reply_keyboard(*, task_id: Optional[str] = None) -> Inlin
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_parallel_post_commit_keyboard(task_id: str, *, can_merge: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_merge:
+        rows.append(
+            [
+                InlineKeyboardButton(text="🔀 尝试自动合并", callback_data=f"{PARALLEL_MERGE_CALLBACK_PREFIX}{task_id}"),
+                InlineKeyboardButton(text="🗑️ 删除并行目录", callback_data=f"{PARALLEL_DELETE_CALLBACK_PREFIX}{task_id}"),
+            ]
+        )
+        rows.append([InlineKeyboardButton(text="稍后再说", callback_data=f"{PARALLEL_MERGE_SKIP_CALLBACK_PREFIX}{task_id}")])
+    else:
+        rows.append([InlineKeyboardButton(text="🗑️ 删除并行目录", callback_data=f"{PARALLEL_DELETE_CALLBACK_PREFIX}{task_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_parallel_post_merge_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🗑️ 删除并行目录", callback_data=f"{PARALLEL_DELETE_CALLBACK_PREFIX}{task_id}"),
+                InlineKeyboardButton(text="保留目录", callback_data=f"{PARALLEL_MERGE_SKIP_CALLBACK_PREFIX}{task_id}"),
+            ]
+        ]
+    )
+
+
+def _build_parallel_delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ 确认删除并行目录", callback_data=f"{PARALLEL_DELETE_CONFIRM_CALLBACK_PREFIX}{task_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="❌ 取消", callback_data=f"{PARALLEL_DELETE_CANCEL_CALLBACK_PREFIX}{task_id}"),
+            ],
+        ]
+    )
 
 
 def _build_command_edit_cancel_keyboard() -> ReplyKeyboardMarkup:
@@ -6901,6 +7036,17 @@ def _build_push_mode_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
+def _build_push_dispatch_target_keyboard() -> ReplyKeyboardMarkup:
+    """推送到模型：处理方式选择阶段菜单按钮。"""
+
+    rows = [
+        [KeyboardButton(text=PUSH_TARGET_CURRENT), KeyboardButton(text=PUSH_TARGET_PARALLEL)],
+        [KeyboardButton(text="取消")],
+    ]
+    _number_reply_buttons(rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def _build_related_task_action_keyboard() -> ReplyKeyboardMarkup:
     """缺陷创建：关联任务选择阶段的菜单栏按钮。"""
 
@@ -7107,6 +7253,12 @@ def _build_push_mode_prompt() -> str:
     return "请选择本次推送到模型的模式：PLAN / YOLO（发送“取消”退出）"
 
 
+def _build_push_dispatch_target_prompt() -> str:
+    """推送到模型：构建“当前 CLI / 并行 CLI”选择提示。"""
+
+    return "请选择处理方式：当前 CLI 处理 / 新建分支 + 新 CLI 并行处理（发送“取消”退出）"
+
+
 def _build_quick_reply_partial_supplement_prompt() -> str:
     """构建“部分按推荐（需补充）”的补充输入提示文案。"""
 
@@ -7131,6 +7283,266 @@ async def _prompt_push_mode_input(message: Message) -> None:
         _build_push_mode_prompt(),
         reply_markup=_build_push_mode_keyboard(),
     )
+
+
+async def _prompt_push_dispatch_target_input(message: Message) -> None:
+    """推送到模型：提示用户选择当前 CLI 或并行 CLI。"""
+
+    await message.answer(
+        _build_push_dispatch_target_prompt(),
+        reply_markup=_build_push_dispatch_target_keyboard(),
+    )
+
+
+def _create_parallel_launch_token() -> str:
+    return uuid.uuid4().hex[:8]
+
+
+def _parallel_dispatch_context_from_session(session: ParallelSessionRecord | Mapping[str, Any]) -> ParallelDispatchContext:
+    if isinstance(session, Mapping):
+        return ParallelDispatchContext(
+            task_id=_normalize_task_id(session.get("task_id")) or "",
+            tmux_session=str(session.get("tmux_session") or TMUX_SESSION),
+            pointer_file=Path(str(session.get("pointer_file") or CODEX_SESSION_FILE_PATH or "")),
+            workspace_root=Path(str(session.get("workspace_root") or (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or ROOT_DIR_PATH))),
+        )
+    return ParallelDispatchContext(
+        task_id=session.task_id,
+        tmux_session=session.tmux_session,
+        pointer_file=Path(session.pointer_file),
+        workspace_root=Path(session.workspace_root),
+    )
+
+
+async def _begin_parallel_launch(
+    *,
+    task: TaskRecord,
+    chat_id: int,
+    origin_message: Optional[Message],
+    actor: Optional[str],
+    push_mode: Optional[str],
+    supplement: Optional[str],
+) -> None:
+    """开始并行分支选择与创建流程。"""
+
+    existing = await _get_active_parallel_session_for_task(task.id)
+    if existing is not None and existing.status != "deleted":
+        try:
+            success, prompt, session_path = await _push_task_to_model(
+                task,
+                chat_id=chat_id,
+                reply_to=origin_message,
+                supplement=supplement,
+                actor=actor,
+                push_mode=push_mode,
+                dispatch_context=_parallel_dispatch_context_from_session(existing),
+            )
+        except ValueError as exc:
+            if origin_message is not None:
+                await origin_message.answer(f"推送失败：{exc}", reply_markup=_build_worker_main_keyboard())
+            return
+        if not success:
+            if origin_message is not None:
+                await origin_message.answer("推送失败：并行 CLI 未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
+            return
+        if origin_message is not None:
+            preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+            await _send_model_push_preview(
+                chat_id,
+                preview_block,
+                reply_to=origin_message,
+                parse_mode=preview_parse_mode,
+                reply_markup=_build_worker_main_keyboard(),
+            )
+            if session_path is not None:
+                await _send_session_ack(chat_id, session_path, reply_to=origin_message)
+        return
+
+    base_dir = PRIMARY_WORKDIR or ROOT_DIR_PATH
+    repos = discover_git_repos(base_dir)
+    if not repos:
+        if origin_message is not None:
+            await origin_message.answer("当前工作目录下未发现 Git 仓库，无法创建并行分支。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    repo_options: list[tuple[str, Path, str, list[BranchRef]]] = []
+    for repo_key, repo_path, relative_path in repos:
+        branches = list_branch_refs(repo_path)
+        if not branches:
+            if origin_message is not None:
+                await origin_message.answer(
+                    f"仓库 {relative_path or '.'} 未发现可选分支，已中止并行创建。",
+                    reply_markup=_build_worker_main_keyboard(),
+                )
+            return
+        repo_options.append((repo_key, repo_path, relative_path, branches))
+
+    token = _create_parallel_launch_token()
+    session = ParallelLaunchSession(
+        token=token,
+        task=task,
+        chat_id=chat_id,
+        actor=actor,
+        origin_message=origin_message,
+        push_mode=push_mode,
+        supplement=supplement,
+        repo_options=repo_options,
+        selections={},
+    )
+    PARALLEL_LAUNCH_SESSIONS[token] = session
+    if origin_message is not None:
+        await _answer_with_markdown(
+            origin_message,
+            _build_parallel_branch_title(session, 0),
+            reply_markup=_build_parallel_branch_keyboard(session, repo_index=0, page=0),
+        )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_PAGE_PREFIX))
+async def on_parallel_branch_page_callback(callback: CallbackQuery) -> None:
+    payload = (callback.data or "")[len(PARALLEL_BRANCH_PAGE_PREFIX) :]
+    token, repo_index_text, page_text = (payload.split(":", 2) + ["0", "0"])[:3]
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("分支选择会话已失效", show_alert=True)
+        return
+    repo_index = int(repo_index_text) if repo_index_text.isdigit() else 0
+    page = int(page_text) if page_text.isdigit() else 0
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            _build_parallel_branch_title(session, repo_index),
+            reply_markup=_build_parallel_branch_keyboard(session, repo_index=repo_index, page=page),
+        )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_SELECT_PREFIX))
+async def on_parallel_branch_select_callback(callback: CallbackQuery) -> None:
+    payload = (callback.data or "")[len(PARALLEL_BRANCH_SELECT_PREFIX) :]
+    token, repo_index_text, branch_index_text = (payload.split(":", 2) + ["0", "0"])[:3]
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("分支选择会话已失效", show_alert=True)
+        return
+    repo_index = int(repo_index_text) if repo_index_text.isdigit() else 0
+    branch_index = int(branch_index_text) if branch_index_text.isdigit() else 0
+    repo_key, _repo_path, _rel, branches = session.repo_options[repo_index]
+    if branch_index < 0 or branch_index >= len(branches):
+        await callback.answer("分支不存在", show_alert=True)
+        return
+    branch = branches[branch_index]
+    session.selections[repo_key] = branch
+    next_index = repo_index + 1
+    await callback.answer(f"已选择 {branch.name}")
+    if callback.message is None:
+        return
+    if next_index < len(session.repo_options):
+        await callback.message.answer(
+            _build_parallel_branch_title(session, next_index),
+            reply_markup=_build_parallel_branch_keyboard(session, repo_index=next_index, page=0),
+        )
+        return
+    await callback.message.answer(
+        _build_parallel_branch_summary(session),
+        reply_markup=_build_parallel_branch_summary_keyboard(session),
+    )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_CANCEL_PREFIX))
+async def on_parallel_branch_cancel_callback(callback: CallbackQuery) -> None:
+    token = (callback.data or "")[len(PARALLEL_BRANCH_CANCEL_PREFIX) :]
+    PARALLEL_LAUNCH_SESSIONS.pop(token, None)
+    await callback.answer("已取消并行创建")
+    if callback.message is not None:
+        await callback.message.answer("已取消并行创建。", reply_markup=_build_worker_main_keyboard())
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_CONFIRM_PREFIX))
+async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
+    token = (callback.data or "")[len(PARALLEL_BRANCH_CONFIRM_PREFIX) :]
+    session = PARALLEL_LAUNCH_SESSIONS.pop(token, None)
+    if session is None:
+        await callback.answer("并行创建会话已失效", show_alert=True)
+        return
+    if len(session.selections) != len(session.repo_options):
+        await callback.answer("仍有仓库未选择基线分支", show_alert=True)
+        return
+
+    task = session.task
+    workspace_root = _parallel_workspace_root(task.id)
+    selections = [
+        RepoBranchSelection(
+            repo_key=repo_key,
+            source_repo_path=repo_path,
+            selected_ref=session.selections[repo_key].name,
+            selected_remote=session.selections[repo_key].remote,
+            relative_path=rel,
+        )
+        for repo_key, repo_path, rel, _branches in session.repo_options
+    ]
+
+    if callback.message is not None:
+        await callback.message.answer("正在创建并行副本并启动并行 CLI，请稍候……", reply_markup=_build_worker_main_keyboard())
+
+    try:
+        repo_records = prepare_parallel_workspace(
+            workspace_root=workspace_root,
+            task_id=task.id,
+            title=task.title,
+            selections=selections,
+        )
+        tmux_session, pointer_file = await _start_parallel_tmux_session(task, workspace_root)
+        await PARALLEL_SESSION_STORE.upsert_session(
+            task_id=task.id,
+            title_snapshot=task.title,
+            workspace_root=str(workspace_root),
+            tmux_session=tmux_session,
+            pointer_file=str(pointer_file),
+            task_branch=build_parallel_branch_name(task.id, task.title),
+            status="running",
+            repos=repo_records,
+        )
+        success, prompt, session_path = await _push_task_to_model(
+            task,
+            chat_id=session.chat_id,
+            reply_to=session.origin_message or callback.message,
+            supplement=session.supplement,
+            actor=session.actor,
+            push_mode=session.push_mode,
+            dispatch_context=ParallelDispatchContext(
+                task_id=task.id,
+                tmux_session=tmux_session,
+                pointer_file=pointer_file,
+                workspace_root=workspace_root,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        shutil.rmtree(_parallel_runtime_root(task.id), ignore_errors=True)
+        await PARALLEL_SESSION_STORE.update_status(task.id, status="merge_failed", last_error=str(exc))
+        await callback.answer("并行创建失败", show_alert=True)
+        if callback.message is not None:
+            await callback.message.answer(f"并行创建失败：{exc}", reply_markup=_build_worker_main_keyboard())
+        return
+
+    await callback.answer("并行分支已创建")
+    if callback.message is not None:
+        preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+        await _send_model_push_preview(
+            session.chat_id,
+            preview_block,
+            reply_to=session.origin_message or callback.message,
+            parse_mode=preview_parse_mode,
+            reply_markup=_build_worker_main_keyboard(),
+        )
+        summary_lines = [
+            "已创建并行开发副本（原目录未改动）：",
+            f"- 任务：/{task.id} {task.title}",
+        ]
+        for repo in selections:
+            summary_lines.append(f"- {repo.relative_path or '.'} -> {repo.selected_ref}")
+        await callback.message.answer("\n".join(summary_lines), reply_markup=_build_worker_main_keyboard())
+        if session_path is not None:
+            await _send_session_ack(session.chat_id, session_path, reply_to=session.origin_message or callback.message)
 
 
 async def _prompt_model_supplement_input(message: Message, *, push_mode: Optional[str] = None) -> None:
@@ -7526,6 +7938,37 @@ class PendingSummary:
 PENDING_SUMMARIES: Dict[str, PendingSummary] = {}
 # 会话与任务的绑定关系：用于在“模型答案消息”底部提供一键入口（如切换到测试）
 SESSION_TASK_BINDINGS: Dict[str, str] = {}
+PARALLEL_SESSION_TASK_BINDINGS: Dict[str, str] = {}
+CHAT_PARALLEL_REPLY_TARGETS: Dict[int, dict[str, Any]] = {}
+
+
+@dataclass
+class ParallelLaunchSession:
+    """描述并行分支选择与创建过程中的临时交互会话。"""
+
+    token: str
+    task: TaskRecord
+    chat_id: int
+    actor: Optional[str]
+    origin_message: Optional[Message]
+    push_mode: Optional[str]
+    supplement: Optional[str]
+    repo_options: list[tuple[str, Path, str, list[BranchRef]]]
+    selections: dict[str, BranchRef]
+    created_at: float = field(default_factory=time.time)
+
+
+PARALLEL_LAUNCH_SESSIONS: Dict[str, ParallelLaunchSession] = {}
+
+
+@dataclass
+class ParallelDispatchContext:
+    """描述向指定并行 tmux/session pointer 推送消息所需的上下文。"""
+
+    task_id: str
+    tmux_session: str
+    pointer_file: Path
+    workspace_root: Path
 
 
 def _bind_session_task(session_key: str, task_id: str) -> None:
@@ -7536,6 +7979,240 @@ def _bind_session_task(session_key: str, task_id: str) -> None:
     if not key or not normalized_task_id:
         return
     SESSION_TASK_BINDINGS[key] = normalized_task_id
+
+
+def _bind_parallel_session_task(session_key: str, task_id: str) -> None:
+    """将 session_key 绑定到并行任务，便于渲染并行消息底部按钮。"""
+
+    key = (session_key or "").strip()
+    normalized_task_id = _normalize_task_id(task_id)
+    if not key or not normalized_task_id:
+        return
+    PARALLEL_SESSION_TASK_BINDINGS[key] = normalized_task_id
+
+
+def _clear_parallel_reply_target(chat_id: int) -> None:
+    CHAT_PARALLEL_REPLY_TARGETS.pop(chat_id, None)
+
+
+def _set_parallel_reply_target(chat_id: int, task_id: str) -> None:
+    CHAT_PARALLEL_REPLY_TARGETS[chat_id] = {
+        "task_id": task_id,
+        "expires_at": time.time() + 600,
+    }
+
+
+def _consume_parallel_reply_target(chat_id: int) -> Optional[str]:
+    payload = CHAT_PARALLEL_REPLY_TARGETS.get(chat_id)
+    if not payload:
+        return None
+    expires_at = float(payload.get("expires_at") or 0.0)
+    if expires_at and expires_at < time.time():
+        _clear_parallel_reply_target(chat_id)
+        return None
+    task_id = _normalize_task_id(payload.get("task_id"))
+    _clear_parallel_reply_target(chat_id)
+    return task_id
+
+
+async def _get_active_parallel_session_for_task(task_id: str) -> Optional[ParallelSessionRecord]:
+    normalized = _normalize_task_id(task_id)
+    if not normalized:
+        return None
+    session = await PARALLEL_SESSION_STORE.get_session(normalized)
+    if session is None:
+        return None
+    if session.status in {"deleted", "closed"}:
+        return None
+    return session
+
+
+async def _get_parallel_session_repos(task_id: str) -> list[ParallelRepoRecord]:
+    normalized = _normalize_task_id(task_id)
+    if not normalized:
+        return []
+    return await PARALLEL_SESSION_STORE.list_repos(normalized)
+
+
+def _parallel_runtime_root(task_id: str) -> Path:
+    normalized = _normalize_task_id(task_id) or task_id
+    return CONFIG_ROOT_PATH / "runtime" / "parallel" / PROJECT_SLUG / normalized
+
+
+def _parallel_workspace_root(task_id: str) -> Path:
+    return _parallel_runtime_root(task_id) / "workspace"
+
+
+def _parallel_runtime_meta_dir(task_id: str) -> Path:
+    return _parallel_runtime_root(task_id) / "_runtime"
+
+
+def _parallel_pointer_file(task_id: str) -> Path:
+    return _parallel_runtime_meta_dir(task_id) / "current_session.txt"
+
+
+def _parallel_active_session_file(task_id: str) -> Path:
+    return _parallel_runtime_meta_dir(task_id) / "active_session_id.txt"
+
+
+def _parallel_session_binder_log(task_id: str) -> Path:
+    return _parallel_runtime_meta_dir(task_id) / "session_binder.log"
+
+
+def _parallel_session_binder_pid(task_id: str) -> Path:
+    return _parallel_runtime_meta_dir(task_id) / "session_binder.pid"
+
+
+def _parallel_model_log(task_id: str) -> Path:
+    return _parallel_runtime_meta_dir(task_id) / "model.log"
+
+
+def _parallel_tmux_session(task_id: str) -> str:
+    normalized = (_normalize_task_id(task_id) or task_id).lower()
+    return f"vibe-par-{PROJECT_SLUG[:12]}-{normalized.lower()}"[:48]
+
+
+def _extract_task_prefixed_prompt(prompt: str) -> tuple[Optional[str], Optional[str]]:
+    stripped = (prompt or "").strip()
+    if not stripped:
+        return None, None
+    first, _, rest = stripped.partition(" ")
+    task_id = _normalize_task_id(first)
+    if not task_id or not rest.strip():
+        return None, None
+    return task_id, stripped
+
+
+async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -> tuple[str, Path]:
+    meta_dir = _parallel_runtime_meta_dir(task.id)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    tmux_session = _parallel_tmux_session(task.id)
+    pointer_file = _parallel_pointer_file(task.id)
+    env = os.environ.copy()
+    env.update(
+        {
+            "TMUX_SESSION": tmux_session,
+            "MODEL_WORKDIR": str(workspace_root),
+            "SESSION_POINTER_FILE": str(pointer_file),
+            "SESSION_ACTIVE_ID_FILE": str(_parallel_active_session_file(task.id)),
+            "SESSION_BINDER_LOG": str(_parallel_session_binder_log(task.id)),
+            "SESSION_BINDER_PID_FILE": str(_parallel_session_binder_pid(task.id)),
+            "LOG_PATH": str(_parallel_model_log(task.id)),
+            "PROJECT_NAME": f"{PROJECT_SLUG}-{task.id.lower()}",
+        }
+    )
+    script = ROOT_DIR_PATH / "scripts" / "start_tmux_codex.sh"
+    process = await asyncio.create_subprocess_exec(
+        str(script),
+        "--kill",
+        cwd=str(ROOT_DIR_PATH),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await process.communicate()
+    if process.returncode != 0:
+        output = (stdout_bytes or b"").decode("utf-8", errors="ignore") + (stderr_bytes or b"").decode("utf-8", errors="ignore")
+        raise RuntimeError(output.strip() or "启动并行 CLI 失败")
+    return tmux_session, pointer_file
+
+
+async def _delete_parallel_session_workspace(task_id: str) -> None:
+    session = await _get_active_parallel_session_for_task(task_id)
+    if session is None:
+        return
+    delete_parallel_workspace(
+        workspace_root=Path(session.workspace_root),
+        tmux_session=session.tmux_session,
+        binder_pid_file=_parallel_session_binder_pid(task_id),
+    )
+    meta_root = _parallel_runtime_root(task_id)
+    shutil.rmtree(meta_root, ignore_errors=True)
+    await PARALLEL_SESSION_STORE.update_status(
+        task_id,
+        status="deleted",
+        deleted_at=shanghai_now_iso(),
+    )
+
+
+def _build_parallel_branch_title(session: ParallelLaunchSession, repo_index: int) -> str:
+    repo_key, _repo_path, rel, branches = session.repo_options[repo_index]
+    lines = [
+        f"并行任务：/{session.task.id} {session.task.title}",
+        f"当前仓库：{rel or '.'}",
+        "请选择该仓库的基线分支（本地 + 远端）：",
+    ]
+    if repo_index > 0:
+        lines.append(f"已选择仓库：{repo_index}/{len(session.repo_options)}")
+    return "\n".join(lines)
+
+
+def _build_parallel_branch_keyboard(
+    session: ParallelLaunchSession,
+    *,
+    repo_index: int,
+    page: int,
+    page_size: int = 8,
+) -> InlineKeyboardMarkup:
+    _repo_key, _repo_path, _rel, branches = session.repo_options[repo_index]
+    total = len(branches)
+    page = max(page, 0)
+    start = page * page_size
+    chunk = branches[start : start + page_size]
+    rows: list[list[InlineKeyboardButton]] = []
+    for offset, branch in enumerate(chunk):
+        branch_idx = start + offset
+        label = ("🌐 " if branch.source == "remote" else "📍 ") + branch.name
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label[:48],
+                    callback_data=f"{PARALLEL_BRANCH_SELECT_PREFIX}{session.token}:{repo_index}:{branch_idx}",
+                )
+            ]
+        )
+    nav_row: list[InlineKeyboardButton] = []
+    if start > 0:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ 上一页",
+                callback_data=f"{PARALLEL_BRANCH_PAGE_PREFIX}{session.token}:{repo_index}:{page-1}",
+            )
+        )
+    if start + page_size < total:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="➡️ 下一页",
+                callback_data=f"{PARALLEL_BRANCH_PAGE_PREFIX}{session.token}:{repo_index}:{page+1}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+    rows.append([InlineKeyboardButton(text="❌ 取消", callback_data=f"{PARALLEL_BRANCH_CANCEL_PREFIX}{session.token}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_parallel_branch_summary(session: ParallelLaunchSession) -> str:
+    lines = [
+        f"并行任务：/{session.task.id} {session.task.title}",
+        "以下仓库将进入并行处理：",
+    ]
+    for repo_key, _repo_path, rel, _branches in session.repo_options:
+        selected = session.selections.get(repo_key)
+        selected_text = selected.name if selected else "（未选择）"
+        lines.append(f"- {rel or '.'} -> {selected_text}")
+    lines.append("")
+    lines.append("确认后将创建独立目录、新分支和新 CLI。")
+    return "\n".join(lines)
+
+
+def _build_parallel_branch_summary_keyboard(session: ParallelLaunchSession) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ 开始并行处理", callback_data=f"{PARALLEL_BRANCH_CONFIRM_PREFIX}{session.token}")],
+            [InlineKeyboardButton(text="❌ 取消", callback_data=f"{PARALLEL_BRANCH_CANCEL_PREFIX}{session.token}")],
+        ]
+    )
 
 # --- 任务视图上下文缓存 ---
 TaskViewKind = Literal["list", "search", "detail", "history"]
@@ -8795,7 +9472,17 @@ async def _deliver_pending_messages(
     last_sent = _get_last_message(chat_id, session_key)
     # 需求约定：仅在“模型答案消息”（本函数投递的模型输出）底部展示快捷按钮。
     bound_task_id = SESSION_TASK_BINDINGS.get(session_key)
-    quick_reply_markup = _build_model_quick_reply_keyboard(task_id=bound_task_id)
+    parallel_task_id = PARALLEL_SESSION_TASK_BINDINGS.get(session_key)
+    parallel_title = None
+    if parallel_task_id:
+        parallel_session = await _get_active_parallel_session_for_task(parallel_task_id)
+        if parallel_session is not None:
+            parallel_title = parallel_session.title_snapshot
+    quick_reply_markup = _build_model_quick_reply_keyboard(
+        task_id=bound_task_id or parallel_task_id,
+        parallel_task_title=parallel_title,
+        enable_parallel_actions=bool(parallel_task_id),
+    )
     delivered_hashes = _get_delivered_hashes(chat_id, session_key)
     delivered_offsets = _get_delivered_offsets(chat_id, session_key)
     last_committed_offset = previous_offset
@@ -10859,7 +11546,7 @@ async def on_commands_button(message: Message) -> None:
     await _send_command_overview(message)
 
 
-@router.callback_query(F.data == MODEL_QUICK_REPLY_ALL_CALLBACK)
+@router.callback_query(F.data.startswith(MODEL_QUICK_REPLY_ALL_CALLBACK))
 async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     """将“全部按推荐”快捷回复注入 tmux，模拟用户发送一条消息到模型。"""
 
@@ -10867,12 +11554,25 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     origin_message = callback.message
     prompt = "待决策项全部按模型推荐"
     _remember_chat_active_user(chat_id, callback.from_user.id if callback.from_user else None)
+    task_id = None
+    if callback.data and callback.data.startswith(MODEL_QUICK_REPLY_ALL_TASK_PREFIX):
+        task_id = _normalize_task_id(callback.data[len(MODEL_QUICK_REPLY_ALL_TASK_PREFIX) :].strip())
+    dispatch_context = None
+    if task_id:
+        session = await _get_active_parallel_session_for_task(task_id)
+        if session is not None:
+            dispatch_context = _parallel_dispatch_context_from_session(session)
 
+    dispatch_kwargs: dict[str, Any] = {
+        "reply_to": origin_message,
+        "ack_immediately": False,
+    }
+    if dispatch_context is not None:
+        dispatch_kwargs["dispatch_context"] = dispatch_context
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         prompt,
-        reply_to=origin_message,
-        ack_immediately=False,
+        **dispatch_kwargs,
     )
     if not success:
         await callback.answer("推送失败：模型未就绪", show_alert=True)
@@ -10896,7 +11596,7 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
 
 
-@router.callback_query(F.data == MODEL_QUICK_REPLY_PARTIAL_CALLBACK)
+@router.callback_query(F.data.startswith(MODEL_QUICK_REPLY_PARTIAL_CALLBACK))
 async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContext) -> None:
     """进入“部分按推荐（需补充）”流程，先收集用户补充说明再推送到模型。"""
 
@@ -10911,6 +11611,11 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
     await state.update_data(
         chat_id=chat_id,
         origin_message=origin_message,
+        parallel_task_id=(
+            _normalize_task_id(callback.data[len(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX) :].strip())
+            if callback.data and callback.data.startswith(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX)
+            else None
+        ),
         # 用于后续超时清理或排查问题（单位：秒）。
         started_at=time.time(),
     )
@@ -10961,6 +11666,155 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
         await _handle_task_list_request(callback.message)
 
 
+@router.callback_query(F.data.startswith(PARALLEL_REPLY_CALLBACK_PREFIX))
+async def on_parallel_reply_callback(callback: CallbackQuery) -> None:
+    raw_task_id = (callback.data or "")[len(PARALLEL_REPLY_CALLBACK_PREFIX) :].strip()
+    task_id = _normalize_task_id(raw_task_id)
+    if not task_id:
+        await callback.answer("任务 ID 无效", show_alert=True)
+        return
+    session = await _get_active_parallel_session_for_task(task_id)
+    if session is None:
+        await callback.answer("未找到活动中的并行会话", show_alert=True)
+        return
+    chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+    _set_parallel_reply_target(chat_id, task_id)
+    await callback.answer("已进入回复模式")
+    if callback.message is not None:
+        await callback.message.answer(
+            f"已进入 /{task_id} 回复模式。\n你下一条消息将自动补上 /{task_id} 前缀。",
+            reply_markup=_build_worker_main_keyboard(),
+        )
+
+
+def _format_parallel_operation_lines(title: str, results: Sequence[RepoOperationResult]) -> str:
+    lines = [title]
+    for item in results:
+        lines.append(f"- {item.repo_name}：{item.message}")
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data.startswith(PARALLEL_COMMIT_CALLBACK_PREFIX))
+async def on_parallel_commit_callback(callback: CallbackQuery) -> None:
+    raw_task_id = (callback.data or "")[len(PARALLEL_COMMIT_CALLBACK_PREFIX) :].strip()
+    task_id = _normalize_task_id(raw_task_id)
+    if not task_id:
+        await callback.answer("任务 ID 无效", show_alert=True)
+        return
+    session = await _get_active_parallel_session_for_task(task_id)
+    if session is None:
+        await callback.answer("并行会话不存在", show_alert=True)
+        return
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await callback.answer("任务不存在", show_alert=True)
+        return
+    repos = await _get_parallel_session_repos(task_id)
+    if not repos:
+        await callback.answer("未找到并行仓库记录", show_alert=True)
+        return
+    await callback.answer("正在提交并行分支…")
+    result = await asyncio.to_thread(commit_parallel_repos, task=task, repos=repos)
+    for item in result.results:
+        await PARALLEL_SESSION_STORE.update_repo_status(
+            task_id,
+            item.repo_key,
+            commit_status=item.status,
+            last_error=None if item.ok else item.message,
+        )
+    await PARALLEL_SESSION_STORE.update_status(
+        task_id,
+        status="committed" if not result.failed else "running",
+        last_error=None if not result.failed else _format_parallel_operation_lines("提交失败", result.results),
+        last_commit_at=shanghai_now_iso() if not result.failed else None,
+    )
+    if callback.message is not None:
+        await callback.message.answer(
+            _format_parallel_operation_lines("并行分支提交结果：", result.results),
+            reply_markup=_build_parallel_post_commit_keyboard(task_id, can_merge=not result.failed),
+        )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_MERGE_CALLBACK_PREFIX))
+async def on_parallel_merge_callback(callback: CallbackQuery) -> None:
+    raw_task_id = (callback.data or "")[len(PARALLEL_MERGE_CALLBACK_PREFIX) :].strip()
+    task_id = _normalize_task_id(raw_task_id)
+    if not task_id:
+        await callback.answer("任务 ID 无效", show_alert=True)
+        return
+    session = await _get_active_parallel_session_for_task(task_id)
+    if session is None:
+        await callback.answer("并行会话不存在", show_alert=True)
+        return
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await callback.answer("任务不存在", show_alert=True)
+        return
+    repos = await _get_parallel_session_repos(task_id)
+    if not repos:
+        await callback.answer("未找到并行仓库记录", show_alert=True)
+        return
+    await callback.answer("正在尝试自动合并…")
+    result = await asyncio.to_thread(merge_parallel_repos, task=task, repos=repos)
+    for item in result.results:
+        await PARALLEL_SESSION_STORE.update_repo_status(
+            task_id,
+            item.repo_key,
+            merge_status=item.status,
+            last_error=None if item.ok else item.message,
+        )
+    await PARALLEL_SESSION_STORE.update_status(
+        task_id,
+        status="merged" if not result.failed else "merge_failed",
+        last_error=None if not result.failed else _format_parallel_operation_lines("自动合并失败", result.results),
+        last_merge_at=shanghai_now_iso() if not result.failed else None,
+    )
+    if callback.message is not None:
+        title = "自动合并成功：" if not result.failed else "自动合并失败："
+        await callback.message.answer(
+            _format_parallel_operation_lines(title, result.results),
+            reply_markup=_build_parallel_post_merge_keyboard(task_id),
+        )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_MERGE_SKIP_CALLBACK_PREFIX))
+async def on_parallel_merge_skip_callback(callback: CallbackQuery) -> None:
+    await callback.answer("已保留并行目录")
+
+
+@router.callback_query(F.data.startswith(PARALLEL_DELETE_CALLBACK_PREFIX))
+async def on_parallel_delete_callback(callback: CallbackQuery) -> None:
+    raw_task_id = (callback.data or "")[len(PARALLEL_DELETE_CALLBACK_PREFIX) :].strip()
+    task_id = _normalize_task_id(raw_task_id)
+    if not task_id:
+        await callback.answer("任务 ID 无效", show_alert=True)
+        return
+    await callback.answer("请确认是否删除并行目录")
+    if callback.message is not None:
+        await callback.message.answer(
+            f"确认删除 /{task_id} 的并行目录吗？删除后将无法继续在本地并行目录中开发。",
+            reply_markup=_build_parallel_delete_confirm_keyboard(task_id),
+        )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_DELETE_CONFIRM_CALLBACK_PREFIX))
+async def on_parallel_delete_confirm_callback(callback: CallbackQuery) -> None:
+    raw_task_id = (callback.data or "")[len(PARALLEL_DELETE_CONFIRM_CALLBACK_PREFIX) :].strip()
+    task_id = _normalize_task_id(raw_task_id)
+    if not task_id:
+        await callback.answer("任务 ID 无效", show_alert=True)
+        return
+    await _delete_parallel_session_workspace(task_id)
+    await callback.answer("并行目录已删除")
+    if callback.message is not None:
+        await callback.message.answer(f"/{task_id} 的并行目录已删除。", reply_markup=_build_worker_main_keyboard())
+
+
+@router.callback_query(F.data.startswith(PARALLEL_DELETE_CANCEL_CALLBACK_PREFIX))
+async def on_parallel_delete_cancel_callback(callback: CallbackQuery) -> None:
+    await callback.answer("已取消删除")
+
+
 def _build_quick_reply_partial_prompt(supplement: str) -> str:
     """构建“部分按推荐”最终推送给模型的提示词。"""
 
@@ -11009,11 +11863,22 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
             prompt = _build_quick_reply_partial_prompt(trimmed)
 
     _remember_chat_active_user(chat_id, message.from_user.id if message.from_user else None)
+    dispatch_context = None
+    parallel_task_id = _normalize_task_id(data.get("parallel_task_id"))
+    if parallel_task_id:
+        session = await _get_active_parallel_session_for_task(parallel_task_id)
+        if session is not None:
+            dispatch_context = _parallel_dispatch_context_from_session(session)
+    dispatch_kwargs: dict[str, Any] = {
+        "reply_to": origin_message,
+        "ack_immediately": False,
+    }
+    if dispatch_context is not None:
+        dispatch_kwargs["dispatch_context"] = dispatch_context
     success, session_path = await _dispatch_prompt_to_model(
         chat_id,
         prompt,
-        reply_to=origin_message,
-        ack_immediately=False,
+        **dispatch_kwargs,
     )
     await state.clear()
     if not success:
@@ -13452,52 +14317,92 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
         return
     actor = _actor_from_callback(callback)
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
-    if task.status in MODEL_PUSH_SUPPLEMENT_STATUSES:
-        await state.clear()
-        await state.update_data(
-            task_id=task_id,
-            origin_message=callback.message,
-            chat_id=chat_id,
-            actor=actor,
-            # 与任务创建/附件流程保持一致：相册（媒体组）会触发多次回调，需要记录已处理的 group。
-            processed_media_groups=[],
-        )
-        await state.set_state(TaskPushStates.waiting_choice)
-        await callback.answer("请选择推送模式：PLAN / YOLO（可发送“取消”退出）")
-        if callback.message:
-            await _prompt_push_mode_input(callback.message)
-        return
     await state.clear()
-    try:
-        success, prompt, session_path = await _push_task_to_model(
-            task,
-            chat_id=chat_id,
-            reply_to=callback.message,
-            supplement=None,
-            actor=actor,
-        )
-    except ValueError as exc:
-        worker_log.error(
-            "推送模板缺失：%s",
-            exc,
-            extra={"task_id": task_id, "status": task.status},
-        )
-        await callback.answer("推送失败：缺少模板配置", show_alert=True)
-        return
-    if not success:
-        await callback.answer("推送失败：模型未就绪", show_alert=True)
-        return
-    await callback.answer("已推送到模型")
-    preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-    await _send_model_push_preview(
-        chat_id,
-        preview_block,
-        reply_to=callback.message,
-        parse_mode=preview_parse_mode,
-        reply_markup=_build_worker_main_keyboard(),
+    await state.update_data(
+        task_id=task_id,
+        origin_message=callback.message,
+        chat_id=chat_id,
+        actor=actor,
+        processed_media_groups=[],
     )
-    if session_path is not None:
-        await _send_session_ack(chat_id, session_path, reply_to=callback.message)
+    await state.set_state(TaskPushStates.waiting_dispatch_target)
+    await callback.answer("请选择处理方式")
+    if callback.message:
+        await _prompt_push_dispatch_target_input(callback.message)
+
+
+@router.message(TaskPushStates.waiting_dispatch_target)
+async def on_task_push_model_dispatch_target(message: Message, state: FSMContext) -> None:
+    """推送到模型：先选择当前 CLI 或并行 CLI。"""
+
+    data = await state.get_data()
+    task_id = (data.get("task_id") or "").strip()
+    if not task_id:
+        await state.clear()
+        await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    raw_text = message.text or ""
+    resolved = _resolve_reply_choice(raw_text, options=[PUSH_TARGET_CURRENT, PUSH_TARGET_PARALLEL, "取消"])
+    if resolved == "取消" or _is_cancel_message(raw_text):
+        await state.clear()
+        await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
+        return
+    if resolved not in {PUSH_TARGET_CURRENT, PUSH_TARGET_PARALLEL}:
+        await message.answer(
+            "请选择处理方式：当前 CLI 处理 / 新建分支 + 新 CLI 并行处理，发送“取消”可退出。",
+            reply_markup=_build_push_dispatch_target_keyboard(),
+        )
+        return
+
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await state.clear()
+        await message.answer("任务不存在，已取消推送。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    await state.update_data(dispatch_target=resolved)
+    if task.status in MODEL_PUSH_SUPPLEMENT_STATUSES:
+        await state.set_state(TaskPushStates.waiting_choice)
+        await _prompt_push_mode_input(message)
+        return
+
+    await state.clear()
+    if resolved == PUSH_TARGET_CURRENT:
+        try:
+            success, prompt, session_path = await _push_task_to_model(
+                task,
+                chat_id=data.get("chat_id") or message.chat.id,
+                reply_to=data.get("origin_message") or message,
+                supplement=None,
+                actor=data.get("actor") or _actor_from_message(message),
+            )
+        except ValueError as exc:
+            await message.answer(f"推送失败：{exc}", reply_markup=_build_worker_main_keyboard())
+            return
+        if not success:
+            await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
+            return
+        preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+        await _send_model_push_preview(
+            data.get("chat_id") or message.chat.id,
+            preview_block,
+            reply_to=data.get("origin_message") or message,
+            parse_mode=preview_parse_mode,
+            reply_markup=_build_worker_main_keyboard(),
+        )
+        if session_path is not None:
+            await _send_session_ack(data.get("chat_id") or message.chat.id, session_path, reply_to=data.get("origin_message") or message)
+        return
+
+    await _begin_parallel_launch(
+        task=task,
+        chat_id=data.get("chat_id") or message.chat.id,
+        origin_message=data.get("origin_message") or message,
+        actor=data.get("actor") or _actor_from_message(message),
+        push_mode=None,
+        supplement=None,
+    )
 
 
 @router.message(TaskPushStates.waiting_choice)
@@ -13559,6 +14464,20 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
     chat_id = data.get("chat_id") or (callback.message.chat.id if callback.message else callback.from_user.id)
     origin_message = data.get("origin_message") or callback.message
     push_mode = (data.get("push_mode") or "").strip().upper()
+    dispatch_target = (data.get("dispatch_target") or "").strip()
+    await state.clear()
+    if dispatch_target == PUSH_TARGET_PARALLEL:
+        await callback.answer("已进入并行分支选择")
+        await _begin_parallel_launch(
+            task=task,
+            chat_id=chat_id,
+            origin_message=origin_message,
+            actor=actor,
+            push_mode=push_mode or None,
+            supplement=None,
+        )
+        return
+
     try:
         success, prompt, session_path = await _push_task_to_model(
             task,
@@ -13569,7 +14488,6 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
             push_mode=push_mode or None,
         )
     except ValueError as exc:
-        await state.clear()
         worker_log.error(
             "推送模板缺失：%s",
             exc,
@@ -13577,7 +14495,6 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
         )
         await callback.answer("推送失败：缺少模板配置", show_alert=True)
         return
-    await state.clear()
     if not success:
         await callback.answer("推送失败：模型未就绪", show_alert=True)
         return
@@ -13653,6 +14570,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     chat_id = data.get("chat_id") or message.chat.id
     origin_message = data.get("origin_message")
     actor = data.get("actor") or _actor_from_message(message)
+    dispatch_target = (data.get("dispatch_target") or "").strip()
     attachment_dir = _attachment_dir_for_message(message)
 
     processed_groups = set(data.get("processed_media_groups") or [])
@@ -13694,6 +14612,18 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     if saved_attachments:
         serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
         await _bind_serialized_attachments(task, serialized, actor=actor)
+    await state.clear()
+    if dispatch_target == PUSH_TARGET_PARALLEL:
+        await _begin_parallel_launch(
+            task=task,
+            chat_id=chat_id,
+            origin_message=origin_message,
+            actor=actor,
+            push_mode=push_mode or None,
+            supplement=supplement,
+        )
+        return
+
     try:
         success, prompt, session_path = await _push_task_to_model(
             task,
@@ -13704,7 +14634,6 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
             push_mode=push_mode or None,
         )
     except ValueError as exc:
-        await state.clear()
         worker_log.error(
             "推送模板缺失：%s",
             exc,
@@ -13712,7 +14641,6 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         )
         await message.answer("推送失败：缺少模板配置。", reply_markup=_build_worker_main_keyboard())
         return
-    await state.clear()
     if not success:
         await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
         return
@@ -15443,6 +16371,30 @@ async def on_text(m: Message, state: FSMContext):
     prompt = raw_text.strip()
     if not prompt:
         return await m.answer("请输入非空提示词")
+    prefixed_task_id, prefixed_prompt = _extract_task_prefixed_prompt(prompt)
+    if prefixed_task_id and prefixed_prompt:
+        session = await _get_active_parallel_session_for_task(prefixed_task_id)
+        if session is None:
+            await m.answer(f"/{prefixed_task_id} 当前没有活动中的并行会话。", reply_markup=_build_worker_main_keyboard())
+            return
+        await _handle_prompt_dispatch(
+            m,
+            prefixed_prompt,
+            dispatch_context=_parallel_dispatch_context_from_session(session),
+        )
+        return
+    reply_task_id = _consume_parallel_reply_target(m.chat.id)
+    if reply_task_id:
+        session = await _get_active_parallel_session_for_task(reply_task_id)
+        if session is None:
+            await m.answer(f"/{reply_task_id} 的并行会话已失效，请重新点击回复按钮。", reply_markup=_build_worker_main_keyboard())
+            return
+        await _handle_prompt_dispatch(
+            m,
+            f"/{reply_task_id} {prompt}",
+            dispatch_context=_parallel_dispatch_context_from_session(session),
+        )
+        return
     task_id_candidate = _normalize_task_id(prompt)
     if task_id_candidate:
         await _reply_task_detail_message(m, task_id_candidate)
@@ -15547,6 +16499,13 @@ async def main():
         await COMMAND_SERVICE.initialize()
     except Exception as exc:
         worker_log.error("命令数据库初始化失败：%s", exc, extra=_session_extra())
+        if _bot:
+            await _bot.session.close()
+        raise SystemExit(1)
+    try:
+        await PARALLEL_SESSION_STORE.initialize()
+    except Exception as exc:
+        worker_log.error("并行会话数据库初始化失败：%s", exc, extra=_session_extra())
         if _bot:
             await _bot.session.close()
         raise SystemExit(1)

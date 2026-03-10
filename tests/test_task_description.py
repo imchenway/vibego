@@ -437,6 +437,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         *,
         reply_to,
         ack_immediately: bool = True,
+        **_kwargs,
     ):
         assert not ack_immediately
         recorded.append((chat_id, prompt, reply_to))
@@ -451,13 +452,22 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_choice.state
-        assert callback.answers and "请选择推送模式" in (callback.answers[0][0] or "")
+        assert await state.get_state() == bot.TaskPushStates.waiting_dispatch_target.state
+        assert callback.answers and "请选择处理方式" in (callback.answers[0][0] or "")
         assert not recorded
         assert message.calls
         prompt_text, _, prompt_markup, _ = message.calls[0]
-        assert prompt_text == bot._build_push_mode_prompt()
+        assert prompt_text == bot._build_push_dispatch_target_prompt()
         assert prompt_markup is not None
+
+        dispatch_target_message = DummyMessage()
+        dispatch_target_message.text = bot.PUSH_TARGET_CURRENT
+        await bot.on_task_push_model_dispatch_target(dispatch_target_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_choice.state
+        assert dispatch_target_message.calls
+        target_prompt_text, _, target_prompt_markup, _ = dispatch_target_message.calls[0]
+        assert target_prompt_text == bot._build_push_mode_prompt()
+        assert target_prompt_markup is not None
 
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_PLAN
@@ -803,7 +813,7 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         return True, tmp_path / "session.jsonl"
 
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
@@ -920,6 +930,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         *,
         reply_to,
         ack_immediately: bool = True,
+        **_kwargs,
     ):
         assert not ack_immediately
         recorded.append((chat_id, prompt, reply_to))
@@ -934,10 +945,19 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_choice.state
-        assert callback.answers and "请选择推送模式" in (callback.answers[0][0] or "")
+        assert await state.get_state() == bot.TaskPushStates.waiting_dispatch_target.state
+        assert callback.answers and "请选择处理方式" in (callback.answers[0][0] or "")
         assert message.calls
         prompt_text, _, prompt_markup, _ = message.calls[0]
+        assert prompt_text == bot._build_push_dispatch_target_prompt()
+        assert prompt_markup is not None
+
+        dispatch_target_message = DummyMessage()
+        dispatch_target_message.text = bot.PUSH_TARGET_CURRENT
+        await bot.on_task_push_model_dispatch_target(dispatch_target_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_choice.state
+        assert dispatch_target_message.calls
+        prompt_text, _, prompt_markup, _ = dispatch_target_message.calls[0]
         assert prompt_text == bot._build_push_mode_prompt()
         assert prompt_markup is not None
 
@@ -1057,6 +1077,7 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
         *,
         reply_to,
         ack_immediately: bool = True,
+        **_kwargs,
     ):
         assert not ack_immediately
         recorded.append((chat_id, prompt, reply_to))
@@ -1071,6 +1092,9 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
+        dispatch_target_message = DummyMessage()
+        dispatch_target_message.text = bot.PUSH_TARGET_CURRENT
+        await bot.on_task_push_model_dispatch_target(dispatch_target_message, state)
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_YOLO
         await bot.on_task_push_model_choice(choice_message, state)
@@ -1138,6 +1162,7 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
         *,
         reply_to,
         ack_immediately: bool = True,
+        **_kwargs,
     ):
         assert not ack_immediately
         recorded.append((chat_id, prompt, reply_to))
@@ -1152,13 +1177,17 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model(callback, state)
-        assert recorded, "完成阶段应发送 /compact"
+        assert not recorded
+        dispatch_target_message = DummyMessage()
+        dispatch_target_message.text = bot.PUSH_TARGET_CURRENT
+        await bot.on_task_push_model_dispatch_target(dispatch_target_message, state)
+        assert recorded, "完成阶段应在选择当前 CLI 后发送 /compact"
         _, payload, reply_to = recorded[0]
         assert reply_to is message
         assert payload.endswith("/compact")
-        assert callback.answers and callback.answers[0][0] == "已推送到模型"
+        assert callback.answers and callback.answers[0][0] == "请选择处理方式"
         assert message.calls
-        preview_text, preview_mode, _, _ = message.calls[0]
+        preview_text, preview_mode, _, _ = message.calls[-1]
         expected_block, expected_mode = bot._wrap_text_in_code_block(payload)
         assert preview_text == f"已推送到模型：\n{expected_block}"
         assert preview_mode == expected_mode
@@ -2134,7 +2163,7 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     session_path = tmp_path / "summary_session.jsonl"
     session_path.write_text("", encoding="utf-8")
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool, **_kwargs):
         assert ack_immediately is False
         dispatch_calls.append((chat_id, prompt))
         return True, session_path
@@ -2205,7 +2234,7 @@ def test_task_summary_command_skips_status_when_already_test(monkeypatch, tmp_pa
     async def fake_history(task_id: str):
         return ("", 0)
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool, **_kwargs):
         return True, session_path
 
     async def fake_log_task_action(*args, **kwargs):
@@ -3367,7 +3396,7 @@ def test_handle_prompt_dispatch_uses_manual_mode_control(monkeypatch):
     bot._bot = DummyAiogram()
     captured: list[Optional[str]] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, intended_mode: Optional[str] = None):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, intended_mode: Optional[str] = None, **_kwargs):
         captured.append(intended_mode)
         return True, Path("/tmp/fake-session.jsonl")
 
@@ -3667,6 +3696,7 @@ def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, 
         *,
         reply_to,
         ack_immediately: bool = True,
+        **_kwargs,
     ):
         captured["chat_id"] = chat_id
         captured["prompt"] = prompt
