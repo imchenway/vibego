@@ -127,6 +127,23 @@ def _repo_key_for(base_dir: Path, repo_path: Path) -> tuple[str, str]:
     return key, key
 
 
+def _relative_repo_parts(relative_path: str) -> tuple[str, ...]:
+    """将仓库相对路径标准化为可比较的层级元组。"""
+
+    normalized = str(relative_path or ".").replace("\\", "/").strip("/")
+    if not normalized or normalized == ".":
+        return ()
+    return tuple(part for part in normalized.split("/") if part and part != ".")
+
+
+def _is_descendant_path(candidate: tuple[str, ...], parent: tuple[str, ...]) -> bool:
+    """判断 candidate 是否为 parent 的严格子路径。"""
+
+    if not parent or len(candidate) <= len(parent):
+        return False
+    return candidate[: len(parent)] == parent
+
+
 def discover_git_repos(base_dir: Path, *, max_depth: int = 4) -> list[tuple[str, Path, str]]:
     """发现根目录下的全部 Git 仓库。"""
 
@@ -153,7 +170,18 @@ def discover_git_repos(base_dir: Path, *, max_depth: int = 4) -> list[tuple[str,
         repos[key] = (repo_path, rel)
 
     ordered = sorted(repos.items(), key=lambda item: (0 if item[0] == "__root__" else item[0].count("/"), item[0]))
-    return [(key, path, rel) for key, (path, rel) in ordered]
+
+    filtered: list[tuple[str, Path, str]] = []
+    kept_paths: list[tuple[str, tuple[str, ...]]] = []
+    for key, (path, rel) in ordered:
+        rel_parts = _relative_repo_parts(rel)
+        # 根仓库允许与独立子仓库共存；但非根仓库一旦被选中，就跳过其子孙仓库，
+        # 避免并行 workspace 中父子路径重叠，导致 git clone 报“目标目录非空”。
+        if any(parent_key != "__root__" and _is_descendant_path(rel_parts, parent_parts) for parent_key, parent_parts in kept_paths):
+            continue
+        filtered.append((key, path, rel))
+        kept_paths.append((key, rel_parts))
+    return filtered
 
 
 def list_branch_refs(repo_path: Path) -> list[BranchRef]:
@@ -218,6 +246,28 @@ def build_parallel_commit_message(task: TaskRecord, repo_name: str) -> tuple[str
     return subject, body
 
 
+def _validate_parallel_selection_paths(selections: Sequence[RepoBranchSelection]) -> None:
+    """校验并行副本目标路径，阻断非根仓库之间的父子路径重叠。"""
+
+    resolved: list[tuple[str, str, tuple[str, ...]]] = []
+    for selection in selections:
+        rel_text = str(selection.relative_path or ".").replace("\\", "/").strip() or "."
+        rel_parts = _relative_repo_parts(rel_text)
+        for prev_repo_key, prev_rel_text, prev_parts in resolved:
+            # 根目录副本允许与其他仓库并存；只拦截非根仓库之间的相同/嵌套路径。
+            if not rel_parts or not prev_parts:
+                continue
+            same_path = rel_parts == prev_parts
+            nested_path = _is_descendant_path(rel_parts, prev_parts) or _is_descendant_path(prev_parts, rel_parts)
+            if same_path or nested_path:
+                raise RuntimeError(
+                    "并行仓库路径重叠："
+                    f"{prev_repo_key}({prev_rel_text}) 与 {selection.repo_key}({rel_text})。"
+                    "请仅保留父仓库或子仓库其一。"
+                )
+        resolved.append((selection.repo_key, rel_text, rel_parts))
+
+
 def prepare_parallel_workspace(
     *,
     workspace_root: Path,
@@ -231,6 +281,7 @@ def prepare_parallel_workspace(
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
+    _validate_parallel_selection_paths(selections)
 
     task_branch = build_parallel_branch_name(task_id, title)
     created: list[Path] = []
