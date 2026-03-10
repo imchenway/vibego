@@ -26,6 +26,7 @@ from tasks import TaskRecord  # noqa: E402
 class DummyMessage:
     def __init__(self, *, chat_id: int = 1, user_id: int = 1):
         self.calls = []
+        self.edits = []
         self.chat = SimpleNamespace(id=chat_id)
         self.from_user = SimpleNamespace(id=user_id, full_name="Tester")
         self.message_id = 100
@@ -36,6 +37,10 @@ class DummyMessage:
     async def answer(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
         self.calls.append((text, parse_mode, reply_markup, kwargs))
         return SimpleNamespace(message_id=self.message_id + len(self.calls), chat=self.chat)
+
+    async def edit_text(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
+        self.edits.append((text, parse_mode, reply_markup, kwargs))
+        return SimpleNamespace(message_id=self.message_id, chat=self.chat)
 
 
 class DummyCallback:
@@ -242,3 +247,133 @@ def test_parallel_branch_keyboard_marks_current_branch_and_keeps_it_first():
 
     assert branch_rows[0][0].text.startswith("📍 develop")
     assert "（当前）" in branch_rows[0][0].text
+
+
+def test_parallel_branch_page_callback_edits_same_message():
+    message = DummyMessage()
+    callback = DummyCallback("parallel:branch_page:demo:0:1", message)
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [
+                    BranchRef(name=f"feature/{idx}", source="local")
+                    for idx in range(12)
+                ],
+            )
+        ],
+        selections={},
+        current_branch_labels={"backend-java": "feature/0"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    asyncio.run(bot.on_parallel_branch_page_callback(callback))
+
+    assert message.edits, "翻页应编辑同一条消息"
+    assert not message.calls, "翻页不应新增消息"
+
+
+def test_parallel_branch_select_callback_edits_same_message_for_next_repo_and_summary():
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            ),
+            (
+                "frontend-admin",
+                Path("/tmp/frontend-admin"),
+                "frontend-admin",
+                [BranchRef(name="main", source="local")],
+            ),
+        ],
+        selections={},
+        current_branch_labels={"backend-java": "develop", "frontend-admin": "main"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback_first = DummyCallback("parallel:branch_select:demo:0:0", message)
+    asyncio.run(bot.on_parallel_branch_select_callback(callback_first))
+    assert message.edits, "选择后进入下一仓库应编辑消息"
+    assert not message.calls, "进入下一仓库不应新增消息"
+
+    callback_second = DummyCallback("parallel:branch_select:demo:1:0", message)
+    asyncio.run(bot.on_parallel_branch_select_callback(callback_second))
+    assert len(message.edits) >= 2, "最后展示摘要也应继续编辑同一条消息"
+    assert not message.calls, "展示开始处理按钮不应新增消息"
+
+
+def test_parallel_branch_confirm_callback_edits_same_message_to_processing(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    monkeypatch.setattr(
+        bot,
+        "prepare_parallel_workspace",
+        lambda **_kwargs: [],
+    )
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert message.edits, "点击开始并行处理应先覆盖原消息为处理中提示"
+    assert message.edits[0][0] == "正在创建并行副本并启动并行 CLI，请稍候……"

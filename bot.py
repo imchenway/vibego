@@ -549,6 +549,8 @@ class RequestInputSession:
     question_message_ids: Dict[str, int] = field(default_factory=dict)
     processed_media_groups: set[str] = field(default_factory=set)
     input_mode_question_id: Optional[str] = None
+    parallel_task_id: Optional[str] = None
+    parallel_dispatch_context: Optional["ParallelDispatchContext"] = None
     submission_state: str = "idle"
     submit_retry_count: int = 0
     submitted: bool = False
@@ -7511,7 +7513,8 @@ async def on_parallel_branch_page_callback(callback: CallbackQuery) -> None:
     page = int(page_text) if page_text.isdigit() else 0
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer(
+        await _render_parallel_branch_flow_message(
+            callback.message,
             _build_parallel_branch_title(session, repo_index),
             reply_markup=_build_parallel_branch_keyboard(session, repo_index=repo_index, page=page),
         )
@@ -7538,12 +7541,14 @@ async def on_parallel_branch_select_callback(callback: CallbackQuery) -> None:
     if callback.message is None:
         return
     if next_index < len(session.repo_options):
-        await callback.message.answer(
+        await _render_parallel_branch_flow_message(
+            callback.message,
             _build_parallel_branch_title(session, next_index),
             reply_markup=_build_parallel_branch_keyboard(session, repo_index=next_index, page=0),
         )
         return
-    await callback.message.answer(
+    await _render_parallel_branch_flow_message(
+        callback.message,
         _build_parallel_branch_summary(session),
         reply_markup=_build_parallel_branch_summary_keyboard(session),
     )
@@ -7555,7 +7560,7 @@ async def on_parallel_branch_cancel_callback(callback: CallbackQuery) -> None:
     PARALLEL_LAUNCH_SESSIONS.pop(token, None)
     await callback.answer("已取消并行创建")
     if callback.message is not None:
-        await callback.message.answer("已取消并行创建。", reply_markup=_build_worker_main_keyboard())
+        await _render_parallel_branch_flow_message(callback.message, "已取消并行创建。", reply_markup=None)
 
 
 @router.callback_query(F.data.startswith(PARALLEL_BRANCH_CONFIRM_PREFIX))
@@ -7583,7 +7588,7 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
     ]
 
     if callback.message is not None:
-        await callback.message.answer("正在创建并行副本并启动并行 CLI，请稍候……", reply_markup=_build_worker_main_keyboard())
+        await _render_parallel_branch_flow_message(callback.message, "正在创建并行副本并启动并行 CLI，请稍候……", reply_markup=None)
 
     try:
         repo_records = prepare_parallel_workspace(
@@ -8193,6 +8198,23 @@ async def _resolve_parallel_dispatch_context(
     return normalized_task_id, dispatch_context
 
 
+async def _resolve_parallel_request_input_context(
+    session_key: str,
+) -> tuple[Optional[str], Optional[ParallelDispatchContext]]:
+    """根据 request_input 所属 session_key 回溯并行上下文。"""
+
+    key = (session_key or "").strip()
+    if not key:
+        return None, None
+    task_id = _normalize_task_id(PARALLEL_SESSION_TASK_BINDINGS.get(key))
+    if not task_id:
+        return None, None
+    dispatch_context = PARALLEL_SESSION_CONTEXTS.get(key)
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        return task_id, dispatch_context
+    return await _resolve_parallel_dispatch_context(task_id, None)
+
+
 def _parallel_tmux_session_exists(session_name: str) -> bool:
     """检查并行 tmux 会话是否仍存在。"""
 
@@ -8533,6 +8555,20 @@ def _build_parallel_branch_summary_keyboard(session: ParallelLaunchSession) -> I
             [InlineKeyboardButton(text="❌ 取消", callback_data=f"{PARALLEL_BRANCH_CANCEL_PREFIX}{session.token}")],
         ]
     )
+
+
+async def _render_parallel_branch_flow_message(
+    message: Optional[Message],
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> None:
+    """并行分支选择流程优先覆盖同一条消息，失败时再降级为新消息。"""
+
+    if await _try_edit_message(message, text, reply_markup=reply_markup):
+        return
+    if message is not None:
+        await _answer_with_markdown(message, text, reply_markup=reply_markup)
 
 # --- 任务视图上下文缓存 ---
 TaskViewKind = Literal["list", "search", "detail", "history"]
@@ -9410,6 +9446,8 @@ def _build_request_input_session(
     user_id: int,
     call_id: str,
     questions_raw: Sequence[Mapping[str, Any]],
+    parallel_task_id: Optional[str] = None,
+    parallel_dispatch_context: Optional["ParallelDispatchContext"] = None,
 ) -> Optional[RequestInputSession]:
     """根据 metadata 反序列化 request_user_input 会话对象。"""
 
@@ -9427,6 +9465,8 @@ def _build_request_input_session(
         current_index=0,
         created_at=now,
         expires_at=now + REQUEST_INPUT_SESSION_TTL_SECONDS,
+        parallel_task_id=_normalize_task_id(parallel_task_id),
+        parallel_dispatch_context=parallel_dispatch_context,
     )
 
 
@@ -9639,6 +9679,7 @@ async def _start_request_input_interaction(
 
     token = uuid.uuid4().hex[:10]
     owner_user_id = int(CHAT_ACTIVE_USERS.get(chat_id, chat_id))
+    parallel_task_id, parallel_dispatch_context = await _resolve_parallel_request_input_context(str(session_path))
     session = _build_request_input_session(
         token=token,
         chat_id=chat_id,
@@ -9646,6 +9687,8 @@ async def _start_request_input_interaction(
         user_id=owner_user_id,
         call_id=call_id,
         questions_raw=questions_raw,
+        parallel_task_id=parallel_task_id,
+        parallel_dispatch_context=parallel_dispatch_context,
     )
     if session is None:
         fallback_text = summary_text.strip() or "⚠️ request_user_input 题目为空，请手动回复模型。"
@@ -12516,11 +12559,20 @@ async def _submit_request_input_session(
     output_payload = _build_request_input_output_payload(session)
     prompt = _build_request_input_submission_prompt(session.call_id, output_payload)
     _remember_chat_active_user(session.chat_id, actor_user_id)
+    dispatch_kwargs: dict[str, Any] = {
+        "reply_to": reply_to,
+        "ack_immediately": False,
+    }
+    dispatch_context = session.parallel_dispatch_context
+    parallel_task_id = _normalize_task_id(session.parallel_task_id)
+    if not isinstance(dispatch_context, ParallelDispatchContext) and parallel_task_id:
+        _resolved_task_id, dispatch_context = await _resolve_parallel_dispatch_context(parallel_task_id, None)
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        dispatch_kwargs["dispatch_context"] = dispatch_context
     success, session_path = await _dispatch_prompt_to_model(
         session.chat_id,
         prompt,
-        reply_to=reply_to,
-        ack_immediately=False,
+        **dispatch_kwargs,
     )
     if not success:
         return False

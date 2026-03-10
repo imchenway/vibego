@@ -285,6 +285,65 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     assert 10 not in bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS
 
 
+def test_request_input_submit_dispatches_parallel_context(monkeypatch, tmp_path: Path):
+    """并行会话里的 request_input 提交，应继续发回对应并行 CLI。"""
+
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="库存页"), bot.RequestInputOption(label="两页")],
+    )
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0093",
+        tmux_session="vibe-par-demo",
+        pointer_file=tmp_path / "pointer.txt",
+        workspace_root=tmp_path / "workspace",
+    )
+    session = bot.RequestInputSession(
+        token="token_parallel_submit",
+        chat_id=20,
+        user_id=20,
+        call_id="call_parallel_submit",
+        session_key="parallel-session-key",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": 1},
+        parallel_task_id="TASK_0093",
+        parallel_dispatch_context=dispatch_context,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[20] = session.token
+
+    captured_contexts: list[object] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, dispatch_context=None):
+        assert chat_id == 20
+        captured_contexts.append(dispatch_context)
+        return True, tmp_path / "parallel.jsonl"
+
+    async def fake_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_SUBMIT),
+        message=DummyMessage(chat_id=20, user_id=20),
+        user_id=20,
+    )
+
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert captured_contexts == [dispatch_context]
+
+
 def test_request_input_submit_requires_all_answers(monkeypatch):
     question_scope = bot.RequestInputQuestion(
         question_id="scope",
@@ -527,6 +586,61 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     main_keyboard_rows = message.calls[-1][2].keyboard
     assert main_keyboard_rows
     assert main_keyboard_rows[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
+
+
+def test_request_input_custom_text_auto_submits_to_parallel_context(monkeypatch, tmp_path: Path):
+    """并行会话里的自定义决策文本提交，应继续发回对应并行 CLI。"""
+
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0093",
+        tmux_session="vibe-par-demo",
+        pointer_file=tmp_path / "pointer.txt",
+        workspace_root=tmp_path / "workspace",
+    )
+    session = bot.RequestInputSession(
+        token="token_parallel_custom_submit",
+        chat_id=166,
+        user_id=166,
+        call_id="call_parallel_custom_submit",
+        session_key="parallel-custom-submit",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        input_mode_question_id="scope",
+        parallel_task_id="TASK_0093",
+        parallel_dispatch_context=dispatch_context,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[166] = session.token
+
+    captured_contexts: list[object] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, dispatch_context=None):
+        assert chat_id == 166
+        captured_contexts.append(dispatch_context)
+        return True, tmp_path / "parallel_custom.jsonl"
+
+    async def fake_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    message = DummyMessage(chat_id=166, user_id=166, text="按推荐，但保留例外")
+    handled = asyncio.run(bot._handle_request_input_custom_text_message(message))
+
+    assert handled is True
+    assert captured_contexts == [dispatch_context]
 
 
 def test_request_input_custom_media_message_auto_submits_with_attachment_prompt(monkeypatch, tmp_path: Path):
