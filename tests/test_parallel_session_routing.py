@@ -230,6 +230,31 @@ def test_manual_task_prefix_routes_parallel_session_without_leaking_slash_prefix
     assert recorded == [("继续补充", binding.dispatch_context)]
 
 
+def test_parallel_reply_cancel_restores_main_keyboard(monkeypatch):
+    """回复态发送“取消”时应退出回复模式并恢复主菜单。"""
+
+    message = DummyMessage(chat_id=18, user_id=18, text="取消")
+    state, _ = _make_state(message)
+    bot._set_parallel_reply_target(
+        message.chat.id,
+        "TASK_0115",
+        dispatch_context=_parallel_context("TASK_0115"),
+    )
+
+    async def fake_handle_request_input_custom_text_message(_message):
+        return False
+
+    monkeypatch.setattr(bot, "_handle_request_input_custom_text_message", fake_handle_request_input_custom_text_message)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert message.calls and message.calls[-1][0] == "已取消 /TASK_0115 回复模式。"
+    reply_markup = message.calls[-1][2]
+    labels = [button.text for row in reply_markup.keyboard for button in row]
+    assert bot.WORKER_MENU_BUTTON_TEXT in labels
+    assert message.chat.id not in bot.CHAT_PARALLEL_REPLY_TARGETS
+
+
 def test_parallel_dispatch_does_not_override_primary_session_binding(monkeypatch, tmp_path: Path):
     """向并行会话发消息时，不应覆盖 chat 当前原生会话，也不应取消原生 watcher。"""
 

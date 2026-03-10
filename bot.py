@@ -7051,6 +7051,13 @@ def _build_description_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
+def _build_parallel_reply_input_keyboard() -> ReplyKeyboardMarkup:
+    """并行回复输入态键盘：仅保留取消按钮，减少误触。"""
+
+    rows = [[KeyboardButton(text="取消")]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def _build_push_mode_keyboard() -> ReplyKeyboardMarkup:
     """推送到模型：模式选择阶段菜单按钮。"""
 
@@ -8344,6 +8351,28 @@ async def _delete_parallel_session_workspace(task_id: str) -> None:
         status="deleted",
         deleted_at=shanghai_now_iso(),
     )
+
+
+async def _cleanup_parallel_session_workspace_safely(task_id: str) -> None:
+    """后台清理任务的并行运行态，避免影响前台状态更新交互。"""
+
+    try:
+        await _delete_parallel_session_workspace(task_id)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "任务完成后的并行清理失败：%s",
+            exc,
+            extra={"task_id": task_id},
+        )
+
+
+def _schedule_parallel_cleanup_for_done(task_id: str) -> None:
+    """任务切换为 done 后，立即异步清理对应并行资源。"""
+
+    normalized = _normalize_task_id(task_id)
+    if not normalized:
+        return
+    asyncio.create_task(_cleanup_parallel_session_workspace_safely(normalized))
 
 
 def _build_parallel_branch_title(session: ParallelLaunchSession, repo_index: int) -> str:
@@ -12054,8 +12083,8 @@ async def on_parallel_reply_callback(callback: CallbackQuery) -> None:
     await callback.answer("已进入回复模式")
     if callback.message is not None:
         await callback.message.answer(
-            f"已进入 /{resolved_task_id or task_id} 回复模式。\n你下一条消息将自动补上 /{resolved_task_id or task_id} 前缀。",
-            reply_markup=_build_worker_main_keyboard(),
+            f"已进入 /{resolved_task_id or task_id} 回复模式。",
+            reply_markup=_build_parallel_reply_input_keyboard(),
         )
 
 
@@ -15530,6 +15559,8 @@ async def on_status_callback(callback: CallbackQuery) -> None:
     except ValueError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
+    if updated.status == "done":
+        _schedule_parallel_cleanup_for_done(updated.id)
     detail_text, markup = await _render_task_detail(updated.id)
     message = callback.message
     if message is None:
@@ -16761,6 +16792,12 @@ async def on_text(m: Message, state: FSMContext):
     if reply_target:
         reply_task_id = _normalize_task_id(reply_target.get("task_id"))
         dispatch_context = reply_target.get("dispatch_context")
+        if _is_cancel_message(prompt):
+            await m.answer(
+                f"已取消 /{reply_task_id} 回复模式。",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+            return
         if not isinstance(dispatch_context, ParallelDispatchContext):
             session = await _get_active_parallel_session_for_task(reply_task_id or "")
             if session is None:

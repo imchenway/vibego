@@ -3821,6 +3821,114 @@ def test_push_task_to_model_forwards_push_mode_as_intended_mode(monkeypatch, tmp
     assert captured == [push_mode]
 
 
+def test_on_status_callback_done_schedules_parallel_cleanup(monkeypatch):
+    """任务切到 done 后，应异步清理该任务的并行运行态。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("task:status:TASK_0115:done", message)
+    updated = _make_task(
+        task_id="TASK_0115",
+        title="并行任务",
+        status="done",
+        task_type="task",
+    )
+
+    async def fake_update_task(task_id: str, *, actor, status: str):
+        assert task_id == updated.id
+        assert status == "done"
+        return updated
+
+    async def fake_render(task_id: str):
+        assert task_id == updated.id
+        return "详情", InlineKeyboardMarkup(inline_keyboard=[])
+
+    async def fake_try_edit_message(_message, _text, reply_markup=None):
+        return True
+
+    cleanup_calls: list[str] = []
+
+    async def fake_delete_parallel_session_workspace(task_id: str):
+        cleanup_calls.append(task_id)
+
+    created_coroutines: list = []
+
+    class DummyTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+    def fake_create_task(coro):
+        created_coroutines.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+    monkeypatch.setattr(bot, "_try_edit_message", fake_try_edit_message)
+    monkeypatch.setattr(bot, "_delete_parallel_session_workspace", fake_delete_parallel_session_workspace)
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    asyncio.run(bot.on_status_callback(callback))
+
+    assert callback.answers[-1] == ("状态已更新", False)
+    assert created_coroutines, "应在后台触发并行清理"
+    asyncio.run(created_coroutines[0])
+    assert cleanup_calls == [updated.id]
+
+
+def test_on_status_callback_non_done_does_not_schedule_parallel_cleanup(monkeypatch):
+    """任务切到非 done 状态时，不应触发并行运行态清理。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("task:status:TASK_0115:test", message)
+    updated = _make_task(
+        task_id="TASK_0115",
+        title="并行任务",
+        status="test",
+        task_type="task",
+    )
+
+    async def fake_update_task(task_id: str, *, actor, status: str):
+        assert task_id == updated.id
+        assert status == "test"
+        return updated
+
+    async def fake_render(task_id: str):
+        assert task_id == updated.id
+        return "详情", InlineKeyboardMarkup(inline_keyboard=[])
+
+    async def fake_try_edit_message(_message, _text, reply_markup=None):
+        return True
+
+    async def fake_delete_parallel_session_workspace(_task_id: str):
+        raise AssertionError("非 done 状态不应触发并行清理")
+
+    created_coroutines: list = []
+
+    class DummyTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+    def fake_create_task(coro):
+        created_coroutines.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+    monkeypatch.setattr(bot, "_try_edit_message", fake_try_edit_message)
+    monkeypatch.setattr(bot, "_delete_parallel_session_workspace", fake_delete_parallel_session_workspace)
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    asyncio.run(bot.on_status_callback(callback))
+
+    assert callback.answers[-1] == ("状态已更新", False)
+    assert not created_coroutines
+
+
 def test_build_model_push_payload_without_history_formatting():
     task = TaskRecord(
         id="TASK_NO_HISTORY",

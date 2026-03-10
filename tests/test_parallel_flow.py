@@ -157,7 +157,10 @@ def test_parallel_reply_mode_auto_prefixes_next_message(monkeypatch):
 
     async def _scenario() -> None:
         await bot.on_parallel_reply_callback(callback)
-        assert origin.calls and "已进入 /TASK_0001 回复模式" in origin.calls[-1][0]
+        assert origin.calls and origin.calls[-1][0] == "已进入 /TASK_0001 回复模式。"
+        reply_keyboard = origin.calls[-1][2]
+        labels = [button.text for row in reply_keyboard.keyboard for button in row]
+        assert labels == ["取消"]
 
         message = DummyMessage(chat_id=origin.chat.id, user_id=origin.from_user.id)
         message.text = "继续完善方案"
