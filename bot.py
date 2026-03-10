@@ -7491,6 +7491,7 @@ async def _begin_parallel_launch(
         [(repo_key, relative_path, branches) for repo_key, _repo_path, relative_path, branches in repo_options]
     )
     common_branch_options = collect_common_branch_refs(common_branch_repo_options)
+    common_branch_repo_keys = {repo_key for repo_key, _branches in common_branch_repo_options}
     token = _create_parallel_launch_token()
     session = ParallelLaunchSession(
         token=token,
@@ -7505,6 +7506,7 @@ async def _begin_parallel_launch(
         current_branch_labels=current_branch_labels,
         base_dir=base_dir,
         common_branch_options=common_branch_options,
+        common_branch_repo_keys=common_branch_repo_keys,
         common_branch_scope_repo_count=len(common_branch_repo_options),
         common_branch_ignored_repos=ignored_common_branch_repos,
         selection_mode="bulk" if common_branch_options else "individual",
@@ -7557,7 +7559,10 @@ async def on_parallel_common_branch_select_callback(callback: CallbackQuery) -> 
         return
     common_branch = session.common_branch_options[branch_index]
     selections: dict[str, BranchRef] = {}
+    scoped_repo_keys = session.common_branch_repo_keys or {repo_key for repo_key, _repo_path, _rel, _branches in session.repo_options}
     for repo_key, _repo_path, _rel, branches in session.repo_options:
+        if repo_key not in scoped_repo_keys:
+            continue
         matched = next(
             (
                 branch
@@ -7572,6 +7577,17 @@ async def on_parallel_common_branch_select_callback(callback: CallbackQuery) -> 
         selections[repo_key] = matched
     session.selection_mode = "bulk"
     session.selections = selections
+    next_index = _find_next_unselected_repo_index(session)
+    if next_index is not None:
+        session.selection_mode = "individual"
+        await callback.answer(f"已批量应用共同分支 {common_branch.name}，请继续补选剩余仓库。")
+        if callback.message is not None:
+            await _render_parallel_branch_flow_message(
+                callback.message,
+                _build_parallel_branch_title(session, next_index),
+                reply_markup=_build_parallel_branch_keyboard(session, repo_index=next_index, page=0),
+            )
+        return
     await callback.answer(f"已选择共同分支 {common_branch.name}")
     if callback.message is not None:
         await _render_parallel_branch_flow_message(
@@ -7589,13 +7605,20 @@ async def on_parallel_branch_individual_callback(callback: CallbackQuery) -> Non
         await callback.answer("分支选择会话已失效", show_alert=True)
         return
     session.selection_mode = "individual"
-    session.selections = {}
     await callback.answer("已切换为逐个选择")
     if callback.message is not None:
+        next_index = _find_next_unselected_repo_index(session)
+        if next_index is None:
+            await _render_parallel_branch_flow_message(
+                callback.message,
+                _build_parallel_branch_summary(session),
+                reply_markup=_build_parallel_branch_summary_keyboard(session),
+            )
+            return
         await _render_parallel_branch_flow_message(
             callback.message,
-            _build_parallel_branch_title(session, 0),
-            reply_markup=_build_parallel_branch_keyboard(session, repo_index=0, page=0),
+            _build_parallel_branch_title(session, next_index),
+            reply_markup=_build_parallel_branch_keyboard(session, repo_index=next_index, page=0),
         )
 
 
@@ -7635,11 +7658,11 @@ async def on_parallel_branch_select_callback(callback: CallbackQuery) -> None:
     branch = branches[branch_index]
     session.selection_mode = "individual"
     session.selections[repo_key] = branch
-    next_index = repo_index + 1
+    next_index = _find_next_unselected_repo_index(session, start=repo_index + 1, wrap=True)
     await callback.answer(f"已选择 {branch.name}")
     if callback.message is None:
         return
-    if next_index < len(session.repo_options):
+    if next_index is not None:
         await _render_parallel_branch_flow_message(
             callback.message,
             _build_parallel_branch_title(session, next_index),
@@ -7665,13 +7688,14 @@ async def on_parallel_branch_cancel_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith(PARALLEL_BRANCH_CONFIRM_PREFIX))
 async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
     token = (callback.data or "")[len(PARALLEL_BRANCH_CONFIRM_PREFIX) :]
-    session = PARALLEL_LAUNCH_SESSIONS.pop(token, None)
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
     if session is None:
         await callback.answer("并行创建会话已失效", show_alert=True)
         return
-    if len(session.selections) != len(session.repo_options):
+    if _find_next_unselected_repo_index(session) is not None:
         await callback.answer("仍有仓库未选择基线分支", show_alert=True)
         return
+    PARALLEL_LAUNCH_SESSIONS.pop(token, None)
 
     task = session.task
     workspace_root = _parallel_workspace_root(task.id)
@@ -8172,6 +8196,7 @@ class ParallelLaunchSession:
     current_branch_labels: dict[str, str]
     base_dir: Optional[Path] = None
     common_branch_options: list[CommonBranchRef] = field(default_factory=list)
+    common_branch_repo_keys: set[str] = field(default_factory=set)
     common_branch_scope_repo_count: int = 0
     common_branch_ignored_repos: list[str] = field(default_factory=list)
     selection_mode: str = "individual"
@@ -8674,7 +8699,7 @@ def _build_parallel_branch_title(session: ParallelLaunchSession, repo_index: int
         "请选择该仓库的基线分支（本地 + 远端）：",
     ]
     if repo_index > 0:
-        lines.append(f"已选择仓库：{repo_index}/{len(session.repo_options)}")
+        lines.append(f"已完成选择：{len(session.selections)}/{len(session.repo_options)}")
     return "\n".join(lines)
 
 
@@ -8746,18 +8771,49 @@ def _build_parallel_branch_summary(session: ParallelLaunchSession) -> str:
         selected = session.selections.get(repo_key)
         selected_text = selected.name if selected else "（未选择）"
         lines.append(f"- {rel or '.'} -> {selected_text}")
+    pending_labels = [rel or "." for repo_key, _repo_path, rel, _branches in session.repo_options if repo_key not in session.selections]
     lines.append("")
-    lines.append("确认后将完整复刻工作目录（排除生成物目录）、创建任务分支和新 CLI。")
+    if pending_labels:
+        lines.append(f"待补选仓库：{'、'.join(pending_labels)}")
+        lines.append("请先完成剩余仓库的基线分支选择。")
+    else:
+        lines.append("确认后将完整复刻工作目录（排除生成物目录）、创建任务分支和新 CLI。")
     return "\n".join(lines)
 
 
 def _build_parallel_branch_summary_keyboard(session: ParallelLaunchSession) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ 开始并行处理", callback_data=f"{PARALLEL_BRANCH_CONFIRM_PREFIX}{session.token}")],
-            [InlineKeyboardButton(text="❌ 取消", callback_data=f"{PARALLEL_BRANCH_CANCEL_PREFIX}{session.token}")],
-        ]
-    )
+    next_index = _find_next_unselected_repo_index(session)
+    rows: list[list[InlineKeyboardButton]] = []
+    if next_index is None:
+        rows.append([InlineKeyboardButton(text="✅ 开始并行处理", callback_data=f"{PARALLEL_BRANCH_CONFIRM_PREFIX}{session.token}")])
+    else:
+        rows.append([InlineKeyboardButton(text="🧩 继续补选剩余仓库", callback_data=f"{PARALLEL_BRANCH_INDIVIDUAL_PREFIX}{session.token}")])
+    rows.append([InlineKeyboardButton(text="❌ 取消", callback_data=f"{PARALLEL_BRANCH_CANCEL_PREFIX}{session.token}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _find_next_unselected_repo_index(
+    session: ParallelLaunchSession,
+    *,
+    start: int = 0,
+    wrap: bool = False,
+) -> Optional[int]:
+    """返回下一个尚未选择基线分支的仓库索引。"""
+
+    total = len(session.repo_options)
+    if total <= 0:
+        return None
+    normalized_start = min(max(start, 0), total)
+    search_ranges = [range(normalized_start, total)]
+    # 用户可能通过翻页或历史消息从中间仓库继续补选，因此允许回绕检查前面的仓库。
+    if wrap and normalized_start > 0:
+        search_ranges.append(range(0, normalized_start))
+    for search_range in search_ranges:
+        for repo_index in search_range:
+            repo_key, _repo_path, _rel, _branches = session.repo_options[repo_index]
+            if repo_key not in session.selections:
+                return repo_index
+    return None
 
 
 async def _render_parallel_branch_flow_message(

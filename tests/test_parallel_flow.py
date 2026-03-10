@@ -410,6 +410,62 @@ def test_parallel_common_branch_select_populates_all_repo_selections(monkeypatch
     assert "以下仓库将进入并行处理" in message.edits[-1][0]
 
 
+def test_parallel_common_branch_select_redirects_to_first_unselected_repo_when_ignored_root_exists():
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "__root__",
+                Path("/tmp/workspace-root"),
+                ".",
+                [BranchRef(name="main", source="local", is_current=True)],
+            ),
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            ),
+            (
+                "frontend-admin",
+                Path("/tmp/frontend-admin"),
+                "frontend-admin",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            ),
+        ],
+        selections={},
+        current_branch_labels={"__root__": "main", "backend-java": "develop", "frontend-admin": "develop"},
+        common_branch_options=[CommonBranchRef(name="develop", source="local", current_count=2, total_repos=2)],
+        common_branch_repo_keys={"backend-java", "frontend-admin"},
+        common_branch_scope_repo_count=2,
+        common_branch_ignored_repos=["."],
+        selection_mode="bulk",
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback(f"{bot.PARALLEL_COMMON_BRANCH_SELECT_PREFIX}demo:0", message)
+    asyncio.run(bot.on_parallel_common_branch_select_callback(callback))
+
+    assert callback.answers[-1] == ("已批量应用共同分支 develop，请继续补选剩余仓库。", False)
+    assert session.selection_mode == "individual"
+    assert set(session.selections) == {"backend-java", "frontend-admin"}
+    assert message.edits, "存在待补选仓库时，应直接进入逐个补选页"
+    assert "当前仓库：." in message.edits[-1][0]
+
+
 def test_parallel_branch_individual_callback_edits_first_repo():
     message = DummyMessage()
     session = bot.ParallelLaunchSession(
@@ -439,9 +495,51 @@ def test_parallel_branch_individual_callback_edits_first_repo():
     asyncio.run(bot.on_parallel_branch_individual_callback(callback))
 
     assert session.selection_mode == "individual"
-    assert session.selections == {}
-    assert message.edits, "切到逐个选择后应编辑为首个仓库的分支页"
-    assert "当前仓库：backend-java" in message.edits[-1][0]
+    assert session.selections == {"backend-java": BranchRef(name="develop", source="local")}
+    assert message.edits, "全部已选时，应直接回到摘要确认页"
+    assert "以下仓库将进入并行处理" in message.edits[-1][0]
+
+
+def test_parallel_branch_individual_callback_keeps_bulk_selections_and_starts_from_first_unselected_repo():
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "__root__",
+                Path("/tmp/workspace-root"),
+                ".",
+                [BranchRef(name="main", source="local", is_current=True)],
+            ),
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local", is_current=True)],
+            ),
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local", is_current=True)},
+        current_branch_labels={"__root__": "main", "backend-java": "develop"},
+        common_branch_options=[CommonBranchRef(name="develop", source="local", current_count=1, total_repos=1)],
+        common_branch_scope_repo_count=1,
+        common_branch_ignored_repos=["."],
+        selection_mode="bulk",
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback(f"{bot.PARALLEL_BRANCH_INDIVIDUAL_PREFIX}demo", message)
+    asyncio.run(bot.on_parallel_branch_individual_callback(callback))
+
+    assert session.selection_mode == "individual"
+    assert set(session.selections) == {"backend-java"}
+    assert message.edits, "应从首个未选择仓库开始补选"
+    assert "当前仓库：." in message.edits[-1][0]
 
 
 def test_parallel_branch_page_callback_edits_same_message():
@@ -515,6 +613,92 @@ def test_parallel_branch_select_callback_edits_same_message_for_next_repo_and_su
     asyncio.run(bot.on_parallel_branch_select_callback(callback_second))
     assert len(message.edits) >= 2, "最后展示摘要也应继续编辑同一条消息"
     assert not message.calls, "展示开始处理按钮不应新增消息"
+
+
+def test_parallel_branch_select_callback_skips_already_selected_repos_and_finishes_with_summary():
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "__root__",
+                Path("/tmp/workspace-root"),
+                ".",
+                [BranchRef(name="main", source="local", is_current=True)],
+            ),
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local", is_current=True)],
+            ),
+            (
+                "frontend-admin",
+                Path("/tmp/frontend-admin"),
+                "frontend-admin",
+                [BranchRef(name="develop", source="local", is_current=True)],
+            ),
+        ],
+        selections={
+            "backend-java": BranchRef(name="develop", source="local", is_current=True),
+            "frontend-admin": BranchRef(name="develop", source="local", is_current=True),
+        },
+        current_branch_labels={"__root__": "main", "backend-java": "develop", "frontend-admin": "develop"},
+        selection_mode="individual",
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback("parallel:branch_select:demo:0:0", message)
+    asyncio.run(bot.on_parallel_branch_select_callback(callback))
+
+    assert session.selections["__root__"].name == "main"
+    assert message.edits, "补选完成后应直接进入摘要页"
+    assert "以下仓库将进入并行处理" in message.edits[-1][0]
+    assert "当前仓库：" not in message.edits[-1][0]
+
+
+def test_parallel_branch_confirm_callback_keeps_session_when_selection_incomplete():
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "__root__",
+                Path("/tmp/workspace-root"),
+                ".",
+                [BranchRef(name="main", source="local", is_current=True)],
+            ),
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local", is_current=True)],
+            ),
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local", is_current=True)},
+        current_branch_labels={"__root__": "main", "backend-java": "develop"},
+        selection_mode="individual",
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert callback.answers[-1] == ("仍有仓库未选择基线分支", True)
+    assert "demo" in bot.PARALLEL_LAUNCH_SESSIONS
+    assert not message.edits
 
 
 def test_parallel_branch_confirm_callback_edits_same_message_to_processing(monkeypatch, tmp_path: Path):
