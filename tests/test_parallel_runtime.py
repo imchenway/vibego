@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from parallel_runtime import (
+    BranchRef,
     RepoBranchSelection,
+    collect_common_branch_refs,
     discover_git_repos,
     get_current_branch_state,
     list_branch_refs,
@@ -61,6 +63,22 @@ def test_discover_git_repos_skips_nested_repos_under_non_root_parent(tmp_path: P
     assert "backend-java/infra-common" not in keys
 
 
+def test_discover_git_repos_includes_nested_repos_when_requested(tmp_path: Path) -> None:
+    """批量分支选择需要看到所有 Git 库时，应支持返回嵌套仓库。"""
+
+    root = tmp_path / "mall"
+    _init_repo(root, {"README.md": "root\n"})
+    _init_repo(root / "backend-java", {"service.txt": "backend\n"})
+    _init_repo(root / "backend-java" / "infra-parent", {"pom.xml": "<project />\n"})
+
+    repos = discover_git_repos(root, include_nested=True)
+    keys = [repo_key for repo_key, _repo_path, _relative_path in repos]
+
+    assert "__root__" in keys
+    assert "backend-java" in keys
+    assert "backend-java/infra-parent" in keys
+
+
 def test_prepare_parallel_workspace_rejects_overlapping_relative_paths(tmp_path: Path) -> None:
     """即使上游传入了父子重叠路径，也应给出明确错误而不是透传生硬的 git 报错。"""
 
@@ -91,6 +109,98 @@ def test_prepare_parallel_workspace_rejects_overlapping_relative_paths(tmp_path:
                 ),
             ],
         )
+
+
+def test_collect_common_branch_refs_builds_intersection_and_current_marker() -> None:
+    """共同分支列表应只保留所有仓库共有的分支，并统计当前分支命中数。"""
+
+    options = collect_common_branch_refs(
+        [
+            (
+                "backend-java",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="release", source="local"),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            ),
+            (
+                "frontend-admin",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="feature/demo", source="local"),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            ),
+        ]
+    )
+
+    assert [(item.name, item.source, item.current_count, item.total_repos) for item in options] == [
+        ("develop", "local", 2, 2),
+        ("origin/develop", "remote", 0, 2),
+    ]
+
+
+def test_prepare_parallel_workspace_copies_full_workdir_and_excludes_generated_dirs(tmp_path: Path) -> None:
+    """整目录复刻时应保留普通/嵌套仓库内容，并排除生成物目录。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(
+        source_root,
+        {
+            "README.md": "root\n",
+            ".gitignore": "target/\nlogs/\n.idea/\n",
+        },
+    )
+    nested_repo = source_root / "service"
+    _init_repo(
+        nested_repo,
+        {
+            "src/main.py": "print('demo')\n",
+            ".gitignore": "target/\nlogs/\n.idea/\n",
+        },
+    )
+    (source_root / "notes.txt").write_text("需要完整复制\n", encoding="utf-8")
+    (source_root / "target").mkdir()
+    (source_root / "target" / "app.bin").write_text("bin\n", encoding="utf-8")
+    (source_root / "logs").mkdir()
+    (source_root / "logs" / "app.log").write_text("log\n", encoding="utf-8")
+    (source_root / ".idea").mkdir()
+    (source_root / ".idea" / "workspace.xml").write_text("<idea/>\n", encoding="utf-8")
+    (source_root / "node_modules").mkdir()
+    (source_root / "node_modules" / "demo.js").write_text("console.log('x')\n", encoding="utf-8")
+
+    records = prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0093",
+        title="并行创建缺陷修复",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref="HEAD",
+                selected_remote=None,
+                relative_path=".",
+            ),
+            RepoBranchSelection(
+                repo_key="service",
+                source_repo_path=nested_repo,
+                selected_ref="HEAD",
+                selected_remote=None,
+                relative_path="service",
+            ),
+        ],
+    )
+
+    workspace_root = tmp_path / "workspace"
+    assert (workspace_root / "notes.txt").read_text(encoding="utf-8") == "需要完整复制\n"
+    assert (workspace_root / "service" / "src" / "main.py").exists()
+    assert not (workspace_root / "target").exists()
+    assert not (workspace_root / "logs").exists()
+    assert not (workspace_root / ".idea").exists()
+    assert not (workspace_root / "node_modules").exists()
+    assert len(records) == 2
 
 
 def test_get_current_branch_state_marks_current_local_branch_first(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import re
 import shutil
 import subprocess
@@ -23,6 +24,17 @@ class BranchRef:
     source: str  # local / remote
     remote: Optional[str] = None
     is_current: bool = False
+
+
+@dataclass(slots=True)
+class CommonBranchRef:
+    """描述所有 Git 仓库都共同拥有的候选分支。"""
+
+    name: str
+    source: str  # local / remote
+    remote: Optional[str] = None
+    current_count: int = 0
+    total_repos: int = 0
 
 
 @dataclass(slots=True)
@@ -145,7 +157,12 @@ def _is_descendant_path(candidate: tuple[str, ...], parent: tuple[str, ...]) -> 
     return candidate[: len(parent)] == parent
 
 
-def discover_git_repos(base_dir: Path, *, max_depth: int = 4) -> list[tuple[str, Path, str]]:
+def discover_git_repos(
+    base_dir: Path,
+    *,
+    max_depth: int = 4,
+    include_nested: bool = False,
+) -> list[tuple[str, Path, str]]:
     """发现根目录下的全部 Git 仓库。"""
 
     base = Path(base_dir).resolve()
@@ -171,6 +188,8 @@ def discover_git_repos(base_dir: Path, *, max_depth: int = 4) -> list[tuple[str,
         repos[key] = (repo_path, rel)
 
     ordered = sorted(repos.items(), key=lambda item: (0 if item[0] == "__root__" else item[0].count("/"), item[0]))
+    if include_nested:
+        return [(key, path, rel) for key, (path, rel) in ordered]
 
     filtered: list[tuple[str, Path, str]] = []
     kept_paths: list[tuple[str, tuple[str, ...]]] = []
@@ -227,6 +246,54 @@ def list_branch_refs(repo_path: Path, *, current_local_branch: Optional[str] = N
         dedup.values(),
         key=lambda item: (
             0 if item.is_current else 1,
+            0 if item.source == "local" else 1,
+            item.name.casefold(),
+        ),
+    )
+
+
+def collect_common_branch_refs(
+    repo_branch_options: Sequence[tuple[str, Sequence[BranchRef]]],
+) -> list[CommonBranchRef]:
+    """收集所有 Git 仓库共同拥有的分支，并统计当前分支命中数。"""
+
+    if not repo_branch_options:
+        return []
+
+    intersection_keys: Optional[set[tuple[str, str]]] = None
+    branch_meta: dict[tuple[str, str], BranchRef] = {}
+    current_counts: dict[tuple[str, str], int] = {}
+
+    for _repo_key, branches in repo_branch_options:
+        repo_map: dict[tuple[str, str], BranchRef] = {}
+        for branch in branches:
+            key = (branch.source, branch.name)
+            repo_map[key] = branch
+            branch_meta[key] = branch
+            if branch.is_current:
+                current_counts[key] = current_counts.get(key, 0) + 1
+        repo_keys = set(repo_map)
+        intersection_keys = repo_keys if intersection_keys is None else intersection_keys & repo_keys
+
+    if not intersection_keys:
+        return []
+
+    total_repos = len(repo_branch_options)
+    results = [
+        CommonBranchRef(
+            name=branch_meta[key].name,
+            source=branch_meta[key].source,
+            remote=branch_meta[key].remote,
+            current_count=current_counts.get(key, 0),
+            total_repos=total_repos,
+        )
+        for key in intersection_keys
+    ]
+    return sorted(
+        results,
+        key=lambda item: (
+            0 if item.current_count == item.total_repos and item.total_repos > 0 else 1,
+            -item.current_count,
             0 if item.source == "local" else 1,
             item.name.casefold(),
         ),
@@ -291,32 +358,131 @@ def _validate_parallel_selection_paths(selections: Sequence[RepoBranchSelection]
         resolved.append((selection.repo_key, rel_text, rel_parts))
 
 
+DEFAULT_PARALLEL_COPY_EXCLUDE_PATTERNS: tuple[str, ...] = (
+    "target",
+    "build",
+    "dist",
+    "node_modules",
+    "logs",
+    ".idea",
+    ".DS_Store",
+    ".pnpm-store",
+    ".gradle",
+)
+
+
+def _normalize_gitignore_pattern(raw_line: str) -> Optional[str]:
+    """标准化 .gitignore 行，仅保留用于复制排除的有效模式。"""
+
+    line = (raw_line or "").strip()
+    if not line or line.startswith("#") or line.startswith("!"):
+        return None
+    if line.startswith("\\#"):
+        line = line[1:]
+    normalized = line.lstrip("/").rstrip("/")
+    return normalized or None
+
+
+def _collect_common_gitignore_patterns(source_root: Path) -> set[str]:
+    """提取工作目录下全部 .gitignore 的交集模式。"""
+
+    pattern_sets: list[set[str]] = []
+    for gitignore_file in sorted(source_root.rglob(".gitignore")):
+        try:
+            lines = gitignore_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        current_patterns = {
+            normalized
+            for normalized in (_normalize_gitignore_pattern(line) for line in lines)
+            if normalized is not None
+        }
+        if current_patterns:
+            pattern_sets.append(current_patterns)
+    if not pattern_sets:
+        return set()
+    return set.intersection(*pattern_sets)
+
+
+def _should_ignore_copy_entry(
+    source_root: Path,
+    current_dir: Path,
+    name: str,
+    *,
+    exclude_patterns: set[str],
+) -> bool:
+    """判断复制工作目录时当前条目是否应被排除。"""
+
+    normalized_name = name.strip()
+    if normalized_name in exclude_patterns:
+        return True
+    try:
+        current_rel = current_dir.relative_to(source_root)
+    except ValueError:
+        current_rel = Path(".")
+    rel_path = Path(name) if str(current_rel) == "." else current_rel / name
+    rel_text = rel_path.as_posix()
+    for pattern in exclude_patterns:
+        if fnmatch.fnmatch(normalized_name, pattern) or fnmatch.fnmatch(rel_text, pattern):
+            return True
+    return False
+
+
+def _copy_parallel_workspace_tree(*, source_root: Path, workspace_root: Path) -> None:
+    """完整复制 workdir，同时排除默认生成物目录与全部 .gitignore 的交集模式。"""
+
+    exclude_patterns = set(DEFAULT_PARALLEL_COPY_EXCLUDE_PATTERNS)
+    exclude_patterns.update(_collect_common_gitignore_patterns(source_root))
+
+    def _ignore(current_dir: str, names: list[str]) -> set[str]:
+        current_path = Path(current_dir)
+        return {
+            name
+            for name in names
+            if _should_ignore_copy_entry(
+                source_root,
+                current_path,
+                name,
+                exclude_patterns=exclude_patterns,
+            )
+        }
+
+    shutil.copytree(source_root, workspace_root, ignore=_ignore, dirs_exist_ok=False)
+
+
 def prepare_parallel_workspace(
     *,
     workspace_root: Path,
     task_id: str,
     title: str,
     selections: Sequence[RepoBranchSelection],
+    source_root: Optional[Path] = None,
 ) -> list[ParallelRepoRecord]:
     """根据所选基线分支创建并行副本。"""
 
     root = Path(workspace_root)
     if root.exists():
         shutil.rmtree(root)
-    root.mkdir(parents=True, exist_ok=True)
-    _validate_parallel_selection_paths(selections)
+    if source_root is None:
+        root.mkdir(parents=True, exist_ok=True)
+        _validate_parallel_selection_paths(selections)
+    else:
+        source_base = Path(source_root).resolve()
+        root.parent.mkdir(parents=True, exist_ok=True)
+        _copy_parallel_workspace_tree(source_root=source_base, workspace_root=root)
 
     task_branch = build_parallel_branch_name(task_id, title)
-    created: list[Path] = []
     records: list[ParallelRepoRecord] = []
     try:
         for selection in selections:
             target = root / selection.relative_path if selection.relative_path != "." else root
-            target.parent.mkdir(parents=True, exist_ok=True)
-            clone = _run_git(["clone", str(selection.source_repo_path), str(target)], cwd=root)
-            if clone.returncode != 0:
-                raise RuntimeError(clone.stderr.strip() or clone.stdout.strip() or f"克隆失败: {selection.repo_key}")
-            created.append(target)
+            if source_root is None:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                clone = _run_git(["clone", str(selection.source_repo_path), str(target)], cwd=root)
+                if clone.returncode != 0:
+                    raise RuntimeError(clone.stderr.strip() or clone.stdout.strip() or f"克隆失败: {selection.repo_key}")
+            elif not target.exists():
+                raise RuntimeError(f"并行目录中缺少仓库：{selection.relative_path or '.'}")
 
             fetch = _run_git(["fetch", "--all", "--prune"], cwd=target)
             if fetch.returncode != 0:

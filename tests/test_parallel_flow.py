@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
 import bot  # noqa: E402
-from parallel_runtime import BranchRef, build_parallel_commit_message  # noqa: E402
+from parallel_runtime import BranchRef, CommonBranchRef, build_parallel_commit_message  # noqa: E402
 from tasks import TaskRecord  # noqa: E402
 
 
@@ -249,6 +249,149 @@ def test_parallel_branch_keyboard_marks_current_branch_and_keeps_it_first():
     assert "（当前）" in branch_rows[0][0].text
 
 
+def test_parallel_common_branch_keyboard_marks_current_and_has_individual_entry():
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=None,
+        push_mode=None,
+        supplement=None,
+        repo_options=[],
+        selections={},
+        current_branch_labels={},
+        common_branch_options=[
+            CommonBranchRef(name="develop", source="local", current_count=2, total_repos=2),
+            CommonBranchRef(name="origin/develop", source="remote", remote="origin", current_count=0, total_repos=2),
+        ],
+        selection_mode="bulk",
+    )
+
+    markup = bot._build_parallel_common_branch_keyboard(session, page=0)
+    labels = [button.text for row in markup.inline_keyboard for button in row if button.text]
+
+    assert any(label.startswith("📍 develop") and "（当前）" in label for label in labels)
+    assert "🧩 逐个选择" in labels
+
+
+def test_begin_parallel_launch_prefers_common_branch_selector(monkeypatch):
+    message = DummyMessage()
+
+    monkeypatch.setattr(
+        bot,
+        "discover_git_repos",
+        lambda _base_dir, include_nested=False: [
+            ("backend-java", Path("/tmp/backend-java"), "backend-java"),
+            ("frontend-admin", Path("/tmp/frontend-admin"), "frontend-admin"),
+        ],
+    )
+    monkeypatch.setattr(bot, "get_current_branch_state", lambda _repo_path: ("develop", "develop"))
+    monkeypatch.setattr(
+        bot,
+        "list_branch_refs",
+        lambda _repo_path, current_local_branch=None: [
+            BranchRef(name="develop", source="local", is_current=True),
+            BranchRef(name="origin/develop", source="remote", remote="origin"),
+        ],
+    )
+
+    asyncio.run(
+        bot._begin_parallel_launch(
+            task=_task(),
+            chat_id=message.chat.id,
+            origin_message=message,
+            actor=None,
+            push_mode=None,
+            supplement=None,
+        )
+    )
+
+    assert message.calls, "首屏应展示共同分支批量选择"
+    assert "共用的基线分支" in message.calls[-1][0]
+
+
+def test_parallel_common_branch_select_populates_all_repo_selections(monkeypatch):
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            ),
+            (
+                "frontend-admin",
+                Path("/tmp/frontend-admin"),
+                "frontend-admin",
+                [
+                    BranchRef(name="develop", source="local", is_current=True),
+                    BranchRef(name="origin/develop", source="remote", remote="origin"),
+                ],
+            ),
+        ],
+        selections={},
+        current_branch_labels={"backend-java": "develop", "frontend-admin": "develop"},
+        common_branch_options=[CommonBranchRef(name="develop", source="local", current_count=2, total_repos=2)],
+        selection_mode="bulk",
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback(f"{bot.PARALLEL_COMMON_BRANCH_SELECT_PREFIX}demo:0", message)
+    asyncio.run(bot.on_parallel_common_branch_select_callback(callback))
+
+    assert session.selection_mode == "bulk"
+    assert set(session.selections) == {"backend-java", "frontend-admin"}
+    assert all(branch.name == "develop" for branch in session.selections.values())
+    assert message.edits, "批量选择后应直接进入摘要确认页"
+    assert "以下仓库将进入并行处理" in message.edits[-1][0]
+
+
+def test_parallel_branch_individual_callback_edits_first_repo():
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+        common_branch_options=[CommonBranchRef(name="develop", source="local", current_count=1, total_repos=1)],
+        selection_mode="bulk",
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback(f"{bot.PARALLEL_BRANCH_INDIVIDUAL_PREFIX}demo", message)
+    asyncio.run(bot.on_parallel_branch_individual_callback(callback))
+
+    assert session.selection_mode == "individual"
+    assert session.selections == {}
+    assert message.edits, "切到逐个选择后应编辑为首个仓库的分支页"
+    assert "当前仓库：backend-java" in message.edits[-1][0]
+
+
 def test_parallel_branch_page_callback_edits_same_message():
     message = DummyMessage()
     callback = DummyCallback("parallel:branch_page:demo:0:1", message)
@@ -432,3 +575,62 @@ def test_parallel_branch_confirm_callback_replaces_processing_message_with_summa
     assert message.edits[0][0] == "正在创建并行副本并启动并行 CLI，请稍候……"
     assert "已创建并行开发副本（原目录未改动）：" in message.edits[-1][0]
     assert not message.calls, "成功收口不应再额外新增摘要消息"
+
+
+def test_parallel_branch_confirm_callback_passes_source_root_for_full_copy(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/project-root/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+        base_dir=Path("/tmp/project-root"),
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    captured: dict[str, object] = {}
+
+    def fake_prepare_parallel_workspace(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", fake_prepare_parallel_workspace)
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert captured["source_root"] == Path("/tmp/project-root")

@@ -98,6 +98,7 @@ from command_center import (
 from command_center.prompts import build_field_prompt_text
 from parallel_runtime import (
     BranchRef,
+    CommonBranchRef,
     ParallelCommitResult,
     ParallelMergeResult,
     ParallelRepoRecord,
@@ -106,6 +107,7 @@ from parallel_runtime import (
     RepoBranchSelection,
     RepoOperationResult,
     build_parallel_branch_name,
+    collect_common_branch_refs,
     commit_parallel_repos,
     delete_parallel_workspace,
     discover_git_repos,
@@ -400,6 +402,9 @@ PARALLEL_BRANCH_SELECT_PREFIX = "parallel:branch_select:"
 PARALLEL_BRANCH_PAGE_PREFIX = "parallel:branch_page:"
 PARALLEL_BRANCH_CANCEL_PREFIX = "parallel:branch_cancel:"
 PARALLEL_BRANCH_CONFIRM_PREFIX = "parallel:branch_confirm:"
+PARALLEL_COMMON_BRANCH_SELECT_PREFIX = "parallel:common_branch_select:"
+PARALLEL_COMMON_BRANCH_PAGE_PREFIX = "parallel:common_branch_page:"
+PARALLEL_BRANCH_INDIVIDUAL_PREFIX = "parallel:branch_individual:"
 # request_user_input：Telegram 按钮回调前缀（需控制总长度 <= 64 字节）
 REQUEST_INPUT_CALLBACK_PREFIX = "rui:"
 REQUEST_INPUT_ACTION_OPTION = "opt"
@@ -7460,7 +7465,7 @@ async def _begin_parallel_launch(
         return
 
     base_dir = PRIMARY_WORKDIR or ROOT_DIR_PATH
-    repos = discover_git_repos(base_dir)
+    repos = discover_git_repos(base_dir, include_nested=True)
     if not repos:
         if origin_message is not None:
             await origin_message.answer("当前工作目录下未发现 Git 仓库，无法创建并行分支。", reply_markup=_build_worker_main_keyboard())
@@ -7481,6 +7486,9 @@ async def _begin_parallel_launch(
         repo_options.append((repo_key, repo_path, relative_path, branches))
         current_branch_labels[repo_key] = current_branch_label
 
+    common_branch_options = collect_common_branch_refs(
+        [(repo_key, branches) for repo_key, _repo_path, _relative_path, branches in repo_options]
+    )
     token = _create_parallel_launch_token()
     session = ParallelLaunchSession(
         token=token,
@@ -7493,11 +7501,95 @@ async def _begin_parallel_launch(
         repo_options=repo_options,
         selections={},
         current_branch_labels=current_branch_labels,
+        base_dir=base_dir,
+        common_branch_options=common_branch_options,
+        selection_mode="bulk" if common_branch_options else "individual",
     )
     PARALLEL_LAUNCH_SESSIONS[token] = session
     if origin_message is not None:
-        await _answer_with_markdown(
-            origin_message,
+        if common_branch_options:
+            await _answer_with_markdown(
+                origin_message,
+                _build_parallel_common_branch_title(session),
+                reply_markup=_build_parallel_common_branch_keyboard(session, page=0),
+            )
+        else:
+            await _answer_with_markdown(
+                origin_message,
+                _build_parallel_branch_title(session, 0),
+                reply_markup=_build_parallel_branch_keyboard(session, repo_index=0, page=0),
+            )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_COMMON_BRANCH_PAGE_PREFIX))
+async def on_parallel_common_branch_page_callback(callback: CallbackQuery) -> None:
+    payload = (callback.data or "")[len(PARALLEL_COMMON_BRANCH_PAGE_PREFIX) :]
+    token, page_text = (payload.split(":", 1) + ["0"])[:2]
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("分支选择会话已失效", show_alert=True)
+        return
+    page = int(page_text) if page_text.isdigit() else 0
+    await callback.answer()
+    if callback.message is not None:
+        await _render_parallel_branch_flow_message(
+            callback.message,
+            _build_parallel_common_branch_title(session),
+            reply_markup=_build_parallel_common_branch_keyboard(session, page=page),
+        )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_COMMON_BRANCH_SELECT_PREFIX))
+async def on_parallel_common_branch_select_callback(callback: CallbackQuery) -> None:
+    payload = (callback.data or "")[len(PARALLEL_COMMON_BRANCH_SELECT_PREFIX) :]
+    token, branch_index_text = (payload.split(":", 1) + ["0"])[:2]
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("分支选择会话已失效", show_alert=True)
+        return
+    branch_index = int(branch_index_text) if branch_index_text.isdigit() else 0
+    if branch_index < 0 or branch_index >= len(session.common_branch_options):
+        await callback.answer("分支不存在", show_alert=True)
+        return
+    common_branch = session.common_branch_options[branch_index]
+    selections: dict[str, BranchRef] = {}
+    for repo_key, _repo_path, _rel, branches in session.repo_options:
+        matched = next(
+            (
+                branch
+                for branch in branches
+                if branch.name == common_branch.name and branch.source == common_branch.source
+            ),
+            None,
+        )
+        if matched is None:
+            await callback.answer("共同分支已失效，请改用逐个选择。", show_alert=True)
+            return
+        selections[repo_key] = matched
+    session.selection_mode = "bulk"
+    session.selections = selections
+    await callback.answer(f"已选择共同分支 {common_branch.name}")
+    if callback.message is not None:
+        await _render_parallel_branch_flow_message(
+            callback.message,
+            _build_parallel_branch_summary(session),
+            reply_markup=_build_parallel_branch_summary_keyboard(session),
+        )
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_INDIVIDUAL_PREFIX))
+async def on_parallel_branch_individual_callback(callback: CallbackQuery) -> None:
+    token = (callback.data or "")[len(PARALLEL_BRANCH_INDIVIDUAL_PREFIX) :]
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("分支选择会话已失效", show_alert=True)
+        return
+    session.selection_mode = "individual"
+    session.selections = {}
+    await callback.answer("已切换为逐个选择")
+    if callback.message is not None:
+        await _render_parallel_branch_flow_message(
+            callback.message,
             _build_parallel_branch_title(session, 0),
             reply_markup=_build_parallel_branch_keyboard(session, repo_index=0, page=0),
         )
@@ -7537,6 +7629,7 @@ async def on_parallel_branch_select_callback(callback: CallbackQuery) -> None:
         await callback.answer("分支不存在", show_alert=True)
         return
     branch = branches[branch_index]
+    session.selection_mode = "individual"
     session.selections[repo_key] = branch
     next_index = repo_index + 1
     await callback.answer(f"已选择 {branch.name}")
@@ -7598,6 +7691,7 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
             task_id=task.id,
             title=task.title,
             selections=selections,
+            source_root=session.base_dir or PRIMARY_WORKDIR or ROOT_DIR_PATH,
         )
         tmux_session, pointer_file = await _start_parallel_tmux_session(task, workspace_root)
         await PARALLEL_SESSION_STORE.upsert_session(
@@ -8072,6 +8166,9 @@ class ParallelLaunchSession:
     repo_options: list[tuple[str, Path, str, list[BranchRef]]]
     selections: dict[str, BranchRef]
     current_branch_labels: dict[str, str]
+    base_dir: Optional[Path] = None
+    common_branch_options: list[CommonBranchRef] = field(default_factory=list)
+    selection_mode: str = "individual"
     created_at: float = field(default_factory=time.time)
 
 
@@ -8475,6 +8572,88 @@ def _schedule_parallel_cleanup_for_done(task_id: str) -> None:
     asyncio.create_task(_cleanup_parallel_session_workspace_safely(normalized))
 
 
+def _build_parallel_common_branch_title(session: ParallelLaunchSession) -> str:
+    """构造“共同分支批量选择”页标题。"""
+
+    total_repos = len(session.repo_options)
+    lines = [
+        f"并行任务：/{session.task.id} {session.task.title}",
+        f"已发现 Git 仓库：{total_repos} 个",
+        "请先选择所有 Git 仓库共用的基线分支：",
+    ]
+    if not session.common_branch_options:
+        lines.append("当前未检测到所有 Git 仓库共同拥有的分支，请点击下方“逐个选择”。")
+    else:
+        lines.append("若不使用批量分支，请点击下方“🧩 逐个选择”。")
+    return "\n".join(lines)
+
+
+def _format_parallel_common_branch_button_label(branch: CommonBranchRef, *, limit: int = 48) -> str:
+    """格式化共同分支按钮文案，并展示当前分支命中情况。"""
+
+    prefix = "🌐 " if branch.source == "remote" else "📍 "
+    if branch.current_count == branch.total_repos and branch.total_repos > 0:
+        suffix = "（当前）"
+    elif branch.current_count > 0:
+        suffix = f"（当前 {branch.current_count}/{branch.total_repos}）"
+    else:
+        suffix = ""
+    available = max(limit - len(prefix) - len(suffix), 1)
+    name = branch.name
+    if len(name) > available:
+        if available <= 1:
+            name = "…"
+        else:
+            name = name[: available - 1] + "…"
+    return f"{prefix}{name}{suffix}"
+
+
+def _build_parallel_common_branch_keyboard(
+    session: ParallelLaunchSession,
+    *,
+    page: int,
+    page_size: int = 8,
+) -> InlineKeyboardMarkup:
+    """构造共同分支批量选择键盘。"""
+
+    branches = session.common_branch_options
+    total = len(branches)
+    page = max(page, 0)
+    start = page * page_size
+    chunk = branches[start : start + page_size]
+    rows: list[list[InlineKeyboardButton]] = []
+    for offset, branch in enumerate(chunk):
+        branch_idx = start + offset
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_format_parallel_common_branch_button_label(branch),
+                    callback_data=f"{PARALLEL_COMMON_BRANCH_SELECT_PREFIX}{session.token}:{branch_idx}",
+                )
+            ]
+        )
+    nav_row: list[InlineKeyboardButton] = []
+    if start > 0:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ 上一页",
+                callback_data=f"{PARALLEL_COMMON_BRANCH_PAGE_PREFIX}{session.token}:{page-1}",
+            )
+        )
+    if start + page_size < total:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="➡️ 下一页",
+                callback_data=f"{PARALLEL_COMMON_BRANCH_PAGE_PREFIX}{session.token}:{page+1}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+    rows.append([InlineKeyboardButton(text="🧩 逐个选择", callback_data=f"{PARALLEL_BRANCH_INDIVIDUAL_PREFIX}{session.token}")])
+    rows.append([InlineKeyboardButton(text="❌ 取消", callback_data=f"{PARALLEL_BRANCH_CANCEL_PREFIX}{session.token}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _build_parallel_branch_title(session: ParallelLaunchSession, repo_index: int) -> str:
     repo_key, _repo_path, rel, _branches = session.repo_options[repo_index]
     current_branch_label = session.current_branch_labels.get(repo_key, "读取失败")
@@ -8558,7 +8737,7 @@ def _build_parallel_branch_summary(session: ParallelLaunchSession) -> str:
         selected_text = selected.name if selected else "（未选择）"
         lines.append(f"- {rel or '.'} -> {selected_text}")
     lines.append("")
-    lines.append("确认后将创建独立目录、新分支和新 CLI。")
+    lines.append("确认后将完整复刻工作目录（排除生成物目录）、创建任务分支和新 CLI。")
     return "\n".join(lines)
 
 
