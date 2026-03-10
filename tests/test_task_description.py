@@ -3748,6 +3748,79 @@ def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, 
     assert "X" * 120 not in dispatched_prompt
 
 
+@pytest.mark.parametrize("push_mode", [bot.PUSH_MODE_PLAN, bot.PUSH_MODE_YOLO])
+def test_push_task_to_model_forwards_push_mode_as_intended_mode(monkeypatch, tmp_path: Path, push_mode: str):
+    """任务推送选择的 PLAN/YOLO 模式应透传到底层分发链路。"""
+
+    task = TaskRecord(
+        id="TASK_PUSH_MODE",
+        project_slug="demo",
+        title="模式透传任务",
+        status="research",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="需要验证模式透传",
+        parent_id=None,
+        root_id="TASK_PUSH_MODE",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=1357)
+
+    async def fake_history(task_id: str):
+        assert task_id == task.id
+        return "", 0
+
+    async def fake_notes(task_id: str):
+        assert task_id == task.id
+        return []
+
+    async def fake_attachments(task_id: str):
+        assert task_id == task.id
+        return []
+
+    captured: list[Optional[str]] = []
+
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        intended_mode: Optional[str] = None,
+        **_kwargs,
+    ):
+        captured.append(intended_mode)
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_build_history_context_for_model", fake_history)
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_notes", fake_notes)
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_attachments", fake_attachments)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    async def _scenario() -> tuple[bool, str, Optional[Path]]:
+        return await bot._push_task_to_model(
+            task,
+            chat_id=message.chat.id,
+            reply_to=message,
+            supplement=None,
+            actor="Tester",
+            push_mode=push_mode,
+        )
+
+    success, _prompt, session_path = asyncio.run(_scenario())
+
+    assert success is True
+    assert session_path == tmp_path / "session.jsonl"
+    assert captured == [push_mode]
+
+
 def test_build_model_push_payload_without_history_formatting():
     task = TaskRecord(
         id="TASK_NO_HISTORY",

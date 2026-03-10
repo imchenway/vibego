@@ -2344,6 +2344,7 @@ async def _push_task_to_model(
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": reply_to,
         "ack_immediately": False,
+        "intended_mode": push_mode,
     }
     if dispatch_context is not None:
         dispatch_kwargs["dispatch_context"] = dispatch_context
