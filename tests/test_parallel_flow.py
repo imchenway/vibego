@@ -311,6 +311,58 @@ def test_begin_parallel_launch_prefers_common_branch_selector(monkeypatch):
     assert "共用的基线分支" in message.calls[-1][0]
 
 
+def test_begin_parallel_launch_ignores_local_only_root_repo_in_common_branch_scope(monkeypatch):
+    message = DummyMessage()
+
+    root_path = Path("/tmp/workspace-root")
+    backend_path = Path("/tmp/backend-java")
+    frontend_path = Path("/tmp/web-base")
+
+    monkeypatch.setattr(
+        bot,
+        "discover_git_repos",
+        lambda _base_dir, include_nested=False: [
+            ("__root__", root_path, "."),
+            ("backend-java", backend_path, "backend-java"),
+            ("web-base", frontend_path, "web-base"),
+        ],
+    )
+
+    def fake_current_branch(repo_path: Path):
+        if repo_path == root_path:
+            return ("main", "main")
+        return ("master", "master")
+
+    def fake_list_branch_refs(repo_path: Path, current_local_branch=None):
+        if repo_path == root_path:
+            return [BranchRef(name="main", source="local", is_current=True)]
+        return [
+            BranchRef(name="master", source="local", is_current=True),
+            BranchRef(name="origin/develop", source="remote", remote="origin"),
+            BranchRef(name="origin/master", source="remote", remote="origin"),
+        ]
+
+    monkeypatch.setattr(bot, "get_current_branch_state", fake_current_branch)
+    monkeypatch.setattr(bot, "list_branch_refs", fake_list_branch_refs)
+
+    asyncio.run(
+        bot._begin_parallel_launch(
+            task=_task(),
+            chat_id=message.chat.id,
+            origin_message=message,
+            actor=None,
+            push_mode=None,
+            supplement=None,
+        )
+    )
+
+    assert message.calls, "忽略本地根仓库后，应进入共同分支批量选择"
+    prompt_text = message.calls[-1][0]
+    assert "共用的基线分支" in prompt_text
+    assert "共同分支计算范围：2/3 个仓库" in prompt_text
+    assert "已忽略仓库：.（根仓库无远端分支）" in prompt_text
+
+
 def test_parallel_common_branch_select_populates_all_repo_selections(monkeypatch):
     message = DummyMessage()
     session = bot.ParallelLaunchSession(

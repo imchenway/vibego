@@ -10,6 +10,7 @@ from parallel_runtime import (
     RepoBranchSelection,
     collect_common_branch_refs,
     discover_git_repos,
+    filter_common_branch_repo_options,
     get_current_branch_state,
     list_branch_refs,
     prepare_parallel_workspace,
@@ -139,6 +140,69 @@ def test_collect_common_branch_refs_builds_intersection_and_current_marker() -> 
         ("develop", "local", 2, 2),
         ("origin/develop", "remote", 0, 2),
     ]
+
+
+def test_filter_common_branch_repo_options_ignores_local_only_root_repo() -> None:
+    """共同分支计算应忽略没有远端分支的本地根仓库。"""
+
+    eligible, ignored = filter_common_branch_repo_options(
+        [
+            (
+                "__root__",
+                ".",
+                [
+                    BranchRef(name="main", source="local", is_current=True),
+                ],
+            ),
+            (
+                "backend-java",
+                "backend-java",
+                [
+                    BranchRef(name="master", source="local", is_current=True),
+                    BranchRef(name="origin/master", source="remote", remote="origin"),
+                ],
+            ),
+            (
+                "frontend-admin",
+                "frontend-admin",
+                [
+                    BranchRef(name="master", source="local", is_current=True),
+                    BranchRef(name="origin/master", source="remote", remote="origin"),
+                ],
+            ),
+        ]
+    )
+
+    assert [repo_key for repo_key, _branches in eligible] == ["backend-java", "frontend-admin"]
+    assert ignored == ["."]
+
+
+def test_filter_common_branch_repo_options_keeps_root_repo_when_remote_exists() -> None:
+    """根仓库一旦存在远端分支，就仍应参与共同分支计算。"""
+
+    eligible, ignored = filter_common_branch_repo_options(
+        [
+            (
+                "__root__",
+                ".",
+                [
+                    BranchRef(name="main", source="local", is_current=True),
+                    BranchRef(name="origin/master", source="remote", remote="origin"),
+                ],
+            ),
+            (
+                "backend-java",
+                "backend-java",
+                [
+                    BranchRef(name="master", source="local", is_current=True),
+                    BranchRef(name="origin/master", source="remote", remote="origin"),
+                ],
+            ),
+        ]
+    )
+
+    assert [repo_key for repo_key, _branches in eligible] == ["__root__", "backend-java"]
+    assert ignored == []
 
 
 def test_prepare_parallel_workspace_copies_full_workdir_and_excludes_generated_dirs(tmp_path: Path) -> None:

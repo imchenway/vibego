@@ -300,6 +300,24 @@ def collect_common_branch_refs(
     )
 
 
+def filter_common_branch_repo_options(
+    repo_branch_options: Sequence[tuple[str, str, Sequence[BranchRef]]],
+) -> tuple[list[tuple[str, Sequence[BranchRef]]], list[str]]:
+    """过滤共同分支计算范围。
+
+    仅忽略“没有任何远端分支的本地根仓库”，其它仓库继续参与共同分支计算。
+    """
+
+    eligible: list[tuple[str, Sequence[BranchRef]]] = []
+    ignored: list[str] = []
+    for repo_key, relative_path, branches in repo_branch_options:
+        if repo_key == "__root__" and not any(branch.source == "remote" for branch in branches):
+            ignored.append(relative_path or ".")
+            continue
+        eligible.append((repo_key, branches))
+    return eligible, ignored
+
+
 def build_parallel_branch_name(task_id: str, title: str) -> str:
     """生成并行任务分支名。"""
 

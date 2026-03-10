@@ -111,6 +111,7 @@ from parallel_runtime import (
     commit_parallel_repos,
     delete_parallel_workspace,
     discover_git_repos,
+    filter_common_branch_repo_options,
     get_current_branch_state,
     list_branch_refs,
     merge_parallel_repos,
@@ -7486,9 +7487,10 @@ async def _begin_parallel_launch(
         repo_options.append((repo_key, repo_path, relative_path, branches))
         current_branch_labels[repo_key] = current_branch_label
 
-    common_branch_options = collect_common_branch_refs(
-        [(repo_key, branches) for repo_key, _repo_path, _relative_path, branches in repo_options]
+    common_branch_repo_options, ignored_common_branch_repos = filter_common_branch_repo_options(
+        [(repo_key, relative_path, branches) for repo_key, _repo_path, relative_path, branches in repo_options]
     )
+    common_branch_options = collect_common_branch_refs(common_branch_repo_options)
     token = _create_parallel_launch_token()
     session = ParallelLaunchSession(
         token=token,
@@ -7503,6 +7505,8 @@ async def _begin_parallel_launch(
         current_branch_labels=current_branch_labels,
         base_dir=base_dir,
         common_branch_options=common_branch_options,
+        common_branch_scope_repo_count=len(common_branch_repo_options),
+        common_branch_ignored_repos=ignored_common_branch_repos,
         selection_mode="bulk" if common_branch_options else "individual",
     )
     PARALLEL_LAUNCH_SESSIONS[token] = session
@@ -8168,6 +8172,8 @@ class ParallelLaunchSession:
     current_branch_labels: dict[str, str]
     base_dir: Optional[Path] = None
     common_branch_options: list[CommonBranchRef] = field(default_factory=list)
+    common_branch_scope_repo_count: int = 0
+    common_branch_ignored_repos: list[str] = field(default_factory=list)
     selection_mode: str = "individual"
     created_at: float = field(default_factory=time.time)
 
@@ -8576,11 +8582,15 @@ def _build_parallel_common_branch_title(session: ParallelLaunchSession) -> str:
     """构造“共同分支批量选择”页标题。"""
 
     total_repos = len(session.repo_options)
+    scoped_repos = session.common_branch_scope_repo_count or total_repos
     lines = [
         f"并行任务：/{session.task.id} {session.task.title}",
         f"已发现 Git 仓库：{total_repos} 个",
         "请先选择所有 Git 仓库共用的基线分支：",
     ]
+    if session.common_branch_ignored_repos:
+        lines.append(f"共同分支计算范围：{scoped_repos}/{total_repos} 个仓库")
+        lines.append(f"已忽略仓库：{'、'.join(session.common_branch_ignored_repos)}（根仓库无远端分支）")
     if not session.common_branch_options:
         lines.append("当前未检测到所有 Git 仓库共同拥有的分支，请点击下方“逐个选择”。")
     else:
