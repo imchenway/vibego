@@ -8121,6 +8121,59 @@ async def _resolve_parallel_dispatch_context(
     return normalized_task_id, dispatch_context
 
 
+def _parallel_tmux_session_exists(session_name: str) -> bool:
+    """检查并行 tmux 会话是否仍存在。"""
+
+    if not session_name.strip():
+        return False
+    try:
+        subprocess.check_call(
+            _tmux_cmd(tmux_bin(), "has-session", "-t", session_name),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
+def _parallel_session_runtime_issue(session: ParallelSessionRecord) -> Optional[str]:
+    """判断并行会话是否已失活，返回首个失活原因。"""
+
+    if not _parallel_tmux_session_exists(session.tmux_session):
+        return f"tmux 会话 {session.tmux_session} 不存在"
+    workspace_root = resolve_path(session.workspace_root)
+    if not workspace_root.exists():
+        return f"并行目录 {workspace_root} 不存在"
+    pointer_file = resolve_path(session.pointer_file)
+    if not pointer_file.exists():
+        return f"会话指针 {pointer_file} 不存在"
+    return None
+
+
+async def _drop_parallel_session_bindings(task_id: str, *, session_key: Optional[str] = None) -> None:
+    """清理并行会话的内存绑定，避免 stale session 继续被路由命中。"""
+
+    normalized = _normalize_task_id(task_id) or task_id
+    watcher = PARALLEL_TASK_WATCHERS.pop(normalized, None)
+    if watcher is not None and not watcher.done():
+        watcher.cancel()
+        if hasattr(watcher, "__await__"):
+            with suppress(asyncio.CancelledError):
+                await watcher
+    bound_session_key = session_key or PARALLEL_TASK_SESSION_MAP.pop(normalized, None)
+    if bound_session_key:
+        PARALLEL_SESSION_CONTEXTS.pop(bound_session_key, None)
+        PARALLEL_SESSION_TASK_BINDINGS.pop(bound_session_key, None)
+    stale_tokens = [
+        token
+        for token, binding in PARALLEL_CALLBACK_BINDINGS.items()
+        if _normalize_task_id(getattr(binding, "task_id", None)) == normalized
+    ]
+    for token in stale_tokens:
+        PARALLEL_CALLBACK_BINDINGS.pop(token, None)
+
+
 def _clear_parallel_reply_target(chat_id: int) -> None:
     CHAT_PARALLEL_REPLY_TARGETS.pop(chat_id, None)
 
@@ -8167,6 +8220,15 @@ async def _get_active_parallel_session_for_task(task_id: str) -> Optional[Parall
     if session is None:
         return None
     if session.status in {"deleted", "closed"}:
+        return None
+    issue = _parallel_session_runtime_issue(session)
+    if issue:
+        await PARALLEL_SESSION_STORE.update_status(normalized, status="closed", last_error=issue)
+        await _drop_parallel_session_bindings(normalized)
+        worker_log.warning(
+            "检测到 stale 并行会话，已自动降级为 closed",
+            extra={"task_id": normalized, "issue": issue, "tmux_session": session.tmux_session},
+        )
         return None
     return session
 
@@ -8224,7 +8286,7 @@ def _extract_task_prefixed_prompt(prompt: str) -> tuple[Optional[str], Optional[
     task_id = _normalize_task_id(first)
     if not task_id or not rest.strip():
         return None, None
-    return task_id, stripped
+    return task_id, rest.strip()
 
 
 async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -> tuple[str, Path]:
@@ -8262,34 +8324,22 @@ async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -
 
 
 async def _delete_parallel_session_workspace(task_id: str) -> None:
-    session = await _get_active_parallel_session_for_task(task_id)
+    normalized = _normalize_task_id(task_id)
+    if not normalized:
+        return
+    session = await PARALLEL_SESSION_STORE.get_session(normalized)
     if session is None:
         return
-    watcher = PARALLEL_TASK_WATCHERS.pop(task_id, None)
-    if watcher is not None and not watcher.done():
-        watcher.cancel()
-        with suppress(asyncio.CancelledError):
-            await watcher
+    await _drop_parallel_session_bindings(normalized)
     delete_parallel_workspace(
         workspace_root=Path(session.workspace_root),
         tmux_session=session.tmux_session,
-        binder_pid_file=_parallel_session_binder_pid(task_id),
+        binder_pid_file=_parallel_session_binder_pid(normalized),
     )
-    meta_root = _parallel_runtime_root(task_id)
+    meta_root = _parallel_runtime_root(normalized)
     shutil.rmtree(meta_root, ignore_errors=True)
-    session_key = PARALLEL_TASK_SESSION_MAP.pop(task_id, None)
-    if session_key:
-        PARALLEL_SESSION_CONTEXTS.pop(session_key, None)
-        PARALLEL_SESSION_TASK_BINDINGS.pop(session_key, None)
-        stale_tokens = [
-            token
-            for token, binding in PARALLEL_CALLBACK_BINDINGS.items()
-            if _normalize_task_id(getattr(binding, "task_id", None)) == task_id
-        ]
-        for token in stale_tokens:
-            PARALLEL_CALLBACK_BINDINGS.pop(token, None)
     await PARALLEL_SESSION_STORE.update_status(
-        task_id,
+        normalized,
         status="deleted",
         deleted_at=shanghai_now_iso(),
     )
@@ -16718,7 +16768,7 @@ async def on_text(m: Message, state: FSMContext):
             dispatch_context = _parallel_dispatch_context_from_session(session)
         await _handle_prompt_dispatch(
             m,
-            f"/{reply_task_id} {prompt}",
+            prompt,
             dispatch_context=dispatch_context,
         )
         return

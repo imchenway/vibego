@@ -123,7 +123,7 @@ def test_parallel_reply_mode_auto_prefixes_next_message(monkeypatch):
     origin = DummyMessage()
     callback = DummyCallback(f"{bot.PARALLEL_REPLY_CALLBACK_PREFIX}TASK_0001", origin)
 
-    recorded: list[str] = []
+    recorded: list[tuple[str, object]] = []
 
     async def fake_handle_request_input_custom_text_message(_message):
         return False
@@ -131,15 +131,27 @@ def test_parallel_reply_mode_auto_prefixes_next_message(monkeypatch):
     async def fake_handle_command_trigger_message(_message, _prompt, _state):
         return False
 
-    async def fake_handle_prompt_dispatch(_message, prompt: str, **_kwargs):
-        recorded.append(prompt)
+    async def fake_handle_prompt_dispatch(_message, prompt: str, **kwargs):
+        recorded.append((prompt, kwargs.get("dispatch_context")))
 
     monkeypatch.setattr(bot, "_handle_request_input_custom_text_message", fake_handle_request_input_custom_text_message)
     monkeypatch.setattr(bot, "_handle_command_trigger_message", fake_handle_command_trigger_message)
     monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle_prompt_dispatch)
 
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0001",
+        tmux_session="vibe-par-demo",
+        pointer_file=Path("/tmp/demo-pointer.txt"),
+        workspace_root=Path("/tmp/demo-workspace"),
+    )
+
     async def fake_active_parallel_session(task_id: str):
-        return {"task_id": task_id}
+        return {
+            "task_id": task_id,
+            "tmux_session": dispatch_context.tmux_session,
+            "pointer_file": str(dispatch_context.pointer_file),
+            "workspace_root": str(dispatch_context.workspace_root),
+        }
 
     monkeypatch.setattr(bot, "_get_active_parallel_session_for_task", fake_active_parallel_session)
 
@@ -152,7 +164,7 @@ def test_parallel_reply_mode_auto_prefixes_next_message(monkeypatch):
         state, _storage = make_state(message)
         await bot.on_text(message, state)
 
-        assert recorded == ["/TASK_0001 继续完善方案"]
+        assert recorded == [("继续完善方案", dispatch_context)]
         assert origin.chat.id not in bot.CHAT_PARALLEL_REPLY_TARGETS
 
     asyncio.run(_scenario())

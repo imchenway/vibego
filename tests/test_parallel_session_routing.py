@@ -186,7 +186,48 @@ def test_parallel_reply_callback_and_followup_use_bound_dispatch_context(monkeyp
 
     asyncio.run(_scenario())
 
-    assert recorded == [("/TASK_0093 继续补充", binding.dispatch_context)]
+    assert recorded == [("继续补充", binding.dispatch_context)]
+
+
+def test_manual_task_prefix_routes_parallel_session_without_leaking_slash_prefix(monkeypatch):
+    """手动输入 /TASK_xxxx 仅用于路由，真正入模文本不应保留 slash 前缀。"""
+
+    message = DummyMessage(chat_id=15, user_id=15, text="/TASK_0093 继续补充")
+    state, _ = _make_state(message)
+    binding = SimpleNamespace(
+        token="deadbeef",
+        task_id="TASK_0093",
+        dispatch_context=_parallel_context(),
+    )
+    bot.PARALLEL_CALLBACK_BINDINGS = {"deadbeef": binding}
+
+    async def fake_active_parallel_session(_task_id: str):
+        return SimpleNamespace(
+            task_id="TASK_0093",
+            tmux_session=binding.dispatch_context.tmux_session,
+            pointer_file=str(binding.dispatch_context.pointer_file),
+            workspace_root=str(binding.dispatch_context.workspace_root),
+        )
+
+    recorded: list[tuple[str, object]] = []
+
+    async def fake_handle_request_input_custom_text_message(_message):
+        return False
+
+    async def fake_handle_command_trigger_message(_message, _prompt, _state):
+        return False
+
+    async def fake_handle_prompt_dispatch(_message, prompt: str, *, dispatch_context=None):
+        recorded.append((prompt, dispatch_context))
+
+    monkeypatch.setattr(bot, "_get_active_parallel_session_for_task", fake_active_parallel_session)
+    monkeypatch.setattr(bot, "_handle_request_input_custom_text_message", fake_handle_request_input_custom_text_message)
+    monkeypatch.setattr(bot, "_handle_command_trigger_message", fake_handle_command_trigger_message)
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle_prompt_dispatch)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert recorded == [("继续补充", binding.dispatch_context)]
 
 
 def test_parallel_dispatch_does_not_override_primary_session_binding(monkeypatch, tmp_path: Path):
@@ -271,3 +312,101 @@ def test_parallel_dispatch_does_not_override_primary_session_binding(monkeypatch
             coro.close()  # type: ignore[attr-defined]
         except Exception:
             pass
+
+
+def test_get_active_parallel_session_marks_stale_session_closed(monkeypatch):
+    """活动并行会话若 tmux 已消失，应自动降级为 closed 并清理内存绑定。"""
+
+    task_id = "TASK_0115"
+    session = SimpleNamespace(
+        task_id=task_id,
+        status="running",
+        tmux_session="vibe-par-hyphamall-task_0115",
+        pointer_file="/tmp/parallel-pointer.txt",
+        workspace_root="/tmp/parallel-workspace",
+    )
+
+    updates: list[tuple[str, dict]] = []
+
+    async def fake_get_session(_task_id: str):
+        return session
+
+    async def fake_update_status(_task_id: str, **kwargs):
+        updates.append((_task_id, kwargs))
+
+    watcher_cancelled = {"value": False}
+
+    class DummyTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            watcher_cancelled["value"] = True
+
+    bot.PARALLEL_TASK_SESSION_MAP[task_id] = "session-key"
+    bot.PARALLEL_SESSION_CONTEXTS["session-key"] = _parallel_context(task_id)
+    bot.PARALLEL_CALLBACK_BINDINGS = {"deadbeef": SimpleNamespace(task_id=task_id)}
+    bot.PARALLEL_TASK_WATCHERS[task_id] = DummyTask()
+
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "get_session", fake_get_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(
+        bot,
+        "_parallel_session_runtime_issue",
+        lambda _session: "tmux 会话 vibe-par-hyphamall-task_0115 不存在",
+    )
+
+    result = asyncio.run(bot._get_active_parallel_session_for_task(task_id))
+
+    assert result is None
+    assert updates and updates[-1][0] == task_id
+    assert updates[-1][1]["status"] == "closed"
+    assert "tmux 会话" in updates[-1][1]["last_error"]
+    assert task_id not in bot.PARALLEL_TASK_SESSION_MAP
+    assert "session-key" not in bot.PARALLEL_SESSION_CONTEXTS
+    assert watcher_cancelled["value"] is True
+    assert not bot.PARALLEL_CALLBACK_BINDINGS
+
+
+def test_delete_parallel_session_workspace_allows_cleanup_for_closed_session(monkeypatch, tmp_path: Path):
+    """删除并行目录时应允许清理 closed/stale 会话，而不是只能清理 active 会话。"""
+
+    task_id = "TASK_0115"
+    runtime_root = tmp_path / task_id
+    workspace_root = runtime_root / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    session = SimpleNamespace(
+        task_id=task_id,
+        status="closed",
+        tmux_session="vibe-par-hyphamall-task_0115",
+        pointer_file=str(runtime_root / "_runtime" / "current_session.txt"),
+        workspace_root=str(workspace_root),
+    )
+
+    deleted_calls: list[dict] = []
+    updates: list[tuple[str, dict]] = []
+
+    async def fake_get_session(_task_id: str):
+        return session
+
+    async def fake_update_status(_task_id: str, **kwargs):
+        updates.append((_task_id, kwargs))
+
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "get_session", fake_get_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(
+        bot,
+        "delete_parallel_workspace",
+        lambda **kwargs: deleted_calls.append(kwargs),
+    )
+    monkeypatch.setattr(bot, "_parallel_runtime_root", lambda _task_id: runtime_root)
+    bot.PARALLEL_TASK_SESSION_MAP[task_id] = "session-key"
+    bot.PARALLEL_SESSION_CONTEXTS["session-key"] = _parallel_context(task_id)
+    bot.PARALLEL_CALLBACK_BINDINGS = {"deadbeef": SimpleNamespace(task_id=task_id)}
+
+    asyncio.run(bot._delete_parallel_session_workspace(task_id))
+
+    assert deleted_calls, "应调用删除目录"
+    assert updates and updates[-1][1]["status"] == "deleted"
+    assert task_id not in bot.PARALLEL_TASK_SESSION_MAP
+    assert "session-key" not in bot.PARALLEL_SESSION_CONTEXTS
