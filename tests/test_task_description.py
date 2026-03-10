@@ -3234,6 +3234,86 @@ def test_dispatch_prompt_plan_mode_skips_switch_for_non_codex(monkeypatch, tmp_p
             pass
 
 
+def test_dispatch_prompt_plan_mode_waits_for_parallel_tmux_ready(monkeypatch, tmp_path: Path):
+    """并行 CLI 首次推送 PLAN 时，应先等待新 tmux 会话 ready，再发送 /plan。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "PLAN_MODE_SWITCH_DELAY_SECONDS", 0.0)
+
+    wait_calls: list[str] = []
+
+    async def fake_wait(tmux_session: str | None) -> bool:
+        wait_calls.append(tmux_session or "")
+        return True
+
+    sent_lines: list[str] = []
+
+    def fake_tmux_send_line(_session: str, line: str) -> None:
+        sent_lines.append(line)
+
+    monkeypatch.setattr(bot, "_wait_tmux_session_ready_for_plan_switch", fake_wait)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0115",
+        tmux_session="vibe-par-hyphamall-task_0115",
+        pointer_file=pointer,
+        workspace_root=tmp_path / "workspace",
+    )
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            704,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+            intended_mode=bot.PUSH_MODE_PLAN,
+            dispatch_context=dispatch_context,
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert wait_calls == [dispatch_context.tmux_session]
+    assert sent_lines[0] == bot.PLAN_MODE_SWITCH_COMMAND
+    assert sent_lines[1] == f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def test_dispatch_prompt_force_exit_plan_ui_sends_key_sequence_before_prompt(monkeypatch, tmp_path: Path):
     """Implement 链路启用 force_exit_plan_ui 时，应先发送 Escape+BTab 序列再发送提示词。"""
 

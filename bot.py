@@ -338,6 +338,14 @@ SESSION_BIND_POLL_INTERVAL = max(_env_float("SESSION_BIND_POLL_INTERVAL", 0.5), 
 # Codex PLAN 模式切换：在发送提示词前可选发送 /plan 预命令
 PLAN_MODE_SWITCH_COMMAND = (os.environ.get("PLAN_MODE_SWITCH_COMMAND") or "/plan").strip() or "/plan"
 PLAN_MODE_SWITCH_DELAY_SECONDS = max(_env_float("PLAN_MODE_SWITCH_DELAY_SECONDS", 0.25), 0.0)
+PARALLEL_PLAN_READY_TIMEOUT_SECONDS = max(_env_float("PARALLEL_PLAN_READY_TIMEOUT_SECONDS", 6.0), 0.0)
+PARALLEL_PLAN_READY_POLL_INTERVAL_SECONDS = max(_env_float("PARALLEL_PLAN_READY_POLL_INTERVAL_SECONDS", 0.2), 0.05)
+PARALLEL_PLAN_READY_PROBE_LINES = max(_env_int("PARALLEL_PLAN_READY_PROBE_LINES", 80), 20)
+PARALLEL_PLAN_READY_MARKERS: Tuple[str, ...] = (
+    "OpenAI Codex",
+    "model:",
+    "/model to change",
+)
 # 直接 Telegram 文本消息默认按 PLAN 推送（先 /plan 再发正文）
 ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE = _env_bool("ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE", True)
 # tmux 注入兜底：部分终端偶发“文本已进输入框但未真正发送”，默认延迟补发一次 Enter。
@@ -1459,6 +1467,55 @@ def tmux_send_key(session: str, key: str) -> None:
     subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, key))
 
 
+def _capture_tmux_output_for_session(session: str, line_count: int, timeout: float) -> str:
+    """抓取指定 tmux 会话尾部输出，供并行 CLI 就绪判断复用。"""
+
+    tmux = tmux_bin()
+    try:
+        return subprocess.check_output(
+            _tmux_cmd(
+                tmux,
+                "capture-pane",
+                "-p",
+                "-t",
+                session,
+                "-S",
+                f"-{line_count}",
+            ),
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        return ""
+
+
+def _is_tmux_session_ready_for_plan_switch(raw_output: str) -> bool:
+    """判断新启动的 Codex tmux 会话是否已进入可接收 /plan 的稳定界面。"""
+
+    text = strip_ansi(normalize_newlines(raw_output or ""))
+    return any(marker in text for marker in PARALLEL_PLAN_READY_MARKERS)
+
+
+async def _wait_tmux_session_ready_for_plan_switch(tmux_session: Optional[str]) -> bool:
+    """并行 CLI 首次推送前，等待 tmux 内的 Codex UI ready。"""
+
+    if not tmux_session or PARALLEL_PLAN_READY_TIMEOUT_SECONDS <= 0 or not _is_codex_model():
+        return True
+    deadline = time.monotonic() + PARALLEL_PLAN_READY_TIMEOUT_SECONDS
+    probe_timeout = max(WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS, 0.1)
+    while time.monotonic() < deadline:
+        raw_output = await asyncio.to_thread(
+            _capture_tmux_output_for_session,
+            tmux_session,
+            PARALLEL_PLAN_READY_PROBE_LINES,
+            probe_timeout,
+        )
+        if _is_tmux_session_ready_for_plan_switch(raw_output):
+            return True
+        await asyncio.sleep(PARALLEL_PLAN_READY_POLL_INTERVAL_SECONDS)
+    return False
+
+
 def _capture_tmux_recent_lines(line_count: int) -> str:
     """截取 tmux 会话尾部指定行数的原始文本。"""
 
@@ -1885,6 +1942,13 @@ async def _maybe_send_plan_switch_command(
 
     if not _should_send_plan_switch_command(intended_mode=intended_mode, prompt=prompt):
         return False
+    if tmux_session and tmux_session != TMUX_SESSION:
+        ready = await _wait_tmux_session_ready_for_plan_switch(tmux_session)
+        if not ready:
+            worker_log.warning(
+                "并行 tmux 会话在发送 PLAN 预命令前仍未就绪，继续尝试发送 /plan",
+                extra={"chat": chat_id, "tmux_session": tmux_session},
+            )
     try:
         tmux_send_line(tmux_session or TMUX_SESSION, PLAN_MODE_SWITCH_COMMAND)
     except subprocess.CalledProcessError as exc:
