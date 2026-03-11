@@ -724,6 +724,7 @@ def test_parallel_branch_confirm_callback_edits_same_message_to_processing(monke
         ],
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 
@@ -782,6 +783,7 @@ def test_parallel_branch_confirm_callback_replaces_processing_message_with_summa
         ],
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 
@@ -839,6 +841,7 @@ def test_parallel_branch_confirm_callback_passes_source_root_for_full_copy(monke
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
         base_dir=Path("/tmp/project-root"),
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 
@@ -877,6 +880,171 @@ def test_parallel_branch_confirm_callback_passes_source_root_for_full_copy(monke
     assert captured["source_root"] == Path("/tmp/project-root")
 
 
+def test_parallel_branch_confirm_callback_prompts_for_prefix_when_missing():
+    """仓库分支全部选完后，首次确认应先进入分支前缀输入，而不是直接创建并行目录。"""
+
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=message.chat.id,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert callback.answers[-1] == ("请输入分支前缀；点击取消将使用默认前缀", False)
+    assert bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS[message.chat.id] == "demo"
+    assert message.edits, "应覆盖原消息进入前缀输入页"
+    assert "请输入本次并行任务的分支前缀" in message.edits[-1][0]
+
+
+def test_parallel_branch_prefix_cancel_uses_default_prefix(monkeypatch, tmp_path: Path):
+    """前缀输入页点击取消时，应回退默认前缀并继续创建并行目录。"""
+
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=message.chat.id,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+    bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS[message.chat.id] = "demo"
+
+    captured: dict[str, object] = {}
+
+    def fake_prepare_parallel_workspace(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", fake_prepare_parallel_workspace)
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    callback = DummyCallback(f"{bot.PARALLEL_BRANCH_PREFIX_CANCEL_PREFIX}demo", message)
+    asyncio.run(bot.on_parallel_branch_prefix_cancel_callback(callback))
+
+    assert captured["branch_prefix"] == bot.DEFAULT_PARALLEL_BRANCH_PREFIX
+    assert session.branch_prefix == bot.DEFAULT_PARALLEL_BRANCH_PREFIX
+    assert message.chat.id not in bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS
+
+
+def test_parallel_branch_prefix_text_uses_custom_prefix_and_continues(monkeypatch, tmp_path: Path):
+    """输入自定义前缀后，应以 prefix/TASK_... 创建任务分支。"""
+
+    origin = DummyMessage(chat_id=9, user_id=9)
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=origin.chat.id,
+        actor=None,
+        origin_message=origin,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+    bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS[origin.chat.id] = "demo"
+
+    captured: dict[str, object] = {}
+
+    def fake_prepare_parallel_workspace(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", fake_prepare_parallel_workspace)
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    message = DummyMessage(chat_id=origin.chat.id, user_id=origin.from_user.id)
+    message.text = "TRADE114"
+    state, _storage = make_state(message)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert captured["branch_prefix"] == "TRADE114"
+    assert session.branch_prefix == "TRADE114"
+    assert origin.chat.id not in bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS
+
+
 def test_parallel_branch_confirm_callback_acknowledges_callback_before_prepare(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     session = bot.ParallelLaunchSession(
@@ -897,6 +1065,7 @@ def test_parallel_branch_confirm_callback_acknowledges_callback_before_prepare(m
         ],
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 
@@ -951,6 +1120,7 @@ def test_parallel_branch_confirm_callback_falls_back_to_chat_when_failure_callba
         ],
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 
@@ -996,6 +1166,7 @@ def test_parallel_branch_confirm_callback_reports_prepare_timeout(monkeypatch):
         ],
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 
@@ -1040,6 +1211,7 @@ def test_parallel_branch_confirm_callback_stops_when_push_task_to_model_fails(mo
         ],
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 
@@ -1111,6 +1283,7 @@ def test_parallel_branch_confirm_callback_ensures_workspace_trust_before_startin
         ],
         selections={"backend-java": BranchRef(name="develop", source="local")},
         current_branch_labels={"backend-java": "develop"},
+        branch_prefix=bot.DEFAULT_PARALLEL_BRANCH_PREFIX,
     )
     bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
 

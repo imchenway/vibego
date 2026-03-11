@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
@@ -136,12 +137,16 @@ class ParallelMergeResult:
 
 
 def _run_git(args: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        env.pop(key, None)
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         capture_output=True,
         check=False,
     )
@@ -428,7 +433,18 @@ def filter_common_branch_repo_options(
     return eligible, ignored
 
 
-def build_parallel_branch_name(task_id: str, title: str) -> str:
+DEFAULT_PARALLEL_BRANCH_PREFIX = "vibego"
+
+
+def normalize_parallel_branch_prefix(prefix: Optional[str]) -> str:
+    """标准化并行任务分支前缀；空值回退默认前缀。"""
+
+    safe_prefix = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "-", (prefix or "").strip())
+    safe_prefix = re.sub(r"-{2,}", "-", safe_prefix).strip("./-")
+    return safe_prefix or DEFAULT_PARALLEL_BRANCH_PREFIX
+
+
+def build_parallel_branch_name(task_id: str, title: str, *, prefix: Optional[str] = None) -> str:
     """生成并行任务分支名。"""
 
     safe_title = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "-", (title or "").strip())
@@ -436,7 +452,7 @@ def build_parallel_branch_name(task_id: str, title: str) -> str:
     base = f"{task_id}-{safe_title}" if safe_title else task_id
     if len(base) > 72:
         base = base[:72].rstrip("-")
-    return base
+    return f"{normalize_parallel_branch_prefix(prefix)}/{base}"
 
 
 def _commit_prefix(task_type: Optional[str]) -> str:
@@ -632,6 +648,7 @@ def prepare_parallel_workspace(
     title: str,
     selections: Sequence[RepoBranchSelection],
     source_root: Optional[Path] = None,
+    branch_prefix: Optional[str] = None,
 ) -> list[ParallelRepoRecord]:
     """根据所选基线分支创建并行副本。"""
 
@@ -648,7 +665,7 @@ def prepare_parallel_workspace(
         _link_shared_docs_dir(source_root=source_base, workspace_root=root)
         _write_workspace_idea_vcs_mappings(workspace_root=root)
 
-    task_branch = build_parallel_branch_name(task_id, title)
+    task_branch = build_parallel_branch_name(task_id, title, prefix=branch_prefix)
     records: list[ParallelRepoRecord] = []
     try:
         for selection in selections:

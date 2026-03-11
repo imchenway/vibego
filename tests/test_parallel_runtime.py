@@ -10,6 +10,7 @@ from tasks import TaskRecord
 from parallel_runtime import (
     BranchRef,
     RepoBranchSelection,
+    build_parallel_branch_name,
     commit_parallel_repos,
     collect_common_branch_refs,
     delete_parallel_workspace,
@@ -54,6 +55,13 @@ def test_run_git_forces_utf8_replace(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert captured["kwargs"]["text"] is True
     assert captured["kwargs"]["encoding"] == "utf-8"
     assert captured["kwargs"]["errors"] == "replace"
+    env = captured["kwargs"]["env"]
+    assert "http_proxy" not in env
+    assert "https_proxy" not in env
+    assert "HTTP_PROXY" not in env
+    assert "HTTPS_PROXY" not in env
+    assert "all_proxy" not in env
+    assert "ALL_PROXY" not in env
 
 
 def _init_repo(repo: Path, files: dict[str, str] | None = None) -> None:
@@ -105,6 +113,21 @@ def _init_bare_remote(remote: Path) -> None:
 
     remote.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+
+
+def test_build_parallel_branch_name_uses_default_prefix() -> None:
+    """未指定前缀时，应统一落到默认分支组。"""
+
+    assert build_parallel_branch_name("TASK_0108", "类目编码校验") == "vibego/TASK_0108-类目编码校验"
+
+
+def test_build_parallel_branch_name_uses_custom_prefix() -> None:
+    """指定前缀时，应生成 prefix/TASK_... 结构。"""
+
+    assert (
+        build_parallel_branch_name("TASK_0109", "类目编码校验", prefix="TRADE114")
+        == "TRADE114/TASK_0109-类目编码校验"
+    )
 
 
 def test_discover_git_repos_skips_nested_repos_under_non_root_parent(tmp_path: Path) -> None:

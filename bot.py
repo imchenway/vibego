@@ -104,6 +104,7 @@ from command_center.prompts import build_field_prompt_text
 from parallel_runtime import (
     BranchRef,
     CommonBranchRef,
+    DEFAULT_PARALLEL_BRANCH_PREFIX,
     ParallelCommitResult,
     ParallelMergeResult,
     ParallelRepoRecord,
@@ -120,6 +121,7 @@ from parallel_runtime import (
     get_current_branch_state,
     list_branch_refs,
     merge_parallel_repos,
+    normalize_parallel_branch_prefix,
     prepare_parallel_workspace,
 )
 
@@ -414,6 +416,7 @@ PARALLEL_BRANCH_SELECT_PREFIX = "parallel:branch_select:"
 PARALLEL_BRANCH_PAGE_PREFIX = "parallel:branch_page:"
 PARALLEL_BRANCH_CANCEL_PREFIX = "parallel:branch_cancel:"
 PARALLEL_BRANCH_CONFIRM_PREFIX = "parallel:branch_confirm:"
+PARALLEL_BRANCH_PREFIX_CANCEL_PREFIX = "parallel:branch_prefix_cancel:"
 PARALLEL_COMMON_BRANCH_SELECT_PREFIX = "parallel:common_branch_select:"
 PARALLEL_COMMON_BRANCH_PAGE_PREFIX = "parallel:common_branch_page:"
 PARALLEL_BRANCH_INDIVIDUAL_PREFIX = "parallel:branch_individual:"
@@ -7972,26 +7975,27 @@ async def on_parallel_branch_select_callback(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith(PARALLEL_BRANCH_CANCEL_PREFIX))
-async def on_parallel_branch_cancel_callback(callback: CallbackQuery) -> None:
-    token = (callback.data or "")[len(PARALLEL_BRANCH_CANCEL_PREFIX) :]
-    PARALLEL_LAUNCH_SESSIONS.pop(token, None)
-    await callback.answer("已取消并行创建")
-    if callback.message is not None:
-        await _render_parallel_branch_flow_message(callback.message, "已取消并行创建。", reply_markup=None)
+def _clear_parallel_branch_prefix_input(*, token: Optional[str] = None, chat_id: Optional[int] = None) -> None:
+    """清理等待输入分支前缀的 chat 绑定。"""
+
+    if chat_id is not None:
+        CHAT_PARALLEL_BRANCH_PREFIX_INPUTS.pop(chat_id, None)
+    if token is not None:
+        stale_chat_ids = [item_chat_id for item_chat_id, item_token in CHAT_PARALLEL_BRANCH_PREFIX_INPUTS.items() if item_token == token]
+        for item_chat_id in stale_chat_ids:
+            CHAT_PARALLEL_BRANCH_PREFIX_INPUTS.pop(item_chat_id, None)
 
 
-@router.callback_query(F.data.startswith(PARALLEL_BRANCH_CONFIRM_PREFIX))
-async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
-    token = (callback.data or "")[len(PARALLEL_BRANCH_CONFIRM_PREFIX) :]
-    session = PARALLEL_LAUNCH_SESSIONS.get(token)
-    if session is None:
-        await callback.answer("并行创建会话已失效", show_alert=True)
-        return
-    if _find_next_unselected_repo_index(session) is not None:
-        await callback.answer("仍有仓库未选择基线分支", show_alert=True)
-        return
+async def _start_parallel_launch_session(
+    session: ParallelLaunchSession,
+    *,
+    trigger_message: Optional[Message],
+) -> None:
+    """在前缀已确定后，继续执行并行副本创建与 CLI 启动。"""
+
+    token = session.token
     PARALLEL_LAUNCH_SESSIONS.pop(token, None)
+    _clear_parallel_branch_prefix_input(token=token, chat_id=session.chat_id)
 
     task = session.task
     workspace_root = _parallel_workspace_root(task.id)
@@ -8006,15 +8010,11 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
         for repo_key, repo_path, rel, _branches in session.repo_options
     ]
 
-    # 先应答 callback，避免后续 Git/复制重操作耗时过长导致 query 过期。
-    await _answer_callback_safely(callback)
-
-    if callback.message is not None:
-        await _render_parallel_branch_flow_message(
-            callback.message,
-            PARALLEL_BRANCH_PREPARING_MESSAGE,
-            reply_markup=None,
-        )
+    await _render_parallel_branch_flow_message(
+        trigger_message,
+        PARALLEL_BRANCH_PREPARING_MESSAGE,
+        reply_markup=None,
+    )
 
     try:
         prepare_kwargs = {
@@ -8023,6 +8023,7 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
             "title": task.title,
             "selections": selections,
             "source_root": session.base_dir or PRIMARY_WORKDIR or ROOT_DIR_PATH,
+            "branch_prefix": session.branch_prefix or DEFAULT_PARALLEL_BRANCH_PREFIX,
         }
         if PARALLEL_WORKSPACE_PREPARE_TIMEOUT_SECONDS > 0:
             try:
@@ -8036,12 +8037,11 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
                 ) from exc
         else:
             repo_records = await asyncio.to_thread(prepare_parallel_workspace, **prepare_kwargs)
-        if callback.message is not None:
-            await _render_parallel_branch_flow_message(
-                callback.message,
-                PARALLEL_BRANCH_STARTING_CLI_MESSAGE,
-                reply_markup=None,
-            )
+        await _render_parallel_branch_flow_message(
+            trigger_message,
+            PARALLEL_BRANCH_STARTING_CLI_MESSAGE,
+            reply_markup=None,
+        )
         await _ensure_codex_trusted_project_path(
             workspace_root,
             scope=CODEX_TRUST_SCOPE_PARALLEL_WORKSPACE,
@@ -8054,14 +8054,14 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
             workspace_root=str(workspace_root),
             tmux_session=tmux_session,
             pointer_file=str(pointer_file),
-            task_branch=build_parallel_branch_name(task.id, task.title),
+            task_branch=build_parallel_branch_name(task.id, task.title, prefix=session.branch_prefix),
             status="running",
             repos=repo_records,
         )
         success, prompt, session_path = await _push_task_to_model(
             task,
             chat_id=session.chat_id,
-            reply_to=session.origin_message or callback.message,
+            reply_to=session.origin_message or trigger_message,
             supplement=session.supplement,
             actor=session.actor,
             push_mode=session.push_mode,
@@ -8078,7 +8078,7 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
         await _reply_to_chat(
             session.chat_id,
             f"并行创建失败：{exc}",
-            reply_to=session.origin_message or callback.message,
+            reply_to=session.origin_message or trigger_message,
             reply_markup=_build_worker_main_keyboard(),
         )
         return
@@ -8092,20 +8092,23 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
         await _reply_to_chat(
             session.chat_id,
             "并行 CLI 未启动成功，请稍后重试。",
-            reply_to=session.origin_message or callback.message,
+            reply_to=session.origin_message or trigger_message,
             reply_markup=_build_worker_main_keyboard(),
         )
         return
 
-    if callback.message is not None:
+    if trigger_message is not None:
+        task_branch = build_parallel_branch_name(task.id, task.title, prefix=session.branch_prefix)
         summary_lines = [
             "已创建并行开发副本（原目录未改动）：",
             f"- 任务：/{task.id} {task.title}",
+            f"- 分支前缀：{session.branch_prefix or DEFAULT_PARALLEL_BRANCH_PREFIX}",
+            f"- 任务分支：{task_branch}",
         ]
         for repo in selections:
             summary_lines.append(f"- {repo.relative_path or '.'} -> {repo.selected_ref}")
         await _render_parallel_branch_flow_message(
-            callback.message,
+            trigger_message,
             "\n".join(summary_lines),
             reply_markup=None,
         )
@@ -8113,12 +8116,59 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
         await _send_model_push_preview(
             session.chat_id,
             preview_block,
-            reply_to=session.origin_message or callback.message,
+            reply_to=session.origin_message or trigger_message,
             parse_mode=preview_parse_mode,
             reply_markup=_build_worker_main_keyboard(),
         )
         if session_path is not None:
-            await _send_session_ack(session.chat_id, session_path, reply_to=session.origin_message or callback.message)
+            await _send_session_ack(session.chat_id, session_path, reply_to=session.origin_message or trigger_message)
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_CANCEL_PREFIX))
+async def on_parallel_branch_cancel_callback(callback: CallbackQuery) -> None:
+    token = (callback.data or "")[len(PARALLEL_BRANCH_CANCEL_PREFIX) :]
+    PARALLEL_LAUNCH_SESSIONS.pop(token, None)
+    _clear_parallel_branch_prefix_input(token=token)
+    await callback.answer("已取消并行创建")
+    if callback.message is not None:
+        await _render_parallel_branch_flow_message(callback.message, "已取消并行创建。", reply_markup=None)
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_CONFIRM_PREFIX))
+async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
+    token = (callback.data or "")[len(PARALLEL_BRANCH_CONFIRM_PREFIX) :]
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("并行创建会话已失效", show_alert=True)
+        return
+    if _find_next_unselected_repo_index(session) is not None:
+        await callback.answer("仍有仓库未选择基线分支", show_alert=True)
+        return
+    if session.branch_prefix is None:
+        CHAT_PARALLEL_BRANCH_PREFIX_INPUTS[session.chat_id] = token
+        await callback.answer("请输入分支前缀；点击取消将使用默认前缀")
+        if callback.message is not None:
+            await _render_parallel_branch_flow_message(
+                callback.message,
+                _build_parallel_branch_prefix_prompt(session),
+                reply_markup=_build_parallel_branch_prefix_keyboard(session),
+            )
+        return
+
+    await _answer_callback_safely(callback)
+    await _start_parallel_launch_session(session, trigger_message=callback.message)
+
+
+@router.callback_query(F.data.startswith(PARALLEL_BRANCH_PREFIX_CANCEL_PREFIX))
+async def on_parallel_branch_prefix_cancel_callback(callback: CallbackQuery) -> None:
+    token = (callback.data or "")[len(PARALLEL_BRANCH_PREFIX_CANCEL_PREFIX) :]
+    session = PARALLEL_LAUNCH_SESSIONS.get(token)
+    if session is None:
+        await callback.answer("分支选择会话已失效", show_alert=True)
+        return
+    session.branch_prefix = DEFAULT_PARALLEL_BRANCH_PREFIX
+    await _answer_callback_safely(callback)
+    await _start_parallel_launch_session(session, trigger_message=callback.message)
 
 
 async def _prompt_model_supplement_input(message: Message, *, push_mode: Optional[str] = None) -> None:
@@ -8543,10 +8593,12 @@ class ParallelLaunchSession:
     common_branch_scope_repo_count: int = 0
     common_branch_ignored_repos: list[str] = field(default_factory=list)
     selection_mode: str = "individual"
+    branch_prefix: Optional[str] = None
     created_at: float = field(default_factory=time.time)
 
 
 PARALLEL_LAUNCH_SESSIONS: Dict[str, ParallelLaunchSession] = {}
+CHAT_PARALLEL_BRANCH_PREFIX_INPUTS: Dict[int, str] = {}
 
 
 @dataclass
@@ -9169,6 +9221,7 @@ def _build_parallel_branch_keyboard(
 def _build_parallel_branch_summary(session: ParallelLaunchSession) -> str:
     lines = [
         f"并行任务：/{session.task.id} {session.task.title}",
+        f"分支前缀：{session.branch_prefix or f'{DEFAULT_PARALLEL_BRANCH_PREFIX}（默认）'}",
         "以下仓库将进入并行处理：",
     ]
     for repo_key, _repo_path, rel, _branches in session.repo_options:
@@ -9183,6 +9236,41 @@ def _build_parallel_branch_summary(session: ParallelLaunchSession) -> str:
     else:
         lines.append("确认后将完整复刻工作目录（排除生成物目录）、创建任务分支和新 CLI。")
     return "\n".join(lines)
+
+
+def _build_parallel_branch_prefix_prompt(session: ParallelLaunchSession) -> str:
+    """构造分支前缀输入提示文案。"""
+
+    example = f"TRADE114/{build_parallel_branch_name(session.task.id, session.task.title, prefix='TRADE114').split('/', 1)[1]}"
+    default_example = build_parallel_branch_name(
+        session.task.id,
+        session.task.title,
+        prefix=DEFAULT_PARALLEL_BRANCH_PREFIX,
+    )
+    lines = [
+        f"并行任务：/{session.task.id} {session.task.title}",
+        "请输入本次并行任务的分支前缀（例如：TRADE114）。",
+        f"若不指定，点击取消将使用默认前缀：{DEFAULT_PARALLEL_BRANCH_PREFIX}",
+        "",
+        f"示例（自定义）：{example}",
+        f"示例（默认）：{default_example}",
+    ]
+    return "\n".join(lines)
+
+
+def _build_parallel_branch_prefix_keyboard(session: ParallelLaunchSession) -> InlineKeyboardMarkup:
+    """构造分支前缀输入阶段键盘。"""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="❌ 取消",
+                    callback_data=f"{PARALLEL_BRANCH_PREFIX_CANCEL_PREFIX}{session.token}",
+                )
+            ]
+        ]
+    )
 
 
 def _build_parallel_branch_summary_keyboard(session: ParallelLaunchSession) -> InlineKeyboardMarkup:
@@ -17687,6 +17775,26 @@ async def on_text(m: Message, state: FSMContext):
     prompt = raw_text.strip()
     if not prompt:
         return await m.answer("请输入非空提示词")
+    prefix_token = CHAT_PARALLEL_BRANCH_PREFIX_INPUTS.get(m.chat.id)
+    if prefix_token:
+        session = PARALLEL_LAUNCH_SESSIONS.get(prefix_token)
+        if session is None:
+            _clear_parallel_branch_prefix_input(chat_id=m.chat.id)
+            await m.answer("分支前缀输入会话已失效，请重新发起并行创建。", reply_markup=_build_worker_main_keyboard())
+            return
+        if _is_cancel_message(prompt):
+            session.branch_prefix = DEFAULT_PARALLEL_BRANCH_PREFIX
+        else:
+            normalized_prefix = normalize_parallel_branch_prefix(prompt)
+            if not normalized_prefix:
+                await m.answer(
+                    f"分支前缀无效，请重新输入（例如 TRADE114）；发送“取消”将使用默认前缀 {DEFAULT_PARALLEL_BRANCH_PREFIX}。",
+                    reply_markup=_build_worker_main_keyboard(),
+                )
+                return
+            session.branch_prefix = normalized_prefix
+        await _start_parallel_launch_session(session, trigger_message=session.origin_message or m)
+        return
     prefixed_task_id, prefixed_prompt = _extract_task_prefixed_prompt(prompt)
     if prefixed_task_id and prefixed_prompt:
         session = await _get_active_parallel_session_for_task(prefixed_task_id)
