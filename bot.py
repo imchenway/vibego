@@ -400,6 +400,7 @@ MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
 MODEL_QUICK_REPLY_ALL_TASK_PREFIX = "model:quick_reply:all:"
 MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX = "model:quick_reply:partial:"
+SESSION_COMMIT_CALLBACK_PREFIX = "session:commit:"
 # 模型答案消息底部：一键将任务切换到“测试”（不依赖提示词/摘要输出）
 MODEL_TASK_TO_TEST_PREFIX = "model:task_to_test:"
 PARALLEL_REPLY_CALLBACK_PREFIX = "parallel:reply:"
@@ -4156,6 +4157,7 @@ def _build_model_quick_reply_keyboard(
     parallel_task_title: Optional[str] = None,
     enable_parallel_actions: bool = False,
     parallel_callback_payload: Optional[str] = None,
+    native_commit_callback_payload: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     """构建“模型答案消息”底部的快捷回复按钮（InlineKeyboard）。"""
 
@@ -4192,6 +4194,15 @@ def _build_model_quick_reply_keyboard(
                 InlineKeyboardButton(
                     text="⬆️ 提交并行分支",
                     callback_data=f"{PARALLEL_COMMIT_CALLBACK_PREFIX}{normalized_task_id}",
+                ),
+            ]
+        )
+    elif normalized_task_id and native_commit_callback_payload:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬆️ 提交分支",
+                    callback_data=f"{SESSION_COMMIT_CALLBACK_PREFIX}{native_commit_callback_payload.strip()}",
                 ),
             ]
         )
@@ -8509,6 +8520,7 @@ PENDING_SUMMARIES: Dict[str, PendingSummary] = {}
 SESSION_TASK_BINDINGS: Dict[str, str] = {}
 PARALLEL_SESSION_TASK_BINDINGS: Dict[str, str] = {}
 CHAT_PARALLEL_REPLY_TARGETS: Dict[int, dict[str, Any]] = {}
+SESSION_COMMIT_CALLBACK_BINDINGS: Dict[str, "SessionCommitBinding"] = {}
 
 
 @dataclass
@@ -8559,6 +8571,17 @@ class ParallelCallbackBinding:
     created_at: float = field(default_factory=time.time)
 
 
+@dataclass
+class SessionCommitBinding:
+    """描述原生会话“提交分支”按钮到具体工作目录的绑定。"""
+
+    token: str
+    task_id: str
+    session_key: str
+    workspace_root: Path
+    created_at: float = field(default_factory=time.time)
+
+
 def _bind_session_task(session_key: str, task_id: str) -> None:
     """将 session_key 与 task_id 绑定，便于从会话回溯当前任务。"""
 
@@ -8597,6 +8620,12 @@ def _build_parallel_callback_payload(task_id: str, token: str) -> str:
     return f"{task_id}:{token}"
 
 
+def _build_session_commit_callback_payload(task_id: str, token: str) -> str:
+    """构造原生会话“提交分支”按钮的 session-scoped payload。"""
+
+    return f"{task_id}:{token}"
+
+
 def _parse_parallel_callback_payload(raw_payload: str) -> tuple[Optional[str], Optional[str]]:
     """解析并行按钮 payload，兼容旧版仅 task_id 的数据格式。"""
 
@@ -8628,6 +8657,19 @@ def _ensure_parallel_callback_binding(
         session_key=session_key,
         dispatch_context=dispatch_context,
         title_snapshot=title_snapshot,
+    )
+    return token
+
+
+def _ensure_session_commit_binding(session_key: str, task_id: str, workspace_root: Path) -> str:
+    """为原生会话消息生成稳定 token，便于按钮精准命中对应目录。"""
+
+    token = hashlib.sha1(f"native-commit:{task_id}:{session_key}".encode("utf-8")).hexdigest()[:10]
+    SESSION_COMMIT_CALLBACK_BINDINGS[token] = SessionCommitBinding(
+        token=token,
+        task_id=task_id,
+        session_key=session_key,
+        workspace_root=Path(workspace_root),
     )
     return token
 
@@ -10463,6 +10505,7 @@ async def _deliver_pending_messages(
     parallel_title = None
     parallel_dispatch_context = None
     parallel_callback_payload = None
+    native_commit_callback_payload = None
     if parallel_task_id:
         parallel_session = await _get_active_parallel_session_for_task(parallel_task_id)
         if parallel_session is not None:
@@ -10475,11 +10518,17 @@ async def _deliver_pending_messages(
                 title_snapshot=parallel_title,
             )
             parallel_callback_payload = _build_parallel_callback_payload(resolved_task_id, token)
+    elif bound_task_id:
+        current_cwd = _read_session_meta_cwd(session_path)
+        if current_cwd:
+            token = _ensure_session_commit_binding(session_key, bound_task_id, Path(current_cwd))
+            native_commit_callback_payload = _build_session_commit_callback_payload(bound_task_id, token)
     quick_reply_markup = _build_model_quick_reply_keyboard(
         task_id=bound_task_id or parallel_task_id,
         parallel_task_title=parallel_title,
         enable_parallel_actions=bool(parallel_task_id),
         parallel_callback_payload=parallel_callback_payload,
+        native_commit_callback_payload=native_commit_callback_payload,
     )
     delivered_hashes = _get_delivered_hashes(chat_id, session_key)
     delivered_offsets = _get_delivered_offsets(chat_id, session_key)
@@ -12819,11 +12868,92 @@ async def on_parallel_reply_callback(callback: CallbackQuery) -> None:
         )
 
 
+def _collect_native_commit_repos(workspace_root: Path) -> tuple[list[ParallelRepoRecord], list[RepoOperationResult]]:
+    """根据原生会话工作目录收敛可提交仓库，并提前过滤 Detached HEAD 仓库。"""
+
+    repos: list[ParallelRepoRecord] = []
+    skipped_results: list[RepoOperationResult] = []
+    for repo_key, repo_path, _relative_path in discover_git_repos(workspace_root, include_nested=True):
+        repo_label = repo_path.name if repo_key != "__root__" else Path(workspace_root).name
+        current_label, current_local_branch = get_current_branch_state(repo_path)
+        if not current_local_branch:
+            skipped_results.append(
+                RepoOperationResult(
+                    repo_key=repo_key,
+                    repo_name=repo_label,
+                    ok=True,
+                    status="skipped",
+                    message=f"当前为 {current_label}，已跳过",
+                )
+            )
+            continue
+        repos.append(
+            ParallelRepoRecord(
+                repo_key=repo_key,
+                source_repo_path=str(repo_path),
+                workspace_repo_path=str(repo_path),
+                selected_base_ref=current_local_branch,
+                selected_remote=None,
+                task_branch=current_local_branch,
+            )
+        )
+    return repos, skipped_results
+
+
 def _format_parallel_operation_lines(title: str, results: Sequence[RepoOperationResult]) -> str:
     lines = [title]
     for item in results:
         lines.append(f"- {item.repo_name}：{item.message}")
     return "\n".join(lines)
+
+
+@router.callback_query(F.data.startswith(SESSION_COMMIT_CALLBACK_PREFIX))
+async def on_session_commit_callback(callback: CallbackQuery) -> None:
+    """原生会话消息底部“提交分支”按钮：按会话绑定目录执行多仓库提交。"""
+
+    payload = (callback.data or "")[len(SESSION_COMMIT_CALLBACK_PREFIX) :].strip()
+    task_id, token = _parse_parallel_callback_payload(payload)
+    if not task_id or not token:
+        await callback.answer("会话提交参数无效", show_alert=True)
+        return
+    binding = SESSION_COMMIT_CALLBACK_BINDINGS.get(token)
+    if binding is None or _normalize_task_id(binding.task_id) != task_id:
+        await callback.answer("会话提交绑定已失效", show_alert=True)
+        return
+    workspace_root = resolve_path(binding.workspace_root)
+    if not workspace_root.exists():
+        await callback.answer("会话目录不存在", show_alert=True)
+        return
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await callback.answer("任务不存在", show_alert=True)
+        return
+
+    repos, skipped_results = _collect_native_commit_repos(workspace_root)
+    if not repos and skipped_results:
+        await callback.answer("未发现可提交仓库")
+        if callback.message is not None:
+            await callback.message.answer(_format_parallel_operation_lines("分支提交结果：", skipped_results))
+        return
+    if not repos:
+        await callback.answer("未发现 Git 仓库", show_alert=True)
+        return
+
+    await callback.answer("正在提交当前会话分支…")
+    try:
+        result = await asyncio.to_thread(commit_parallel_repos, task=task, repos=repos)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.exception("原生会话提交分支失败：%s", exc, extra={"task_id": task_id, "workspace_root": str(workspace_root)})
+        await callback.answer("提交失败", show_alert=True)
+        if callback.message is not None:
+            await callback.message.answer(
+                f"提交失败：{exc}",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+        return
+    combined_results = [*skipped_results, *result.results]
+    if callback.message is not None:
+        await callback.message.answer(_format_parallel_operation_lines("分支提交结果：", combined_results))
 
 
 @router.callback_query(F.data.startswith(PARALLEL_COMMIT_CALLBACK_PREFIX))
@@ -12846,7 +12976,18 @@ async def on_parallel_commit_callback(callback: CallbackQuery) -> None:
         await callback.answer("未找到并行仓库记录", show_alert=True)
         return
     await callback.answer("正在提交并行分支…")
-    result = await asyncio.to_thread(commit_parallel_repos, task=task, repos=repos)
+    try:
+        result = await asyncio.to_thread(commit_parallel_repos, task=task, repos=repos)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.exception("提交并行分支失败：%s", exc, extra={"task_id": task_id})
+        await PARALLEL_SESSION_STORE.update_status(task_id, status="running", last_error=f"提交失败：{exc}")
+        await callback.answer("提交失败", show_alert=True)
+        if callback.message is not None:
+            await callback.message.answer(
+                f"提交失败：{exc}",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+        return
     for item in result.results:
         await PARALLEL_SESSION_STORE.update_repo_status(
             task_id,
@@ -12887,7 +13028,18 @@ async def on_parallel_merge_callback(callback: CallbackQuery) -> None:
         await callback.answer("未找到并行仓库记录", show_alert=True)
         return
     await callback.answer("正在尝试自动合并…")
-    result = await asyncio.to_thread(merge_parallel_repos, task=task, repos=repos)
+    try:
+        result = await asyncio.to_thread(merge_parallel_repos, task=task, repos=repos)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.exception("自动合并并行分支失败：%s", exc, extra={"task_id": task_id})
+        await PARALLEL_SESSION_STORE.update_status(task_id, status="merge_failed", last_error=f"自动合并失败：{exc}")
+        await callback.answer("自动合并失败", show_alert=True)
+        if callback.message is not None:
+            await callback.message.answer(
+                f"自动合并失败：{exc}",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+        return
     for item in result.results:
         await PARALLEL_SESSION_STORE.update_repo_status(
             task_id,

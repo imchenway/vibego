@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime
@@ -63,6 +64,20 @@ def make_state(message: DummyMessage) -> tuple[FSMContext, MemoryStorage]:
     return state, storage
 
 
+def _assistant_event(text: str, *, cwd: str) -> dict:
+    """构造最小 assistant_message 事件，携带 cwd 供会话路由测试复用。"""
+
+    return {
+        "timestamp": "2025-01-01T00:00:00Z",
+        "type": "response_item",
+        "payload": {
+            "type": "assistant_message",
+            "message": text,
+            "cwd": cwd,
+        },
+    }
+
+
 def test_quick_reply_partial_enters_supplement_state():
     """点击“部分按推荐（需补充）”应进入补充输入状态，不应立即推送到模型。"""
 
@@ -80,6 +95,140 @@ def test_quick_reply_partial_enters_supplement_state():
         assert isinstance(reply_markup, ReplyKeyboardMarkup)
 
     asyncio.run(_scenario())
+
+
+def test_deliver_pending_messages_for_bound_native_session_includes_commit_button(monkeypatch, tmp_path: Path):
+    """原生 Codex 会话若已绑定任务，应在模型答案底部展示会话级“提交分支”按钮。"""
+
+    session_file = tmp_path / "session.jsonl"
+    workspace_root = tmp_path / "native-workspace"
+    session_file.write_text(
+        json.dumps(_assistant_event("原生会话返回结果", cwd=str(workspace_root)), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    bot.SESSION_OFFSETS[str(session_file)] = 0
+    bot.SESSION_TASK_BINDINGS[str(session_file)] = "TASK_0200"
+
+    captured_markups: list[object] = []
+
+    async def fake_reply(
+        _chat_id: int,
+        _text: str,
+        *,
+        parse_mode=None,
+        preformatted: bool = False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+    ):
+        captured_markups.append(reply_markup)
+        return "ok"
+
+    monkeypatch.setattr(bot, "reply_large_text", fake_reply)
+
+    delivered = asyncio.run(bot._deliver_pending_messages(42, session_file))
+
+    assert delivered is True
+    assert captured_markups, "应给模型答案消息附加快捷按钮"
+    callback_data = [
+        button.callback_data
+        for row in captured_markups[-1].inline_keyboard
+        for button in row
+        if getattr(button, "callback_data", None)
+    ]
+    assert any(data.startswith(bot.SESSION_COMMIT_CALLBACK_PREFIX) for data in callback_data)
+
+
+def test_native_session_commit_callback_uses_bound_workspace_root(monkeypatch, tmp_path: Path):
+    """原生会话的提交按钮应按会话绑定目录收敛提交范围，避免串到其它会话目录。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}TASK_0200:deadbeef", message)
+    workspace_root = tmp_path / "native-workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    binding = SimpleNamespace(
+        token="deadbeef",
+        task_id="TASK_0200",
+        session_key=str(tmp_path / "session.jsonl"),
+        workspace_root=workspace_root,
+    )
+    bot.SESSION_COMMIT_CALLBACK_BINDINGS = {"deadbeef": binding}
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0200"
+        return SimpleNamespace(id="TASK_0200", title="原生提交", task_type="task")
+
+    discovered_roots: list[Path] = []
+    committed_repo_roots: list[Path] = []
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(
+        bot,
+        "discover_git_repos",
+        lambda root, include_nested=True: discovered_roots.append(Path(root)) or [
+            ("__root__", workspace_root, "."),
+            ("service", workspace_root / "service", "service"),
+        ],
+    )
+    monkeypatch.setattr(bot, "get_current_branch_state", lambda _repo: ("feature/TASK_0200", "feature/TASK_0200"))
+
+    def fake_commit_parallel_repos(*, task, repos):
+        committed_repo_roots.extend(Path(item.workspace_repo_path) for item in repos)
+        return SimpleNamespace(
+            results=[
+                bot.RepoOperationResult("service", "service", True, "pushed", "提交并推送成功"),
+            ]
+        )
+
+    monkeypatch.setattr(bot, "commit_parallel_repos", fake_commit_parallel_repos)
+
+    asyncio.run(bot.on_session_commit_callback(callback))
+
+    assert discovered_roots == [workspace_root]
+    assert committed_repo_roots == [workspace_root, workspace_root / "service"]
+    assert message.calls and "分支提交结果" in message.calls[-1][0]
+
+
+def test_native_session_commit_callback_reports_runtime_failure(monkeypatch, tmp_path: Path):
+    """原生会话提交分支异常时，应在 Telegram 明确回执失败原因。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}TASK_0200:deadbeef", message)
+    workspace_root = tmp_path / "native-workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    binding = SimpleNamespace(
+        token="deadbeef",
+        task_id="TASK_0200",
+        session_key=str(tmp_path / "session.jsonl"),
+        workspace_root=workspace_root,
+    )
+    bot.SESSION_COMMIT_CALLBACK_BINDINGS = {"deadbeef": binding}
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0200"
+        return SimpleNamespace(id="TASK_0200", title="原生提交", task_type="task")
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(
+        bot,
+        "discover_git_repos",
+        lambda root, include_nested=True: [("__root__", workspace_root, ".")],
+    )
+    monkeypatch.setattr(bot, "get_current_branch_state", lambda _repo: ("feature/TASK_0200", "feature/TASK_0200"))
+
+    def fake_commit_parallel_repos(*, task, repos):
+        raise RuntimeError("git push 失败")
+
+    monkeypatch.setattr(bot, "commit_parallel_repos", fake_commit_parallel_repos)
+
+    asyncio.run(bot.on_session_commit_callback(callback))
+
+    assert callback.answers[0] == ("正在提交当前会话分支…", False)
+    assert message.calls, "异常时应向聊天发送失败消息"
+    text, _, reply_markup, _ = message.calls[-1]
+    assert "提交失败" in text
+    assert "git push 失败" in text
+    assert isinstance(reply_markup, ReplyKeyboardMarkup)
 
 
 def test_quick_reply_all_dispatches_prompt_and_restores_main_keyboard(monkeypatch, tmp_path: Path):

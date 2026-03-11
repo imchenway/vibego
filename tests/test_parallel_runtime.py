@@ -34,6 +34,28 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_run_git_forces_utf8_replace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """git 子进程应固定使用 utf-8 + replace，避免系统 locale 导致解码崩溃。"""
+
+    captured: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(parallel_runtime.subprocess, "run", fake_run)
+
+    result = parallel_runtime._run_git(["status", "--short"], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert captured["args"] == ["git", "status", "--short"]
+    assert captured["kwargs"]["cwd"] == str(tmp_path)
+    assert captured["kwargs"]["text"] is True
+    assert captured["kwargs"]["encoding"] == "utf-8"
+    assert captured["kwargs"]["errors"] == "replace"
+
+
 def _init_repo(repo: Path, files: dict[str, str] | None = None) -> None:
     """初始化最小 Git 仓库，供并行运行时测试复用。"""
 

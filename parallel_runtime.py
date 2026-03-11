@@ -140,6 +140,8 @@ def _run_git(args: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[s
         ["git", *args],
         cwd=str(cwd),
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )

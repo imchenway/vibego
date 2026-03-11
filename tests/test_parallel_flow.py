@@ -1214,3 +1214,79 @@ def test_start_parallel_tmux_session_returns_after_ready_file_written(monkeypatc
         assert pointer_file.name == "current_session.txt"
 
     asyncio.run(scenario())
+
+
+def test_parallel_commit_callback_reports_runtime_failure(monkeypatch):
+    """提交并行分支异常时，应在 Telegram 明确回执失败原因。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(f"{bot.PARALLEL_COMMIT_CALLBACK_PREFIX}TASK_0001", message)
+
+    async def fake_active_parallel_session(_task_id: str):
+        return SimpleNamespace(task_id="TASK_0001")
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0001"
+        return _task()
+
+    async def fake_get_repos(_task_id: str):
+        return [SimpleNamespace(repo_key="repo")]
+
+    async def fake_update_status(*_args, **_kwargs):
+        return None
+
+    async def fake_to_thread(*_args, **_kwargs):
+        raise RuntimeError("git 输出解码失败")
+
+    monkeypatch.setattr(bot, "_get_active_parallel_session_for_task", fake_active_parallel_session)
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_get_parallel_session_repos", fake_get_repos)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(bot.asyncio, "to_thread", fake_to_thread)
+
+    asyncio.run(bot.on_parallel_commit_callback(callback))
+
+    assert callback.answers[0] == ("正在提交并行分支…", False)
+    assert message.calls, "异常时应向聊天发送失败消息"
+    text, _, reply_markup, _ = message.calls[-1]
+    assert "提交失败" in text
+    assert "git 输出解码失败" in text
+    assert isinstance(reply_markup, ReplyKeyboardMarkup)
+
+
+def test_parallel_merge_callback_reports_runtime_failure(monkeypatch):
+    """自动合并异常时，应在 Telegram 明确回执失败原因。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(f"{bot.PARALLEL_MERGE_CALLBACK_PREFIX}TASK_0001", message)
+
+    async def fake_active_parallel_session(_task_id: str):
+        return SimpleNamespace(task_id="TASK_0001")
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0001"
+        return _task()
+
+    async def fake_get_repos(_task_id: str):
+        return [SimpleNamespace(repo_key="repo")]
+
+    async def fake_update_status(*_args, **_kwargs):
+        return None
+
+    async def fake_to_thread(*_args, **_kwargs):
+        raise RuntimeError("远端服务异常")
+
+    monkeypatch.setattr(bot, "_get_active_parallel_session_for_task", fake_active_parallel_session)
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_get_parallel_session_repos", fake_get_repos)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(bot.asyncio, "to_thread", fake_to_thread)
+
+    asyncio.run(bot.on_parallel_merge_callback(callback))
+
+    assert callback.answers[0] == ("正在尝试自动合并…", False)
+    assert message.calls, "异常时应向聊天发送失败消息"
+    text, _, reply_markup, _ = message.calls[-1]
+    assert "自动合并失败" in text
+    assert "远端服务异常" in text
+    assert isinstance(reply_markup, ReplyKeyboardMarkup)
