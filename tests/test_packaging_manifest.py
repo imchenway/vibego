@@ -20,3 +20,12 @@ def test_parallel_runtime_is_packaged_for_distribution() -> None:
     py_modules = set(data["tool"]["setuptools"]["py-modules"])
 
     assert "parallel_runtime" in py_modules
+
+
+def test_codex_trust_is_packaged_for_distribution() -> None:
+    """codex_trust 被 master.py / bot.py 直接依赖，发布包必须显式收录。"""
+
+    data = _load_pyproject()
+    py_modules = set(data["tool"]["setuptools"]["py-modules"])
+
+    assert "codex_trust" in py_modules

@@ -34,7 +34,7 @@ vibego = "vibego_cli.main:main"
 
 [tool.setuptools]
 include-package-data = true
-py-modules = ["bot", "master", "logging_setup", "project_repository", "parallel_runtime"]
+py-modules = ["bot", "master", "logging_setup", "project_repository", "parallel_runtime", "codex_trust"]
 
 [tool.setuptools.packages.find]
 # 显式包含子包，避免 setuptools 漏掉 vibego_cli.data、scripts.models 等目录

@@ -5,16 +5,19 @@ from pathlib import Path
 
 import pytest
 import parallel_runtime
+from tasks import TaskRecord
 
 from parallel_runtime import (
     BranchRef,
     RepoBranchSelection,
+    commit_parallel_repos,
     collect_common_branch_refs,
     delete_parallel_workspace,
     discover_git_repos,
     filter_common_branch_repo_options,
     get_current_branch_state,
     list_branch_refs,
+    merge_parallel_repos,
     prepare_parallel_workspace,
 )
 
@@ -44,6 +47,42 @@ def _init_repo(repo: Path, files: dict[str, str] | None = None) -> None:
         file_path.write_text(content, encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "init")
+
+
+def _current_branch(repo: Path) -> str:
+    """读取仓库当前分支名，避免测试依赖 main/master 默认值。"""
+
+    return _git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
+
+
+def _make_task(task_id: str = "TASK_0100", title: str = "并行工作区修复") -> TaskRecord:
+    """构造并行提交测试所需的最小任务对象。"""
+
+    return TaskRecord(
+        id=task_id,
+        project_slug="demo",
+        title=title,
+        status="research",
+        priority=3,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="测试并行运行时",
+        parent_id=None,
+        root_id=task_id,
+        depth=0,
+        lineage="0100",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+
+def _init_bare_remote(remote: Path) -> None:
+    """初始化 bare 远端，供 push/merge 场景验证。"""
+
+    remote.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
 
 
 def test_discover_git_repos_skips_nested_repos_under_non_root_parent(tmp_path: Path) -> None:
@@ -442,6 +481,192 @@ def test_prepare_parallel_workspace_fetches_only_selected_remote_repos(
     assert root_checkout_calls == [("checkout", "-B", records[0].task_branch, "develop")]
     assert service_checkout_calls == [("checkout", "-B", records[1].task_branch, "origin/develop")]
     assert calls.index((service_fetch_calls[0], service_workspace)) < calls.index((service_checkout_calls[0], service_workspace))
+
+
+def test_prepare_parallel_workspace_preserves_dirty_changes_for_current_local_branch(tmp_path: Path) -> None:
+    """当前分支创建并行任务分支时，应保留未提交改动进入并行目录。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(source_root, {"README.md": "root\n"})
+    current_branch = _current_branch(source_root)
+    (source_root / "README.md").write_text("dirty root\n", encoding="utf-8")
+    (source_root / "draft.txt").write_text("untracked\n", encoding="utf-8")
+
+    records = prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0102",
+        title="保留当前分支未提交改动",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref=current_branch,
+                selected_remote=None,
+                relative_path=".",
+            )
+        ],
+    )
+
+    workspace_root = tmp_path / "workspace"
+    status = _git(workspace_root, "status", "--short", "--branch").stdout
+
+    assert _current_branch(workspace_root) == records[0].task_branch
+    assert (workspace_root / "README.md").read_text(encoding="utf-8") == "dirty root\n"
+    assert (workspace_root / "draft.txt").read_text(encoding="utf-8") == "untracked\n"
+    assert "README.md" in status
+    assert "draft.txt" in status
+
+
+def test_prepare_parallel_workspace_drops_dirty_changes_for_other_branch(tmp_path: Path) -> None:
+    """切到非当前基线分支时，不应把当前工作区未提交改动带入并行目录。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(source_root, {"README.md": "root\n"})
+    current_branch = _current_branch(source_root)
+    _git(source_root, "checkout", "-b", "develop")
+    _git(source_root, "checkout", current_branch)
+    (source_root / "README.md").write_text("dirty root\n", encoding="utf-8")
+    (source_root / "draft.txt").write_text("untracked\n", encoding="utf-8")
+
+    records = prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0103",
+        title="其他基线不带未提交改动",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref="develop",
+                selected_remote=None,
+                relative_path=".",
+            )
+        ],
+    )
+
+    workspace_root = tmp_path / "workspace"
+    status = _git(workspace_root, "status", "--short", "--branch").stdout
+
+    assert _current_branch(workspace_root) == records[0].task_branch
+    assert (workspace_root / "README.md").read_text(encoding="utf-8") == "root\n"
+    assert not (workspace_root / "draft.txt").exists()
+    assert status.strip() == f"## {records[0].task_branch}"
+
+
+def test_commit_parallel_repos_skips_meta_only_parent_and_keeps_real_child_commit(tmp_path: Path) -> None:
+    """父仓库仅包含嵌套仓库指针变化时，应跳过空壳提交；真实子仓库仍正常本地提交。"""
+
+    root = tmp_path / "workspace"
+    _init_repo(root, {"README.md": "root\n"})
+    child = root / "service"
+    _init_repo(child, {"service.py": "print('v1')\n"})
+
+    _git(root, "add", "service")
+    _git(root, "commit", "-m", "track child")
+
+    task_branch = "TASK_0104-meta"
+    _git(root, "checkout", "-b", task_branch)
+    _git(child, "checkout", "-b", task_branch)
+    (child / "service.py").write_text("print('v2')\n", encoding="utf-8")
+
+    result = commit_parallel_repos(
+        task=_make_task(task_id="TASK_0104", title="跳过空壳父仓库提交"),
+        repos=[
+            parallel_runtime.ParallelRepoRecord(
+                repo_key="__root__",
+                source_repo_path=str(root),
+                workspace_repo_path=str(root),
+                selected_base_ref=_current_branch(root),
+                selected_remote=None,
+                task_branch=task_branch,
+            ),
+            parallel_runtime.ParallelRepoRecord(
+                repo_key="service",
+                source_repo_path=str(child),
+                workspace_repo_path=str(child),
+                selected_base_ref=_current_branch(child),
+                selected_remote=None,
+                task_branch=task_branch,
+            ),
+        ],
+    )
+
+    by_repo = {item.repo_key: item for item in result.results}
+
+    assert by_repo["__root__"].ok is True
+    assert by_repo["__root__"].status == "skipped"
+    assert "元信息" in by_repo["__root__"].message
+    assert by_repo["service"].ok is True
+    assert by_repo["service"].status == "committed"
+    assert "本地提交" in by_repo["service"].message
+    assert _git(child, "log", "--oneline", "-n", "1").stdout.split()[1].startswith("chore(TASK_0104):")
+
+
+def test_commit_parallel_repos_pushes_to_single_available_remote(tmp_path: Path) -> None:
+    """未显式记录 selected_remote 时，若仓库仅有一个 remote，仍应正常推送任务分支。"""
+
+    remote = tmp_path / "remote.git"
+    _init_bare_remote(remote)
+
+    repo = tmp_path / "repo"
+    _init_repo(repo, {"README.md": "demo\n"})
+    base_branch = _current_branch(repo)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-u", "origin", base_branch)
+    task_branch = "TASK_0105-push"
+    _git(repo, "checkout", "-b", task_branch)
+    (repo / "README.md").write_text("demo v2\n", encoding="utf-8")
+
+    result = commit_parallel_repos(
+        task=_make_task(task_id="TASK_0105", title="唯一远端推送"),
+        repos=[
+            parallel_runtime.ParallelRepoRecord(
+                repo_key="repo",
+                source_repo_path=str(repo),
+                workspace_repo_path=str(repo),
+                selected_base_ref=base_branch,
+                selected_remote=None,
+                task_branch=task_branch,
+            )
+        ],
+    )
+
+    assert result.results[0].ok is True
+    assert result.results[0].status == "pushed"
+    remote_refs = _git(remote, "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout.splitlines()
+    assert task_branch in remote_refs
+
+
+def test_merge_parallel_repos_skips_repo_without_remote(tmp_path: Path) -> None:
+    """无远端仓库在自动合并阶段应跳过，而不是默认 fetch/push origin 失败。"""
+
+    repo = tmp_path / "repo"
+    _init_repo(repo, {"README.md": "demo\n"})
+    base_branch = _current_branch(repo)
+    task_branch = "TASK_0106-merge"
+    _git(repo, "checkout", "-b", task_branch)
+    (repo / "README.md").write_text("demo v2\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "task change")
+
+    result = merge_parallel_repos(
+        task=_make_task(task_id="TASK_0106", title="无远端跳过自动合并"),
+        repos=[
+            parallel_runtime.ParallelRepoRecord(
+                repo_key="repo",
+                source_repo_path=str(repo),
+                workspace_repo_path=str(repo),
+                selected_base_ref=base_branch,
+                selected_remote=None,
+                task_branch=task_branch,
+            )
+        ],
+    )
+
+    assert result.results[0].ok is True
+    assert result.results[0].status == "skipped"
+    assert "远端" in result.results[0].message
 
 
 def test_get_current_branch_state_marks_current_local_branch_first(tmp_path: Path) -> None:

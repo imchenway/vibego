@@ -145,6 +145,100 @@ def _run_git(args: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[s
     )
 
 
+def _current_branch_name(repo_path: Path) -> Optional[str]:
+    """返回仓库当前本地分支名；Detached/失败时返回 None。"""
+
+    result = _run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=repo_path)
+    branch_name = result.stdout.strip()
+    return branch_name or None if result.returncode == 0 else None
+
+
+def _extract_status_paths(status_output: str) -> list[str]:
+    """从 git status --short 输出中提取变更路径。"""
+
+    paths: list[str] = []
+    for raw_line in (status_output or "").splitlines():
+        line = raw_line.rstrip()
+        if len(line) < 4:
+            continue
+        path_text = line[3:].strip().strip('"')
+        if " -> " in path_text:
+            path_text = path_text.split(" -> ", 1)[1].strip().strip('"')
+        if path_text:
+            paths.append(path_text)
+    return paths
+
+
+def _resolve_push_remote(repo_path: Path, repo: ParallelRepoRecord) -> Optional[str]:
+    """解析仓库推送/合并应使用的 remote。"""
+
+    current_branch = _current_branch_name(repo_path)
+    candidate_branches: list[str] = []
+    if current_branch:
+        candidate_branches.append(current_branch)
+    if repo.selected_base_ref and "/" not in repo.selected_base_ref:
+        candidate_branches.append(repo.selected_base_ref)
+
+    seen: set[str] = set()
+    for branch_name in candidate_branches:
+        if not branch_name or branch_name in seen:
+            continue
+        seen.add(branch_name)
+        remote = _run_git(["config", f"branch.{branch_name}.remote"], cwd=repo_path)
+        remote_name = remote.stdout.strip()
+        if remote.returncode == 0 and remote_name:
+            return remote_name
+
+    if repo.selected_remote:
+        return repo.selected_remote
+
+    remotes = _run_git(["remote"], cwd=repo_path)
+    if remotes.returncode != 0:
+        return None
+    remote_names = [line.strip() for line in remotes.stdout.splitlines() if line.strip()]
+    if len(remote_names) == 1:
+        return remote_names[0]
+    return None
+
+
+def _direct_child_repo_names(repo_path: Path, repos: Sequence[ParallelRepoRecord], current_repo_key: str) -> set[str]:
+    """收集当前仓库下直系/间接嵌套仓库在当前仓库视角的首层目录名。"""
+
+    child_names: set[str] = set()
+    for item in repos:
+        if item.repo_key == current_repo_key:
+            continue
+        try:
+            relative_path = Path(item.workspace_repo_path).resolve().relative_to(repo_path.resolve())
+        except ValueError:
+            continue
+        if not relative_path.parts:
+            continue
+        child_names.add(relative_path.parts[0])
+    return child_names
+
+
+def _is_meta_only_status(repo: ParallelRepoRecord, repos: Sequence[ParallelRepoRecord], status_output: str) -> bool:
+    """判断当前仓库是否只有子仓库指针/共享目录等元信息变化。"""
+
+    changed_paths = _extract_status_paths(status_output)
+    if not changed_paths:
+        return False
+
+    repo_path = Path(repo.workspace_repo_path)
+    allowed_top_levels = _direct_child_repo_names(repo_path, repos, repo.repo_key)
+    if repo.repo_key == "__root__":
+        allowed_top_levels.update({"docs", ".idea"})
+    if not allowed_top_levels:
+        return False
+
+    for changed_path in changed_paths:
+        first_part = Path(changed_path).parts[0] if Path(changed_path).parts else ""
+        if first_part not in allowed_top_levels:
+            return False
+    return True
+
+
 def _repo_key_for(base_dir: Path, repo_path: Path) -> tuple[str, str]:
     rel = repo_path.relative_to(base_dir)
     rel_text = str(rel).strip()
@@ -539,7 +633,21 @@ def prepare_parallel_workspace(
                 if fetch.returncode != 0:
                     raise RuntimeError(fetch.stderr.strip() or fetch.stdout.strip() or f"抓取分支失败: {selection.repo_key}")
 
-            checkout = _run_git(["checkout", "-B", task_branch, selection.selected_ref], cwd=target)
+            current_local_branch = _current_branch_name(target)
+            preserve_dirty_worktree = selection.selected_remote is None and (
+                selection.selected_ref == "HEAD" or current_local_branch == selection.selected_ref
+            )
+            if preserve_dirty_worktree:
+                checkout = _run_git(["checkout", "-b", task_branch], cwd=target)
+            else:
+                checkout = _run_git(["checkout", "-B", task_branch, selection.selected_ref], cwd=target)
+                if checkout.returncode == 0:
+                    reset = _run_git(["reset", "--hard", "HEAD"], cwd=target)
+                    if reset.returncode != 0:
+                        raise RuntimeError(reset.stderr.strip() or reset.stdout.strip() or f"重置并行工作区失败: {selection.repo_key}")
+                    clean = _run_git(["clean", "-fd"], cwd=target)
+                    if clean.returncode != 0:
+                        raise RuntimeError(clean.stderr.strip() or clean.stdout.strip() or f"清理并行工作区失败: {selection.repo_key}")
             if checkout.returncode != 0:
                 raise RuntimeError(checkout.stderr.strip() or checkout.stdout.strip() or f"切换任务分支失败: {selection.repo_key}")
 
@@ -579,6 +687,9 @@ def commit_parallel_repos(
         if not status.stdout.strip():
             results.append(RepoOperationResult(repo.repo_key, repo_name, True, "skipped", "无改动，已跳过"))
             continue
+        if _is_meta_only_status(repo, repos, status.stdout):
+            results.append(RepoOperationResult(repo.repo_key, repo_name, True, "skipped", "仅包含子仓库/共享目录元信息变更，已跳过"))
+            continue
 
         add = _run_git(["add", "-A"], cwd=repo_path)
         if add.returncode != 0:
@@ -594,7 +705,10 @@ def commit_parallel_repos(
                 results.append(RepoOperationResult(repo.repo_key, repo_name, False, "failed", commit.stderr.strip() or "git commit 失败"))
             continue
 
-        push_remote = repo.selected_remote or "origin"
+        push_remote = _resolve_push_remote(repo_path, repo)
+        if not push_remote:
+            results.append(RepoOperationResult(repo.repo_key, repo_name, True, "committed", "已本地提交，未配置远端，已跳过推送"))
+            continue
         push = _run_git(["push", "--set-upstream", push_remote, repo.task_branch], cwd=repo_path)
         if push.returncode != 0:
             results.append(RepoOperationResult(repo.repo_key, repo_name, False, "failed", push.stderr.strip() or "git push 失败"))
@@ -615,13 +729,17 @@ def merge_parallel_repos(
     for repo in repos:
         repo_path = Path(repo.workspace_repo_path)
         repo_name = Path(repo.repo_key).name if repo.repo_key != "__root__" else Path(repo.source_repo_path).name
+        push_remote = _resolve_push_remote(repo_path, repo)
+        if not push_remote:
+            results.append(RepoOperationResult(repo.repo_key, repo_name, True, "skipped", "未配置远端，已跳过自动合并"))
+            continue
         fetch = _run_git(["fetch", "--all", "--prune"], cwd=repo_path)
         if fetch.returncode != 0:
             results.append(RepoOperationResult(repo.repo_key, repo_name, False, "failed", fetch.stderr.strip() or "git fetch 失败"))
             break
 
         target_branch = repo.selected_base_ref.split("/", 1)[1] if "/" in repo.selected_base_ref and repo.selected_base_ref.count("/") == 1 else repo.selected_base_ref.split("/")[-1]
-        if repo.selected_base_ref.startswith((repo.selected_remote or "origin") + "/"):
+        if repo.selected_base_ref.startswith(push_remote + "/"):
             checkout = _run_git(["checkout", "-B", target_branch, repo.selected_base_ref], cwd=repo_path)
         else:
             checkout = _run_git(["checkout", target_branch], cwd=repo_path)
@@ -635,7 +753,6 @@ def merge_parallel_repos(
             results.append(RepoOperationResult(repo.repo_key, repo_name, False, "failed", merge.stderr.strip() or merge.stdout.strip() or "自动合并失败"))
             break
 
-        push_remote = repo.selected_remote or "origin"
         push = _run_git(["push", push_remote, target_branch], cwd=repo_path)
         if push.returncode != 0:
             results.append(RepoOperationResult(repo.repo_key, repo_name, False, "failed", push.stderr.strip() or "推送基线分支失败"))

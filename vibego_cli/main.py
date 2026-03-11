@@ -553,9 +553,14 @@ def command_start(args: argparse.Namespace) -> None:
     log_file = config.LOG_FILE
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    if _read_pid():
-        print("检测到 master 已启动，如需重启请先执行 `vibego stop`。")
-        return
+    existing_pid = _read_pid()
+    if existing_pid:
+        if _pid_alive(existing_pid):
+            print("检测到 master 已启动，如需重启请先执行 `vibego stop`。")
+            return
+        # stale pid 文件会导致后续 start 被误判为“已启动”，这里先自动清理。
+        config.MASTER_PID_FILE.unlink(missing_ok=True)
+        print(f"检测到失效的 master PID 文件（PID={existing_pid}），已自动清理。")
 
     print("正在启动 master 服务...")
     with open(log_file, "a", encoding="utf-8") as log_fp:
@@ -571,6 +576,7 @@ def command_start(args: argparse.Namespace) -> None:
 
     time.sleep(2)
     if process.poll() is not None:
+        config.MASTER_PID_FILE.unlink(missing_ok=True)
         raise RuntimeError("master 进程启动失败，请检查日志。")
 
     print("master 已启动，PID:", process.pid)
