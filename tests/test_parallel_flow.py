@@ -908,10 +908,15 @@ def test_parallel_branch_confirm_callback_prompts_for_prefix_when_missing():
     callback = DummyCallback("parallel:branch_confirm:demo", message)
     asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
 
-    assert callback.answers[-1] == ("请输入分支前缀；点击取消将使用默认前缀", False)
+    assert callback.answers[-1] == ("请输入分支前缀；发送取消将使用默认前缀", False)
     assert bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS[message.chat.id] == "demo"
-    assert message.edits, "应覆盖原消息进入前缀输入页"
-    assert "请输入本次并行任务的分支前缀" in message.edits[-1][0]
+    assert message.calls, "应发送新消息进入前缀输入页并展示底部菜单按钮"
+    prompt_text, _, reply_markup, _ = message.calls[-1]
+    assert "请输入本次并行任务的分支前缀（例如：Sprint001）。" in prompt_text
+    assert "示例（自定义）：Sprint001/TASK\\_0001-调研任务" in prompt_text
+    assert "示例（默认）：vibego/TASK\\_0001-调研任务" in prompt_text
+    labels = [button.text for row in reply_markup.keyboard for button in row]
+    assert labels == ["取消"]
 
 
 def test_parallel_branch_prefix_cancel_uses_default_prefix(monkeypatch, tmp_path: Path):

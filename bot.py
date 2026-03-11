@@ -8146,12 +8146,12 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
         return
     if session.branch_prefix is None:
         CHAT_PARALLEL_BRANCH_PREFIX_INPUTS[session.chat_id] = token
-        await callback.answer("请输入分支前缀；点击取消将使用默认前缀")
+        await callback.answer("请输入分支前缀；发送取消将使用默认前缀")
         if callback.message is not None:
-            await _render_parallel_branch_flow_message(
+            await _answer_with_markdown(
                 callback.message,
                 _build_parallel_branch_prefix_prompt(session),
-                reply_markup=_build_parallel_branch_prefix_keyboard(session),
+                reply_markup=_build_parallel_branch_prefix_input_keyboard(),
             )
         return
 
@@ -9241,7 +9241,8 @@ def _build_parallel_branch_summary(session: ParallelLaunchSession) -> str:
 def _build_parallel_branch_prefix_prompt(session: ParallelLaunchSession) -> str:
     """构造分支前缀输入提示文案。"""
 
-    example = f"TRADE114/{build_parallel_branch_name(session.task.id, session.task.title, prefix='TRADE114').split('/', 1)[1]}"
+    suffix_example = build_parallel_branch_name(session.task.id, session.task.title, prefix="Sprint001").split("/", 1)[1]
+    example = f"Sprint001/{suffix_example}"
     default_example = build_parallel_branch_name(
         session.task.id,
         session.task.title,
@@ -9249,8 +9250,8 @@ def _build_parallel_branch_prefix_prompt(session: ParallelLaunchSession) -> str:
     )
     lines = [
         f"并行任务：/{session.task.id} {session.task.title}",
-        "请输入本次并行任务的分支前缀（例如：TRADE114）。",
-        f"若不指定，点击取消将使用默认前缀：{DEFAULT_PARALLEL_BRANCH_PREFIX}",
+        "请输入本次并行任务的分支前缀（例如：Sprint001）。",
+        f"若不指定，发送“取消”将使用默认前缀：{DEFAULT_PARALLEL_BRANCH_PREFIX}",
         "",
         f"示例（自定义）：{example}",
         f"示例（默认）：{default_example}",
@@ -9258,19 +9259,11 @@ def _build_parallel_branch_prefix_prompt(session: ParallelLaunchSession) -> str:
     return "\n".join(lines)
 
 
-def _build_parallel_branch_prefix_keyboard(session: ParallelLaunchSession) -> InlineKeyboardMarkup:
-    """构造分支前缀输入阶段键盘。"""
+def _build_parallel_branch_prefix_input_keyboard() -> ReplyKeyboardMarkup:
+    """分支前缀输入态键盘：仅保留底部取消按钮。"""
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="❌ 取消",
-                    callback_data=f"{PARALLEL_BRANCH_PREFIX_CANCEL_PREFIX}{session.token}",
-                )
-            ]
-        ]
-    )
+    rows = [[KeyboardButton(text="取消")]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 def _build_parallel_branch_summary_keyboard(session: ParallelLaunchSession) -> InlineKeyboardMarkup:
@@ -17788,8 +17781,8 @@ async def on_text(m: Message, state: FSMContext):
             normalized_prefix = normalize_parallel_branch_prefix(prompt)
             if not normalized_prefix:
                 await m.answer(
-                    f"分支前缀无效，请重新输入（例如 TRADE114）；发送“取消”将使用默认前缀 {DEFAULT_PARALLEL_BRANCH_PREFIX}。",
-                    reply_markup=_build_worker_main_keyboard(),
+                    f"分支前缀无效，请重新输入（例如 Sprint001）；发送“取消”将使用默认前缀 {DEFAULT_PARALLEL_BRANCH_PREFIX}。",
+                    reply_markup=_build_parallel_branch_prefix_input_keyboard(),
                 )
                 return
             session.branch_prefix = normalized_prefix
