@@ -1529,8 +1529,8 @@ async def _wait_tmux_session_ready_for_plan_switch(tmux_session: Optional[str]) 
     return False
 
 
-def _capture_tmux_recent_lines(line_count: int) -> str:
-    """截取 tmux 会话尾部指定行数的原始文本。"""
+def _capture_tmux_recent_lines(line_count: int, tmux_session: Optional[str] = None) -> str:
+    """截取指定 tmux 会话尾部指定行数的原始文本。"""
 
     tmux = tmux_bin()
     normalized = max(1, min(line_count, TMUX_SNAPSHOT_MAX_LINES))
@@ -1544,7 +1544,7 @@ def _capture_tmux_recent_lines(line_count: int) -> str:
             "capture-pane",
             "-p",
             "-t",
-            TMUX_SESSION,
+            tmux_session or TMUX_SESSION,
             "-S",
             start_arg,
         ),
@@ -1571,11 +1571,11 @@ def _extract_terminal_collaboration_mode(raw_output: str) -> Optional[str]:
     return None
 
 
-def _probe_terminal_collaboration_mode() -> Literal["plan", "non_plan", "unknown"]:
-    """探测当前终端协作模式：plan / 非 plan / unknown。"""
+def _probe_terminal_collaboration_mode(tmux_session: Optional[str] = None) -> Literal["plan", "non_plan", "unknown"]:
+    """探测指定终端协作模式：plan / 非 plan / unknown。"""
 
     try:
-        raw_output = _capture_tmux_recent_lines(PLAN_EXECUTION_MODE_PROBE_LINES)
+        raw_output = _capture_tmux_recent_lines(PLAN_EXECUTION_MODE_PROBE_LINES, tmux_session=tmux_session)
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
         return "unknown"
     mode = _extract_terminal_collaboration_mode(raw_output)
@@ -1586,10 +1586,10 @@ def _probe_terminal_collaboration_mode() -> Literal["plan", "non_plan", "unknown
     return "non_plan"
 
 
-async def _probe_plan_execution_terminal_mode() -> Literal["plan", "non_plan", "unknown"]:
+async def _probe_plan_execution_terminal_mode(tmux_session: Optional[str] = None) -> Literal["plan", "non_plan", "unknown"]:
     """异步包装终端模式探测，避免阻塞事件循环。"""
 
-    return await asyncio.to_thread(_probe_terminal_collaboration_mode)
+    return await asyncio.to_thread(_probe_terminal_collaboration_mode, tmux_session)
 
 
 def _should_force_exit_plan_ui(*, force_exit_plan_ui: bool, prompt: str) -> bool:
@@ -1622,6 +1622,7 @@ async def _maybe_force_exit_plan_ui(
     chat_id: int,
     prompt: str,
     force_exit_plan_ui: bool,
+    tmux_session: Optional[str] = None,
     force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
     force_exit_plan_ui_max_rounds: Optional[int] = None,
 ) -> Literal["plan", "non_plan", "unknown", "skipped"]:
@@ -1630,11 +1631,12 @@ async def _maybe_force_exit_plan_ui(
     if not _should_force_exit_plan_ui(force_exit_plan_ui=force_exit_plan_ui, prompt=prompt):
         return "skipped"
 
-    before_mode = await _probe_plan_execution_terminal_mode()
+    target_tmux_session = tmux_session or TMUX_SESSION
+    before_mode = await _probe_plan_execution_terminal_mode(target_tmux_session)
     if before_mode == "non_plan":
         worker_log.info(
             "Plan 切换预检：当前已非 Plan 模式，跳过 Shift+Tab",
-            extra={"chat": chat_id, "before_mode": before_mode},
+            extra={"chat": chat_id, "before_mode": before_mode, "tmux_session": target_tmux_session},
         )
         return before_mode
 
@@ -1665,7 +1667,7 @@ async def _maybe_force_exit_plan_ui(
     for round_index in range(1, max_rounds + 1):
         try:
             for key_index, key in enumerate(key_sequence):
-                tmux_send_key(TMUX_SESSION, key)
+                tmux_send_key(target_tmux_session, key)
                 if (
                     PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS > 0
                     and key_index < len(key_sequence) - 1
@@ -1680,6 +1682,7 @@ async def _maybe_force_exit_plan_ui(
                     "before_mode": before_mode,
                     "round": str(round_index),
                     "switch_key_sequence": ",".join(key_sequence),
+                    "tmux_session": target_tmux_session,
                 },
             )
             return current_mode
@@ -1687,7 +1690,7 @@ async def _maybe_force_exit_plan_ui(
         if PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS > 0:
             await asyncio.sleep(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS)
 
-        current_mode = await _probe_plan_execution_terminal_mode()
+        current_mode = await _probe_plan_execution_terminal_mode(target_tmux_session)
         worker_log.info(
             "Plan 切换预命令已发送",
             extra={
@@ -1699,6 +1702,7 @@ async def _maybe_force_exit_plan_ui(
                 "switch_key_sequence": ",".join(key_sequence),
                 "round_gap": str(PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS),
                 "delay": str(PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS),
+                "tmux_session": target_tmux_session,
             },
         )
         if current_mode == "non_plan":
@@ -2183,6 +2187,7 @@ async def _dispatch_prompt_to_model(
         chat_id=chat_id,
         prompt=prompt,
         force_exit_plan_ui=force_exit_plan_ui,
+        tmux_session=dispatch_context.tmux_session if dispatch_context is not None else None,
         force_exit_plan_ui_key_sequence=force_exit_plan_ui_key_sequence,
         force_exit_plan_ui_max_rounds=force_exit_plan_ui_max_rounds,
     )

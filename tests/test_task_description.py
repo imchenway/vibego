@@ -3343,7 +3343,7 @@ def test_dispatch_prompt_force_exit_plan_ui_sends_key_sequence_before_prompt(mon
 
     monkeypatch.setattr(bot, "tmux_send_key", fake_tmux_send_key)
     monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
-    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda: "plan")
+    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda _tmux_session=None: "plan")
     monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
 
     created_tasks: list = []
@@ -3404,7 +3404,7 @@ def test_dispatch_prompt_force_exit_plan_ui_skips_btab_when_not_plan(monkeypatch
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
     monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
-    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda: "non_plan")
+    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda _tmux_session=None: "non_plan")
     monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
 
     sent_keys: list[str] = []
@@ -3452,6 +3452,97 @@ def test_dispatch_prompt_force_exit_plan_ui_skips_btab_when_not_plan(monkeypatch
 
     assert sent_keys == []
     assert sent_lines == [bot.PLAN_IMPLEMENT_EXEC_PROMPT]
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def test_dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session(monkeypatch, tmp_path: Path):
+    """并行会话触发 Implement 时，退出 Plan 的探测与按键必须命中并行 tmux。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-primary")
+    monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_RETRY_GAP_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS", 1)
+    monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST", True)
+    monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS", ("BTab",))
+
+    operations: list[tuple[str, str, str]] = []
+    probe_calls: list[str | None] = []
+
+    async def fake_probe(tmux_session: str | None = None):
+        probe_calls.append(tmux_session)
+        return "plan" if len(probe_calls) == 1 else "non_plan"
+
+    def fake_tmux_send_key(session: str, key: str) -> None:
+        operations.append(("key", session, key))
+
+    def fake_tmux_send_line(session: str, line: str) -> None:
+        operations.append(("line", session, line))
+
+    monkeypatch.setattr(bot, "_probe_plan_execution_terminal_mode", fake_probe)
+    monkeypatch.setattr(bot, "tmux_send_key", fake_tmux_send_key)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0115",
+        tmux_session="vibe-par-demo",
+        pointer_file=pointer,
+        workspace_root=tmp_path / "workspace",
+    )
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            706,
+            bot.PLAN_IMPLEMENT_PROMPT,
+            reply_to=None,
+            ack_immediately=False,
+            force_exit_plan_ui=True,
+            dispatch_context=dispatch_context,
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert probe_calls == [dispatch_context.tmux_session, dispatch_context.tmux_session]
+    assert operations == [
+        ("key", dispatch_context.tmux_session, "Escape"),
+        ("key", dispatch_context.tmux_session, "BTab"),
+        ("line", dispatch_context.tmux_session, bot.PLAN_IMPLEMENT_PROMPT),
+    ]
 
     for coro in created_tasks:
         try:
@@ -3528,7 +3619,7 @@ def test_dispatch_prompt_force_exit_plan_ui_retries_multiple_rounds(monkeypatch,
     monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS", 2)
     monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST", True)
     monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS", ("BTab", "BTab"))
-    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda: "plan")
+    monkeypatch.setattr(bot, "_probe_terminal_collaboration_mode", lambda _tmux_session=None: "plan")
     monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
 
     sent_keys: list[str] = []
