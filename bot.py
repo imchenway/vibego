@@ -1472,6 +1472,30 @@ def tmux_send_line(session: str, line: str):
         )
 
 
+_TMUX_SHELL_COMMANDS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh"}
+
+
+def _get_tmux_pane_current_command(session: str) -> Optional[str]:
+    """读取 tmux pane 当前前台进程名，用于判断模型 CLI 是否真正启动。"""
+
+    tmux = tmux_bin()
+    try:
+        current = subprocess.check_output(
+            _tmux_cmd(tmux, "display-message", "-p", "-t", session, "#{pane_current_command}"),
+            text=True,
+        ).strip()
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    return current or None
+
+
+def _is_tmux_shell_command(command: Optional[str]) -> bool:
+    """判断当前 tmux 前台进程是否仍是 shell。"""
+
+    normalized = Path((command or "").strip()).name.lower()
+    return normalized in _TMUX_SHELL_COMMANDS
+
+
 def tmux_send_key(session: str, key: str) -> None:
     """向 tmux 会话发送单个按键（如 BTab / Escape）。"""
 
@@ -2016,6 +2040,29 @@ async def _maybe_send_plan_switch_command(
     return True
 
 
+async def _validate_parallel_tmux_ready_for_dispatch(
+    *,
+    chat_id: int,
+    tmux_session: Optional[str],
+) -> Optional[str]:
+    """并行首次派发前校验 tmux 已进入模型 CLI，而不是停留在 shell。"""
+
+    if not tmux_session:
+        return "缺少并行 tmux 会话标识"
+    current_command = await asyncio.to_thread(_get_tmux_pane_current_command, tmux_session)
+    if _is_tmux_shell_command(current_command):
+        worker_log.warning(
+            "并行 tmux 首次派发前仍停留在 shell",
+            extra={
+                "chat": chat_id,
+                "tmux_session": tmux_session,
+                "pane_current_command": current_command or "-",
+            },
+        )
+        return f"当前终端仍停留在 shell（{current_command or 'unknown'}）"
+    return None
+
+
 async def _dispatch_prompt_to_model(
     chat_id: int,
     prompt: str,
@@ -2177,6 +2224,19 @@ async def _dispatch_prompt_to_model(
         )
         return False, None
 
+    if is_parallel_dispatch and needs_session_wait:
+        ready_issue = await _validate_parallel_tmux_ready_for_dispatch(
+            chat_id=chat_id,
+            tmux_session=dispatch_context.tmux_session if dispatch_context is not None else None,
+        )
+        if ready_issue:
+            await _reply_to_chat(
+                chat_id,
+                f"并行 CLI 未启动成功：{ready_issue}",
+                reply_to=reply_to,
+            )
+            return False, None
+
     await _maybe_send_plan_switch_command(
         chat_id=chat_id,
         intended_mode=intended_mode,
@@ -2220,7 +2280,8 @@ async def _dispatch_prompt_to_model(
             and not SESSION_BIND_STRICT
         ):
             session_path = _find_latest_claudecode_rollout(pointer_path)
-        if session_path is None and pointer_path is not None and SESSION_BIND_STRICT:
+        allow_strict_fallback = not (is_parallel_dispatch and needs_session_wait)
+        if session_path is None and pointer_path is not None and SESSION_BIND_STRICT and allow_strict_fallback:
             # strict 模式兜底：当 pointer 长时间未写入（binder 异常/已退出）时，
             # 直接扫描会话目录定位最新 session，避免用户侧出现“未检测到会话日志”的误报。
             session_path = _fallback_locate_latest_session(pointer_path, target_cwd)
@@ -2237,7 +2298,13 @@ async def _dispatch_prompt_to_model(
                 details.append(f"pointer={pointer_path}")
             if target_cwd:
                 details.append(f"cwd={target_cwd}")
-            if details:
+            if is_parallel_dispatch and needs_session_wait:
+                if details:
+                    hint = "；".join(details)
+                    message = f"并行 CLI 未生成新的会话日志，请稍后重试。\n（{hint}）"
+                else:
+                    message = "并行 CLI 未生成新的会话日志，请稍后重试。"
+            elif details:
                 hint = "；".join(details)
                 message = f"未检测到 {MODEL_DISPLAY_LABEL} 会话日志，请稍后重试。\n（{hint}）"
             else:
@@ -7817,6 +7884,20 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
         )
         return
 
+    if not success:
+        await PARALLEL_SESSION_STORE.update_status(
+            task.id,
+            status="closed",
+            last_error="并行 CLI 未启动成功：首次推送未建立 fresh session",
+        )
+        await _reply_to_chat(
+            session.chat_id,
+            "并行 CLI 未启动成功，请稍后重试。",
+            reply_to=session.origin_message or callback.message,
+            reply_markup=_build_worker_main_keyboard(),
+        )
+        return
+
     if callback.message is not None:
         summary_lines = [
             "已创建并行开发副本（原目录未改动）：",
@@ -8440,6 +8521,9 @@ def _parallel_session_runtime_issue(session: ParallelSessionRecord) -> Optional[
 
     if not _parallel_tmux_session_exists(session.tmux_session):
         return f"tmux 会话 {session.tmux_session} 不存在"
+    current_command = _get_tmux_pane_current_command(session.tmux_session)
+    if _is_tmux_shell_command(current_command):
+        return f"tmux 会话 {session.tmux_session} 当前仍停留在 shell：{current_command}"
     workspace_root = resolve_path(session.workspace_root)
     if not workspace_root.exists():
         return f"并行目录 {workspace_root} 不存在"

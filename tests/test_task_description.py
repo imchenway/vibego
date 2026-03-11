@@ -3048,7 +3048,8 @@ def test_dispatch_prompt_plan_mode_sends_plan_switch_for_codex(monkeypatch, tmp_
     monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
     monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
-    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
     bot.CHAT_SESSION_MAP.clear()
@@ -3121,7 +3122,8 @@ def test_dispatch_prompt_yolo_mode_skips_plan_switch(monkeypatch, tmp_path: Path
     monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
     monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
-    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
     sent_lines: list[str] = []
@@ -3314,6 +3316,153 @@ def test_dispatch_prompt_plan_mode_waits_for_parallel_tmux_ready(monkeypatch, tm
             pass
 
 
+def test_dispatch_prompt_parallel_first_dispatch_fails_closed_when_tmux_still_shell(monkeypatch, tmp_path: Path):
+    """并行首次派发时，若 pane 当前仍是 shell，则必须 fail-closed，且不能把正文打进 shell。"""
+
+    pointer = tmp_path / "pointer.txt"
+    pointer.write_text("", encoding="utf-8")
+    old_session = tmp_path / "old-rollout.jsonl"
+    old_session.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-primary")
+    monkeypatch.setattr(bot, "PLAN_MODE_SWITCH_DELAY_SECONDS", 0.0)
+    bot.PARALLEL_TASK_WATCHERS.clear()
+    bot.PARALLEL_TASK_SESSION_MAP.clear()
+    bot.PARALLEL_SESSION_CONTEXTS.clear()
+
+    monkeypatch.setattr(bot, "_get_tmux_pane_current_command", lambda _session: "zsh", raising=False)
+
+    async def fake_wait(tmux_session: str | None) -> bool:
+        return True
+
+    sent_lines: list[tuple[str, str]] = []
+
+    def fake_tmux_send_line(session: str, line: str) -> None:
+        sent_lines.append((session, line))
+
+    fallback_calls: list[tuple[Path, Path | None]] = []
+
+    def fake_fallback(pointer_path: Path, target_cwd: Path | None):
+        fallback_calls.append((pointer_path, target_cwd))
+        return old_session
+
+    notices: list[str] = []
+
+    async def fake_reply_to_chat(chat_id: int, text: str, *, reply_to=None, disable_notification: bool = False, parse_mode=None, reply_markup=None):
+        notices.append(text)
+        return None
+
+    monkeypatch.setattr(bot, "_wait_tmux_session_ready_for_plan_switch", fake_wait)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_fallback_locate_latest_session", fake_fallback)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply_to_chat)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
+
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0115",
+        tmux_session="vibe-par-demo",
+        pointer_file=pointer,
+        workspace_root=tmp_path / "workspace",
+    )
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            704,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+            intended_mode=bot.PUSH_MODE_PLAN,
+            dispatch_context=dispatch_context,
+        )
+        assert ok is False
+        assert path is None
+
+    asyncio.run(scenario())
+
+    assert sent_lines == []
+    assert fallback_calls == []
+    assert notices and "并行 CLI 未启动成功" in notices[-1]
+
+
+def test_dispatch_prompt_parallel_first_dispatch_does_not_fallback_to_old_session(monkeypatch, tmp_path: Path):
+    """并行首次派发若未绑定 fresh session，必须失败，不能 strict fallback 到旧 rollout。"""
+
+    pointer = tmp_path / "pointer.txt"
+    pointer.write_text("", encoding="utf-8")
+    old_session = tmp_path / "old-rollout.jsonl"
+    old_session.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-primary")
+    monkeypatch.setattr(bot, "PLAN_MODE_SWITCH_DELAY_SECONDS", 0.0)
+    bot.PARALLEL_TASK_WATCHERS.clear()
+    bot.PARALLEL_TASK_SESSION_MAP.clear()
+    bot.PARALLEL_SESSION_CONTEXTS.clear()
+
+    monkeypatch.setattr(bot, "_get_tmux_pane_current_command", lambda _session: "codex-aarch64-a", raising=False)
+
+    async def fake_wait(tmux_session: str | None) -> bool:
+        return True
+
+    sent_lines: list[tuple[str, str]] = []
+
+    def fake_tmux_send_line(session: str, line: str) -> None:
+        sent_lines.append((session, line))
+
+    fallback_calls: list[tuple[Path, Path | None]] = []
+
+    def fake_fallback(pointer_path: Path, target_cwd: Path | None):
+        fallback_calls.append((pointer_path, target_cwd))
+        return old_session
+
+    notices: list[str] = []
+
+    async def fake_reply_to_chat(chat_id: int, text: str, *, reply_to=None, disable_notification: bool = False, parse_mode=None, reply_markup=None):
+        notices.append(text)
+        return None
+
+    monkeypatch.setattr(bot, "_wait_tmux_session_ready_for_plan_switch", fake_wait)
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_fallback_locate_latest_session", fake_fallback)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply_to_chat)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
+
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0115",
+        tmux_session="vibe-par-demo",
+        pointer_file=pointer,
+        workspace_root=tmp_path / "workspace",
+    )
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            705,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+            intended_mode=bot.PUSH_MODE_PLAN,
+            dispatch_context=dispatch_context,
+        )
+        assert ok is False
+        assert path is None
+
+    asyncio.run(scenario())
+
+    assert sent_lines, "fresh session 未绑定前，当前实现仍会先尝试发入模正文"
+    assert fallback_calls == []
+    assert notices and "未生成新的会话日志" in notices[-1]
+
+
 def test_dispatch_prompt_force_exit_plan_ui_sends_key_sequence_before_prompt(monkeypatch, tmp_path: Path):
     """Implement 链路启用 force_exit_plan_ui 时，应先发送 Escape+BTab 序列再发送提示词。"""
 
@@ -3479,6 +3628,9 @@ def test_dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session(monkeypat
     monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_MAX_ROUNDS", 1)
     monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_ESC_FIRST", True)
     monkeypatch.setattr(bot, "PLAN_EXECUTION_EXIT_PLAN_RETRY_KEYS", ("BTab",))
+    bot.PARALLEL_TASK_WATCHERS.clear()
+    bot.PARALLEL_TASK_SESSION_MAP.clear()
+    bot.PARALLEL_SESSION_CONTEXTS.clear()
 
     operations: list[tuple[str, str, str]] = []
     probe_calls: list[str | None] = []
@@ -3496,6 +3648,10 @@ def test_dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session(monkeypat
     monkeypatch.setattr(bot, "_probe_plan_execution_terminal_mode", fake_probe)
     monkeypatch.setattr(bot, "tmux_send_key", fake_tmux_send_key)
     monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    async def fake_send_session_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
     monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
 
     created_tasks: list = []

@@ -1015,3 +1015,74 @@ def test_parallel_branch_confirm_callback_reports_prepare_timeout(monkeypatch):
     assert callback.answers == [(None, False)]
     assert message.calls, "准备超时后应向聊天明确回报失败"
     assert "并行副本准备超时" in message.calls[-1][0]
+
+
+def test_parallel_branch_confirm_callback_stops_when_push_task_to_model_fails(monkeypatch, tmp_path: Path):
+    """并行 tmux 已启动但首次推送失败时，不得继续展示成功摘要或预览。"""
+
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=bot.PUSH_MODE_PLAN,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", lambda **_kwargs: [])
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    updates: list[tuple[str, dict]] = []
+
+    async def fake_update_status(task_id: str, **kwargs):
+        updates.append((task_id, kwargs))
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return False, "PROMPT", None
+
+    preview_calls: list[int] = []
+    ack_calls: list[int] = []
+
+    async def fake_send_preview(*_args, **_kwargs):
+        preview_calls.append(1)
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        ack_calls.append(1)
+        return None
+
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert callback.answers == [(None, False)]
+    assert message.calls, "首次推送失败后应向聊天明确回报失败"
+    assert "并行 CLI 未启动成功" in message.calls[-1][0]
+    assert preview_calls == []
+    assert ack_calls == []
+    assert not any("已创建并行开发副本（原目录未改动）：" in text for text, *_rest in message.edits)
+    assert updates and updates[-1][1]["status"] == "closed"

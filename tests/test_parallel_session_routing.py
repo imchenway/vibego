@@ -393,6 +393,30 @@ def test_get_active_parallel_session_marks_stale_session_closed(monkeypatch):
     assert not bot.PARALLEL_CALLBACK_BINDINGS
 
 
+def test_parallel_session_runtime_issue_detects_shell_pane(monkeypatch, tmp_path: Path):
+    """并行 tmux 虽存在，但 pane 当前进程仍是 shell 时，应视为未就绪/已失活。"""
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    pointer_file = tmp_path / "pointer.txt"
+    pointer_file.write_text("placeholder", encoding="utf-8")
+    session = SimpleNamespace(
+        task_id="TASK_0115",
+        status="running",
+        tmux_session="vibe-par-hyphamall-task_0115",
+        pointer_file=str(pointer_file),
+        workspace_root=str(workspace_root),
+    )
+
+    monkeypatch.setattr(bot, "_parallel_tmux_session_exists", lambda _session_name: True)
+    monkeypatch.setattr(bot, "_get_tmux_pane_current_command", lambda _session_name: "zsh", raising=False)
+
+    issue = bot._parallel_session_runtime_issue(session)
+
+    assert issue is not None
+    assert "zsh" in issue
+
+
 def test_delete_parallel_session_workspace_allows_cleanup_for_closed_session(monkeypatch, tmp_path: Path):
     """删除并行目录时应允许清理 closed/stale 会话，而不是只能清理 active 会话。"""
 
