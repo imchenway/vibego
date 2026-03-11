@@ -591,6 +591,38 @@ def _link_shared_docs_dir(*, source_root: Path, workspace_root: Path) -> None:
     workspace_docs.symlink_to(source_docs, target_is_directory=True)
 
 
+def _write_workspace_idea_vcs_mappings(*, workspace_root: Path) -> None:
+    """为并行工作区生成 IDEA 多仓库 Git 映射，便于直接查看所有分支。"""
+
+    repo_entries = discover_git_repos(workspace_root, include_nested=True)
+    if not repo_entries:
+        return
+
+    idea_dir = Path(workspace_root) / ".idea"
+    idea_dir.mkdir(parents=True, exist_ok=True)
+    mappings: list[str] = []
+    for _repo_key, _repo_path, relative_path in repo_entries:
+        if relative_path == ".":
+            directory = "$PROJECT_DIR$"
+        else:
+            normalized = str(relative_path).replace("\\", "/").strip("/")
+            directory = f"$PROJECT_DIR$/{normalized}"
+        mappings.append(f'    <mapping directory="{directory}" vcs="Git" />')
+
+    content = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            "<project version=\"4\">",
+            "  <component name=\"VcsDirectoryMappings\">",
+            *mappings,
+            "  </component>",
+            "</project>",
+            "",
+        ]
+    )
+    (idea_dir / "vcs.xml").write_text(content, encoding="utf-8")
+
+
 def prepare_parallel_workspace(
     *,
     workspace_root: Path,
@@ -612,6 +644,7 @@ def prepare_parallel_workspace(
         root.parent.mkdir(parents=True, exist_ok=True)
         _copy_parallel_workspace_tree(source_root=source_base, workspace_root=root)
         _link_shared_docs_dir(source_root=source_base, workspace_root=root)
+        _write_workspace_idea_vcs_mappings(workspace_root=root)
 
     task_branch = build_parallel_branch_name(task_id, title)
     records: list[ParallelRepoRecord] = []

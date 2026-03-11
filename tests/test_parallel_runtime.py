@@ -303,7 +303,8 @@ def test_prepare_parallel_workspace_copies_full_workdir_and_excludes_generated_d
     assert (workspace_root / "service" / "src" / "main.py").exists()
     assert not (workspace_root / "target").exists()
     assert not (workspace_root / "logs").exists()
-    assert not (workspace_root / ".idea").exists()
+    assert not (workspace_root / ".idea" / "workspace.xml").exists()
+    assert (workspace_root / ".idea" / "vcs.xml").exists()
     assert not (workspace_root / "node_modules").exists()
     assert len(records) == 2
 
@@ -366,6 +367,43 @@ def test_prepare_parallel_workspace_creates_missing_source_docs_before_linking(t
     assert source_docs.is_dir()
     assert workspace_docs.is_symlink()
     assert workspace_docs.resolve() == source_docs.resolve()
+
+
+def test_prepare_parallel_workspace_generates_idea_vcs_mappings_for_nested_repos(tmp_path: Path) -> None:
+    """并行工作区应补齐 IDEA 的多仓库 Git 映射，便于直接查看所有分支。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(source_root, {"README.md": "root\n"})
+    nested_repo = source_root / "service"
+    _init_repo(nested_repo, {"src/main.py": "print('demo')\n"})
+
+    prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0107",
+        title="生成 IDEA Git 映射",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref="HEAD",
+                selected_remote=None,
+                relative_path=".",
+            ),
+            RepoBranchSelection(
+                repo_key="service",
+                source_repo_path=nested_repo,
+                selected_ref="HEAD",
+                selected_remote=None,
+                relative_path="service",
+            ),
+        ],
+    )
+
+    vcs_xml = (tmp_path / "workspace" / ".idea" / "vcs.xml").read_text(encoding="utf-8")
+
+    assert '<mapping directory="$PROJECT_DIR$" vcs="Git" />' in vcs_xml
+    assert '<mapping directory="$PROJECT_DIR$/service" vcs="Git" />' in vcs_xml
 
 
 def test_delete_parallel_workspace_keeps_shared_source_docs(tmp_path: Path) -> None:
