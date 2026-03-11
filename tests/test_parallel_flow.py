@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -755,7 +757,8 @@ def test_parallel_branch_confirm_callback_edits_same_message_to_processing(monke
     asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
 
     assert message.edits, "点击开始并行处理应先覆盖原消息为处理中提示"
-    assert message.edits[0][0] == "正在创建并行副本并启动并行 CLI，请稍候……"
+    assert callback.answers == [(None, False)]
+    assert message.edits[0][0] == "正在准备并行副本，请稍候……"
 
 
 def test_parallel_branch_confirm_callback_replaces_processing_message_with_summary(monkeypatch, tmp_path: Path):
@@ -807,8 +810,9 @@ def test_parallel_branch_confirm_callback_replaces_processing_message_with_summa
     callback = DummyCallback("parallel:branch_confirm:demo", message)
     asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
 
-    assert len(message.edits) >= 2, "成功后应继续覆盖同一条消息为摘要"
-    assert message.edits[0][0] == "正在创建并行副本并启动并行 CLI，请稍候……"
+    assert len(message.edits) >= 3, "成功后应继续覆盖同一条消息为阶段提示与摘要"
+    assert message.edits[0][0] == "正在准备并行副本，请稍候……"
+    assert any(text == "正在启动并行 CLI，请稍候……" for text, *_rest in message.edits)
     assert "已创建并行开发副本（原目录未改动）：" in message.edits[-1][0]
     assert not message.calls, "成功收口不应再额外新增摘要消息"
 
@@ -870,3 +874,144 @@ def test_parallel_branch_confirm_callback_passes_source_root_for_full_copy(monke
     asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
 
     assert captured["source_root"] == Path("/tmp/project-root")
+
+
+def test_parallel_branch_confirm_callback_acknowledges_callback_before_prepare(monkeypatch, tmp_path: Path):
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+
+    def fake_prepare_parallel_workspace(**_kwargs):
+        assert callback.answers == [(None, False)], "进入重操作前应先确认 callback，避免超时失效"
+        return []
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", fake_prepare_parallel_workspace)
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+
+def test_parallel_branch_confirm_callback_falls_back_to_chat_when_failure_callback_expires(monkeypatch):
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    async def flaky_answer(text: str | None = None, show_alert: bool = False):
+        if text == "并行创建失败":
+            raise TelegramBadRequest(method="answerCallbackQuery", message="Bad Request: query is too old")
+        callback.answers.append((text, show_alert))
+
+    monkeypatch.setattr(
+        bot,
+        "prepare_parallel_workspace",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("ssh: connect to host gitlab.cckggroup.com port 10002: Connection reset by peer")),
+    )
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    monkeypatch.setattr(callback, "answer", flaky_answer)
+
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert callback.answers == [(None, False)]
+    assert message.calls, "callback 失效后仍应回退为普通聊天消息"
+    assert "并行创建失败：" in message.calls[-1][0]
+    assert "Connection reset by peer" in message.calls[-1][0]
+
+
+def test_parallel_branch_confirm_callback_reports_prepare_timeout(monkeypatch):
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=None,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    def slow_prepare_parallel_workspace(**_kwargs):
+        time.sleep(0.05)
+        return []
+
+    async def should_not_start_tmux(*_args, **_kwargs):
+        raise AssertionError("准备阶段超时后不应继续启动并行 CLI")
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", slow_prepare_parallel_workspace)
+    monkeypatch.setattr(bot, "PARALLEL_WORKSPACE_PREPARE_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", should_not_start_tmux)
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert callback.answers == [(None, False)]
+    assert message.calls, "准备超时后应向聊天明确回报失败"
+    assert "并行副本准备超时" in message.calls[-1][0]

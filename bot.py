@@ -344,6 +344,7 @@ PLAN_MODE_SWITCH_DELAY_SECONDS = max(_env_float("PLAN_MODE_SWITCH_DELAY_SECONDS"
 PARALLEL_PLAN_READY_TIMEOUT_SECONDS = max(_env_float("PARALLEL_PLAN_READY_TIMEOUT_SECONDS", 6.0), 0.0)
 PARALLEL_PLAN_READY_POLL_INTERVAL_SECONDS = max(_env_float("PARALLEL_PLAN_READY_POLL_INTERVAL_SECONDS", 0.2), 0.05)
 PARALLEL_PLAN_READY_PROBE_LINES = max(_env_int("PARALLEL_PLAN_READY_PROBE_LINES", 80), 20)
+PARALLEL_WORKSPACE_PREPARE_TIMEOUT_SECONDS = max(_env_float("PARALLEL_WORKSPACE_PREPARE_TIMEOUT_SECONDS", 45.0), 0.0)
 PARALLEL_PLAN_READY_MARKERS: Tuple[str, ...] = (
     "OpenAI Codex",
     "model:",
@@ -406,6 +407,8 @@ PARALLEL_BRANCH_CONFIRM_PREFIX = "parallel:branch_confirm:"
 PARALLEL_COMMON_BRANCH_SELECT_PREFIX = "parallel:common_branch_select:"
 PARALLEL_COMMON_BRANCH_PAGE_PREFIX = "parallel:common_branch_page:"
 PARALLEL_BRANCH_INDIVIDUAL_PREFIX = "parallel:branch_individual:"
+PARALLEL_BRANCH_PREPARING_MESSAGE = "正在准备并行副本，请稍候……"
+PARALLEL_BRANCH_STARTING_CLI_MESSAGE = "正在启动并行 CLI，请稍候……"
 # request_user_input：Telegram 按钮回调前缀（需控制总长度 <= 64 字节）
 REQUEST_INPUT_CALLBACK_PREFIX = "rui:"
 REQUEST_INPUT_ACTION_OPTION = "opt"
@@ -1848,6 +1851,33 @@ async def _reply_to_chat(
     except TelegramBadRequest:
         raise
     return None
+
+
+async def _answer_callback_safely(
+    callback: CallbackQuery,
+    text: Optional[str] = None,
+    *,
+    show_alert: bool = False,
+) -> bool:
+    """安全确认 Telegram callback，避免长耗时流程结束后 query 过期打断主流程。"""
+
+    try:
+        await callback.answer(text, show_alert=show_alert)
+        return True
+    except (TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter) as exc:
+        worker_log.warning(
+            "回调答复失败(忽略)：%s",
+            exc,
+            extra=_session_extra(),
+        )
+        return False
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "回调答复失败(忽略)：%s",
+            exc,
+            extra=_session_extra(),
+        )
+        return False
 
 
 async def _send_session_ack(
@@ -7710,17 +7740,42 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
         for repo_key, repo_path, rel, _branches in session.repo_options
     ]
 
+    # 先应答 callback，避免后续 Git/复制重操作耗时过长导致 query 过期。
+    await _answer_callback_safely(callback)
+
     if callback.message is not None:
-        await _render_parallel_branch_flow_message(callback.message, "正在创建并行副本并启动并行 CLI，请稍候……", reply_markup=None)
+        await _render_parallel_branch_flow_message(
+            callback.message,
+            PARALLEL_BRANCH_PREPARING_MESSAGE,
+            reply_markup=None,
+        )
 
     try:
-        repo_records = prepare_parallel_workspace(
-            workspace_root=workspace_root,
-            task_id=task.id,
-            title=task.title,
-            selections=selections,
-            source_root=session.base_dir or PRIMARY_WORKDIR or ROOT_DIR_PATH,
-        )
+        prepare_kwargs = {
+            "workspace_root": workspace_root,
+            "task_id": task.id,
+            "title": task.title,
+            "selections": selections,
+            "source_root": session.base_dir or PRIMARY_WORKDIR or ROOT_DIR_PATH,
+        }
+        if PARALLEL_WORKSPACE_PREPARE_TIMEOUT_SECONDS > 0:
+            try:
+                repo_records = await asyncio.wait_for(
+                    asyncio.to_thread(prepare_parallel_workspace, **prepare_kwargs),
+                    timeout=PARALLEL_WORKSPACE_PREPARE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(
+                    f"并行副本准备超时（{PARALLEL_WORKSPACE_PREPARE_TIMEOUT_SECONDS:.2f}s），请检查 Git 网络或仓库状态后重试。"
+                ) from exc
+        else:
+            repo_records = await asyncio.to_thread(prepare_parallel_workspace, **prepare_kwargs)
+        if callback.message is not None:
+            await _render_parallel_branch_flow_message(
+                callback.message,
+                PARALLEL_BRANCH_STARTING_CLI_MESSAGE,
+                reply_markup=None,
+            )
         tmux_session, pointer_file = await _start_parallel_tmux_session(task, workspace_root)
         await PARALLEL_SESSION_STORE.upsert_session(
             task_id=task.id,
@@ -7749,12 +7804,14 @@ async def on_parallel_branch_confirm_callback(callback: CallbackQuery) -> None:
     except Exception as exc:  # noqa: BLE001
         shutil.rmtree(_parallel_runtime_root(task.id), ignore_errors=True)
         await PARALLEL_SESSION_STORE.update_status(task.id, status="merge_failed", last_error=str(exc))
-        await callback.answer("并行创建失败", show_alert=True)
-        if callback.message is not None:
-            await callback.message.answer(f"并行创建失败：{exc}", reply_markup=_build_worker_main_keyboard())
+        await _reply_to_chat(
+            session.chat_id,
+            f"并行创建失败：{exc}",
+            reply_to=session.origin_message or callback.message,
+            reply_markup=_build_worker_main_keyboard(),
+        )
         return
 
-    await callback.answer("并行分支已创建")
     if callback.message is not None:
         summary_lines = [
             "已创建并行开发副本（原目录未改动）：",
