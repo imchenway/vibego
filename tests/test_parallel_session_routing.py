@@ -459,3 +459,40 @@ def test_delete_parallel_session_workspace_allows_cleanup_for_closed_session(mon
     assert updates and updates[-1][1]["status"] == "deleted"
     assert task_id not in bot.PARALLEL_TASK_SESSION_MAP
     assert "session-key" not in bot.PARALLEL_SESSION_CONTEXTS
+
+
+def test_delete_parallel_session_workspace_cleans_parallel_workspace_trust(monkeypatch, tmp_path: Path):
+    """删除并行目录时，应同步清理该 workspace 的 Codex trusted 条目。"""
+
+    task_id = "TASK_0116"
+    runtime_root = tmp_path / task_id
+    workspace_root = runtime_root / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    session = SimpleNamespace(
+        task_id=task_id,
+        status="closed",
+        tmux_session="vibe-par-hyphamall-task_0116",
+        pointer_file=str(runtime_root / "_runtime" / "current_session.txt"),
+        workspace_root=str(workspace_root),
+    )
+
+    cleanup_calls: list[tuple[str, str, str]] = []
+
+    async def fake_get_session(_task_id: str):
+        return session
+
+    async def fake_update_status(_task_id: str, **_kwargs):
+        return None
+
+    async def fake_cleanup(path: Path, *, scope: str, owner_key: str):
+        cleanup_calls.append((str(path), scope, owner_key))
+
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "get_session", fake_get_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(bot, "_cleanup_codex_trusted_project_path", fake_cleanup)
+    monkeypatch.setattr(bot, "delete_parallel_workspace", lambda **_kwargs: None)
+    monkeypatch.setattr(bot, "_parallel_runtime_root", lambda _task_id: runtime_root)
+
+    asyncio.run(bot._delete_parallel_session_workspace(task_id))
+
+    assert cleanup_calls == [(str(workspace_root), "parallel_workspace", task_id)]

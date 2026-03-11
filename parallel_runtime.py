@@ -74,6 +74,20 @@ class ParallelSessionRecord:
 
 
 @dataclass(slots=True)
+class CodexTrustedPathRecord:
+    """描述 vibego 托管的 Codex trusted 路径记录。"""
+
+    path: str
+    project_slug: str
+    scope: str
+    owner_key: str
+    previous_trust_level: Optional[str]
+    managed_by_vibego: bool
+    created_at: str
+    updated_at: str
+
+
+@dataclass(slots=True)
 class RepoBranchSelection:
     """描述创建并行副本时用户为单个仓库选中的基线分支。"""
 
@@ -703,6 +717,26 @@ class ParallelSessionStore:
                 ON parallel_sessions(project_slug, status, updated_at)
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS codex_trusted_paths (
+                    path TEXT PRIMARY KEY,
+                    project_slug TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    owner_key TEXT NOT NULL,
+                    previous_trust_level TEXT,
+                    managed_by_vibego INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_codex_trusted_paths_scope_owner
+                ON codex_trusted_paths(project_slug, scope, owner_key, updated_at)
+                """
+            )
             await db.commit()
         self._initialized = True
 
@@ -940,4 +974,111 @@ class ParallelSessionStore:
                     f"UPDATE parallel_session_repos SET {', '.join(fields)} WHERE session_id = ? AND repo_key = ?",
                     values,
                 )
+                await db.commit()
+
+    async def upsert_trusted_path(
+        self,
+        *,
+        path: str,
+        scope: str,
+        owner_key: str,
+        previous_trust_level: Optional[str],
+        managed_by_vibego: bool,
+    ) -> CodexTrustedPathRecord:
+        """新增或更新 Codex trusted 路径登记。"""
+
+        await self.initialize()
+        now = shanghai_now_iso()
+        async with self._get_lock():
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    """
+                    INSERT INTO codex_trusted_paths (
+                        path, project_slug, scope, owner_key, previous_trust_level,
+                        managed_by_vibego, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        project_slug = excluded.project_slug,
+                        scope = excluded.scope,
+                        owner_key = excluded.owner_key,
+                        previous_trust_level = excluded.previous_trust_level,
+                        managed_by_vibego = excluded.managed_by_vibego,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        path,
+                        self.project_slug,
+                        scope,
+                        owner_key,
+                        previous_trust_level,
+                        1 if managed_by_vibego else 0,
+                        now,
+                        now,
+                    ),
+                )
+                await db.commit()
+        record = await self.get_trusted_path(path)
+        assert record is not None
+        return record
+
+    async def get_trusted_path(self, path: str) -> Optional[CodexTrustedPathRecord]:
+        """读取单条 Codex trusted 路径登记。"""
+
+        await self.initialize()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM codex_trusted_paths WHERE path = ?",
+                (path,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        return CodexTrustedPathRecord(
+            path=row["path"],
+            project_slug=row["project_slug"],
+            scope=row["scope"],
+            owner_key=row["owner_key"],
+            previous_trust_level=row["previous_trust_level"],
+            managed_by_vibego=bool(row["managed_by_vibego"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def list_trusted_paths(self, *, scope: Optional[str] = None) -> list[CodexTrustedPathRecord]:
+        """按范围列出 Codex trusted 路径登记。"""
+
+        await self.initialize()
+        query = "SELECT * FROM codex_trusted_paths"
+        args: tuple[object, ...] = ()
+        if scope:
+            query += " WHERE scope = ?"
+            args = (scope,)
+        query += " ORDER BY path"
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, args) as cursor:
+                rows = await cursor.fetchall()
+        return [
+            CodexTrustedPathRecord(
+                path=row["path"],
+                project_slug=row["project_slug"],
+                scope=row["scope"],
+                owner_key=row["owner_key"],
+                previous_trust_level=row["previous_trust_level"],
+                managed_by_vibego=bool(row["managed_by_vibego"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
+    async def delete_trusted_path(self, path: str) -> None:
+        """删除一条 Codex trusted 路径登记。"""
+
+        await self.initialize()
+        async with self._get_lock():
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("DELETE FROM codex_trusted_paths WHERE path = ?", (path,))
                 await db.commit()

@@ -1086,3 +1086,65 @@ def test_parallel_branch_confirm_callback_stops_when_push_task_to_model_fails(mo
     assert ack_calls == []
     assert not any("已创建并行开发副本（原目录未改动）：" in text for text, *_rest in message.edits)
     assert updates and updates[-1][1]["status"] == "closed"
+
+
+def test_parallel_branch_confirm_callback_ensures_workspace_trust_before_starting_tmux(monkeypatch, tmp_path: Path):
+    """启动并行 tmux 前应先确保 workspace 已写入 Codex trusted 配置。"""
+
+    message = DummyMessage()
+    session = bot.ParallelLaunchSession(
+        token="demo",
+        task=_task(),
+        chat_id=1,
+        actor=None,
+        origin_message=message,
+        push_mode=bot.PUSH_MODE_PLAN,
+        supplement=None,
+        repo_options=[
+            (
+                "backend-java",
+                Path("/tmp/backend-java"),
+                "backend-java",
+                [BranchRef(name="develop", source="local")],
+            )
+        ],
+        selections={"backend-java": BranchRef(name="develop", source="local")},
+        current_branch_labels={"backend-java": "develop"},
+    )
+    bot.PARALLEL_LAUNCH_SESSIONS["demo"] = session
+
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", lambda **_kwargs: [])
+
+    call_order: list[tuple[str, str]] = []
+
+    async def fake_ensure_trusted(path: Path, *, scope: str, owner_key: str):
+        call_order.append(("trust", f"{path}|{scope}|{owner_key}"))
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        call_order.append(("tmux", str(workspace_root)))
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_ensure_codex_trusted_project_path", fake_ensure_trusted)
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    callback = DummyCallback("parallel:branch_confirm:demo", message)
+    asyncio.run(bot.on_parallel_branch_confirm_callback(callback))
+
+    assert call_order[0][0] == "trust"
+    assert call_order[1][0] == "tmux"
