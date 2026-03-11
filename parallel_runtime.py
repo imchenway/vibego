@@ -502,9 +502,12 @@ def prepare_parallel_workspace(
             elif not target.exists():
                 raise RuntimeError(f"并行目录中缺少仓库：{selection.relative_path or '.'}")
 
-            fetch = _run_git(["fetch", "--all", "--prune"], cwd=target)
-            if fetch.returncode != 0:
-                raise RuntimeError(fetch.stderr.strip() or fetch.stdout.strip() or f"抓取分支失败: {selection.repo_key}")
+            # 仅当用户选中了远端分支时才刷新远端引用；
+            # 本地分支直接基于副本内已有分支检出，避免不必要的远端访问。
+            if selection.selected_remote:
+                fetch = _run_git(["fetch", "--all", "--prune"], cwd=target)
+                if fetch.returncode != 0:
+                    raise RuntimeError(fetch.stderr.strip() or fetch.stdout.strip() or f"抓取分支失败: {selection.repo_key}")
 
             checkout = _run_git(["checkout", "-B", task_branch, selection.selected_ref], cwd=target)
             if checkout.returncode != 0:

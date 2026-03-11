@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import parallel_runtime
 
 from parallel_runtime import (
     BranchRef,
@@ -265,6 +266,103 @@ def test_prepare_parallel_workspace_copies_full_workdir_and_excludes_generated_d
     assert not (workspace_root / ".idea").exists()
     assert not (workspace_root / "node_modules").exists()
     assert len(records) == 2
+
+
+def test_prepare_parallel_workspace_skips_fetch_for_local_branch_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本地分支作为基线时，不应额外访问远端。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(source_root, {"README.md": "root\n"})
+
+    calls: list[tuple[tuple[str, ...], Path]] = []
+
+    def fake_run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        calls.append((tuple(args), Path(cwd)))
+        return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(parallel_runtime, "_run_git", fake_run_git)
+
+    records = prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0100",
+        title="本地分支跳过抓取",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref="develop",
+                selected_remote=None,
+                relative_path=".",
+            )
+        ],
+    )
+
+    workspace_root = tmp_path / "workspace"
+    fetch_calls = [args for args, cwd in calls if args[:3] == ("fetch", "--all", "--prune") and cwd == workspace_root]
+    checkout_calls = [args for args, cwd in calls if args[:2] == ("checkout", "-B") and cwd == workspace_root]
+
+    assert fetch_calls == []
+    assert checkout_calls == [("checkout", "-B", records[0].task_branch, "develop")]
+
+
+def test_prepare_parallel_workspace_fetches_only_selected_remote_repos(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """仅选中远端分支的仓库需要抓取远端；本地分支仓库应直接检出。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(source_root, {"README.md": "root\n"})
+    nested_repo = source_root / "service"
+    _init_repo(nested_repo, {"service.txt": "nested\n"})
+
+    calls: list[tuple[tuple[str, ...], Path]] = []
+
+    def fake_run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        calls.append((tuple(args), Path(cwd)))
+        return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(parallel_runtime, "_run_git", fake_run_git)
+
+    records = prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0101",
+        title="混合本地远端基线",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref="develop",
+                selected_remote=None,
+                relative_path=".",
+            ),
+            RepoBranchSelection(
+                repo_key="service",
+                source_repo_path=nested_repo,
+                selected_ref="origin/develop",
+                selected_remote="origin",
+                relative_path="service",
+            ),
+        ],
+    )
+
+    workspace_root = tmp_path / "workspace"
+    service_workspace = workspace_root / "service"
+    root_fetch_calls = [args for args, cwd in calls if args[:3] == ("fetch", "--all", "--prune") and cwd == workspace_root]
+    service_fetch_calls = [args for args, cwd in calls if args[:3] == ("fetch", "--all", "--prune") and cwd == service_workspace]
+    root_checkout_calls = [args for args, cwd in calls if args[:2] == ("checkout", "-B") and cwd == workspace_root]
+    service_checkout_calls = [args for args, cwd in calls if args[:2] == ("checkout", "-B") and cwd == service_workspace]
+
+    assert root_fetch_calls == []
+    assert service_fetch_calls == [("fetch", "--all", "--prune")]
+    assert root_checkout_calls == [("checkout", "-B", records[0].task_branch, "develop")]
+    assert service_checkout_calls == [("checkout", "-B", records[1].task_branch, "origin/develop")]
+    assert calls.index((service_fetch_calls[0], service_workspace)) < calls.index((service_checkout_calls[0], service_workspace))
 
 
 def test_get_current_branch_state_marks_current_local_branch_first(tmp_path: Path) -> None:
