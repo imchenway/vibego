@@ -8815,6 +8815,49 @@ def _parallel_session_runtime_issue(session: ParallelSessionRecord) -> Optional[
     return None
 
 
+def _clear_parallel_session_scoped_runtime_state(session_key: Optional[str]) -> None:
+    """清理并行会话对应的 session 级缓存，避免残留到进程重启前。"""
+
+    normalized_key = (session_key or "").strip()
+    if not normalized_key:
+        return
+    SESSION_OFFSETS.pop(normalized_key, None)
+    PENDING_SUMMARIES.pop(normalized_key, None)
+    SESSION_TASK_BINDINGS.pop(normalized_key, None)
+
+    stale_native_commit_tokens = [
+        token
+        for token, binding in SESSION_COMMIT_CALLBACK_BINDINGS.items()
+        if (getattr(binding, "session_key", "") or "").strip() == normalized_key
+    ]
+    for token in stale_native_commit_tokens:
+        SESSION_COMMIT_CALLBACK_BINDINGS.pop(token, None)
+
+    for chat_id in list(CHAT_LAST_MESSAGE):
+        _clear_last_message(chat_id, normalized_key)
+    for chat_id in list(CHAT_DELIVERED_HASHES):
+        _reset_delivered_hashes(chat_id, normalized_key)
+    for chat_id in list(CHAT_DELIVERED_OFFSETS):
+        _reset_delivered_offsets(chat_id, normalized_key)
+
+
+def _clear_parallel_reply_targets_for_task(task_id: str) -> None:
+    """清理命中指定任务的并行回复态，避免任务删除后仍可误入旧会话。"""
+
+    normalized = _normalize_task_id(task_id) or task_id
+    if not normalized:
+        return
+    stale_chat_ids: list[int] = []
+    for chat_id, payload in CHAT_PARALLEL_REPLY_TARGETS.items():
+        payload_task_id = _normalize_task_id(payload.get("task_id"))
+        dispatch_context = payload.get("dispatch_context")
+        context_task_id = _normalize_task_id(getattr(dispatch_context, "task_id", None))
+        if payload_task_id == normalized or context_task_id == normalized:
+            stale_chat_ids.append(chat_id)
+    for chat_id in stale_chat_ids:
+        CHAT_PARALLEL_REPLY_TARGETS.pop(chat_id, None)
+
+
 async def _drop_parallel_session_bindings(task_id: str, *, session_key: Optional[str] = None) -> None:
     """清理并行会话的内存绑定，避免 stale session 继续被路由命中。"""
 
@@ -8825,17 +8868,21 @@ async def _drop_parallel_session_bindings(task_id: str, *, session_key: Optional
         if hasattr(watcher, "__await__"):
             with suppress(asyncio.CancelledError):
                 await watcher
-    bound_session_key = session_key or PARALLEL_TASK_SESSION_MAP.pop(normalized, None)
+    bound_session_key = session_key or PARALLEL_TASK_SESSION_MAP.get(normalized)
+    PARALLEL_TASK_SESSION_MAP.pop(normalized, None)
     if bound_session_key:
         PARALLEL_SESSION_CONTEXTS.pop(bound_session_key, None)
         PARALLEL_SESSION_TASK_BINDINGS.pop(bound_session_key, None)
+        _clear_parallel_session_scoped_runtime_state(bound_session_key)
     stale_tokens = [
         token
         for token, binding in PARALLEL_CALLBACK_BINDINGS.items()
         if _normalize_task_id(getattr(binding, "task_id", None)) == normalized
+        or (getattr(binding, "session_key", "") or "").strip() == (bound_session_key or "")
     ]
     for token in stale_tokens:
         PARALLEL_CALLBACK_BINDINGS.pop(token, None)
+    _clear_parallel_reply_targets_for_task(normalized)
 
 
 def _clear_parallel_reply_target(chat_id: int) -> None:

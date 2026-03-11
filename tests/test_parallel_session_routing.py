@@ -461,6 +461,74 @@ def test_delete_parallel_session_workspace_allows_cleanup_for_closed_session(mon
     assert "session-key" not in bot.PARALLEL_SESSION_CONTEXTS
 
 
+def test_delete_parallel_session_workspace_cleans_session_scoped_runtime_state(monkeypatch, tmp_path: Path):
+    """删除并行目录时，应同步清理会话级缓存状态，避免残留到 vibego 重启前。"""
+
+    task_id = "TASK_0117"
+    session_key = str(tmp_path / "runtime" / "session.jsonl")
+    runtime_root = tmp_path / task_id
+    workspace_root = runtime_root / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    session = SimpleNamespace(
+        task_id=task_id,
+        status="committed",
+        tmux_session="vibe-par-hyphamall-task_0117",
+        pointer_file=str(runtime_root / "_runtime" / "current_session.txt"),
+        workspace_root=str(workspace_root),
+    )
+
+    async def fake_get_session(_task_id: str):
+        return session
+
+    async def fake_update_status(_task_id: str, **_kwargs):
+        return None
+
+    async def fake_cleanup(path: Path, *, scope: str, owner_key: str):
+        return None
+
+    bot.PARALLEL_TASK_SESSION_MAP[task_id] = session_key
+    bot.PARALLEL_SESSION_CONTEXTS[session_key] = _parallel_context(task_id)
+    bot.PARALLEL_SESSION_TASK_BINDINGS[session_key] = task_id
+    bot.PARALLEL_CALLBACK_BINDINGS = {
+        "deadbeef": SimpleNamespace(task_id=task_id, session_key=session_key),
+    }
+    bot.SESSION_OFFSETS[session_key] = 12
+    bot.PENDING_SUMMARIES[session_key] = bot.PendingSummary(
+        task_id=task_id,
+        request_id="req-1",
+        actor="Tester",
+        session_key=session_key,
+        session_path=Path(session_key),
+        created_at=time.monotonic(),
+    )
+    bot.CHAT_LAST_MESSAGE[1] = {session_key: "历史消息"}
+    bot.CHAT_DELIVERED_HASHES[1] = {session_key: {"hash-1"}}
+    bot.CHAT_DELIVERED_OFFSETS[1] = {session_key: {1}}
+    bot.CHAT_PARALLEL_REPLY_TARGETS[1] = {
+        "task_id": task_id,
+        "dispatch_context": _parallel_context(task_id),
+        "token": "deadbeef",
+        "expires_at": time.time() + 600,
+    }
+
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "get_session", fake_get_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(bot, "_cleanup_codex_trusted_project_path", fake_cleanup)
+    monkeypatch.setattr(bot, "delete_parallel_workspace", lambda **_kwargs: None)
+    monkeypatch.setattr(bot, "_parallel_runtime_root", lambda _task_id: runtime_root)
+
+    asyncio.run(bot._delete_parallel_session_workspace(task_id))
+
+    assert session_key not in bot.SESSION_OFFSETS
+    assert session_key not in bot.PENDING_SUMMARIES
+    assert bot.CHAT_LAST_MESSAGE.get(1, {}).get(session_key) is None
+    assert bot.CHAT_DELIVERED_HASHES.get(1, {}).get(session_key) is None
+    assert bot.CHAT_DELIVERED_OFFSETS.get(1, {}).get(session_key) is None
+    assert 1 not in bot.CHAT_PARALLEL_REPLY_TARGETS
+    assert "deadbeef" not in bot.PARALLEL_CALLBACK_BINDINGS
+    assert session_key not in bot.PARALLEL_SESSION_TASK_BINDINGS
+
+
 def test_delete_parallel_session_workspace_cleans_parallel_workspace_trust(monkeypatch, tmp_path: Path):
     """删除并行目录时，应同步清理该 workspace 的 Codex trusted 条目。"""
 
