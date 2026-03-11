@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -1148,3 +1149,68 @@ def test_parallel_branch_confirm_callback_ensures_workspace_trust_before_startin
 
     assert call_order[0][0] == "trust"
     assert call_order[1][0] == "tmux"
+
+
+def test_start_parallel_tmux_session_requires_ready_file(monkeypatch, tmp_path: Path):
+    """并行 CLI 启动脚本即使返回成功，也必须产出 ready 回执文件。"""
+
+    task = SimpleNamespace(id="TASK_9005")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(bot, "CONFIG_ROOT_PATH", tmp_path)
+    monkeypatch.setattr(bot, "PROJECT_SLUG", "demo")
+
+    captured_env: dict[str, str] = {}
+
+    class DummyProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured_env.update({key: str(value) for key, value in kwargs["env"].items()})
+        return DummyProcess()
+
+    monkeypatch.setattr(bot.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError, match="ready 回执"):
+            await bot._start_parallel_tmux_session(task, workspace_root)
+
+    asyncio.run(scenario())
+
+    assert captured_env["SESSION_READY_FILE"].endswith("tmux_ready")
+
+
+def test_start_parallel_tmux_session_returns_after_ready_file_written(monkeypatch, tmp_path: Path):
+    """并行 CLI 启动脚本返回成功且 ready 回执存在时，应允许继续后续派发。"""
+
+    task = SimpleNamespace(id="TASK_9006")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(bot, "CONFIG_ROOT_PATH", tmp_path)
+    monkeypatch.setattr(bot, "PROJECT_SLUG", "demo")
+
+    class DummyProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        ready_file = Path(str(kwargs["env"]["SESSION_READY_FILE"]))
+        ready_file.parent.mkdir(parents=True, exist_ok=True)
+        ready_file.write_text("ready", encoding="utf-8")
+        return DummyProcess()
+
+    monkeypatch.setattr(bot.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    async def scenario() -> None:
+        tmux_session, pointer_file = await bot._start_parallel_tmux_session(task, workspace_root)
+        assert tmux_session == "vibe-par-demo-task_9006"
+        assert pointer_file.name == "current_session.txt"
+
+    asyncio.run(scenario())

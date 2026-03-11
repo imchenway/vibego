@@ -160,3 +160,74 @@ async def test_send_projects_overview_retries_on_transient_network_error(
     await master._send_projects_overview_to_chat(bot, 1, manager)
 
     assert send_mock.await_count == 3, "出现瞬时网络错误后应重试直至成功"
+
+
+@pytest.mark.asyncio
+async def test_run_worker_ensures_project_workdir_trust_before_launch(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """项目启动前应先确保 workdir 已具备 Codex trusted 权限。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    master.PROJECT_REPOSITORY = repo
+    cfg = manager.require_project("sample")
+
+    trust_calls: list[tuple[str, str]] = []
+    launch_calls: list[tuple[str, ...]] = []
+
+    def fake_ensure_codex_project_trust(project_path: Path, *, config_path: Path | None = None):
+        trust_calls.append((str(project_path), str(config_path) if config_path is not None else ""))
+        return SimpleNamespace(path=project_path, previous_trust_level=None, changed=False)
+
+    class DummyProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        launch_calls.append(tuple(str(part) for part in cmd))
+        assert trust_calls, "应先完成 trusted 校验，再启动 run_bot.sh"
+        return DummyProcess()
+
+    monkeypatch.setattr(master, "ensure_codex_project_trust", fake_ensure_codex_project_trust)
+    monkeypatch.setattr(master, "CODEX_CONFIG_PATH", tmp_path / "codex-config.toml")
+    monkeypatch.setattr(master.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(manager, "_health_check_worker", AsyncMock(return_value=None))
+
+    chosen = await manager.run_worker(cfg)
+
+    assert chosen == "codex"
+    assert trust_calls == [(str(tmp_path), str(tmp_path / "codex-config.toml"))]
+    assert launch_calls, "trusted 校验通过后应继续启动 worker"
+
+
+@pytest.mark.asyncio
+async def test_run_worker_fails_closed_when_project_workdir_trust_auto_config_fails(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """项目 workdir 权限自动配置失败时，应 fail-closed 并阻止启动。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    master.PROJECT_REPOSITORY = repo
+    cfg = manager.require_project("sample")
+
+    def fake_ensure_codex_project_trust(project_path: Path, *, config_path: Path | None = None):
+        raise RuntimeError(f"无法自动写入 trusted：{project_path}")
+
+    create_proc = AsyncMock()
+
+    monkeypatch.setattr(master, "ensure_codex_project_trust", fake_ensure_codex_project_trust)
+    monkeypatch.setattr(master, "CODEX_CONFIG_PATH", tmp_path / "codex-config.toml")
+    monkeypatch.setattr(master.asyncio, "create_subprocess_exec", create_proc)
+
+    with pytest.raises(RuntimeError, match="Codex trusted"):
+        await manager.run_worker(cfg)
+
+    create_proc.assert_not_called()

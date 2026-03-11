@@ -31,6 +31,11 @@ SESSION_BINDER_LOG="${SESSION_BINDER_LOG:-$(dirname "${SESSION_POINTER_FILE}")/s
 SESSION_BINDER_TIMEOUT="${SESSION_BINDER_TIMEOUT:-0}"
 # 用于管理后台 binder 生命周期，避免 stop/restart 后残留常驻进程。
 SESSION_BINDER_PID_FILE="${SESSION_BINDER_PID_FILE:-$(dirname "${SESSION_POINTER_FILE}")/session_binder.pid}"
+SESSION_READY_FILE="${SESSION_READY_FILE:-}"
+SESSION_READY_TIMEOUT_SECONDS="${SESSION_READY_TIMEOUT_SECONDS:-6}"
+SESSION_READY_POLL_INTERVAL_SECONDS="${SESSION_READY_POLL_INTERVAL_SECONDS:-0.2}"
+SESSION_READY_PROBE_LINES="${SESSION_READY_PROBE_LINES:-80}"
+SESSION_READY_MARKERS="${SESSION_READY_MARKERS:-OpenAI Codex||model:||/model to change}"
 
 # 避免 oh-my-zsh 在非交互环境弹出更新提示
 export DISABLE_UPDATE_PROMPT="${DISABLE_UPDATE_PROMPT:-true}"
@@ -81,11 +86,15 @@ SESSION_POINTER_FILE=$(expand_path "$SESSION_POINTER_FILE")
 SESSION_ACTIVE_ID_FILE=$(expand_path "$SESSION_ACTIVE_ID_FILE")
 SESSION_BINDER_LOG=$(expand_path "$SESSION_BINDER_LOG")
 SESSION_BINDER_PID_FILE=$(expand_path "$SESSION_BINDER_PID_FILE")
+SESSION_READY_FILE=$(expand_path "$SESSION_READY_FILE")
 ensure_dir "$(dirname "$LOG_PATH")"
 ensure_dir "$(dirname "$SESSION_POINTER_FILE")"
 ensure_dir "$(dirname "$SESSION_ACTIVE_ID_FILE")"
 ensure_dir "$(dirname "$SESSION_BINDER_LOG")"
 ensure_dir "$(dirname "$SESSION_BINDER_PID_FILE")"
+if [[ -n "$SESSION_READY_FILE" ]]; then
+  ensure_dir "$(dirname "$SESSION_READY_FILE")"
+fi
 
 if [[ "${VIBEGO_AGENTS_SYNCED:-0}" != "1" ]]; then
   AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$ROOT_DIR/AGENTS-template.md}"
@@ -107,6 +116,55 @@ run_tmux() {
   else
     tmux -u "$@"
   fi
+}
+
+is_shell_command() {
+  case "${1##*/}" in
+    sh|bash|zsh|fish|dash|ksh|csh|tcsh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+tmux_output_contains_ready_marker() {
+  local output="$1"
+  local marker
+  IFS='||' read -r -a READY_MARKERS <<<"$SESSION_READY_MARKERS"
+  for marker in "${READY_MARKERS[@]}"; do
+    [[ -n "$marker" && "$output" == *"$marker"* ]] && return 0
+  done
+  return 1
+}
+
+wait_for_tmux_ready() {
+  [[ -n "$SESSION_READY_FILE" ]] || return 0
+  local max_attempts
+  max_attempts="$("$PYTHON_EXEC" - <<PY
+import math
+timeout = max(float("${SESSION_READY_TIMEOUT_SECONDS}"), 0.0)
+poll = max(float("${SESSION_READY_POLL_INTERVAL_SECONDS}"), 0.05)
+print(max(1, math.ceil(timeout / poll)))
+PY
+)"
+  local attempt current_command pane_output
+  rm -f "$SESSION_READY_FILE"
+  for (( attempt=1; attempt<=max_attempts; attempt++ )); do
+    current_command="$(tmux -u display-message -p -t "$SESSION_NAME" '#{pane_current_command}' 2>/dev/null || true)"
+    if [[ -n "$current_command" ]] && ! is_shell_command "$current_command"; then
+      pane_output="$(tmux -u capture-pane -p -t "$SESSION_NAME" -S "-${SESSION_READY_PROBE_LINES}" 2>/dev/null || true)"
+      if tmux_output_contains_ready_marker "$pane_output"; then
+        {
+          printf 'session=%s\n' "$SESSION_NAME"
+          printf 'command=%s\n' "$current_command"
+        } >"$SESSION_READY_FILE"
+        return 0
+      fi
+    fi
+    if (( attempt < max_attempts )); then
+      sleep "$SESSION_READY_POLL_INTERVAL_SECONDS"
+    fi
+  done
+  echo "[start-tmux] tmux 会话未在限定时间内进入 Codex ready 状态: session=$SESSION_NAME current_command=${current_command:-unknown}" >&2
+  return 1
 }
 
 SESSION_CREATED=0
@@ -248,6 +306,10 @@ PY
   echo $! >"$SESSION_BINDER_PID_FILE"
 else
   echo "[start-tmux] session binder 未找到：$SESSION_BINDER" >&2
+fi
+
+if ! wait_for_tmux_ready; then
+  exit 1
 fi
 
 exit 0

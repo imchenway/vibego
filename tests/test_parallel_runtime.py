@@ -10,6 +10,7 @@ from parallel_runtime import (
     BranchRef,
     RepoBranchSelection,
     collect_common_branch_refs,
+    delete_parallel_workspace,
     discover_git_repos,
     filter_common_branch_repo_options,
     get_current_branch_state,
@@ -266,6 +267,84 @@ def test_prepare_parallel_workspace_copies_full_workdir_and_excludes_generated_d
     assert not (workspace_root / ".idea").exists()
     assert not (workspace_root / "node_modules").exists()
     assert len(records) == 2
+
+
+def test_prepare_parallel_workspace_links_root_docs_to_source_docs(tmp_path: Path) -> None:
+    """并行工作区根级 docs 应直接共享真实项目 docs，而不是保留副本。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(source_root, {"README.md": "root\n"})
+    (source_root / "docs").mkdir(parents=True, exist_ok=True)
+    (source_root / "docs" / "TASK_0079.md").write_text("真实项目文档\n", encoding="utf-8")
+
+    prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0079",
+        title="共享真实 docs",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref="HEAD",
+                selected_remote=None,
+                relative_path=".",
+            )
+        ],
+    )
+
+    workspace_docs = tmp_path / "workspace" / "docs"
+    assert workspace_docs.is_symlink()
+    assert workspace_docs.resolve() == (source_root / "docs").resolve()
+    assert (workspace_docs / "TASK_0079.md").read_text(encoding="utf-8") == "真实项目文档\n"
+
+
+def test_prepare_parallel_workspace_creates_missing_source_docs_before_linking(tmp_path: Path) -> None:
+    """真实项目缺少 docs 时，应先自动创建，再让工作区 docs 指向它。"""
+
+    source_root = tmp_path / "source"
+    _init_repo(source_root, {"README.md": "root\n"})
+
+    prepare_parallel_workspace(
+        workspace_root=tmp_path / "workspace",
+        task_id="TASK_0080",
+        title="自动创建 docs",
+        source_root=source_root,
+        selections=[
+            RepoBranchSelection(
+                repo_key="__root__",
+                source_repo_path=source_root,
+                selected_ref="HEAD",
+                selected_remote=None,
+                relative_path=".",
+            )
+        ],
+    )
+
+    source_docs = source_root / "docs"
+    workspace_docs = tmp_path / "workspace" / "docs"
+    assert source_docs.exists()
+    assert source_docs.is_dir()
+    assert workspace_docs.is_symlink()
+    assert workspace_docs.resolve() == source_docs.resolve()
+
+
+def test_delete_parallel_workspace_keeps_shared_source_docs(tmp_path: Path) -> None:
+    """删除并行工作区时，只能删除 docs 链接本身，不能删除真实项目 docs。"""
+
+    source_docs = tmp_path / "source" / "docs"
+    source_docs.mkdir(parents=True, exist_ok=True)
+    (source_docs / "TASK_0079.md").write_text("保留\n", encoding="utf-8")
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "docs").symlink_to(source_docs, target_is_directory=True)
+
+    delete_parallel_workspace(workspace_root=workspace_root)
+
+    assert not workspace_root.exists()
+    assert source_docs.exists()
+    assert (source_docs / "TASK_0079.md").read_text(encoding="utf-8") == "保留\n"
 
 
 def test_prepare_parallel_workspace_skips_fetch_for_local_branch_selection(

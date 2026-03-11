@@ -482,6 +482,21 @@ def _copy_parallel_workspace_tree(*, source_root: Path, workspace_root: Path) ->
     shutil.copytree(source_root, workspace_root, ignore=_ignore, dirs_exist_ok=False)
 
 
+def _link_shared_docs_dir(*, source_root: Path, workspace_root: Path) -> None:
+    """让并行工作区根级 docs 直接共享真实项目根级 docs。"""
+
+    source_docs = Path(source_root) / "docs"
+    workspace_docs = Path(workspace_root) / "docs"
+    source_docs.mkdir(parents=True, exist_ok=True)
+
+    if workspace_docs.is_symlink() or workspace_docs.is_file():
+        workspace_docs.unlink(missing_ok=True)
+    elif workspace_docs.is_dir():
+        shutil.rmtree(workspace_docs, ignore_errors=True)
+
+    workspace_docs.symlink_to(source_docs, target_is_directory=True)
+
+
 def prepare_parallel_workspace(
     *,
     workspace_root: Path,
@@ -502,6 +517,7 @@ def prepare_parallel_workspace(
         source_base = Path(source_root).resolve()
         root.parent.mkdir(parents=True, exist_ok=True)
         _copy_parallel_workspace_tree(source_root=source_base, workspace_root=root)
+        _link_shared_docs_dir(source_root=source_base, workspace_root=root)
 
     task_branch = build_parallel_branch_name(task_id, title)
     records: list[ParallelRepoRecord] = []

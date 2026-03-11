@@ -61,6 +61,7 @@ from aiogram.exceptions import (
 from aiohttp import BasicAuth, ClientError
 
 from logging_setup import create_logger
+from codex_trust import ensure_codex_project_trust
 from tasks import TaskHistoryRecord, TaskNoteRecord, TaskRecord, TaskAttachmentRecord, TaskService
 from tasks.commands import parse_simple_kv, parse_structured_text
 from tasks.models import shanghai_now_iso
@@ -1920,17 +1921,18 @@ async def _ensure_codex_trusted_project_path(
 
     normalized = resolve_path(project_path)
     async with CODEX_CONFIG_LOCK:
-        raw = CODEX_CONFIG_PATH.read_text(encoding="utf-8") if CODEX_CONFIG_PATH.exists() else ""
-        current = _read_codex_project_trust_level(CODEX_CONFIG_PATH, normalized)
-        if current != "trusted":
-            raw = _upsert_codex_project_trust_level_text(raw, normalized, "trusted")
-            _write_codex_config_text(CODEX_CONFIG_PATH, raw)
+        ensure_result = ensure_codex_project_trust(normalized, config_path=CODEX_CONFIG_PATH)
+        if ensure_result.changed:
             managed_by_vibego = True
-            previous_trust_level = current
+            previous_trust_level = ensure_result.previous_trust_level
         else:
             existing = await PARALLEL_SESSION_STORE.get_trusted_path(str(normalized))
             managed_by_vibego = bool(existing.managed_by_vibego) if existing is not None else False
-            previous_trust_level = existing.previous_trust_level if existing is not None else current
+            previous_trust_level = (
+                existing.previous_trust_level
+                if existing is not None
+                else ensure_result.previous_trust_level
+            )
         await PARALLEL_SESSION_STORE.upsert_trusted_path(
             path=str(normalized),
             scope=scope,
@@ -8841,6 +8843,12 @@ def _parallel_model_log(task_id: str) -> Path:
     return _parallel_runtime_meta_dir(task_id) / "model.log"
 
 
+def _parallel_tmux_ready_file(task_id: str) -> Path:
+    """返回并行 CLI 启动完成后的 ready 回执文件路径。"""
+
+    return _parallel_runtime_meta_dir(task_id) / "tmux_ready"
+
+
 def _parallel_tmux_session(task_id: str) -> str:
     normalized = (_normalize_task_id(task_id) or task_id).lower()
     return f"vibe-par-{PROJECT_SLUG[:12]}-{normalized.lower()}"[:48]
@@ -8862,6 +8870,8 @@ async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -
     meta_dir.mkdir(parents=True, exist_ok=True)
     tmux_session = _parallel_tmux_session(task.id)
     pointer_file = _parallel_pointer_file(task.id)
+    ready_file = _parallel_tmux_ready_file(task.id)
+    ready_file.unlink(missing_ok=True)
     env = os.environ.copy()
     env.update(
         {
@@ -8871,7 +8881,13 @@ async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -
             "SESSION_ACTIVE_ID_FILE": str(_parallel_active_session_file(task.id)),
             "SESSION_BINDER_LOG": str(_parallel_session_binder_log(task.id)),
             "SESSION_BINDER_PID_FILE": str(_parallel_session_binder_pid(task.id)),
+            "TMUX_LOG": str(_parallel_model_log(task.id)),
             "LOG_PATH": str(_parallel_model_log(task.id)),
+            "SESSION_READY_FILE": str(ready_file),
+            "SESSION_READY_TIMEOUT_SECONDS": str(PARALLEL_PLAN_READY_TIMEOUT_SECONDS),
+            "SESSION_READY_POLL_INTERVAL_SECONDS": str(PARALLEL_PLAN_READY_POLL_INTERVAL_SECONDS),
+            "SESSION_READY_PROBE_LINES": str(PARALLEL_PLAN_READY_PROBE_LINES),
+            "SESSION_READY_MARKERS": "||".join(PARALLEL_PLAN_READY_MARKERS),
             "PROJECT_NAME": f"{PROJECT_SLUG}-{task.id.lower()}",
         }
     )
@@ -8888,6 +8904,8 @@ async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -
     if process.returncode != 0:
         output = (stdout_bytes or b"").decode("utf-8", errors="ignore") + (stderr_bytes or b"").decode("utf-8", errors="ignore")
         raise RuntimeError(output.strip() or "启动并行 CLI 失败")
+    if not ready_file.exists():
+        raise RuntimeError(f"启动并行 CLI 失败：缺少 ready 回执（{ready_file}）")
     return tmux_session, pointer_file
 
 

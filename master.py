@@ -60,6 +60,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from codex_trust import CODEX_CONFIG_PATH as DEFAULT_CODEX_CONFIG_PATH, ensure_codex_project_trust
 from logging_setup import create_logger
 from project_repository import ProjectRepository, ProjectRecord
 from tasks.fsm import ProjectDeleteStates
@@ -89,6 +90,9 @@ except ImportError:  # pragma: no cover
         """占位异常，兼容缺失 packaging 时的版本解析错误。"""
 
 ROOT_DIR = Path(__file__).resolve().parent
+CODEX_CONFIG_PATH = DEFAULT_CODEX_CONFIG_PATH
+
+
 def _default_config_root() -> Path:
     """
     解析配置根目录，兼容多种环境变量并回落到 XDG 规范。
@@ -2068,6 +2072,17 @@ class MasterManager:
                 extra={"project": cfg.project_slug, "model": target_model},
             )
             raise RuntimeError(message)
+        workdir_path = Path(os.path.expandvars(os.path.expanduser(cfg.workdir or "")))
+        try:
+            ensure_codex_project_trust(workdir_path, config_path=CODEX_CONFIG_PATH)
+        except Exception as exc:
+            message = f"项目目录 Codex trusted 自动配置失败：{exc}"
+            log.error(
+                "项目启动前的 Codex trusted 校验失败: %s",
+                message,
+                extra={"project": cfg.project_slug, "model": target_model, "workdir": str(workdir_path)},
+            )
+            raise RuntimeError(message) from exc
         chat_id_env = state.chat_id or cfg.allowed_chat_id
         env = os.environ.copy()
         boot_id = uuid.uuid4().hex
