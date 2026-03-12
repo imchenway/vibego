@@ -2401,7 +2401,7 @@ def test_model_task_to_test_callback_updates_status(monkeypatch):
     bot.TASK_VIEW_STACK.clear()
 
 
-def test_model_task_to_test_callback_skips_when_already_test(monkeypatch):
+def test_model_task_to_test_callback_still_shows_task_list_when_already_test(monkeypatch):
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:TASK_0601", message)
 
@@ -2425,15 +2425,27 @@ def test_model_task_to_test_callback_skips_when_already_test(monkeypatch):
     async def fake_update_task(*args, **kwargs):
         raise AssertionError("不应在状态已为 test 时调用 update_task")
 
+    async def fake_paginate(*args, **kwargs):
+        return [], 1
+
+    async def fake_count_tasks(*args, **kwargs):
+        return 0
+
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
     monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "paginate", fake_paginate)
+    monkeypatch.setattr(bot.TASK_SERVICE, "count_tasks", fake_count_tasks)
 
     async def scenario() -> None:
         await bot.on_model_task_to_test(callback)
 
     asyncio.run(scenario())
     assert callback.answers[-1] == ("任务已处于“测试”状态", False)
-    assert not message.calls
+    assert len(message.calls) >= 1
+    list_text, _, list_markup, _ = message.calls[0]
+    assert "任务列表" in list_text
+    assert isinstance(list_markup, InlineKeyboardMarkup)
+    bot.TASK_VIEW_STACK.clear()
 
 
 def test_model_task_to_test_callback_handles_missing_task(monkeypatch):

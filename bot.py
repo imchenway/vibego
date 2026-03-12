@@ -13648,6 +13648,8 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
 
     if task.status == "test":
         await callback.answer("任务已处于“测试”状态")
+        if callback.message is not None:
+            await _handle_task_list_request(callback.message)
         return
 
     actor = _actor_from_callback(callback)
