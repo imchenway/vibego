@@ -532,6 +532,85 @@ def test_request_input_custom_option_enters_text_mode():
     assert "请发送第 1 题的自定义决策文本" in message.calls[-1][0]
 
 
+def test_request_input_custom_option_claims_text_focus_token():
+    """进入自定义输入模式后，应把文本输入焦点切到当前 token。"""
+
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_custom_focus",
+        chat_id=199,
+        user_id=199,
+        call_id="call_custom_focus",
+        session_key="s-custom-focus",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    message = DummyMessage(chat_id=199, user_id=199)
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_CUSTOM),
+        message=message,
+        user_id=199,
+    )
+
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[199] == session.token
+
+
+def test_request_input_old_callback_still_works_after_newer_session_created():
+    """同 chat 下新问题出现后，旧问题按钮仍应可点，不应因“单活 token”提前失效。"""
+
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    older = bot.RequestInputSession(
+        token="token_older",
+        chat_id=299,
+        user_id=299,
+        call_id="call_older",
+        session_key="s-older",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    newer = bot.RequestInputSession(
+        token="token_newer",
+        chat_id=299,
+        user_id=299,
+        call_id="call_newer",
+        session_key="s-newer",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    bot.REQUEST_INPUT_SESSIONS[older.token] = older
+    bot.REQUEST_INPUT_SESSIONS[newer.token] = newer
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[299] = newer.token
+    message = DummyMessage(chat_id=299, user_id=299)
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(older.token, bot.REQUEST_INPUT_ACTION_CUSTOM),
+        message=message,
+        user_id=299,
+    )
+
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert callback.answers[-1] == ("请发送自定义决策文本", False)
+    assert older.input_mode_question_id == "scope"
+    assert bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[299] == older.token
+
+
 def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     question = bot.RequestInputQuestion(
         question_id="scope",
@@ -641,6 +720,71 @@ def test_request_input_custom_text_auto_submits_to_parallel_context(monkeypatch,
 
     assert handled is True
     assert captured_contexts == [dispatch_context]
+
+
+def test_dispatch_prompt_to_model_does_not_drop_existing_request_input_session_for_same_chat(monkeypatch, tmp_path: Path):
+    """同 chat 新一轮入模时，不应把尚未过期的 request_input 会话直接删掉。"""
+
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+    )
+    session = bot.RequestInputSession(
+        token="token_keep_alive",
+        chat_id=399,
+        user_id=399,
+        call_id="call_keep_alive",
+        session_key="s-keep-alive",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[399] = session.token
+
+    pointer = tmp_path / "pointer.txt"
+    new_session = tmp_path / "rollout-new.jsonl"
+    new_session.write_text("", encoding="utf-8")
+    pointer.write_text(str(new_session), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", pointer, raising=False)
+    monkeypatch.setattr(bot, "_drop_chat_plan_confirm_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bot, "_reply_to_chat", lambda *args, **kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(bot, "_deliver_pending_messages", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(bot, "_await_session_path", lambda *args, **kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(bot, "tmux_send_line", lambda *args, **kwargs: None)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def _scenario() -> None:
+        ok, _session_path = await bot._dispatch_prompt_to_model(399, "继续处理", reply_to=None, ack_immediately=True)
+        assert ok is True
+
+    asyncio.run(_scenario())
+
+    assert session.token in bot.REQUEST_INPUT_SESSIONS
+    assert bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[399] == session.token
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
 
 def test_request_input_custom_media_message_auto_submits_with_attachment_prompt(monkeypatch, tmp_path: Path):

@@ -2264,9 +2264,6 @@ async def _dispatch_prompt_to_model(
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
 
-    stale_token = CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id)
-    if stale_token:
-        _drop_request_input_session(stale_token)
     # 新提示词入模时，清理旧的 Plan 确认状态，避免跨轮次误触发。
     _drop_chat_plan_confirm_session(chat_id)
 
@@ -8538,7 +8535,8 @@ CHAT_COMPACT_STATE: Dict[int, Dict[str, Dict[str, Any]]] = {}
 CHAT_ACTIVE_USERS: Dict[int, int] = {}
 # request_user_input：token -> session
 REQUEST_INPUT_SESSIONS: Dict[str, RequestInputSession] = {}
-# request_user_input：每个 chat 当前生效 token（旧 token 自动失效）
+# request_user_input：每个 chat 当前“自定义文本输入焦点”token。
+# 说明：同 chat 可并存多个按钮交互，但自由文本一次只路由到一个会话。
 CHAT_ACTIVE_REQUEST_INPUT_TOKENS: Dict[int, str] = {}
 # plan confirm：token -> session
 PLAN_CONFIRM_SESSIONS: Dict[str, PlanConfirmSession] = {}
@@ -9974,6 +9972,26 @@ def _drop_request_input_session(token: str) -> None:
         CHAT_ACTIVE_REQUEST_INPUT_TOKENS.pop(session.chat_id, None)
 
 
+def _set_request_input_text_focus(chat_id: int, token: str) -> None:
+    """将 chat 的 request_input 自定义输入焦点切到指定 token。"""
+
+    normalized = (token or "").strip()
+    if not normalized:
+        CHAT_ACTIVE_REQUEST_INPUT_TOKENS.pop(chat_id, None)
+        return
+    CHAT_ACTIVE_REQUEST_INPUT_TOKENS[chat_id] = normalized
+
+
+def _clear_request_input_text_focus(chat_id: int, token: Optional[str] = None) -> None:
+    """清理 chat 的 request_input 自定义输入焦点。"""
+
+    if token is None:
+        CHAT_ACTIVE_REQUEST_INPUT_TOKENS.pop(chat_id, None)
+        return
+    if CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id) == token:
+        CHAT_ACTIVE_REQUEST_INPUT_TOKENS.pop(chat_id, None)
+
+
 def _drop_plan_confirm_session(token: str) -> None:
     """按 token 删除 Plan 结束确认会话及其 chat 映射。"""
 
@@ -10463,11 +10481,6 @@ async def _start_request_input_interaction(
         await reply_large_text(chat_id, fallback_text, parse_mode=None, preformatted=True)
         return True
 
-    # 替换同 chat 的旧 token，旧按钮将自动失效。
-    previous_token = CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id)
-    if previous_token:
-        _drop_request_input_session(previous_token)
-
     token = uuid.uuid4().hex[:10]
     owner_user_id = int(CHAT_ACTIVE_USERS.get(chat_id, chat_id))
     parallel_task_id, parallel_dispatch_context = await _resolve_parallel_request_input_context(str(session_path))
@@ -10487,7 +10500,6 @@ async def _start_request_input_interaction(
         return True
 
     REQUEST_INPUT_SESSIONS[token] = session
-    CHAT_ACTIVE_REQUEST_INPUT_TOKENS[chat_id] = token
     sent = await _send_request_input_question(session, reply_to=None)
     if not sent:
         _drop_request_input_session(token)
@@ -13547,7 +13559,7 @@ async def _submit_request_input_session_with_auto_retry(
 
 
 def _get_request_input_session_for_chat(chat_id: int) -> Optional[RequestInputSession]:
-    """获取 chat 当前有效的 request_user_input 会话。"""
+    """获取 chat 当前拥有“自定义文本输入焦点”的 request_input 会话。"""
 
     _cleanup_expired_request_input_sessions()
     token = CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id)
@@ -13692,6 +13704,7 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
     token = _normalize_choice_token(raw_text)
     if not attachments and _is_cancel_message(token):
         session.input_mode_question_id = None
+        _clear_request_input_text_focus(message.chat.id, session.token)
         await message.answer("已取消自定义输入，返回当前题目。", reply_markup=ReplyKeyboardRemove())
         await _send_request_input_question(session, reply_to=message)
         return True
@@ -13708,6 +13721,7 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
     question_index = _find_request_input_question_index(session, question_id)
     if question_index is None:
         session.input_mode_question_id = None
+        _clear_request_input_text_focus(message.chat.id, session.token)
         await message.answer("当前题目已失效，请重新选择。", reply_markup=ReplyKeyboardRemove())
         await _send_request_input_question(session, reply_to=message)
         return True
@@ -13715,6 +13729,7 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
     question = session.questions[question_index]
     if _is_request_input_question_answered(session, question.question_id):
         session.input_mode_question_id = None
+        _clear_request_input_text_focus(message.chat.id, session.token)
         await message.answer("该题已锁定，不可修改。", reply_markup=ReplyKeyboardRemove())
         return True
 
@@ -13724,6 +13739,7 @@ async def _handle_request_input_custom_text_message(message: Message) -> bool:
         session.custom_answers[question.question_id] = trimmed
     session.selected_option_indexes[question.question_id] = REQUEST_INPUT_CUSTOM_OPTION_INDEX
     session.input_mode_question_id = None
+    _clear_request_input_text_focus(message.chat.id, session.token)
     await _lock_request_input_question_markup(session, question.question_id)
 
     next_unanswered = _next_unanswered_request_input_index(session, after_index=question_index)
@@ -13896,11 +13912,6 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
         await callback.answer("会话不匹配，无法操作。", show_alert=True)
         return
 
-    active_token = CHAT_ACTIVE_REQUEST_INPUT_TOKENS.get(chat_id)
-    if active_token and active_token != token:
-        await callback.answer("该交互已被新问题替换，请使用最新消息。", show_alert=True)
-        return
-
     if callback.from_user and callback.from_user.id != session.user_id:
         await callback.answer("仅会话发起人可操作该按钮。", show_alert=True)
         return
@@ -13973,6 +13984,7 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
         session.selected_option_indexes[question.question_id] = option_index
         session.custom_answers.pop(question.question_id, None)
         session.input_mode_question_id = None
+        _clear_request_input_text_focus(chat_id, token)
         await _lock_request_input_callback_message(callback.message)
         option_label = question.options[option_index].label
         next_unanswered = _next_unanswered_request_input_index(
@@ -14014,6 +14026,7 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
             return
         session.current_index = question_index
         session.input_mode_question_id = question.question_id
+        _set_request_input_text_focus(chat_id, token)
         await callback.answer("请发送自定义决策文本")
         if callback.message is not None:
             await callback.message.answer(
@@ -14033,6 +14046,7 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
     if action == REQUEST_INPUT_ACTION_CANCEL:
         session.cancelled = True
         session.input_mode_question_id = None
+        _clear_request_input_text_focus(chat_id, token)
         _drop_request_input_session(token)
         await callback.answer("已取消")
         if callback.message is not None:
