@@ -347,6 +347,63 @@ def test_parallel_plan_confirm_yes_fails_closed_when_context_stale(monkeypatch: 
     assert "并行会话已失效" in callback.message.answers[-1][0]
 
 
+def test_plan_confirm_old_callback_still_works_after_newer_session_created(monkeypatch: pytest.MonkeyPatch):
+    """同 chat 出现更新的 PlanConfirm 后，旧按钮仍应可点击，不应被“单活 token”提前判失效。"""
+
+    chat_id = 190
+    older = bot.PlanConfirmSession(
+        token="tok-older",
+        chat_id=chat_id,
+        session_key="session-older",
+        user_id=9,
+        created_at=time.monotonic(),
+    )
+    newer = bot.PlanConfirmSession(
+        token="tok-newer",
+        chat_id=chat_id,
+        session_key="session-newer",
+        user_id=9,
+        created_at=time.monotonic(),
+    )
+    bot.PLAN_CONFIRM_SESSIONS[older.token] = older
+    bot.PLAN_CONFIRM_SESSIONS[newer.token] = newer
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = newer.token
+
+    dispatched: list[tuple[int, str]] = []
+
+    async def fake_dispatch(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        intended_mode=None,
+        force_exit_plan_ui: bool = False,
+        force_exit_plan_ui_key_sequence=None,
+        force_exit_plan_ui_max_rounds=None,
+        dispatch_context=None,
+    ):
+        dispatched.append((_chat_id, prompt))
+        return True, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
+
+    callback = DummyCallback(
+        bot._build_plan_confirm_callback_data(older.token, bot.PLAN_CONFIRM_ACTION_YES),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=9,
+    )
+
+    asyncio.run(bot.on_plan_confirm_callback(callback))
+
+    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_PROMPT)]
+    assert older.token not in bot.PLAN_CONFIRM_SESSIONS
+    assert newer.token in bot.PLAN_CONFIRM_SESSIONS
+    assert bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] == newer.token
+    assert callback.answers[-1] == ("已确认并推送到模型", False)
+
+
 def test_plan_confirm_yes_is_idempotent_under_concurrent_clicks(monkeypatch: pytest.MonkeyPatch):
     """同一个 Plan Yes token 并发点击时，最多只允许一次实际派发。"""
 
@@ -459,6 +516,51 @@ def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
     assert callback.answers[-1] == ("已保持 Plan 模式", False)
     assert callback.message.answers == []
+
+
+def test_maybe_send_plan_confirm_prompt_keeps_older_session_for_same_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """同 chat 出现新的 PlanConfirm 时，不应直接删掉旧 session。"""
+
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent_messages: list[dict] = []
+
+        async def send_message(self, chat_id: int, text: str, parse_mode=None, reply_markup=None):
+            self.sent_messages.append(
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "reply_markup": reply_markup,
+                }
+            )
+            return SimpleNamespace(message_id=len(self.sent_messages), chat=SimpleNamespace(id=chat_id))
+
+    chat_id = 191
+
+    async def fake_send_with_retry(coro_factory, *, attempts=bot.SEND_RETRY_ATTEMPTS):
+        await coro_factory()
+
+    async def fake_resolve_parallel(_session_key: str):
+        return None, None
+
+    monkeypatch.setattr(bot, "_bot", DummyBot())
+    monkeypatch.setattr(bot, "_send_with_retry", fake_send_with_retry)
+    monkeypatch.setattr(bot, "_resolve_parallel_plan_confirm_context", fake_resolve_parallel)
+
+    created_1 = asyncio.run(bot._maybe_send_plan_confirm_prompt(chat_id, str(tmp_path / "session-1.jsonl")))
+    older_token = bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id]
+    created_2 = asyncio.run(bot._maybe_send_plan_confirm_prompt(chat_id, str(tmp_path / "session-2.jsonl")))
+    newer_token = bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id]
+
+    assert created_1 is True
+    assert created_2 is True
+    assert older_token != newer_token
+    assert older_token in bot.PLAN_CONFIRM_SESSIONS
+    assert newer_token in bot.PLAN_CONFIRM_SESSIONS
+    assert bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] == newer_token
 
 
 def test_plan_develop_retry_callback_dispatches_implement_prompt_without_session(

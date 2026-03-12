@@ -2264,9 +2264,6 @@ async def _dispatch_prompt_to_model(
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
 
-    # 新提示词入模时，清理旧的 Plan 确认状态，避免跨轮次误触发。
-    _drop_chat_plan_confirm_session(chat_id)
-
     is_parallel_dispatch = dispatch_context is not None
     parallel_task_id = _normalize_task_id(dispatch_context.task_id) if dispatch_context is not None else None
 
@@ -2400,6 +2397,9 @@ async def _dispatch_prompt_to_model(
                 )
 
     needs_session_wait = session_path is None
+    if session_path is not None:
+        # 仅收口当前即将继续执行的会话，避免其他并存会话按钮被误删。
+        _drop_plan_confirm_sessions_for_session(chat_id, str(session_path))
     if needs_session_wait and pointer_path is None:
         await _reply_to_chat(
             chat_id,
@@ -2514,6 +2514,7 @@ async def _dispatch_prompt_to_model(
             session_path,
             extra=_session_extra(path=session_path),
         )
+        _drop_plan_confirm_sessions_for_session(chat_id, str(session_path))
 
     assert session_path is not None
     session_key = str(session_path)
@@ -8540,7 +8541,7 @@ REQUEST_INPUT_SESSIONS: Dict[str, RequestInputSession] = {}
 CHAT_ACTIVE_REQUEST_INPUT_TOKENS: Dict[int, str] = {}
 # plan confirm：token -> session
 PLAN_CONFIRM_SESSIONS: Dict[str, PlanConfirmSession] = {}
-# plan confirm：每个 chat 当前生效 token（旧 token 自动失效）
+# plan confirm：每个 chat 最近一次下发 token（仅用于最新态记录，旧 token 仍可并存）
 CHAT_ACTIVE_PLAN_CONFIRM_TOKENS: Dict[int, str] = {}
 # Plan Yes 并发点击幂等保护：记录当前正在处理中的确认 token。
 PLAN_CONFIRM_PROCESSING_TOKENS: set[str] = set()
@@ -10033,6 +10034,27 @@ def _drop_chat_plan_confirm_session(chat_id: int) -> None:
     _drop_plan_confirm_session(token)
 
 
+def _find_plan_confirm_tokens(chat_id: int, *, session_key: Optional[str] = None) -> List[str]:
+    """查找指定 chat 下的 PlanConfirm token，可按 session_key 过滤。"""
+
+    normalized_session_key = (session_key or "").strip()
+    matched_tokens: List[str] = []
+    for token, session in PLAN_CONFIRM_SESSIONS.items():
+        if session.chat_id != chat_id:
+            continue
+        if normalized_session_key and session.session_key != normalized_session_key:
+            continue
+        matched_tokens.append(token)
+    return matched_tokens
+
+
+def _drop_plan_confirm_sessions_for_session(chat_id: int, session_key: Optional[str]) -> None:
+    """仅删除指定 chat + session_key 的 PlanConfirm，会保留其他并存会话。"""
+
+    for token in _find_plan_confirm_tokens(chat_id, session_key=session_key):
+        _drop_plan_confirm_session(token)
+
+
 def _build_plan_confirm_callback_data(token: str, action: str) -> str:
     """构造 Plan 结束确认按钮回调数据（遵循 Telegram 64 字节限制）。"""
 
@@ -10558,13 +10580,9 @@ def _build_plan_confirm_keyboard(token: str) -> InlineKeyboardMarkup:
 async def _maybe_send_plan_confirm_prompt(chat_id: int, session_key: str) -> bool:
     """在计划收口后向 Telegram 下发“是否进入开发”确认按钮。"""
 
-    active_token = CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.get(chat_id)
-    if active_token:
-        active_session = PLAN_CONFIRM_SESSIONS.get(active_token)
-        if active_session and active_session.session_key == session_key:
-            # 同会话已存在确认，不重复发送。
-            return False
-        _drop_plan_confirm_session(active_token)
+    if _find_plan_confirm_tokens(chat_id, session_key=session_key):
+        # 同会话已存在确认，不重复发送；但保留同 chat 的其他并存确认。
+        return False
 
     token = uuid.uuid4().hex[:10]
     owner_user_id = CHAT_ACTIVE_USERS.get(chat_id)
@@ -13780,11 +13798,6 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
     chat_id = callback.message.chat.id if callback.message else callback.from_user.id
     if chat_id != session.chat_id:
         await callback.answer("会话不匹配，无法操作。", show_alert=True)
-        return
-
-    active_token = CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.get(chat_id)
-    if active_token and active_token != token:
-        await callback.answer("该确认已被新会话替换，请使用最新消息。", show_alert=True)
         return
 
     if session.user_id is not None and callback.from_user and callback.from_user.id != session.user_id:

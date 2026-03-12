@@ -3831,6 +3831,61 @@ def test_dispatch_prompt_force_exit_plan_ui_retries_multiple_rounds(monkeypatch,
             pass
 
 
+def test_dispatch_prompt_to_model_does_not_drop_other_session_plan_confirm_for_same_chat(monkeypatch, tmp_path: Path):
+    """同 chat 派发到另一条会话时，不应把无关 session 的 PlanConfirm 直接删掉。"""
+
+    plan_session = bot.PlanConfirmSession(
+        token="token_plan_keep",
+        chat_id=499,
+        session_key="session-plan-old",
+        user_id=499,
+        created_at=time.monotonic(),
+    )
+    bot.PLAN_CONFIRM_SESSIONS[plan_session.token] = plan_session
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[499] = plan_session.token
+
+    pointer = tmp_path / "pointer.txt"
+    new_session = tmp_path / "rollout-new.jsonl"
+    new_session.write_text("", encoding="utf-8")
+    pointer.write_text(str(new_session), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", pointer, raising=False)
+    monkeypatch.setattr(bot, "_reply_to_chat", lambda *args, **kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(bot, "_deliver_pending_messages", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(bot, "_await_session_path", lambda *args, **kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(bot, "tmux_send_line", lambda *args, **kwargs: None)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def _scenario() -> None:
+        ok, _session_path = await bot._dispatch_prompt_to_model(499, "继续处理", reply_to=None, ack_immediately=True)
+        assert ok is True
+
+    asyncio.run(_scenario())
+
+    assert plan_session.token in bot.PLAN_CONFIRM_SESSIONS
+    assert bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[499] == plan_session.token
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 @pytest.mark.parametrize(
     "raw_output,expected",
     [
