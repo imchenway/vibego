@@ -1069,6 +1069,45 @@ class ParallelSessionStore:
             deleted_at=row["deleted_at"],
         )
 
+    async def list_sessions(self, *, statuses: Optional[Sequence[str]] = None) -> list[ParallelSessionRecord]:
+        """按当前项目列出并行会话，可选按状态过滤。"""
+
+        await self.initialize()
+        query = ["SELECT * FROM parallel_sessions WHERE project_slug = ?"]
+        params: list[object] = [self.project_slug]
+        normalized_statuses = [str(item).strip() for item in (statuses or ()) if str(item).strip()]
+        if normalized_statuses:
+            placeholders = ",".join("?" for _ in normalized_statuses)
+            query.append(f"AND status IN ({placeholders})")
+            params.extend(normalized_statuses)
+        query.append("ORDER BY updated_at DESC, created_at DESC, task_id ASC")
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(" ".join(query), params) as cursor:
+                rows = await cursor.fetchall()
+
+        return [
+            ParallelSessionRecord(
+                id=row["id"],
+                task_id=row["task_id"],
+                project_slug=row["project_slug"],
+                title_snapshot=row["title_snapshot"],
+                workspace_root=row["workspace_root"],
+                tmux_session=row["tmux_session"],
+                pointer_file=row["pointer_file"],
+                task_branch=row["task_branch"],
+                status=row["status"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                last_error=row["last_error"],
+                last_commit_at=row["last_commit_at"],
+                last_merge_at=row["last_merge_at"],
+                deleted_at=row["deleted_at"],
+            )
+            for row in rows
+        ]
+
     async def list_repos(self, task_id: str) -> list[ParallelRepoRecord]:
         session = await self.get_session(task_id)
         if session is None:

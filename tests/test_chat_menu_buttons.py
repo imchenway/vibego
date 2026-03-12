@@ -49,8 +49,30 @@ def test_worker_keyboard_button_text(monkeypatch):
     markup = bot._build_worker_main_keyboard()
     assert markup.keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
     assert markup.keyboard[0][1].text == bot.WORKER_COMMANDS_BUTTON_TEXT
-    assert markup.keyboard[1][0].text == bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT
+    assert markup.keyboard[1][0].text == "💻 会话实况"
     assert markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF
+
+
+def test_worker_session_live_button_opens_session_list(monkeypatch):
+    """点击“会话实况”应先进入会话列表，而不是直接截取默认 tmux。"""
+
+    async def fake_build_session_live_list_view():
+        return "*会话实况*", ReplyKeyboardMarkup(keyboard=[])
+
+    mock_answer = AsyncMock(return_value="sent")
+
+    def should_not_capture(*_args, **_kwargs):
+        raise AssertionError("进入会话实况入口时，不应直接抓取默认 tmux 输出")
+
+    monkeypatch.setattr(bot, "_build_session_live_list_view", fake_build_session_live_list_view, raising=False)
+    monkeypatch.setattr(bot, "_answer_with_markdown", mock_answer)
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", should_not_capture)
+
+    message = _DummyMessage("💻 会话实况")
+    asyncio.run(bot.on_tmux_snapshot_button(message))
+
+    assert mock_answer.await_count == 1
+    assert "会话实况" in mock_answer.await_args.args[1]
 
 
 def test_worker_keyboard_resize_enabled():
@@ -190,61 +212,76 @@ class _DummyManager:
 def test_worker_terminal_snapshot_success(monkeypatch):
     captured_lines = {}
 
-    def fake_capture(lines: int) -> str:
+    async def fake_resolve(entry_key: str):
+        assert entry_key == "main"
+        return bot.SessionLiveEntry(
+            key="main",
+            label="💻 主会话（vibe）",
+            tmux_session=bot.TMUX_SESSION,
+            kind="main",
+        )
+
+    def fake_capture(lines: int, tmux_session: str | None = None) -> str:
         captured_lines["value"] = lines
+        captured_lines["tmux_session"] = tmux_session
         return "line-1\nline-2"
 
-    mock_reply_large_text = AsyncMock(return_value="sent")
-
+    monkeypatch.setattr(bot, "_resolve_session_live_entry", fake_resolve, raising=False)
     monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
-    monkeypatch.setattr(bot, "reply_large_text", mock_reply_large_text)
-
-    message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
-    asyncio.run(bot.on_tmux_snapshot_button(message))
+    text, markup = asyncio.run(bot._build_session_live_snapshot_view("main"))
 
     assert "value" in captured_lines
     assert captured_lines["value"] == bot.TMUX_SNAPSHOT_LINES
-    assert mock_reply_large_text.await_count == 1
-    sent_text = mock_reply_large_text.await_args.args[1]
-    assert "line-1" in sent_text
-    assert bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT in sent_text
-    kwargs = mock_reply_large_text.await_args.kwargs
-    assert isinstance(kwargs.get("reply_markup"), ReplyKeyboardMarkup)
-    assert isinstance(kwargs.get("attachment_reply_markup"), ReplyKeyboardMarkup)
+    assert captured_lines["tmux_session"] == bot.TMUX_SESSION
+    assert "line-1" in text
+    callback_data = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert bot.SESSION_LIVE_REFRESH_MAIN_CALLBACK in callback_data
+    assert bot.SESSION_LIVE_LIST_CALLBACK in callback_data
 
 
 def test_worker_terminal_snapshot_handles_tmux_failure(monkeypatch):
-    def fake_capture(_: int) -> str:
+    async def fake_resolve(entry_key: str):
+        assert entry_key == "main"
+        return bot.SessionLiveEntry(
+            key="main",
+            label="💻 主会话（vibe）",
+            tmux_session=bot.TMUX_SESSION,
+            kind="main",
+        )
+
+    def fake_capture(_: int, tmux_session: str | None = None) -> str:
         raise subprocess.CalledProcessError(returncode=1, cmd="tmux", output="err")
 
-    mock_reply = AsyncMock()
-
+    monkeypatch.setattr(bot, "_resolve_session_live_entry", fake_resolve, raising=False)
     monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
-    monkeypatch.setattr(bot, "_reply_to_chat", mock_reply)
 
-    message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
-    asyncio.run(bot.on_tmux_snapshot_button(message))
-
-    assert mock_reply.await_count == 1
-    call = mock_reply.await_args
-    assert bot.TMUX_SESSION in call.args[1]
+    with pytest.raises(RuntimeError, match=bot.TMUX_SESSION):
+        asyncio.run(bot._build_session_live_snapshot_view("main"))
 
 
 def test_worker_terminal_snapshot_handles_tmux_timeout(monkeypatch):
-    def fake_capture(_: int) -> str:
+    async def fake_resolve(entry_key: str):
+        assert entry_key == "main"
+        return bot.SessionLiveEntry(
+            key="main",
+            label="💻 主会话（vibe）",
+            tmux_session=bot.TMUX_SESSION,
+            kind="main",
+        )
+
+    def fake_capture(_: int, tmux_session: str | None = None) -> str:
         raise subprocess.TimeoutExpired(cmd="tmux", timeout=1)
 
-    mock_reply = AsyncMock()
-
+    monkeypatch.setattr(bot, "_resolve_session_live_entry", fake_resolve, raising=False)
     monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
-    monkeypatch.setattr(bot, "_reply_to_chat", mock_reply)
 
-    message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
-    asyncio.run(bot.on_tmux_snapshot_button(message))
-
-    assert mock_reply.await_count == 1
-    call = mock_reply.await_args
-    assert "超时" in call.args[1]
+    with pytest.raises(RuntimeError, match="超时"):
+        asyncio.run(bot._build_session_live_snapshot_view("main"))
 
 
 def test_worker_terminal_snapshot_resumes_watcher_when_exited(monkeypatch, tmp_path):
@@ -266,14 +303,12 @@ def test_worker_terminal_snapshot_resumes_watcher_when_exited(monkeypatch, tmp_p
     async def fake_watch_and_notify(*args, **kwargs):
         return None
 
-    def fake_capture(_: int) -> str:
-        return "line-1"
-
-    mock_reply_large_text = AsyncMock(return_value="sent")
+    async def fake_build_session_live_list_view():
+        return "*会话实况*", ReplyKeyboardMarkup(keyboard=[])
 
     monkeypatch.setattr(bot, "_watch_and_notify", fake_watch_and_notify)
-    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
-    monkeypatch.setattr(bot, "reply_large_text", mock_reply_large_text)
+    monkeypatch.setattr(bot, "_build_session_live_list_view", fake_build_session_live_list_view, raising=False)
+    monkeypatch.setattr(bot, "_answer_with_markdown", AsyncMock(return_value="sent"))
 
     message = _DummyMessage(bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT, chat_id=chat_id)
     asyncio.run(bot.on_tmux_snapshot_button(message))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from tasks import TaskRecord
 
 from parallel_runtime import (
     BranchRef,
+    ParallelSessionStore,
     RepoBranchSelection,
     build_parallel_branch_name,
     commit_parallel_repos,
@@ -119,6 +121,40 @@ def test_build_parallel_branch_name_uses_default_prefix() -> None:
     """未指定前缀时，应统一落到默认分支组。"""
 
     assert build_parallel_branch_name("TASK_0108", "类目编码校验") == "vibego/TASK_0108-类目编码校验"
+
+
+def test_parallel_session_store_list_sessions_filters_by_status(tmp_path: Path) -> None:
+    """并行会话列表应按当前项目与目标状态过滤。"""
+
+    async def _scenario() -> None:
+        store = ParallelSessionStore(tmp_path / "parallel.db", "demo")
+        await store.upsert_session(
+            task_id="TASK_9001",
+            title_snapshot="并行任务一",
+            workspace_root=str(tmp_path / "workspace-1"),
+            tmux_session="vibe-par-demo-1",
+            pointer_file=str(tmp_path / "pointer-1.txt"),
+            task_branch="vibego/TASK_9001",
+            status="running",
+            repos=[],
+        )
+        await store.upsert_session(
+            task_id="TASK_9002",
+            title_snapshot="并行任务二",
+            workspace_root=str(tmp_path / "workspace-2"),
+            tmux_session="vibe-par-demo-2",
+            pointer_file=str(tmp_path / "pointer-2.txt"),
+            task_branch="vibego/TASK_9002",
+            status="closed",
+            repos=[],
+        )
+
+        running_sessions = await store.list_sessions(statuses=("running",))
+
+        assert [item.task_id for item in running_sessions] == ["TASK_9001"]
+        assert all(item.status == "running" for item in running_sessions)
+
+    asyncio.run(_scenario())
 
 
 def test_build_parallel_branch_name_uses_custom_prefix() -> None:

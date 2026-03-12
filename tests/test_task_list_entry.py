@@ -533,6 +533,84 @@ def test_compose_task_button_label_does_not_include_task_type_icons():
         assert "⚪" not in label
 
 
+def test_compose_task_button_label_appends_running_suffix():
+    """存在活动会话时，任务标题末尾应追加运行中图标。"""
+
+    task = TaskRecord(
+        id="TASK_RUNNING",
+        project_slug="demo",
+        title="并行中的任务",
+        status="research",
+        priority=3,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="",
+        parent_id=None,
+        root_id="TASK_RUNNING",
+        depth=0,
+        lineage="0001",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    label = bot._compose_task_button_label(task, max_length=60, is_session_running=True)
+    assert label.endswith(" ▶️")
+
+
+def test_build_task_list_view_marks_running_tasks(monkeypatch):
+    """任务列表命中活动会话时，应把运行中图标透传到详情按钮文案。"""
+
+    task = TaskRecord(
+        id="TASK_RUNNING",
+        project_slug="demo",
+        title="并行中的任务",
+        status="research",
+        priority=3,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="",
+        parent_id=None,
+        root_id="TASK_RUNNING",
+        depth=0,
+        lineage="0001",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    async def fake_paginate(*, status, page, page_size, exclude_statuses=None):
+        assert status is None
+        assert page == 1
+        assert page_size == 10
+        return [task], 1
+
+    async def fake_count_tasks(*, status, include_archived, exclude_statuses=None):
+        assert status is None
+        assert include_archived is False
+        return 1
+
+    async def fake_running_task_ids():
+        return {"TASK_RUNNING"}
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "paginate", fake_paginate)
+    monkeypatch.setattr(bot.TASK_SERVICE, "count_tasks", fake_count_tasks)
+    monkeypatch.setattr(bot, "_list_running_task_ids_for_task_list", fake_running_task_ids, raising=False)
+
+    text, markup = asyncio.run(bot._build_task_list_view(status=None, page=1, limit=10))
+
+    assert "任务列表" in text
+    detail_buttons = [
+        button.text
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data and button.callback_data.startswith("task:detail:")
+    ]
+    assert detail_buttons == ["🔍 并行中的任务 ▶️"]
+
+
 def test_task_list_search_cancel_restores_list(monkeypatch):
     message = DummyMessage()
     user = SimpleNamespace(id=123, is_bot=False)

@@ -3931,7 +3931,7 @@ COMMAND_KEYWORDS.update(
 
 WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
 WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
-WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT = "💻 终端实况"
+WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT = "💻 会话实况"
 WORKER_PLAN_MODE_BUTTON_PREFIX = "🧭 PLAN MODE:"
 WORKER_PLAN_MODE_BUTTON_TEXT_ON = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ON"
 WORKER_PLAN_MODE_BUTTON_TEXT_OFF = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} OFF"
@@ -3950,6 +3950,17 @@ WORKER_PLAN_MODE_STATUS_LINE_RE = re.compile(
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 # Worker 主菜单 PLAN MODE 状态缓存（按 tmux session 维度）。
 WORKER_PLAN_MODE_STATE_CACHE: Dict[str, Literal["on", "off", "unknown"]] = {}
+
+
+@dataclass
+class SessionLiveEntry:
+    """描述“会话实况”页中的单个可查看会话。"""
+
+    key: str
+    label: str
+    tmux_session: str
+    kind: Literal["main", "parallel"]
+    task_id: Optional[str] = None
 
 COMMAND_EXEC_PREFIX = "cmd:run:"
 COMMAND_EXEC_GLOBAL_PREFIX = "cmd_global:run:"
@@ -5858,6 +5869,11 @@ TASK_LIST_CREATE_CALLBACK = "task:list_create"
 TASK_LIST_SEARCH_CALLBACK = "task:list_search"
 TASK_LIST_SEARCH_PAGE_CALLBACK = "task:list_search_page"
 TASK_LIST_RETURN_CALLBACK = "task:list_return"
+SESSION_LIVE_LIST_CALLBACK = "session:view:list"
+SESSION_LIVE_MAIN_CALLBACK = "session:view:main"
+SESSION_LIVE_PARALLEL_PREFIX = "session:view:parallel:"
+SESSION_LIVE_REFRESH_MAIN_CALLBACK = "session:view:refresh:main"
+SESSION_LIVE_REFRESH_PARALLEL_PREFIX = "session:view:refresh:parallel:"
 TASK_DETAIL_BACK_CALLBACK = "task:detail_back"
 TASK_DETAIL_DELETE_PROMPT_CALLBACK = "task:delete_prompt"
 TASK_DETAIL_DELETE_CONFIRM_CALLBACK = "task:delete_confirm"
@@ -6637,17 +6653,23 @@ def _format_task_list_entry(task: TaskRecord) -> str:
     return f"{indent}- {title}"
 
 
-def _compose_task_button_label(task: TaskRecord, *, max_length: int = 60) -> str:
+def _compose_task_button_label(
+    task: TaskRecord,
+    *,
+    max_length: int = 60,
+    is_session_running: bool = False,
+) -> str:
     """生成任务列表按钮文本，将状态图标置于最左侧并去除任务类型图标。"""
 
     title_raw = (task.title or "").strip()
     title = title_raw if title_raw else "-"
     status_icon = _status_icon(task.status)
+    running_suffix = " ▶️" if is_session_running else ""
 
     # 前缀仅保留状态图标：列表场景更关注进度与标题，降低类型图标带来的视觉噪声。
     prefix = f"{status_icon} " if status_icon else ""
 
-    available = max_length - len(prefix)
+    available = max_length - len(prefix) - len(running_suffix)
     if available <= 0:
         truncated_title = "…"
     else:
@@ -6659,10 +6681,202 @@ def _compose_task_button_label(task: TaskRecord, *, max_length: int = 60) -> str
         else:
             truncated_title = title
 
-    label = f"{prefix}{truncated_title}" if prefix else truncated_title
+    label = f"{prefix}{truncated_title}{running_suffix}" if prefix else f"{truncated_title}{running_suffix}"
     if len(label) > max_length:
         label = label[: max_length - 1] + "…"
     return label
+
+
+def _list_native_active_task_ids() -> set[str]:
+    """汇总当前原生主会话正在绑定的任务，用于列表展示运行中图标。"""
+
+    active_task_ids: set[str] = set()
+    for session_key in CHAT_SESSION_MAP.values():
+        normalized_task_id = _normalize_task_id(SESSION_TASK_BINDINGS.get(session_key))
+        if normalized_task_id:
+            active_task_ids.add(normalized_task_id)
+    return active_task_ids
+
+
+async def _list_active_parallel_sessions() -> list[ParallelSessionRecord]:
+    """列出当前项目仍健康可用的并行会话，并自动降级 stale 记录。"""
+
+    sessions = await PARALLEL_SESSION_STORE.list_sessions()
+    active_sessions: list[ParallelSessionRecord] = []
+    for session in sessions:
+        if session.status in {"deleted", "closed"}:
+            continue
+        issue = _parallel_session_runtime_issue(session)
+        if issue:
+            await PARALLEL_SESSION_STORE.update_status(session.task_id, status="closed", last_error=issue)
+            await _drop_parallel_session_bindings(session.task_id)
+            worker_log.warning(
+                "会话实况过滤掉 stale 并行会话，已自动降级为 closed",
+                extra={"task_id": session.task_id, "issue": issue, "tmux_session": session.tmux_session},
+            )
+            continue
+        active_sessions.append(session)
+    return active_sessions
+
+
+async def _list_running_task_ids_for_task_list() -> set[str]:
+    """汇总任务列表中需要追加运行中图标的任务集合。"""
+
+    task_ids = set(_list_native_active_task_ids())
+    for session in await _list_active_parallel_sessions():
+        normalized_task_id = _normalize_task_id(session.task_id)
+        if normalized_task_id:
+            task_ids.add(normalized_task_id)
+    return task_ids
+
+
+async def _build_native_session_live_entry() -> SessionLiveEntry:
+    """构造主会话入口。"""
+
+    native_task_ids = sorted(_list_native_active_task_ids())
+    label = f"💻 主会话（{TMUX_SESSION}）"
+    bound_task_id: Optional[str] = None
+    if len(native_task_ids) == 1:
+        bound_task_id = native_task_ids[0]
+        task = await TASK_SERVICE.get_task(bound_task_id)
+        title = ((task.title or "").strip() if task is not None else "") or "-"
+        label = f"{label} · /{bound_task_id} {title}"
+    elif len(native_task_ids) > 1:
+        label = f"{label} · {len(native_task_ids)} 个任务上下文"
+    if len(label) > 60:
+        label = label[:59] + "…"
+    return SessionLiveEntry(
+        key="main",
+        label=label,
+        tmux_session=TMUX_SESSION,
+        kind="main",
+        task_id=bound_task_id,
+    )
+
+
+def _build_parallel_session_live_entry(session: ParallelSessionRecord) -> SessionLiveEntry:
+    """构造并行会话入口。"""
+
+    title = (session.title_snapshot or "").strip() or "-"
+    label = f"/{session.task_id} {title}"
+    if len(label) > 60:
+        label = label[:59] + "…"
+    return SessionLiveEntry(
+        key=f"parallel:{session.task_id}",
+        label=label,
+        tmux_session=session.tmux_session,
+        kind="parallel",
+        task_id=session.task_id,
+    )
+
+
+async def _list_project_live_sessions() -> list[SessionLiveEntry]:
+    """汇总“会话实况”列表要展示的主会话与活动并行会话。"""
+
+    entries: list[SessionLiveEntry] = [await _build_native_session_live_entry()]
+    parallel_sessions = await _list_active_parallel_sessions()
+    entries.extend(_build_parallel_session_live_entry(session) for session in parallel_sessions)
+    return entries
+
+
+async def _resolve_session_live_entry(entry_key: str) -> Optional[SessionLiveEntry]:
+    """根据入口键解析当前仍可查看的会话。"""
+
+    normalized_key = (entry_key or "").strip()
+    if normalized_key == "main":
+        return await _build_native_session_live_entry()
+    if normalized_key.startswith("parallel:"):
+        task_id = _normalize_task_id(normalized_key.split(":", 1)[1])
+        if not task_id:
+            return None
+        session = await _get_active_parallel_session_for_task(task_id)
+        if session is None:
+            return None
+        return _build_parallel_session_live_entry(session)
+    return None
+
+
+def _build_session_live_list_markup(entries: Sequence[SessionLiveEntry]) -> InlineKeyboardMarkup:
+    """构造会话列表页按钮。"""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for entry in entries:
+        if entry.kind == "main":
+            callback_data = SESSION_LIVE_MAIN_CALLBACK
+        else:
+            callback_data = f"{SESSION_LIVE_PARALLEL_PREFIX}{entry.task_id}"
+        rows.append([InlineKeyboardButton(text=entry.label, callback_data=callback_data)])
+    rows.append([InlineKeyboardButton(text="🔄 刷新列表", callback_data=SESSION_LIVE_LIST_CALLBACK)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _build_session_live_list_view() -> tuple[str, InlineKeyboardMarkup]:
+    """构造“会话实况”列表页。"""
+
+    entries = await _list_project_live_sessions()
+    lines = [
+        "*会话实况*",
+        f"当前项目可查看会话：{len(entries)} 个",
+    ]
+    if entries:
+        lines.append("点击下方按钮查看对应会话的最近输出。")
+    else:
+        lines.append("当前没有可查看的会话。")
+    return "\n".join(lines), _build_session_live_list_markup(entries)
+
+
+def _build_session_live_snapshot_markup(entry: SessionLiveEntry) -> InlineKeyboardMarkup:
+    """构造单会话实况页按钮。"""
+
+    if entry.kind == "main":
+        refresh_callback = SESSION_LIVE_REFRESH_MAIN_CALLBACK
+    else:
+        refresh_callback = f"{SESSION_LIVE_REFRESH_PARALLEL_PREFIX}{entry.task_id}"
+    rows = [
+        [InlineKeyboardButton(text="🔄 刷新当前会话", callback_data=refresh_callback)],
+        [InlineKeyboardButton(text="⬅️ 返回会话列表", callback_data=SESSION_LIVE_LIST_CALLBACK)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _build_session_live_snapshot_view(entry_key: str) -> tuple[str, InlineKeyboardMarkup]:
+    """构造指定会话的最近输出视图。"""
+
+    entry = await _resolve_session_live_entry(entry_key)
+    if entry is None:
+        raise ValueError("会话不存在或已失活，请返回会话列表刷新。")
+
+    try:
+        raw_output = await asyncio.to_thread(
+            _capture_tmux_recent_lines,
+            TMUX_SNAPSHOT_LINES,
+            entry.tmux_session,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("未检测到 tmux，可通过 'brew install tmux' 安装后重试。") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"会话 {entry.label} 截取超时（{TMUX_SNAPSHOT_TIMEOUT_SECONDS:.1f} 秒），请稍后重试。"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"无法读取 tmux 会话 {entry.tmux_session} 的输出，请确认会话仍在运行。") from exc
+
+    if entry.kind == "main":
+        _set_worker_plan_mode_state_cache(_resolve_worker_plan_mode_state_from_output(raw_output))
+
+    cleaned = postprocess_tmux_output(raw_output)
+    header = "\n".join(
+        [
+            "*会话实况*",
+            f"会话：{entry.label}",
+            f"最近 {TMUX_SNAPSHOT_LINES} 行：",
+        ]
+    )
+    if cleaned:
+        text = f"{header}\n\n{cleaned}"
+    else:
+        text = f"{header}\n\n暂无可展示的输出，请稍后再试。"
+    return text, _build_session_live_snapshot_markup(entry)
 
 
 TASK_ATTACHMENT_PREVIEW_LIMIT = 5
@@ -12533,11 +12747,15 @@ async def _build_task_list_view(
     if not tasks:
         lines.append("当前没有匹配的任务，可使用上方状态按钮切换。")
     text = "\n".join(lines)
+    running_task_ids = await _list_running_task_ids_for_task_list()
 
     rows: list[list[InlineKeyboardButton]] = []
     rows.extend(_build_status_filter_row(status, limit))
     for task in tasks:
-        label = _compose_task_button_label(task)
+        label = _compose_task_button_label(
+            task,
+            is_session_running=((_normalize_task_id(task.id) or "") in running_task_ids),
+        )
         rows.append(
             [
                 InlineKeyboardButton(
@@ -12614,10 +12832,14 @@ async def _build_task_search_view(
     ]
     if not tasks:
         lines.append("未找到匹配的任务，请调整关键词或重新搜索。")
+    running_task_ids = await _list_running_task_ids_for_task_list()
 
     rows: list[list[InlineKeyboardButton]] = []
     for task in tasks:
-        label = _compose_task_button_label(task)
+        label = _compose_task_button_label(
+            task,
+            is_session_running=((_normalize_task_id(task.id) or "") in running_task_ids),
+        )
         rows.append(
             [
                 InlineKeyboardButton(
@@ -12698,119 +12920,15 @@ async def _handle_task_list_request(message: Message) -> None:
 
 
 async def _handle_terminal_snapshot_request(message: Message) -> None:
-    """处理“终端实况”按钮，抓取 tmux 会话尾部输出。"""
+    """处理“会话实况”按钮，先展示当前项目的可查看会话列表。"""
 
     chat_id = message.chat.id
-    lines = TMUX_SNAPSHOT_LINES
-    started = time.monotonic()
-    # “终端实况”是 PLAN MODE 状态的强校准触发点：优先按本次捕获结果回写缓存。
-
     try:
-        try:
-            # 使用线程池执行 tmux 命令，避免阻塞 asyncio 事件循环，影响 watcher 推送。
-            raw_output = await asyncio.to_thread(_capture_tmux_recent_lines, lines)
-            _set_worker_plan_mode_state_cache(_resolve_worker_plan_mode_state_from_output(raw_output))
-        except FileNotFoundError as exc:
-            worker_log.warning(
-                "终端实况截取失败，未找到 tmux：%s",
-                exc,
-                extra={"chat": chat_id},
-            )
-            _set_worker_plan_mode_state_cache("unknown")
-            await _reply_to_chat(
-                chat_id,
-                "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
-                reply_to=message,
-                reply_markup=_build_worker_main_keyboard(),
-            )
-            return
-        except subprocess.TimeoutExpired as exc:
-            worker_log.warning(
-                "终端实况截取超时：%s",
-                exc,
-                extra={
-                    "chat": chat_id,
-                    "timeout": str(TMUX_SNAPSHOT_TIMEOUT_SECONDS),
-                    "tmux_session": TMUX_SESSION,
-                },
-            )
-            timeout_text = (
-                f"终端实况截取超时（{TMUX_SNAPSHOT_TIMEOUT_SECONDS:.1f} 秒），"
-                "请稍后重试或提高 TMUX_SNAPSHOT_TIMEOUT_SECONDS。"
-            )
-            _set_worker_plan_mode_state_cache("unknown")
-            await _reply_to_chat(
-                chat_id,
-                timeout_text,
-                reply_to=message,
-                reply_markup=_build_worker_main_keyboard(),
-            )
-            return
-        except subprocess.CalledProcessError as exc:
-            worker_log.warning(
-                "终端实况截取失败：%s",
-                exc,
-                extra={"chat": chat_id, "tmux_session": TMUX_SESSION},
-            )
-            _set_worker_plan_mode_state_cache("unknown")
-            await _reply_to_chat(
-                chat_id,
-                f"无法读取 tmux 会话 {TMUX_SESSION} 的输出，请确认 worker 已启动。",
-                reply_to=message,
-                reply_markup=_build_worker_main_keyboard(),
-            )
-            return
-
-        cleaned = postprocess_tmux_output(raw_output)
-        header = f"{WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT}（最近 {lines} 行）"
-        if not cleaned:
-            await _reply_to_chat(
-                chat_id,
-                f"{header}\n\n暂无可展示的输出，请稍后再试。",
-                reply_to=message,
-                reply_markup=_build_worker_main_keyboard(),
-            )
-            return
-
-        payload = f"{header}\n\n{cleaned}"
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        worker_log.info(
-            "准备发送终端实况",
-            extra={
-                "chat": chat_id,
-                "lines": str(lines),
-                "length": str(len(cleaned)),
-                "elapsed_ms": str(elapsed_ms),
-            },
-        )
-        try:
-            main_keyboard = _build_worker_main_keyboard()
-            await reply_large_text(
-                chat_id,
-                payload,
-                reply_markup=main_keyboard,
-                attachment_reply_markup=main_keyboard,
-            )
-        except (TelegramNetworkError, TelegramRetryAfter) as exc:
-            worker_log.warning(
-                "终端实况发送失败，将提示用户重试: %s",
-                exc,
-                extra={"chat": chat_id},
-            )
-            await _notify_send_failure_message(chat_id)
-            return
-        worker_log.info(
-            "已发送终端实况",
-            extra={
-                "chat": chat_id,
-                "lines": str(lines),
-                "length": str(len(cleaned)),
-                "elapsed_ms": str(elapsed_ms),
-            },
-        )
+        text, markup = await _build_session_live_list_view()
+        await _answer_with_markdown(message, text, reply_markup=markup)
     finally:
         # 轻量自愈：若 watcher 意外退出，尝试恢复推送通道，避免用户必须再发一条消息。
-        await _resume_session_watcher_if_needed(chat_id, reason="terminal_snapshot")
+        await _resume_session_watcher_if_needed(chat_id, reason="session_live")
 
 
 @router.message(Command("task_list"))
@@ -12826,6 +12944,100 @@ async def on_task_list_button(message: Message) -> None:
 @router.message(F.text == WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
 async def on_tmux_snapshot_button(message: Message) -> None:
     await _handle_terminal_snapshot_request(message)
+
+
+async def _show_session_live_list(message: Message) -> bool:
+    """在当前消息中展示会话列表；编辑失败时回退为发送新消息。"""
+
+    text, markup = await _build_session_live_list_view()
+    if await _try_edit_message(message, text, reply_markup=markup):
+        return True
+    sent = await _answer_with_markdown(message, text, reply_markup=markup)
+    return sent is not None
+
+
+async def _show_session_live_snapshot(message: Message, entry_key: str) -> bool:
+    """在当前消息中展示指定会话的最近输出。"""
+
+    text, markup = await _build_session_live_snapshot_view(entry_key)
+    if await _try_edit_message(message, text, reply_markup=markup):
+        return True
+    sent = await _answer_with_markdown(message, text, reply_markup=markup)
+    return sent is not None
+
+
+@router.callback_query(F.data == SESSION_LIVE_LIST_CALLBACK)
+async def on_session_live_list_callback(callback: CallbackQuery) -> None:
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    success = await _show_session_live_list(message)
+    await callback.answer("已刷新会话列表" if success else "会话列表发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data == SESSION_LIVE_MAIN_CALLBACK)
+async def on_session_live_main_callback(callback: CallbackQuery) -> None:
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    try:
+        success = await _show_session_live_snapshot(message, "main")
+    except (ValueError, RuntimeError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("已打开主会话" if success else "会话实况发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data.startswith(SESSION_LIVE_PARALLEL_PREFIX))
+async def on_session_live_parallel_callback(callback: CallbackQuery) -> None:
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    task_id = _normalize_task_id((callback.data or "")[len(SESSION_LIVE_PARALLEL_PREFIX) :])
+    if not task_id:
+        await callback.answer("会话参数错误", show_alert=True)
+        return
+    try:
+        success = await _show_session_live_snapshot(message, f"parallel:{task_id}")
+    except (ValueError, RuntimeError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("已打开并行会话" if success else "会话实况发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data == SESSION_LIVE_REFRESH_MAIN_CALLBACK)
+async def on_session_live_refresh_main_callback(callback: CallbackQuery) -> None:
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    try:
+        success = await _show_session_live_snapshot(message, "main")
+    except (ValueError, RuntimeError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("已刷新主会话" if success else "会话实况发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data.startswith(SESSION_LIVE_REFRESH_PARALLEL_PREFIX))
+async def on_session_live_refresh_parallel_callback(callback: CallbackQuery) -> None:
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    task_id = _normalize_task_id((callback.data or "")[len(SESSION_LIVE_REFRESH_PARALLEL_PREFIX) :])
+    if not task_id:
+        await callback.answer("会话参数错误", show_alert=True)
+        return
+    try:
+        success = await _show_session_live_snapshot(message, f"parallel:{task_id}")
+    except (ValueError, RuntimeError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("已刷新并行会话" if success else "会话实况发送失败", show_alert=not success)
 
 
 async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
