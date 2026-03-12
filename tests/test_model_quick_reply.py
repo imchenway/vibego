@@ -197,7 +197,13 @@ def test_native_session_commit_callback_uses_bound_workspace_root(monkeypatch, t
 
     assert discovered_roots == [workspace_root]
     assert committed_repo_roots == [workspace_root, workspace_root / "service"]
-    assert message.calls and "分支提交结果" in message.calls[-1][0]
+    assert message.calls, "成功时应向聊天发送结构化结果消息"
+    text, _parse_mode, _markup, _kwargs = message.calls[-1]
+    assert "分支提交结果" in text
+    assert "总览：1 个仓库｜失败 0｜成功 1｜跳过 0" in text
+    assert "✅ 成功（1）" in text
+    assert "- service" in text
+    assert "提交并推送成功" in text
 
 
 def test_native_session_commit_callback_reports_runtime_failure(monkeypatch, tmp_path: Path):

@@ -189,6 +189,30 @@ def test_parallel_commit_message_uses_task_type_prefix():
     assert "仓库: web-base" in body
 
 
+def test_format_parallel_operation_lines_groups_failures_success_and_skipped():
+    """结果消息应先给总览，再按失败/成功/跳过分组展示，并缩进多行错误。"""
+
+    text = bot._format_parallel_operation_lines(
+        "并行分支提交结果：",
+        [
+            bot.RepoOperationResult("repo-failed", "repo-failed", False, "failed", "第一行失败\r\n第二行失败"),
+            bot.RepoOperationResult("repo-pushed", "repo-pushed", True, "pushed", "提交并推送成功"),
+            bot.RepoOperationResult("repo-skipped", "repo-skipped", True, "skipped", "无改动，已跳过"),
+            bot.RepoOperationResult("repo-local", "repo-local", True, "committed", "已本地提交，未配置远端，已跳过推送"),
+        ],
+    )
+
+    assert text.splitlines()[0] == "并行分支提交结果"
+    assert "总览：4 个仓库｜失败 1｜成功 2｜跳过 1" in text
+    assert text.index("❌ 失败（1）") < text.index("✅ 成功（2）") < text.index("⏭️ 已跳过（1）")
+    assert "- repo-failed" in text
+    assert "  第一行失败" in text
+    assert "  第二行失败" in text
+    assert "- repo-pushed" in text
+    assert "- repo-local" in text
+    assert "- repo-skipped" in text
+
+
 def test_parallel_branch_title_shows_current_branch():
     session = bot.ParallelLaunchSession(
         token="demo",
@@ -1432,6 +1456,55 @@ def test_parallel_commit_callback_reports_runtime_failure(monkeypatch):
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
 
 
+def test_parallel_commit_callback_formats_grouped_result(monkeypatch):
+    """并行提交成功后，应输出失败置顶的分组摘要。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(f"{bot.PARALLEL_COMMIT_CALLBACK_PREFIX}TASK_0001", message)
+
+    async def fake_active_parallel_session(_task_id: str):
+        return SimpleNamespace(task_id="TASK_0001")
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0001"
+        return _task()
+
+    async def fake_get_repos(_task_id: str):
+        return [SimpleNamespace(repo_key="repo-failed"), SimpleNamespace(repo_key="repo-pushed"), SimpleNamespace(repo_key="repo-skipped")]
+
+    async def fake_update_status(*_args, **_kwargs):
+        return None
+
+    async def fake_update_repo_status(*_args, **_kwargs):
+        return None
+
+    async def fake_to_thread(*_args, **_kwargs):
+        return SimpleNamespace(
+            failed=True,
+            results=[
+                bot.RepoOperationResult("repo-failed", "repo-failed", False, "failed", "推送失败\r\n请检查权限"),
+                bot.RepoOperationResult("repo-pushed", "repo-pushed", True, "pushed", "提交并推送成功"),
+                bot.RepoOperationResult("repo-skipped", "repo-skipped", True, "skipped", "无改动，已跳过"),
+            ],
+        )
+
+    monkeypatch.setattr(bot, "_get_active_parallel_session_for_task", fake_active_parallel_session)
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_get_parallel_session_repos", fake_get_repos)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_repo_status", fake_update_repo_status)
+    monkeypatch.setattr(bot.asyncio, "to_thread", fake_to_thread)
+
+    asyncio.run(bot.on_parallel_commit_callback(callback))
+
+    assert message.calls, "成功回执应输出结构化摘要"
+    text, _parse_mode, _markup, _kwargs = message.calls[-1]
+    assert text.splitlines()[0] == "并行分支提交结果"
+    assert "总览：3 个仓库｜失败 1｜成功 1｜跳过 1" in text
+    assert text.index("❌ 失败（1）") < text.index("✅ 成功（1）") < text.index("⏭️ 已跳过（1）")
+    assert "  请检查权限" in text
+
+
 def test_parallel_merge_callback_reports_runtime_failure(monkeypatch):
     """自动合并异常时，应在 Telegram 明确回执失败原因。"""
 
@@ -1468,3 +1541,52 @@ def test_parallel_merge_callback_reports_runtime_failure(monkeypatch):
     assert "自动合并失败" in text
     assert "远端服务异常" in text
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
+
+
+def test_parallel_merge_callback_formats_grouped_success_result(monkeypatch):
+    """自动合并成功后，应输出成功/跳过分组摘要。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(f"{bot.PARALLEL_MERGE_CALLBACK_PREFIX}TASK_0001", message)
+
+    async def fake_active_parallel_session(_task_id: str):
+        return SimpleNamespace(task_id="TASK_0001")
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0001"
+        return _task()
+
+    async def fake_get_repos(_task_id: str):
+        return [SimpleNamespace(repo_key="repo-merged"), SimpleNamespace(repo_key="repo-skipped")]
+
+    async def fake_update_status(*_args, **_kwargs):
+        return None
+
+    async def fake_update_repo_status(*_args, **_kwargs):
+        return None
+
+    async def fake_to_thread(*_args, **_kwargs):
+        return SimpleNamespace(
+            failed=False,
+            results=[
+                bot.RepoOperationResult("repo-merged", "repo-merged", True, "merged", "已自动合并到 develop"),
+                bot.RepoOperationResult("repo-skipped", "repo-skipped", True, "skipped", "未配置远端，已跳过自动合并"),
+            ],
+        )
+
+    monkeypatch.setattr(bot, "_get_active_parallel_session_for_task", fake_active_parallel_session)
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_get_parallel_session_repos", fake_get_repos)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_status", fake_update_status)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "update_repo_status", fake_update_repo_status)
+    monkeypatch.setattr(bot.asyncio, "to_thread", fake_to_thread)
+
+    asyncio.run(bot.on_parallel_merge_callback(callback))
+
+    assert message.calls, "成功回执应输出结构化摘要"
+    text, _parse_mode, _markup, _kwargs = message.calls[-1]
+    assert text.splitlines()[0] == "自动合并成功"
+    assert "总览：2 个仓库｜失败 0｜成功 1｜跳过 1" in text
+    assert "❌ 失败" not in text
+    assert "✅ 成功（1）" in text
+    assert "⏭️ 已跳过（1）" in text
