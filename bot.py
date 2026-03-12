@@ -12117,19 +12117,12 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
     if event_type == "event_msg":
         payload = data.get("payload") or {}
         if payload.get("type") == "agent_message":
-            # Codex 新版会同时输出两条 assistant 文本流：
-            # 1) response_item.message（含 phase）
-            # 2) event_msg.agent_message（通常不含 phase，属于镜像流）
-            # 若直接兼容 event_msg 无 phase，会把 commentary 误发到 Telegram。
-            # 因此该分支仅在显式携带 phase 时才参与投递判断。
-            payload_phase = payload.get("phase")
-            if not isinstance(payload_phase, str):
-                return None
-            if not _should_deliver_message(payload):
-                return None
-            message = payload.get("message")
-            if isinstance(message, str) and message.strip():
-                return DELIVERABLE_KIND_MESSAGE, message, None
+            # Codex 的 event_msg.agent_message 视为镜像流：
+            # - response_item.message / assistant_message 才是 Telegram 正式正文来源
+            # - event_msg.agent_message 即使带 final_answer，也可能只是短版镜像
+            #   与 response_item 正文并存，导致同一轮出现“双发”
+            # 因此这里统一忽略，由 response_item 路径负责最终投递。
+            return None
         return None
 
     if event_type != "response_item":

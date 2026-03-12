@@ -148,6 +148,31 @@ def _final_event(message: str) -> dict:
     }
 
 
+def _codex_event_msg_final_event(message: str) -> dict:
+    return {
+        "timestamp": "2025-01-01T00:00:10Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "agent_message",
+            "message": message,
+            "phase": bot.CODEX_MESSAGE_PHASE_FINAL_ANSWER,
+        },
+    }
+
+
+def _codex_response_item_final_event(message: str) -> dict:
+    return {
+        "timestamp": "2025-01-01T00:00:10Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "phase": bot.CODEX_MESSAGE_PHASE_FINAL_ANSWER,
+            "content": [{"type": "output_text", "text": message}],
+        },
+    }
+
+
 def test_plan_incomplete_keeps_watcher(plan_test_env):
     env = plan_test_env
     chat_id = 101
@@ -417,6 +442,38 @@ def test_duplicate_messages_sent_once(plan_test_env):
     assert result is True
     assert len(env["replies"]) == 1
     assert env["replies"][0][1].endswith(message_text)
+
+
+def test_codex_mixed_final_answer_prefers_response_item_once(plan_test_env, monkeypatch):
+    env = plan_test_env
+    chat_id = 1405
+    short_text = "镜像短消息"
+    final_text = "<proposed_plan>\n完整最终答案\n</proposed_plan>"
+    confirm_calls: list[tuple[int, str]] = []
+
+    async def fake_plan_confirm(target_chat_id: int, session_key: str):
+        confirm_calls.append((target_chat_id, session_key))
+        return True
+
+    monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex")
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "_maybe_send_plan_confirm_prompt", fake_plan_confirm)
+
+    env["append_events"](
+        [
+            _codex_event_msg_final_event(short_text),
+            _codex_response_item_final_event(final_text),
+        ]
+    )
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert len(env["replies"]) == 1
+    assert env["replies"][0][0] == chat_id
+    assert env["replies"][0][1].endswith(final_text)
+    assert confirm_calls == [(chat_id, str(env["session"]))]
 
 
 def test_clear_last_message_allows_new_delivery(plan_test_env):

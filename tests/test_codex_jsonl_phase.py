@@ -92,11 +92,6 @@ def test_extract_codex_event_msg_commentary_phase_ignored():
     assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
 
 
-def test_extract_codex_event_msg_final_answer_phase_delivered():
+def test_extract_codex_event_msg_final_answer_phase_ignored():
     event = _build_codex_event_msg_agent_message_event("最终答案", phase="final_answer")
-    result = bot._extract_deliverable_payload(event, event_timestamp=None)
-    assert result is not None
-    kind, text, metadata = result
-    assert kind == bot.DELIVERABLE_KIND_MESSAGE
-    assert text == "最终答案"
-    assert metadata is None
+    assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
