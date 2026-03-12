@@ -35,6 +35,7 @@ class DummyMessage:
     def __init__(self):
         self.calls = []
         self.edits = []
+        self.reply_markup_edits = []
         self.chat = SimpleNamespace(id=1)
         self.from_user = SimpleNamespace(id=1, full_name="Tester")
         self.message_id = 100
@@ -60,6 +61,10 @@ class DummyMessage:
 
     async def edit_text(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
         self.edits.append((text, parse_mode, reply_markup, kwargs))
+        return SimpleNamespace(message_id=self.message_id, chat=self.chat)
+
+    async def edit_reply_markup(self, reply_markup=None, **kwargs):
+        self.reply_markup_edits.append((reply_markup, kwargs))
         return SimpleNamespace(message_id=self.message_id, chat=self.chat)
 
 
@@ -4204,7 +4209,7 @@ def test_push_task_to_model_forwards_push_mode_as_intended_mode(monkeypatch, tmp
 
 
 def test_on_status_callback_done_schedules_parallel_cleanup(monkeypatch):
-    """任务切到 done 后，应异步清理该任务的并行运行态。"""
+    """任务切到 done 后，应立即返回，并把详情刷新与清理都放到后台。"""
 
     message = DummyMessage()
     callback = DummyCallback("task:status:TASK_0115:done", message)
@@ -4221,11 +4226,10 @@ def test_on_status_callback_done_schedules_parallel_cleanup(monkeypatch):
         return updated
 
     async def fake_render(task_id: str):
-        assert task_id == updated.id
-        return "详情", InlineKeyboardMarkup(inline_keyboard=[])
+        raise AssertionError(f"done 快路径不应同步渲染详情: {task_id}")
 
     async def fake_try_edit_message(_message, _text, reply_markup=None):
-        return True
+        raise AssertionError("done 快路径不应同步编辑详情文本")
 
     cleanup_calls: list[str] = []
 
@@ -4254,9 +4258,19 @@ def test_on_status_callback_done_schedules_parallel_cleanup(monkeypatch):
     asyncio.run(bot.on_status_callback(callback))
 
     assert callback.answers[-1] == ("状态已更新", False)
-    assert created_coroutines, "应在后台触发并行清理"
+    assert len(created_coroutines) == 1, "done 快路径应只创建一个后台收尾任务"
+    assert cleanup_calls == []
+    assert not message.reply_markup_edits
     asyncio.run(created_coroutines[0])
     assert cleanup_calls == [updated.id]
+    assert message.reply_markup_edits, "后台应刷新详情按钮"
+    refreshed_markup, _kwargs = message.reply_markup_edits[-1]
+    button_texts = [
+        button.text
+        for row in refreshed_markup.inline_keyboard
+        for button in row
+    ]
+    assert "✅ 已完成 (当前)" in button_texts
 
 
 def test_on_status_callback_non_done_does_not_schedule_parallel_cleanup(monkeypatch):

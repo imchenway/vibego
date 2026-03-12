@@ -9105,6 +9105,47 @@ def _schedule_parallel_cleanup_for_done(task_id: str) -> None:
     asyncio.create_task(_cleanup_parallel_session_workspace_safely(normalized))
 
 
+async def _refresh_done_task_detail_markup_safely(
+    message: Optional[Message],
+    task: TaskRecord,
+) -> None:
+    """后台刷新 done 状态的详情按钮，避免阻塞前台成功反馈。"""
+
+    if message is None:
+        return
+    edit_reply_markup = getattr(message, "edit_reply_markup", None)
+    if edit_reply_markup is None:
+        return
+    detail_state = TaskViewState(kind="detail", data={"task_id": task.id})
+    try:
+        await edit_reply_markup(reply_markup=_build_task_actions(task))
+        _set_task_view_context(message, detail_state)
+    except TelegramBadRequest as exc:
+        worker_log.info(
+            "后台刷新已完成任务详情按钮失败：%s",
+            exc,
+            extra={"task_id": task.id, **_session_extra()},
+        )
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "后台刷新已完成任务详情按钮异常：%s",
+            exc,
+            extra={"task_id": task.id, **_session_extra()},
+        )
+
+
+async def _finalize_done_status_update_safely(
+    message: Optional[Message],
+    task: TaskRecord,
+) -> None:
+    """后台完成 done 状态收尾：刷新按钮并清理并行运行态。"""
+
+    # 先刷新详情按钮，让用户更快看到“已完成（当前）”。
+    await _refresh_done_task_detail_markup_safely(message, task)
+    # 再执行并行运行态清理；无论成功与否都不影响前台已返回的成功提示。
+    await _cleanup_parallel_session_workspace_safely(task.id)
+
+
 def _build_parallel_common_branch_title(session: ParallelLaunchSession) -> str:
     """构造“共同分支批量选择”页标题。"""
 
@@ -16618,10 +16659,14 @@ async def on_status_callback(callback: CallbackQuery) -> None:
     except ValueError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
-    if updated.status == "done":
-        _schedule_parallel_cleanup_for_done(updated.id)
-    detail_text, markup = await _render_task_detail(updated.id)
     message = callback.message
+    if updated.status == "done":
+        # done 是长链路场景：只要状态写库成功，立即返回成功提示；
+        # 详情按钮刷新与并行清理全部放到后台，避免用户感知到“点击后卡住”。
+        asyncio.create_task(_finalize_done_status_update_safely(message, updated))
+        await _answer_callback_safely(callback, "状态已更新")
+        return
+    detail_text, markup = await _render_task_detail(updated.id)
     if message is None:
         await callback.answer("无法定位原消息", show_alert=True)
         return
