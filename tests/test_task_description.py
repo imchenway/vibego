@@ -276,6 +276,33 @@ def test_format_task_detail_defect_falls_back_to_generic_description_when_unstru
     assert "🎯 期望结果：" not in result
 
 
+def test_format_task_detail_task_uses_current_and_expected_effect():
+    """优化任务详情应优先展示当前效果与期望效果。"""
+
+    task = _make_task(task_id="TASK_0113", title="优化任务", status="research", task_type="task")
+    task.description = "当前效果：\n需要点击两次\n\n期望效果：\n点击一次即可提交"
+
+    result = bot._format_task_detail(task, notes=())
+
+    assert "当前效果：" in result
+    assert "点击两次" in result
+    assert "期望效果：点击一次即可提交" in result
+    assert "🖊️ 描述：" not in result
+
+
+def test_format_task_detail_task_falls_back_to_generic_description_when_unstructured():
+    """历史优化任务若仍为旧描述结构，应回退到通用描述展示。"""
+
+    task = _make_task(task_id="TASK_0114", title="历史优化", status="research", task_type="task")
+    task.description = "旧版自由描述"
+
+    result = bot._format_task_detail(task, notes=())
+
+    assert "🖊️ 描述：旧版自由描述" in result
+    assert "当前效果：" not in result
+    assert "期望效果：" not in result
+
+
 def test_format_task_detail_misc_note_without_label():
     task = _make_task(task_id="TASK_0110", title="无标签任务", status="research")
     notes = (
@@ -4129,6 +4156,73 @@ def test_build_task_context_block_for_model_defect_uses_reproduction_and_expecte
     assert "期望结果：\n~~~\n不应报错\n~~~" in block
     assert "补充任务描述：\n~~~\n补充说明\n~~~" in block
     assert "任务描述：\n~~~\n复现步骤：" not in block
+
+
+def test_build_model_push_payload_task_uses_current_and_expected_effect():
+    """优化任务推送到模型时应展示当前效果与期望效果。"""
+
+    task = TaskRecord(
+        id="TASK_TASK_PUSH",
+        project_slug="demo",
+        title="优化推送",
+        status="research",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="当前效果：\n需要点击两次\n\n期望效果：\n点击一次即可提交",
+        parent_id=None,
+        root_id="TASK_TASK_PUSH",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    payload = bot._build_model_push_payload(task, supplement="补充内容")
+
+    assert "当前效果：\n~~~\n需要点击两次\n~~~" in payload
+    assert "期望效果：\n~~~\n点击一次即可提交\n~~~" in payload
+    assert "补充任务描述：\n~~~\n补充内容\n~~~" in payload
+    assert "任务描述：\n~~~\n当前效果：" not in payload
+
+
+def test_build_task_context_block_for_model_task_uses_current_and_expected_effect():
+    """优化任务上下文块也应输出当前效果与期望效果。"""
+
+    task = TaskRecord(
+        id="TASK_TASK_CTX",
+        project_slug="demo",
+        title="优化上下文",
+        status="test",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="当前效果：\n需要点击两次\n\n期望效果：\n点击一次即可提交",
+        parent_id=None,
+        root_id="TASK_TASK_CTX",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    block = bot._build_task_context_block_for_model(
+        task,
+        supplement="补充说明",
+        history="",
+        attachments=(),
+    )
+
+    assert "当前效果：\n~~~\n需要点击两次\n~~~" in block
+    assert "期望效果：\n~~~\n点击一次即可提交\n~~~" in block
+    assert "补充任务描述：\n~~~\n补充说明\n~~~" in block
+    assert "任务描述：\n~~~\n当前效果：" not in block
+
+
 def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, tmp_path: Path):
     """推送到模型：任务上下文超长时应自动转为本地附件提示词，避免直接注入超长文本。"""
 

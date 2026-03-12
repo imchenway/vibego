@@ -11,6 +11,10 @@ class TaskCreateStates(StatesGroup):
     waiting_type = State()
     waiting_related_task = State()
     waiting_description = State()
+    waiting_reproduction = State()
+    waiting_expected_result = State()
+    waiting_current_effect = State()
+    waiting_expected_effect = State()
     waiting_confirm = State()
 
 

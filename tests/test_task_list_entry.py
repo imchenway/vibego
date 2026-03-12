@@ -789,6 +789,40 @@ def test_format_task_detail_defect_sections_keep_special_chars_in_markdown_v2(mo
     assert "\\!" not in detail_text
 
 
+def test_format_task_detail_task_sections_keep_special_chars_in_markdown_v2(monkeypatch):
+    """优化详情的双字段在 MarkdownV2 模式下也应保持原始特殊字符。"""
+
+    monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", True)
+    monkeypatch.setattr(bot, "_IS_MARKDOWN", False)
+
+    task = TaskRecord(
+        id="TASK_TASK_SECTIONS",
+        project_slug="demo",
+        title="优化标题",
+        status="research",
+        priority=3,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="当前效果：\n点击 [提交](按钮) 需要两次\n\n期望效果：\n一次点击即可 success_message!",
+        parent_id=None,
+        root_id="TASK_TASK_SECTIONS",
+        depth=0,
+        lineage="0001",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    detail_text = bot._format_task_detail(task, notes=[])
+
+    assert "当前效果：点击 [提交](按钮) 需要两次" in detail_text
+    assert "期望效果：一次点击即可 success_message!" in detail_text
+    assert "\\[" not in detail_text
+    assert "\\(" not in detail_text
+    assert "\\!" not in detail_text
+
+
 def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
     """测试向后兼容：在传统 Markdown 模式下保持手动转义"""
     # 模拟传统 Markdown 模式

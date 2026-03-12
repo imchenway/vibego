@@ -133,6 +133,8 @@ def test_task_create_type_accepts_number_inputs(monkeypatch, raw, expected_type)
     expected_state = (
         TaskCreateStates.waiting_related_task
         if expected_type == "defect"
+        else TaskCreateStates.waiting_current_effect
+        if expected_type == "task"
         else TaskCreateStates.waiting_description
     )
     assert state.state == expected_state

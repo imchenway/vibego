@@ -128,7 +128,7 @@ def test_task_create_title_moves_to_type_selection():
     assert "请选择任务类型" in message.calls[-1]["text"]
 
 
-def test_task_create_type_valid_moves_to_description_prompt():
+def test_task_create_type_requirement_moves_to_description_prompt():
     state = DummyState(
         data={
             "title": "测试标题",
@@ -136,11 +136,11 @@ def test_task_create_type_valid_moves_to_description_prompt():
         },
         state=TaskCreateStates.waiting_type,
     )
-    message = DummyMessage(bot._format_task_type("task"))
+    message = DummyMessage(bot._format_task_type("requirement"))
     asyncio.run(bot.on_task_create_type(message, state))
 
     assert state.state == TaskCreateStates.waiting_description
-    assert state.data["task_type"] == "task"
+    assert state.data["task_type"] == "requirement"
     assert message.calls
     prompt = message.calls[-1]["text"]
     assert prompt.startswith("请输入任务描述")
@@ -149,6 +149,25 @@ def test_task_create_type_valid_moves_to_description_prompt():
     buttons = [button.text for row in markup.keyboard for button in row]
     assert any("跳过" in text for text in buttons)
     assert any("取消" in text for text in buttons)
+
+
+def test_task_create_type_task_moves_to_current_effect_prompt():
+    state = DummyState(
+        data={
+            "title": "优化任务",
+            "priority": bot.DEFAULT_PRIORITY,
+        },
+        state=TaskCreateStates.waiting_type,
+    )
+    message = DummyMessage(bot._format_task_type("task"))
+    asyncio.run(bot.on_task_create_type(message, state))
+
+    assert state.state == TaskCreateStates.waiting_current_effect
+    assert state.data["task_type"] == "task"
+    assert message.calls
+    prompt = message.calls[-1]["text"]
+    assert prompt.startswith("请输入当前效果")
+    assert isinstance(message.calls[-1]["reply_markup"], ReplyKeyboardMarkup)
 
 
 def test_task_create_type_defect_moves_to_related_selection(monkeypatch):
@@ -197,10 +216,11 @@ def test_task_create_related_task_text_accepts_number_skip(monkeypatch):
     message = DummyMessage("1")
     asyncio.run(bot.on_task_create_related_task_text(message, state))
 
-    assert state.state == TaskCreateStates.waiting_description
+    assert state.state == TaskCreateStates.waiting_reproduction
     assert state.data.get("related_task_id") is None
     assert message.calls
     assert any("已跳过关联任务选择" in call["text"] for call in message.calls)
+    assert any("请输入复现步骤" in call["text"] for call in message.calls)
 
 
 def test_task_create_related_task_text_accepts_number_cancel():
@@ -261,7 +281,7 @@ def test_task_create_description_skip_produces_summary():
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_description,
     )
@@ -281,7 +301,7 @@ def test_task_create_description_accepts_text():
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_description,
     )
@@ -301,7 +321,7 @@ def test_task_create_description_too_long_converts_to_attachment_and_continues()
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_description,
     )
@@ -323,7 +343,7 @@ def test_task_create_description_cancel_aborts():
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_description,
     )
@@ -340,7 +360,7 @@ def test_task_create_description_cancel_keyboard_aborts():
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_description,
     )
@@ -357,7 +377,7 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_description,
     )
@@ -399,7 +419,7 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
         title="测试标题",
         status="research",
         priority=3,
-        task_type="task",
+        task_type="requirement",
         tags=(),
         due_date=None,
         description="任务描述",
@@ -450,7 +470,7 @@ def test_task_create_album_keeps_text_and_collects_followup_attachments(monkeypa
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_description,
     )
@@ -499,7 +519,7 @@ def test_task_create_album_keeps_text_and_collects_followup_attachments(monkeypa
         title="测试标题",
         status="research",
         priority=3,
-        task_type="task",
+        task_type="requirement",
         tags=(),
         due_date=None,
         description="描述文本",
@@ -556,7 +576,7 @@ def test_task_create_media_group_dedupes_attachments_and_advances_once(monkeypat
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
             "processed_media_groups": [],
         },
         state=TaskCreateStates.waiting_description,
@@ -622,7 +642,7 @@ def test_task_create_confirm_media_group_appends_once(monkeypatch, tmp_path):
         data={
             "title": "测试标题",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
             "description": "已有描述",
             "pending_attachments": [],
             "processed_media_groups": [],
@@ -754,7 +774,7 @@ def test_task_create_confirm_uses_default_priority(monkeypatch):
         data={
             "title": "测试任务",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
             "actor": "Tester#1",
             "description": "",
         },
@@ -791,7 +811,7 @@ def test_task_create_confirm_invalid_prompts_again():
         data={
             "title": "测试任务",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
             "description": "",
         },
         state=TaskCreateStates.waiting_confirm,
@@ -811,7 +831,7 @@ def test_task_create_confirm_cancel_via_number():
         data={
             "title": "测试任务",
             "priority": bot.DEFAULT_PRIORITY,
-            "task_type": "task",
+            "task_type": "requirement",
         },
         state=TaskCreateStates.waiting_confirm,
     )
@@ -824,6 +844,162 @@ def test_task_create_confirm_cancel_via_number():
     assert isinstance(message.calls[-2]["reply_markup"], ReplyKeyboardRemove)
     assert message.calls[-2]["text"] == "已取消创建任务。"
     assert message.calls[-1]["text"] == "已返回主菜单。"
+
+
+def test_task_create_reproduction_accepts_text_and_moves_to_expected_result():
+    state = DummyState(
+        data={
+            "title": "缺陷任务",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "defect",
+            "related_task_id": None,
+        },
+        state=TaskCreateStates.waiting_reproduction,
+    )
+    message = DummyMessage("1. 打开页面")
+
+    asyncio.run(bot.on_task_create_reproduction(message, state))
+
+    assert state.state == TaskCreateStates.waiting_expected_result
+    assert state.data["reproduction"] == "1. 打开页面"
+    assert message.calls and "请输入期望结果" in message.calls[-1]["text"]
+
+
+def test_task_create_expected_result_skip_builds_defect_summary():
+    state = DummyState(
+        data={
+            "title": "缺陷任务",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "defect",
+            "related_task_id": None,
+            "reproduction": "1. 打开页面",
+        },
+        state=TaskCreateStates.waiting_expected_result,
+    )
+    message = DummyMessage(bot.SKIP_TEXT)
+
+    asyncio.run(bot.on_task_create_expected_result(message, state))
+
+    assert state.state == TaskCreateStates.waiting_confirm
+    assert state.data["description"] == "复现步骤：\n1. 打开页面\n\n期望结果：\n-"
+    summary = message.calls[-2]["text"]
+    assert "复现步骤：" in summary
+    assert "期望结果：-" in summary
+
+
+def test_task_create_current_effect_accepts_text_and_moves_to_expected_effect():
+    state = DummyState(
+        data={
+            "title": "优化任务",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "task",
+        },
+        state=TaskCreateStates.waiting_current_effect,
+    )
+    message = DummyMessage("当前按钮需要点击两次才能成功")
+
+    asyncio.run(bot.on_task_create_current_effect(message, state))
+
+    assert state.state == TaskCreateStates.waiting_expected_effect
+    assert state.data["current_effect"] == "当前按钮需要点击两次才能成功"
+    assert message.calls and "请输入期望效果" in message.calls[-1]["text"]
+
+
+def test_task_create_expected_effect_accepts_text_and_builds_task_summary():
+    state = DummyState(
+        data={
+            "title": "优化任务",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "task",
+            "current_effect": "当前按钮需要点击两次才能成功",
+        },
+        state=TaskCreateStates.waiting_expected_effect,
+    )
+    message = DummyMessage("点击一次即可成功提交")
+
+    asyncio.run(bot.on_task_create_expected_effect(message, state))
+
+    assert state.state == TaskCreateStates.waiting_confirm
+    assert (
+        state.data["description"]
+        == "当前效果：\n当前按钮需要点击两次才能成功\n\n期望效果：\n点击一次即可成功提交"
+    )
+    summary = message.calls[-2]["text"]
+    assert "当前效果：" in summary
+    assert "期望效果：" in summary
+
+
+def test_task_new_command_defect_accepts_structured_fields(monkeypatch):
+    state = DummyState()
+    message = DummyMessage(
+        "/task_new 登录按钮无响应 | type=缺陷 | reproduction=点击登录按钮 | expected_result=页面应成功进入首页"
+    )
+
+    created_calls = []
+
+    async def fake_create_root_task(**kwargs):
+        created_calls.append(kwargs)
+        return SimpleNamespace(id="TASK_9001")
+
+    async def fake_render(task_id: str):
+        return "detail", None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+
+    asyncio.run(bot.on_task_new(message, state))
+
+    assert created_calls
+    assert created_calls[0]["task_type"] == "defect"
+    assert created_calls[0]["description"] == "复现步骤：\n点击登录按钮\n\n期望结果：\n页面应成功进入首页"
+
+
+def test_task_new_command_task_accepts_structured_fields(monkeypatch):
+    state = DummyState()
+    message = DummyMessage(
+        "/task_new 优化登录流程 | type=优化 | current_effect=当前需要重复点击两次 | expected_effect=点击一次即可完成提交"
+    )
+
+    created_calls = []
+
+    async def fake_create_root_task(**kwargs):
+        created_calls.append(kwargs)
+        return SimpleNamespace(id="TASK_9002")
+
+    async def fake_render(task_id: str):
+        return "detail", None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+
+    asyncio.run(bot.on_task_new(message, state))
+
+    assert created_calls
+    assert created_calls[0]["task_type"] == "task"
+    assert created_calls[0]["description"] == "当前效果：\n当前需要重复点击两次\n\n期望效果：\n点击一次即可完成提交"
+
+
+@pytest.mark.parametrize("task_type_text", ["缺陷", "优化"])
+def test_task_new_command_keeps_legacy_description_param_compatible(monkeypatch, task_type_text):
+    state = DummyState()
+    message = DummyMessage(f"/task_new 兼容旧参数 | type={task_type_text} | description=旧描述正文")
+
+    created_calls = []
+
+    async def fake_create_root_task(**kwargs):
+        created_calls.append(kwargs)
+        return SimpleNamespace(id="TASK_9003")
+
+    async def fake_render(task_id: str):
+        return "detail", None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+
+    asyncio.run(bot.on_task_new(message, state))
+
+    assert created_calls
+    assert created_calls[0]["description"] == "旧描述正文"
 
 
 def test_task_child_command_reports_deprecation():
