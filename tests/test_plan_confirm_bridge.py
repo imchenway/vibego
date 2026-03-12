@@ -72,6 +72,7 @@ def _reset_runtime():
     bot.PARALLEL_SESSION_TASK_BINDINGS.clear()
     bot.PARALLEL_SESSION_CONTEXTS.clear()
     bot.PARALLEL_TASK_SESSION_MAP.clear()
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS.clear()
     yield
     bot.PLAN_CONFIRM_SESSIONS.clear()
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.clear()
@@ -80,6 +81,7 @@ def _reset_runtime():
     bot.PARALLEL_SESSION_TASK_BINDINGS.clear()
     bot.PARALLEL_SESSION_CONTEXTS.clear()
     bot.PARALLEL_TASK_SESSION_MAP.clear()
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS.clear()
 
 
 def _build_assistant_message_event(text: str) -> dict:
@@ -402,6 +404,78 @@ def test_plan_confirm_old_callback_still_works_after_newer_session_created(monke
     assert newer.token in bot.PLAN_CONFIRM_SESSIONS
     assert bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] == newer.token
     assert callback.answers[-1] == ("已确认并推送到模型", False)
+
+
+def test_old_native_quick_reply_fail_closed_does_not_drop_other_session_plan_confirm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """旧原生会话 quick reply fail-closed 后，不应误删另一个活动会话的 PlanConfirm。"""
+
+    chat_id = 260
+    plan_token = "plan-keep"
+    plan_session = bot.PlanConfirmSession(
+        token=plan_token,
+        chat_id=chat_id,
+        session_key="session-current",
+        user_id=9,
+        created_at=time.monotonic(),
+    )
+    bot.PLAN_CONFIRM_SESSIONS[plan_token] = plan_session
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = plan_token
+    bot.CHAT_SESSION_MAP[chat_id] = "session-current"
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS["deadbeef"] = bot.SessionQuickReplyBinding(
+        token="deadbeef",
+        task_id="TASK_0200",
+        session_key="session-old",
+    )
+
+    async def should_not_dispatch_quick_reply(*_args, **_kwargs):
+        raise AssertionError("旧原生 quick reply fail-closed 时不应派发")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", should_not_dispatch_quick_reply)
+
+    stale_callback = DummyCallback(
+        f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}TASK_0200:deadbeef",
+        message=DummyMessage(chat_id=chat_id),
+        user_id=9,
+    )
+
+    asyncio.run(bot.on_model_quick_reply_all(stale_callback))
+
+    assert stale_callback.answers[-1] == ("该消息所属会话已失效，请在最新会话中重试。", True)
+    assert plan_token in bot.PLAN_CONFIRM_SESSIONS
+    assert bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] == plan_token
+
+    dispatched: list[tuple[int, str]] = []
+
+    async def fake_dispatch_yes(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        intended_mode=None,
+        force_exit_plan_ui: bool = False,
+        force_exit_plan_ui_key_sequence=None,
+        force_exit_plan_ui_max_rounds=None,
+        dispatch_context=None,
+    ):
+        dispatched.append((_chat_id, prompt))
+        return True, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch_yes)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
+
+    yes_callback = DummyCallback(
+        bot._build_plan_confirm_callback_data(plan_token, bot.PLAN_CONFIRM_ACTION_YES),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=9,
+    )
+
+    asyncio.run(bot.on_plan_confirm_callback(yes_callback))
+
+    assert dispatched == [(chat_id, bot.PLAN_IMPLEMENT_PROMPT)]
+    assert yes_callback.answers[-1] == ("已确认并推送到模型", False)
 
 
 def test_plan_confirm_yes_is_idempotent_under_concurrent_clicks(monkeypatch: pytest.MonkeyPatch):

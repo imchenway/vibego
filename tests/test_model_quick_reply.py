@@ -23,6 +23,15 @@ os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 import bot  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _reset_quick_reply_runtime():
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS.clear()
+    bot.CHAT_SESSION_MAP.clear()
+    yield
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS.clear()
+    bot.CHAT_SESSION_MAP.clear()
+
+
 class DummyMessage:
     """模拟 aiogram Message，覆盖本用例所需的最小接口。"""
 
@@ -136,6 +145,8 @@ def test_deliver_pending_messages_for_bound_native_session_includes_commit_butto
         for button in row
         if getattr(button, "callback_data", None)
     ]
+    assert any(data.startswith(bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX) for data in callback_data)
+    assert any(data.startswith(bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX) for data in callback_data)
     assert any(data.startswith(bot.SESSION_COMMIT_CALLBACK_PREFIX) for data in callback_data)
 
 
@@ -290,6 +301,91 @@ def test_quick_reply_all_dispatch_failure_restores_main_keyboard(monkeypatch):
         assert isinstance(reply_markup, ReplyKeyboardMarkup)
 
     asyncio.run(_scenario())
+
+
+def test_quick_reply_all_old_native_message_fails_closed(monkeypatch):
+    """旧原生会话消息上的“全部按推荐”若已不是当前活动会话，应直接报失效。"""
+
+    origin = DummyMessage(chat_id=66, user_id=66)
+    callback = DummyCallback(f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}TASK_0200:deadbeef", origin)
+    bot.CHAT_SESSION_MAP[origin.chat.id] = "session-current"
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS["deadbeef"] = bot.SessionQuickReplyBinding(
+        token="deadbeef",
+        task_id="TASK_0200",
+        session_key="session-old",
+    )
+
+    async def fake_dispatch(*_args, **_kwargs):
+        raise AssertionError("旧原生会话 quick reply 失效时不应继续派发")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_model_quick_reply_all(callback))
+
+    assert callback.answers[-1] == ("该消息所属会话已失效，请在最新会话中重试。", True)
+    assert origin.calls and "已失效" in origin.calls[-1][0]
+
+
+def test_quick_reply_partial_old_native_message_fails_closed(monkeypatch):
+    """旧原生会话消息上的“部分按推荐”若已不是当前活动会话，应直接报失效。"""
+
+    origin = DummyMessage(chat_id=67, user_id=67)
+    callback = DummyCallback(f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}TASK_0200:deadbeef", origin)
+    state, _ = make_state(origin)
+    bot.CHAT_SESSION_MAP[origin.chat.id] = "session-current"
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS["deadbeef"] = bot.SessionQuickReplyBinding(
+        token="deadbeef",
+        task_id="TASK_0200",
+        session_key="session-old",
+    )
+
+    async def fake_dispatch(*_args, **_kwargs):
+        raise AssertionError("旧原生会话 quick reply 失效时不应进入派发")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    async def _scenario() -> None:
+        await bot.on_model_quick_reply_partial(callback, state)
+        assert await state.get_state() is None
+
+    asyncio.run(_scenario())
+
+    assert callback.answers[-1] == ("该消息所属会话已失效，请在最新会话中重试。", True)
+    assert origin.calls and "已失效" in origin.calls[-1][0]
+
+
+def test_quick_reply_partial_native_submit_fails_closed_after_session_switch(monkeypatch):
+    """原生“部分按推荐”进入补充后，若当前活动会话已切走，提交时应 fail-closed。"""
+
+    origin = DummyMessage(chat_id=68, user_id=68)
+    callback = DummyCallback(f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}TASK_0200:deadbeef", origin)
+    state, _ = make_state(origin)
+    session_key = "session-active"
+    bot.CHAT_SESSION_MAP[origin.chat.id] = session_key
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS["deadbeef"] = bot.SessionQuickReplyBinding(
+        token="deadbeef",
+        task_id="TASK_0200",
+        session_key=session_key,
+    )
+
+    async def fake_dispatch(*_args, **_kwargs):
+        raise AssertionError("会话切走后不应继续派发")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    supplement_message = DummyMessage(chat_id=origin.chat.id, user_id=origin.from_user.id)
+    supplement_message.text = "补充说明"
+
+    async def _scenario() -> None:
+        await bot.on_model_quick_reply_partial(callback, state)
+        assert await state.get_state() == bot.ModelQuickReplyStates.waiting_partial_supplement.state
+        bot.CHAT_SESSION_MAP[origin.chat.id] = "session-newer"
+        await bot.on_model_quick_reply_partial_supplement(supplement_message, state)
+        assert await state.get_state() is None
+
+    asyncio.run(_scenario())
+
+    assert supplement_message.calls and "已失效" in supplement_message.calls[-1][0]
 
 
 def test_quick_reply_partial_supplement_dispatches_prompt(monkeypatch, tmp_path: Path):

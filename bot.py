@@ -402,6 +402,8 @@ MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
 MODEL_QUICK_REPLY_ALL_TASK_PREFIX = "model:quick_reply:all:"
 MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX = "model:quick_reply:partial:"
+MODEL_QUICK_REPLY_ALL_SESSION_PREFIX = "model:quick_reply:all_session:"
+MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX = "model:quick_reply:partial_session:"
 SESSION_COMMIT_CALLBACK_PREFIX = "session:commit:"
 # 模型答案消息底部：一键将任务切换到“测试”（不依赖提示词/摘要输出）
 MODEL_TASK_TO_TEST_PREFIX = "model:task_to_test:"
@@ -4169,6 +4171,7 @@ def _build_model_quick_reply_keyboard(
     parallel_task_title: Optional[str] = None,
     enable_parallel_actions: bool = False,
     parallel_callback_payload: Optional[str] = None,
+    native_quick_reply_payload: Optional[str] = None,
     native_commit_callback_payload: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     """构建“模型答案消息”底部的快捷回复按钮（InlineKeyboard）。"""
@@ -4180,6 +4183,10 @@ def _build_model_quick_reply_keyboard(
         payload = (parallel_callback_payload or normalized_task_id).strip()
         all_callback = f"{MODEL_QUICK_REPLY_ALL_TASK_PREFIX}{payload}"
         partial_callback = f"{MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX}{payload}"
+    elif normalized_task_id and native_quick_reply_payload:
+        payload = native_quick_reply_payload.strip()
+        all_callback = f"{MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}{payload}"
+        partial_callback = f"{MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{payload}"
 
     rows: list[list[InlineKeyboardButton]] = [
         [
@@ -8784,6 +8791,7 @@ SESSION_TASK_BINDINGS: Dict[str, str] = {}
 PARALLEL_SESSION_TASK_BINDINGS: Dict[str, str] = {}
 CHAT_PARALLEL_REPLY_TARGETS: Dict[int, dict[str, Any]] = {}
 SESSION_COMMIT_CALLBACK_BINDINGS: Dict[str, "SessionCommitBinding"] = {}
+SESSION_QUICK_REPLY_CALLBACK_BINDINGS: Dict[str, "SessionQuickReplyBinding"] = {}
 
 
 @dataclass
@@ -8847,6 +8855,16 @@ class SessionCommitBinding:
     created_at: float = field(default_factory=time.time)
 
 
+@dataclass
+class SessionQuickReplyBinding:
+    """描述原生会话 quick reply 按钮到具体 session 的绑定。"""
+
+    token: str
+    task_id: str
+    session_key: str
+    created_at: float = field(default_factory=time.time)
+
+
 def _bind_session_task(session_key: str, task_id: str) -> None:
     """将 session_key 与 task_id 绑定，便于从会话回溯当前任务。"""
 
@@ -8887,6 +8905,12 @@ def _build_parallel_callback_payload(task_id: str, token: str) -> str:
 
 def _build_session_commit_callback_payload(task_id: str, token: str) -> str:
     """构造原生会话“提交分支”按钮的 session-scoped payload。"""
+
+    return f"{task_id}:{token}"
+
+
+def _build_session_quick_reply_callback_payload(task_id: str, token: str) -> str:
+    """构造原生会话 quick reply 的 session-scoped payload。"""
 
     return f"{task_id}:{token}"
 
@@ -8937,6 +8961,53 @@ def _ensure_session_commit_binding(session_key: str, task_id: str, workspace_roo
         workspace_root=Path(workspace_root),
     )
     return token
+
+
+def _ensure_session_quick_reply_binding(session_key: str, task_id: str) -> str:
+    """为原生会话消息生成稳定 token，便于 quick reply 精准命中所属 session。"""
+
+    token = hashlib.sha1(f"native-quick-reply:{task_id}:{session_key}".encode("utf-8")).hexdigest()[:10]
+    SESSION_QUICK_REPLY_CALLBACK_BINDINGS[token] = SessionQuickReplyBinding(
+        token=token,
+        task_id=task_id,
+        session_key=session_key,
+    )
+    return token
+
+
+def _resolve_session_quick_reply_binding(
+    chat_id: int,
+    task_id: Optional[str],
+    token: Optional[str],
+) -> Optional[SessionQuickReplyBinding]:
+    """解析原生会话 quick reply 绑定，仅允许命中当前活动原生会话。"""
+
+    normalized_task_id = _normalize_task_id(task_id)
+    normalized_token = (token or "").strip()
+    if not normalized_task_id or not normalized_token:
+        return None
+    binding = SESSION_QUICK_REPLY_CALLBACK_BINDINGS.get(normalized_token)
+    if binding is None:
+        return None
+    if _normalize_task_id(binding.task_id) != normalized_task_id:
+        return None
+    current_session_key = (CHAT_SESSION_MAP.get(chat_id) or "").strip()
+    if not current_session_key or current_session_key != (binding.session_key or "").strip():
+        return None
+    return binding
+
+
+def _should_fail_closed_legacy_native_quick_reply(chat_id: int) -> bool:
+    """判断无 session token 的旧原生 quick reply 是否应直接 fail-closed。"""
+
+    current_session_key = (CHAT_SESSION_MAP.get(chat_id) or "").strip()
+    if not current_session_key:
+        return False
+    if _normalize_task_id(SESSION_TASK_BINDINGS.get(current_session_key)):
+        return True
+    if CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.get(chat_id):
+        return True
+    return False
 
 
 async def _resolve_parallel_dispatch_context(
@@ -10918,6 +10989,7 @@ async def _deliver_pending_messages(
     parallel_title = None
     parallel_dispatch_context = None
     parallel_callback_payload = None
+    native_quick_reply_payload = None
     native_commit_callback_payload = None
     if parallel_task_id:
         parallel_session = await _get_active_parallel_session_for_task(parallel_task_id)
@@ -10932,6 +11004,8 @@ async def _deliver_pending_messages(
             )
             parallel_callback_payload = _build_parallel_callback_payload(resolved_task_id, token)
     elif bound_task_id:
+        token = _ensure_session_quick_reply_binding(session_key, bound_task_id)
+        native_quick_reply_payload = _build_session_quick_reply_callback_payload(bound_task_id, token)
         current_cwd = _read_session_meta_cwd(session_path)
         if current_cwd:
             token = _ensure_session_commit_binding(session_key, bound_task_id, Path(current_cwd))
@@ -10941,6 +11015,7 @@ async def _deliver_pending_messages(
         parallel_task_title=parallel_title,
         enable_parallel_actions=bool(parallel_task_id),
         parallel_callback_payload=parallel_callback_payload,
+        native_quick_reply_payload=native_quick_reply_payload,
         native_commit_callback_payload=native_commit_callback_payload,
     )
     delivered_hashes = _get_delivered_hashes(chat_id, session_key)
@@ -13111,10 +13186,30 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     _remember_chat_active_user(chat_id, callback.from_user.id if callback.from_user else None)
     task_id = None
     token = None
+    native_binding = None
     if callback.data and callback.data.startswith(MODEL_QUICK_REPLY_ALL_TASK_PREFIX):
         task_id, token = _parse_parallel_callback_payload(callback.data[len(MODEL_QUICK_REPLY_ALL_TASK_PREFIX) :].strip())
+    elif callback.data and callback.data.startswith(MODEL_QUICK_REPLY_ALL_SESSION_PREFIX):
+        task_id, token = _parse_parallel_callback_payload(callback.data[len(MODEL_QUICK_REPLY_ALL_SESSION_PREFIX) :].strip())
+        native_binding = _resolve_session_quick_reply_binding(chat_id, task_id, token)
+        if native_binding is None:
+            await callback.answer("该消息所属会话已失效，请在最新会话中重试。", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "该消息所属会话已失效，请在最新会话中重试。",
+                    reply_markup=_build_worker_main_keyboard(),
+                )
+            return
+    elif callback.data == MODEL_QUICK_REPLY_ALL_CALLBACK and _should_fail_closed_legacy_native_quick_reply(chat_id):
+        await callback.answer("该消息所属会话已失效，请在最新会话中重试。", show_alert=True)
+        if callback.message is not None:
+            await callback.message.answer(
+                "该消息所属会话已失效，请在最新会话中重试。",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+        return
     dispatch_context = None
-    if task_id or token:
+    if native_binding is None and (task_id or token):
         task_id, dispatch_context = await _resolve_parallel_dispatch_context(task_id, token)
         if dispatch_context is None:
             await callback.answer("并行会话已失效，请在最新并行消息中重试。", show_alert=True)
@@ -13172,6 +13267,7 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
     parallel_task_id = None
     parallel_token = None
     parallel_dispatch_context = None
+    native_quick_reply_session_key = None
     if callback.data and callback.data.startswith(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX):
         parallel_task_id, parallel_token = _parse_parallel_callback_payload(
             callback.data[len(MODEL_QUICK_REPLY_PARTIAL_TASK_PREFIX) :].strip()
@@ -13189,6 +13285,28 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
                         reply_markup=_build_worker_main_keyboard(),
                     )
                 return
+    elif callback.data and callback.data.startswith(MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX):
+        native_task_id, native_token = _parse_parallel_callback_payload(
+            callback.data[len(MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX) :].strip()
+        )
+        native_binding = _resolve_session_quick_reply_binding(chat_id, native_task_id, native_token)
+        if native_binding is None:
+            await callback.answer("该消息所属会话已失效，请在最新会话中重试。", show_alert=True)
+            if origin_message is not None:
+                await origin_message.answer(
+                    "该消息所属会话已失效，请在最新会话中重试。",
+                    reply_markup=_build_worker_main_keyboard(),
+                )
+            return
+        native_quick_reply_session_key = native_binding.session_key
+    elif callback.data == MODEL_QUICK_REPLY_PARTIAL_CALLBACK and _should_fail_closed_legacy_native_quick_reply(chat_id):
+        await callback.answer("该消息所属会话已失效，请在最新会话中重试。", show_alert=True)
+        if origin_message is not None:
+            await origin_message.answer(
+                "该消息所属会话已失效，请在最新会话中重试。",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+        return
 
     await state.clear()
     await state.update_data(
@@ -13196,6 +13314,7 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
         origin_message=origin_message,
         parallel_task_id=parallel_task_id,
         parallel_dispatch_context=parallel_dispatch_context,
+        native_quick_reply_session_key=native_quick_reply_session_key,
         # 用于后续超时清理或排查问题（单位：秒）。
         started_at=time.time(),
     )
@@ -13554,11 +13673,21 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
     dispatch_context = data.get("parallel_dispatch_context")
     if not isinstance(dispatch_context, ParallelDispatchContext):
         dispatch_context = None
+    native_quick_reply_session_key = (data.get("native_quick_reply_session_key") or "").strip()
     parallel_task_id = _normalize_task_id(data.get("parallel_task_id"))
     if parallel_task_id and dispatch_context is None:
         session = await _get_active_parallel_session_for_task(parallel_task_id)
         if session is not None:
             dispatch_context = _parallel_dispatch_context_from_session(session)
+    if native_quick_reply_session_key:
+        current_session_key = (CHAT_SESSION_MAP.get(chat_id) or "").strip()
+        if not current_session_key or current_session_key != native_quick_reply_session_key:
+            await state.clear()
+            await message.answer(
+                "该消息所属会话已失效，请在最新会话中重试。",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+            return
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": origin_message,
         "ack_immediately": False,
