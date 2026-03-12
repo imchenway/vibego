@@ -1332,26 +1332,22 @@ async def reply_large_text(
         return delivered
 
     attachment_name = f"model-response-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
-    summary_text = (
-        f"{MODEL_COMPLETION_PREFIX}\n\n"
-        f"内容较长，已生成附件 `{attachment_name}`，请下载查看全文。"
-    )
-
-    summary_prepared, summary_fallback = _prepare_model_payload_variants(summary_text)
-    delivered_summary = await _send_with_markdown_guard(
-        summary_prepared,
-        _send_formatted_message_without_markup,
-        raw_sender=_send_raw_message_without_markup,
-        fallback_payload=summary_fallback,
-    )
+    summary_text = f"{MODEL_COMPLETION_PREFIX}\n\n内容较长，已生成附件 {attachment_name}，请下载查看全文。"
 
     document = BufferedInputFile(text.encode("utf-8"), filename=attachment_name)
 
     async def _send_document() -> None:
         kwargs: dict[str, Any] = {}
-        if attachment_reply_markup is not None:
-            kwargs["reply_markup"] = attachment_reply_markup
-        await bot.send_document(chat_id=chat_id, document=document, **kwargs)
+        attachment_markup = attachment_reply_markup if attachment_reply_markup is not None else reply_markup
+        if attachment_markup is not None:
+            kwargs["reply_markup"] = attachment_markup
+        await bot.send_document(
+            chat_id=chat_id,
+            document=document,
+            caption=summary_text,
+            parse_mode=None,
+            **kwargs,
+        )
 
     await _send_with_retry(_send_document)
 
@@ -1365,7 +1361,7 @@ async def reply_large_text(
         },
     )
 
-    return delivered_summary
+    return summary_text
 
 
 async def _send_model_push_preview(
@@ -4199,20 +4195,24 @@ def _build_model_quick_reply_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"🏷 { _format_task_command(normalized_task_id) } {title_text}".strip()[:64],
-                    callback_data=f"task:detail:{normalized_task_id}",
-                )
+                    text="⬆️ 提交并行分支",
+                    callback_data=f"{PARALLEL_COMMIT_CALLBACK_PREFIX}{normalized_task_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🧪 任务状态更新为测试中",
+                    callback_data=f"{MODEL_TASK_TO_TEST_PREFIX}{normalized_task_id}",
+                ),
             ]
         )
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"↩️ 回复 { _format_task_command(normalized_task_id) }".strip()[:40],
-                    callback_data=f"{PARALLEL_REPLY_CALLBACK_PREFIX}{(parallel_callback_payload or normalized_task_id).strip()}",
+                    text=f"🏷 { _format_task_command(normalized_task_id) } {title_text}".strip()[:64],
+                    callback_data=f"task:detail:{normalized_task_id}",
                 ),
                 InlineKeyboardButton(
-                    text="⬆️ 提交并行分支",
-                    callback_data=f"{PARALLEL_COMMIT_CALLBACK_PREFIX}{normalized_task_id}",
+                    text=f"↩️ 回复 { _format_task_command(normalized_task_id) }".strip()[:40],
+                    callback_data=f"{PARALLEL_REPLY_CALLBACK_PREFIX}{(parallel_callback_payload or normalized_task_id).strip()}",
                 ),
             ]
         )
@@ -4223,9 +4223,13 @@ def _build_model_quick_reply_keyboard(
                     text="⬆️ 提交分支",
                     callback_data=f"{SESSION_COMMIT_CALLBACK_PREFIX}{native_commit_callback_payload.strip()}",
                 ),
+                InlineKeyboardButton(
+                    text="🧪 任务状态更新为测试中",
+                    callback_data=f"{MODEL_TASK_TO_TEST_PREFIX}{normalized_task_id}",
+                ),
             ]
         )
-    if normalized_task_id:
+    elif normalized_task_id:
         rows.append(
             [
                 InlineKeyboardButton(
@@ -12475,6 +12479,7 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
     if payload_type in {"message", "assistant_message"}:
         if not _should_deliver_message(payload):
             return None
+        metadata: Dict[str, Any] = {"codex_response_item_type": payload_type}
         content = payload.get("content")
         if isinstance(content, list):
             fragments = []
@@ -12486,13 +12491,13 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
                     if text:
                         fragments.append(text)
             if fragments:
-                return DELIVERABLE_KIND_MESSAGE, "\n".join(fragments), None
+                return DELIVERABLE_KIND_MESSAGE, "\n".join(fragments), metadata
         message = payload.get("message")
         if isinstance(message, str) and message.strip():
-            return DELIVERABLE_KIND_MESSAGE, message, None
+            return DELIVERABLE_KIND_MESSAGE, message, metadata
         text = payload.get("text")
         if isinstance(text, str) and text.strip():
-            return DELIVERABLE_KIND_MESSAGE, text, None
+            return DELIVERABLE_KIND_MESSAGE, text, metadata
 
     if payload_type == "function_call":
         function_name = payload.get("name")
@@ -12580,6 +12585,30 @@ def _extract_deliverable_payload(data: dict, *, event_timestamp: Optional[str]) 
     return _extract_codex_payload(data, event_timestamp=event_timestamp)
 
 
+def _collapse_codex_response_item_duplicates(events: List[SessionDeliverable]) -> List[SessionDeliverable]:
+    """收敛 Codex 同时间戳的 assistant_message/message 双发，仅保留正式 message。"""
+
+    if not _is_codex_model():
+        return events
+    preferred_timestamps = {
+        item.timestamp
+        for item in events
+        if item.kind == DELIVERABLE_KIND_MESSAGE
+        and item.timestamp
+        and (item.metadata or {}).get("codex_response_item_type") == "message"
+    }
+    if not preferred_timestamps:
+        return events
+
+    collapsed: List[SessionDeliverable] = []
+    for item in events:
+        source_type = (item.metadata or {}).get("codex_response_item_type")
+        if source_type == "assistant_message" and item.timestamp in preferred_timestamps:
+            continue
+        collapsed.append(item)
+    return collapsed
+
+
 def _read_session_events_jsonl(path: Path, offset: int) -> Tuple[int, List[SessionDeliverable]]:
     """读取 Codex/ClaudeCode 的 JSONL 会话增量事件（按字节偏移）。"""
 
@@ -12619,7 +12648,7 @@ def _read_session_events_jsonl(path: Path, offset: int) -> Tuple[int, List[Sessi
     except FileNotFoundError:
         return offset, []
 
-    return new_offset, events
+    return new_offset, _collapse_codex_response_item_duplicates(events)
 
 
 def _read_gemini_session_json(path: Path) -> Optional[dict]:

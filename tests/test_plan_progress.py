@@ -46,10 +46,10 @@ class DummyBot:
 class DummyDocumentBot(DummyBot):
     def __init__(self):
         super().__init__()
-        self.sent_documents: list[tuple[int, BufferedInputFile, Optional[str], Optional[str]]] = []
+        self.sent_documents: list[tuple[int, BufferedInputFile, Optional[str], Optional[str], object]] = []
 
-    async def send_document(self, chat_id: int, document, caption=None, parse_mode=None):
-        self.sent_documents.append((chat_id, document, caption, parse_mode))
+    async def send_document(self, chat_id: int, document, caption=None, parse_mode=None, reply_markup=None):
+        self.sent_documents.append((chat_id, document, caption, parse_mode, reply_markup))
         return SimpleNamespace(file_id="dummy")
 
 
@@ -497,19 +497,42 @@ def test_reply_large_text_attachment(reply_bot_env):
 
     delivered = asyncio.run(bot.reply_large_text(chat_id, long_text))
 
-    assert reply_bot_env.sent_messages, "应发送摘要提示"
-    summary = reply_bot_env.sent_messages[-1][1]
-    assert "附件" in summary
-    assert delivered == summary
+    assert not reply_bot_env.sent_messages, "长文本场景不应再额外发送摘要消息"
 
     assert reply_bot_env.sent_documents, "应发送附件"
-    doc_chat_id, buffered_file, caption, parse_mode = reply_bot_env.sent_documents[-1]
+    doc_chat_id, buffered_file, caption, parse_mode, reply_markup = reply_bot_env.sent_documents[-1]
     assert doc_chat_id == chat_id
     assert isinstance(buffered_file, BufferedInputFile)
     assert buffered_file.filename.endswith(".md")
     assert buffered_file.data.decode("utf-8") == long_text
-    assert caption is None
+    assert caption is not None
+    assert "附件" in caption
     assert parse_mode is None
+    assert reply_markup is None
+    assert delivered == caption
+
+
+def test_codex_response_item_and_assistant_message_same_timestamp_only_delivered_once(plan_test_env):
+    env = plan_test_env
+    chat_id = 1406
+    short_text = "短版镜像"
+    final_text = "完整最终答案"
+
+    env["append_events"](
+        [
+            _final_event(short_text),
+            _codex_response_item_final_event(final_text),
+        ]
+    )
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert len(env["replies"]) == 1
+    assert env["replies"][0][1].endswith(final_text)
 
 
 def test_reply_large_text_short_message(reply_bot_env):

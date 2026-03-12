@@ -64,7 +64,7 @@ def test_extract_codex_final_answer_phase_delivered():
     kind, text, metadata = result
     assert kind == bot.DELIVERABLE_KIND_MESSAGE
     assert text == "最终答案"
-    assert metadata is None
+    assert metadata == {"codex_response_item_type": "message"}
 
 
 def test_extract_codex_legacy_message_without_phase_kept():
@@ -74,7 +74,7 @@ def test_extract_codex_legacy_message_without_phase_kept():
     kind, text, metadata = result
     assert kind == bot.DELIVERABLE_KIND_MESSAGE
     assert text == "旧格式输出"
-    assert metadata is None
+    assert metadata == {"codex_response_item_type": "message"}
 
 
 def test_extract_codex_unknown_phase_ignored():

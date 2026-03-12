@@ -303,6 +303,38 @@ def test_quick_reply_all_dispatch_failure_restores_main_keyboard(monkeypatch):
     asyncio.run(_scenario())
 
 
+def test_native_quick_reply_keyboard_places_commit_and_test_on_same_row():
+    """原生会话消息：提交分支与更新为测试中应同排。"""
+
+    markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0200",
+        native_quick_reply_payload="TASK_0200:deadbeef",
+        native_commit_callback_payload="TASK_0200:commitbeef",
+    )
+
+    assert len(markup.inline_keyboard) == 2
+    second_row = markup.inline_keyboard[1]
+    assert [button.text for button in second_row] == ["⬆️ 提交分支", "🧪 任务状态更新为测试中"]
+
+
+def test_parallel_quick_reply_keyboard_places_commit_and_test_together_and_title_reply_last():
+    """并行消息：提交并行分支与更新为测试中同排，标题+回复放最后一排。"""
+
+    markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0201",
+        parallel_task_title="并行任务标题",
+        enable_parallel_actions=True,
+        parallel_callback_payload="TASK_0201:deadbeef",
+    )
+
+    assert len(markup.inline_keyboard) == 3
+    second_row = markup.inline_keyboard[1]
+    third_row = markup.inline_keyboard[2]
+    assert [button.text for button in second_row] == ["⬆️ 提交并行分支", "🧪 任务状态更新为测试中"]
+    assert third_row[0].text.startswith("🏷 ")
+    assert third_row[1].text.startswith("↩️ 回复 ")
+
+
 def test_quick_reply_all_old_native_message_fails_closed(monkeypatch):
     """旧原生会话消息上的“全部按推荐”若已不是当前活动会话，应直接报失效。"""
 
