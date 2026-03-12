@@ -13464,9 +13464,57 @@ def _collect_native_commit_repos(workspace_root: Path) -> tuple[list[ParallelRep
 
 
 def _format_parallel_operation_lines(title: str, results: Sequence[RepoOperationResult]) -> str:
-    lines = [title]
+    """按失败/成功/跳过分组格式化并行操作结果，提升 Telegram 消息可读性。"""
+
+    def _normalize_title(raw_title: str) -> str:
+        """统一去掉标题末尾冒号，避免视觉噪音。"""
+
+        cleaned = normalize_newlines(raw_title or "").strip()
+        return cleaned.rstrip("：:").strip() or "执行结果"
+
+    def _group_key(item: RepoOperationResult) -> Literal["failed", "success", "skipped"]:
+        """根据操作结果映射到用户可见分组。"""
+
+        if not item.ok:
+            return "failed"
+        if item.status == "skipped":
+            return "skipped"
+        return "success"
+
+    def _append_group(lines: list[str], header: str, items: Sequence[RepoOperationResult]) -> None:
+        """将单个结果分组追加到输出文本，并缩进多行 message。"""
+
+        if not items:
+            return
+        lines.append("")
+        lines.append(f"{header}（{len(items)}）")
+        for item in items:
+            lines.append(f"- {item.repo_name}")
+            message_lines = [line.strip() for line in normalize_newlines(item.message or "").splitlines() if line.strip()]
+            if not message_lines:
+                message_lines = ["-"]
+            for line in message_lines:
+                lines.append(f"  {line}")
+
+    grouped_results: dict[str, list[RepoOperationResult]] = {
+        "failed": [],
+        "success": [],
+        "skipped": [],
+    }
     for item in results:
-        lines.append(f"- {item.repo_name}：{item.message}")
+        grouped_results[_group_key(item)].append(item)
+
+    normalized_title = _normalize_title(title)
+    lines = [
+        normalized_title,
+        (
+            f"总览：{len(results)} 个仓库｜失败 {len(grouped_results['failed'])}"
+            f"｜成功 {len(grouped_results['success'])}｜跳过 {len(grouped_results['skipped'])}"
+        ),
+    ]
+    _append_group(lines, "❌ 失败", grouped_results["failed"])
+    _append_group(lines, "✅ 成功", grouped_results["success"])
+    _append_group(lines, "⏭️ 已跳过", grouped_results["skipped"])
     return "\n".join(lines)
 
 
