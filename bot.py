@@ -6666,29 +6666,40 @@ def _compose_task_button_label(
     max_length: int = 60,
     is_session_running: bool = False,
 ) -> str:
-    """生成任务列表按钮文本，将状态图标置于最左侧并去除任务类型图标。"""
+    """生成任务列表按钮文本：状态图标 + 任务编码 + 标题。"""
 
     title_raw = (task.title or "").strip()
     title = title_raw if title_raw else "-"
     status_icon = _status_icon(task.status)
+    task_code = (task.id or "").strip()
     running_suffix = " ▶️" if is_session_running else ""
 
-    # 前缀仅保留状态图标：列表场景更关注进度与标题，降低类型图标带来的视觉噪声。
-    prefix = f"{status_icon} " if status_icon else ""
+    prefix_parts: list[str] = []
+    if status_icon:
+        prefix_parts.append(status_icon)
+    if task_code:
+        prefix_parts.append(task_code)
+    prefix = " ".join(part for part in prefix_parts if part).strip()
 
-    available = max_length - len(prefix) - len(running_suffix)
+    separator = " " if prefix else ""
+    reserved = len(prefix) + len(separator) + len(running_suffix)
+    available = max_length - reserved
+
     if available <= 0:
-        truncated_title = "…"
-    else:
-        if len(title) > available:
-            if available <= 1:
-                truncated_title = "…"
-            else:
-                truncated_title = title[: available - 1] + "…"
-        else:
-            truncated_title = title
+        label = f"{prefix}{running_suffix}" if prefix else running_suffix.strip()
+        if len(label) > max_length:
+            label = label[: max_length - 1] + "…"
+        return label
 
-    label = f"{prefix}{truncated_title}{running_suffix}" if prefix else f"{truncated_title}{running_suffix}"
+    if len(title) > available:
+        truncated_title = "…" if available <= 1 else title[: available - 1] + "…"
+    else:
+        truncated_title = title
+
+    if prefix:
+        label = f"{prefix} {truncated_title}{running_suffix}"
+    else:
+        label = f"{truncated_title}{running_suffix}"
     if len(label) > max_length:
         label = label[: max_length - 1] + "…"
     return label
