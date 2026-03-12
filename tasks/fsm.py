@@ -44,7 +44,8 @@ class TaskDefectReportStates(StatesGroup):
     """报告缺陷（创建缺陷任务）流程状态。"""
 
     waiting_title = State()
-    waiting_description = State()
+    waiting_reproduction = State()
+    waiting_expected_result = State()
     waiting_confirm = State()
 
 

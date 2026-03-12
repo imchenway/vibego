@@ -249,6 +249,33 @@ def test_format_task_detail_without_history():
     assert "📊 状态：" not in result
 
 
+def test_format_task_detail_defect_uses_reproduction_and_expected_result():
+    """缺陷任务详情应优先展示复现步骤与期望结果。"""
+
+    task = _make_task(task_id="TASK_0111", title="缺陷任务", status="research", task_type="defect")
+    task.description = "复现步骤：\n1. 打开页面\n\n期望结果：\n页面应正常显示"
+
+    result = bot._format_task_detail(task, notes=())
+
+    assert "🧪 复现步骤：" in result
+    assert "打开页面" in result
+    assert "🎯 期望结果：页面应正常显示" in result
+    assert "🖊️ 描述：" not in result
+
+
+def test_format_task_detail_defect_falls_back_to_generic_description_when_unstructured():
+    """历史缺陷任务若仍为旧描述结构，应回退到通用描述展示。"""
+
+    task = _make_task(task_id="TASK_0112", title="历史缺陷", status="research", task_type="defect")
+    task.description = "旧版自由描述"
+
+    result = bot._format_task_detail(task, notes=())
+
+    assert "🖊️ 描述：旧版自由描述" in result
+    assert "🧪 复现步骤：" not in result
+    assert "🎯 期望结果：" not in result
+
+
 def test_format_task_detail_misc_note_without_label():
     task = _make_task(task_id="TASK_0110", title="无标签任务", status="research")
     notes = (
@@ -4039,6 +4066,69 @@ def test_build_model_push_payload_with_supplement():
     assert "测试阶段补充说明：" not in payload
 
 
+def test_build_model_push_payload_defect_uses_reproduction_and_expected_result():
+    """缺陷任务推送到模型时应展示复现步骤与期望结果。"""
+
+    task = TaskRecord(
+        id="TASK_DEFECT_PUSH",
+        project_slug="demo",
+        title="缺陷推送",
+        status="research",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="复现步骤：\n1. 点击按钮\n\n期望结果：\n应弹出成功提示",
+        parent_id=None,
+        root_id="TASK_DEFECT_PUSH",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    payload = bot._build_model_push_payload(task, supplement="补充内容")
+
+    assert "复现步骤：\n~~~\n1. 点击按钮\n~~~" in payload
+    assert "期望结果：\n~~~\n应弹出成功提示\n~~~" in payload
+    assert "补充任务描述：\n~~~\n补充内容\n~~~" in payload
+    assert "任务描述：\n~~~\n复现步骤：" not in payload
+
+
+def test_build_task_context_block_for_model_defect_uses_reproduction_and_expected_result():
+    """任务上下文块在缺陷任务下也应输出双字段结构。"""
+
+    task = TaskRecord(
+        id="TASK_DEFECT_CTX",
+        project_slug="demo",
+        title="缺陷上下文",
+        status="test",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="复现步骤：\n打开控制台\n\n期望结果：\n不应报错",
+        parent_id=None,
+        root_id="TASK_DEFECT_CTX",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    block = bot._build_task_context_block_for_model(
+        task,
+        supplement="补充说明",
+        history="",
+        attachments=(),
+    )
+
+    assert "复现步骤：\n~~~\n打开控制台\n~~~" in block
+    assert "期望结果：\n~~~\n不应报错\n~~~" in block
+    assert "补充任务描述：\n~~~\n补充说明\n~~~" in block
+    assert "任务描述：\n~~~\n复现步骤：" not in block
 def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, tmp_path: Path):
     """推送到模型：任务上下文超长时应自动转为本地附件提示词，避免直接注入超长文本。"""
 

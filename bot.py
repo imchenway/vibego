@@ -6155,6 +6155,111 @@ def _append_prompt_field_as_code_block(lines: list[str], *, label: str, value: O
     lines.append("~~~")
 
 
+DEFECT_REPRODUCTION_LABEL = "复现步骤"
+DEFECT_EXPECTED_RESULT_LABEL = "期望结果"
+DEFECT_DESCRIPTION_PATTERN = re.compile(
+    rf"^{DEFECT_REPRODUCTION_LABEL}：\n(?P<reproduction>.*)\n\n{DEFECT_EXPECTED_RESULT_LABEL}：\n(?P<expected_result>.*)$",
+    re.DOTALL,
+)
+
+
+def _build_defect_description(reproduction: Optional[str], expected_result: Optional[str]) -> str:
+    """将缺陷任务的复现步骤与期望结果组装为统一存储结构。"""
+
+    normalized_reproduction = normalize_newlines(reproduction or "").strip() or "-"
+    normalized_expected_result = normalize_newlines(expected_result or "").strip() or "-"
+    return (
+        f"{DEFECT_REPRODUCTION_LABEL}：\n{normalized_reproduction}\n\n"
+        f"{DEFECT_EXPECTED_RESULT_LABEL}：\n{normalized_expected_result}"
+    )
+
+
+def _parse_defect_description(description: Optional[str]) -> Optional[tuple[str, str]]:
+    """解析缺陷任务的结构化描述；历史自由文本会返回 None 以便回退兼容。"""
+
+    normalized = normalize_newlines(description or "").strip()
+    if not normalized:
+        return None
+    match = DEFECT_DESCRIPTION_PATTERN.match(normalized)
+    if not match:
+        return None
+    reproduction = (match.group("reproduction") or "").strip() or "-"
+    expected_result = (match.group("expected_result") or "").strip() or "-"
+    return reproduction, expected_result
+
+
+def _append_task_prompt_description_fields(
+    lines: list[str],
+    *,
+    task: TaskRecord,
+    description: Optional[str],
+    supplement_value: Optional[str],
+) -> None:
+    """按任务类型输出推送提示词中的描述字段，缺陷任务优先拆成双字段。"""
+
+    normalized_task_type = _normalize_task_type(getattr(task, "task_type", None))
+    parsed_defect = _parse_defect_description(description) if normalized_task_type == "defect" else None
+    if parsed_defect is not None:
+        reproduction, expected_result = parsed_defect
+        _append_prompt_field_as_code_block(lines, label=DEFECT_REPRODUCTION_LABEL, value=reproduction)
+        _append_prompt_field_as_code_block(lines, label=DEFECT_EXPECTED_RESULT_LABEL, value=expected_result)
+    else:
+        _append_prompt_field_as_code_block(lines, label="任务描述", value=description)
+    _append_prompt_field_as_code_block(lines, label="补充任务描述", value=supplement_value)
+
+
+def _format_task_detail_value(value: Optional[str]) -> str:
+    """统一格式化任务详情中的文本值，兼容 Markdown 与预转义内容。"""
+
+    cleaned = _clean_user_text(value or "") or "-"
+    if _IS_MARKDOWN_V2:
+        return cleaned
+    return _escape_markdown_text(cleaned)
+
+
+def _append_defect_summary_field(lines: list[str], *, label: str, value: Optional[str]) -> None:
+    """将缺陷确认页的字段按“标题 + 内容”形式写入，便于长文本阅读。"""
+
+    normalized = normalize_newlines(value or "").strip()
+    if not normalized:
+        lines.append(f"{label}：-")
+        return
+    lines.append(f"{label}：")
+    lines.extend(normalized.splitlines())
+
+
+def _build_defect_confirm_summary_lines(
+    *,
+    title: str,
+    origin_task: Optional[TaskRecord],
+    origin_task_id: Optional[str],
+    reproduction: Optional[str],
+    expected_result: Optional[str],
+    pending_attachments: Sequence[Mapping[str, str]],
+) -> list[str]:
+    """构建缺陷确认页摘要，统一复现步骤/期望结果与附件展示顺序。"""
+
+    summary_lines = [
+        "请确认缺陷任务信息：",
+        f"标题：{title or '-'}",
+        f"类型：{_format_task_type('defect')}",
+    ]
+    if origin_task is not None:
+        origin_title = (origin_task.title or "").strip() or "-"
+        summary_lines.append(f"关联任务：/{origin_task.id} {origin_title}")
+    elif origin_task_id:
+        summary_lines.append(f"关联任务：/{origin_task_id}")
+    else:
+        summary_lines.append("关联任务：-")
+    _append_defect_summary_field(summary_lines, label=DEFECT_REPRODUCTION_LABEL, value=reproduction)
+    _append_defect_summary_field(summary_lines, label=DEFECT_EXPECTED_RESULT_LABEL, value=expected_result)
+    if isinstance(pending_attachments, Sequence):
+        summary_lines.extend(_format_pending_attachments_for_create_summary(pending_attachments))
+    else:
+        summary_lines.append("附件列表：-")
+    return summary_lines
+
+
 def _build_model_push_payload(
     task: TaskRecord,
     supplement: Optional[str] = None,
@@ -6228,8 +6333,12 @@ def _build_model_push_payload(
             f"任务标题：{title}",
             f"任务编码：{task_code_plain}",
         ]
-        _append_prompt_field_as_code_block(lines, label="任务描述", value=description)
-        _append_prompt_field_as_code_block(lines, label="补充任务描述", value=supplement_value)
+        _append_task_prompt_description_fields(
+            lines,
+            task=task,
+            description=description,
+            supplement_value=supplement_value,
+        )
         lines.extend([f"关联任务编码：{related_task_code}", ""])
         if attachments:
             lines.append("附件列表：")
@@ -6257,8 +6366,12 @@ def _build_model_push_payload(
             description = (task.description or "").strip() or "暂无"
             supplement_value = supplement_text or "-"
             info_lines.extend([f"任务标题：{title}", f"任务编码：{task_code_plain}"])
-            _append_prompt_field_as_code_block(info_lines, label="任务描述", value=description)
-            _append_prompt_field_as_code_block(info_lines, label="补充任务描述", value=supplement_value)
+            _append_task_prompt_description_fields(
+                info_lines,
+                task=task,
+                description=description,
+                supplement_value=supplement_value,
+            )
         elif supplement_text:
             _append_prompt_field_as_code_block(info_lines, label="补充任务描述", value=supplement_text)
 
@@ -6326,8 +6439,12 @@ def _build_task_context_block_for_model(
         f"任务标题：{title}",
         f"任务编码：{task_code_plain}",
     ]
-    _append_prompt_field_as_code_block(lines, label="任务描述", value=description)
-    _append_prompt_field_as_code_block(lines, label="补充任务描述", value=supplement_value)
+    _append_task_prompt_description_fields(
+        lines,
+        task=task,
+        description=description,
+        supplement_value=supplement_value,
+    )
     lines.append("")
 
     if attachments:
@@ -6935,15 +7052,16 @@ def _format_task_detail(
     ]
 
     # 修复：描述字段智能清理预转义
-    description_raw = task.description or "暂无"
-    description_cleaned = _clean_user_text(description_raw)
-    if _IS_MARKDOWN_V2:
-        # 智能清理预转义文本（保护代码块）
-        description_text = description_cleaned
+    normalized_task_type = _normalize_task_type(getattr(task, "task_type", None))
+    parsed_defect = _parse_defect_description(task.description) if normalized_task_type == "defect" else None
+    if parsed_defect is not None:
+        reproduction_text = _format_task_detail_value(parsed_defect[0])
+        expected_result_text = _format_task_detail_value(parsed_defect[1])
+        lines.append(f"🧪 {DEFECT_REPRODUCTION_LABEL}：{reproduction_text}")
+        lines.append(f"🎯 {DEFECT_EXPECTED_RESULT_LABEL}：{expected_result_text}")
     else:
-        description_text = _escape_markdown_text(description_cleaned)
-
-    lines.append(f"🖊️ 描述：{description_text}")
+        description_text = _format_task_detail_value(task.description or "暂无")
+        lines.append(f"🖊️ 描述：{description_text}")
     lines.append(f"📅 创建时间：{_format_local_time(task.created_at)}")
     lines.append(f"🔁 更新时间：{_format_local_time(task.updated_at)}")
 
@@ -17236,7 +17354,8 @@ async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None
         origin_task_id=task.id,
         reporter=reporter,
         title="",
-        description="",
+        reproduction="",
+        expected_result="",
         pending_attachments=[],
         processed_media_groups=[],
     )
@@ -17265,16 +17384,16 @@ async def on_task_defect_report_title(message: Message, state: FSMContext) -> No
         title=title,
         processed_media_groups=[],
     )
-    await state.set_state(TaskDefectReportStates.waiting_description)
+    await state.set_state(TaskDefectReportStates.waiting_reproduction)
     await message.answer(
-        "请输入缺陷描述（可选），可直接发送图片/文件作为附件；若暂无描述可发送“跳过”继续（仅发送附件也会进入下一步）：",
+        "请输入复现步骤（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
         reply_markup=_build_description_keyboard(),
     )
 
 
-@router.message(TaskDefectReportStates.waiting_description)
-async def on_task_defect_report_description(message: Message, state: FSMContext) -> None:
-    """报告缺陷：处理缺陷任务描述输入，并暂存附件。"""
+@router.message(TaskDefectReportStates.waiting_reproduction)
+async def on_task_defect_report_reproduction(message: Message, state: FSMContext) -> None:
+    """报告缺陷：处理复现步骤输入，并暂存附件。"""
 
     data = await state.get_data()
     attachment_dir = _attachment_dir_for_message(message)
@@ -17295,7 +17414,7 @@ async def on_task_defect_report_description(message: Message, state: FSMContext)
         await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
-    # 缺陷描述非必填：用户可选择“跳过”直接进入确认阶段。
+    # 复现步骤非必填：用户可选择“跳过”继续录入期望结果。
     options = [SKIP_TEXT, "取消"]
     resolved = _resolve_reply_choice(trimmed, options=options)
     if resolved == "取消" or _is_cancel_message(resolved):
@@ -17306,47 +17425,87 @@ async def on_task_defect_report_description(message: Message, state: FSMContext)
     if is_skip:
         trimmed = ""
     if not trimmed and not is_skip and not saved_attachments:
-        # 用户既没输入文字也没发送附件时，继续提示可补充描述或跳过。
+        # 用户既没输入文字也没发送附件时，继续提示可补充复现步骤或跳过。
         await message.answer(
-            "缺陷描述可选：可继续输入描述（可同时发送附件），或发送“跳过”直接进入确认创建：",
+            "复现步骤可选：可继续输入步骤（可同时发送附件），或发送“跳过”继续录入期望结果：",
             reply_markup=_build_description_keyboard(),
         )
         return
-    description = trimmed
-    if len(description) > DESCRIPTION_MAX_LENGTH:
-        # 缺陷描述超长：自动落盘为附件，写入占位文本并继续流程。
-        attachment = _persist_text_paste_as_attachment(message, description)
+    reproduction = trimmed
+    if len(reproduction) > DESCRIPTION_MAX_LENGTH:
+        # 复现步骤超长：自动落盘为附件，写入占位文本并继续流程。
+        attachment = _persist_text_paste_as_attachment(message, reproduction)
         pending = list(data.get("pending_attachments") or [])
         pending.append(_serialize_saved_attachment(attachment))
         await state.update_data(pending_attachments=pending)
-        description = _build_overlong_text_placeholder("缺陷描述")
-    await state.update_data(description=description)
+        reproduction = _build_overlong_text_placeholder("复现步骤")
+    await state.update_data(reproduction=reproduction)
+    await state.set_state(TaskDefectReportStates.waiting_expected_result)
+    await message.answer(
+        "请输入期望结果（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
+        reply_markup=_build_description_keyboard(),
+    )
+
+
+@router.message(TaskDefectReportStates.waiting_expected_result)
+async def on_task_defect_report_expected_result(message: Message, state: FSMContext) -> None:
+    """报告缺陷：处理期望结果输入，并进入确认阶段。"""
+
+    data = await state.get_data()
+    attachment_dir = _attachment_dir_for_message(message)
+    processed_groups = set(data.get("processed_media_groups") or [])
+    saved_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    # 媒体组会触发多次 handler，若本次调用已被其他消息消费则直接忽略，避免重复追加附件。
+    if message.media_group_id and not saved_attachments and not text_part:
+        return
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
+    if saved_attachments:
+        pending = list(data.get("pending_attachments") or [])
+        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
+        await state.update_data(pending_attachments=pending)
+    raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
+    trimmed = raw_text.strip()
+    options = [SKIP_TEXT, "取消"]
+    resolved = _resolve_reply_choice(trimmed, options=options)
+    if resolved == "取消" or _is_cancel_message(resolved):
+        await state.clear()
+        await message.answer("已取消创建缺陷任务。", reply_markup=_build_worker_main_keyboard())
+        return
+    is_skip = resolved == SKIP_TEXT or _is_skip_message(resolved)
+    if is_skip:
+        trimmed = ""
+    if not trimmed and not is_skip and not saved_attachments:
+        await message.answer(
+            "期望结果可选：可继续输入结果（可同时发送附件），或发送“跳过”进入确认创建：",
+            reply_markup=_build_description_keyboard(),
+        )
+        return
+    expected_result = trimmed
+    if len(expected_result) > DESCRIPTION_MAX_LENGTH:
+        # 期望结果超长：自动落盘为附件，写入占位文本并继续流程。
+        attachment = _persist_text_paste_as_attachment(message, expected_result)
+        pending = list(data.get("pending_attachments") or [])
+        pending.append(_serialize_saved_attachment(attachment))
+        await state.update_data(pending_attachments=pending)
+        expected_result = _build_overlong_text_placeholder("期望结果")
+    await state.update_data(expected_result=expected_result)
     await state.set_state(TaskDefectReportStates.waiting_confirm)
     data = await state.get_data()
     origin_task_id = data.get("origin_task_id")
     origin_task = await TASK_SERVICE.get_task(origin_task_id) if origin_task_id else None
-    summary_lines = [
-        "请确认缺陷任务信息：",
-        f"标题：{data.get('title')}",
-        f"类型：{_format_task_type('defect')}",
-    ]
-    if origin_task is not None:
-        origin_title = (origin_task.title or "").strip() or "-"
-        summary_lines.append(f"关联任务：/{origin_task.id} {origin_title}")
-    elif origin_task_id:
-        summary_lines.append(f"关联任务：/{origin_task_id}")
-    else:
-        summary_lines.append("关联任务：-")
-    if description:
-        summary_lines.append("描述：")
-        summary_lines.append(description)
-    else:
-        summary_lines.append("描述：暂无（可稍后通过 /task_desc 补充）")
-    pending_attachments = data.get("pending_attachments") or []
-    if isinstance(pending_attachments, list):
-        summary_lines.extend(_format_pending_attachments_for_create_summary(pending_attachments))
-    else:
-        summary_lines.append("附件列表：-")
+    summary_lines = _build_defect_confirm_summary_lines(
+        title=(data.get("title") or "").strip(),
+        origin_task=origin_task,
+        origin_task_id=origin_task_id,
+        reproduction=data.get("reproduction"),
+        expected_result=expected_result,
+        pending_attachments=data.get("pending_attachments") or [],
+    )
     await message.answer("\n".join(summary_lines), reply_markup=_build_worker_main_keyboard())
     await message.answer("是否创建该缺陷任务？", reply_markup=_build_confirm_keyboard())
 
@@ -17382,17 +17541,17 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
         pending = list(data.get("pending_attachments") or [])
         if extra_attachments:
             pending.extend(_serialize_saved_attachment(item) for item in extra_attachments)
-        description = data.get("description") or ""
+        expected_result = data.get("expected_result") or ""
         if extra_text and not is_confirm and not is_cancel:
             trimmed_extra = extra_text.strip()
             if trimmed_extra:
                 if len(trimmed_extra) > DESCRIPTION_MAX_LENGTH:
                     attachment = _persist_text_paste_as_attachment(message, trimmed_extra)
                     pending.append(_serialize_saved_attachment(attachment))
-                    placeholder = _build_overlong_text_placeholder("补充缺陷描述")
-                    description = f"{description}\n{placeholder}" if description else placeholder
+                    placeholder = _build_overlong_text_placeholder("补充期望结果")
+                    expected_result = f"{expected_result}\n{placeholder}" if expected_result else placeholder
                 else:
-                    description = f"{description}\n{trimmed_extra}" if description else trimmed_extra
+                    expected_result = f"{expected_result}\n{trimmed_extra}" if expected_result else trimmed_extra
         # 若是媒体组，统一使用合并后的文本，避免遗漏 caption
         if text_part and not extra_text:
             trimmed_part = text_part.strip()
@@ -17400,14 +17559,24 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
                 if len(trimmed_part) > DESCRIPTION_MAX_LENGTH:
                     attachment = _persist_text_paste_as_attachment(message, trimmed_part)
                     pending.append(_serialize_saved_attachment(attachment))
-                    placeholder = _build_overlong_text_placeholder("补充缺陷描述")
-                    description = f"{description}\n{placeholder}" if description else placeholder
+                    placeholder = _build_overlong_text_placeholder("补充期望结果")
+                    expected_result = f"{expected_result}\n{placeholder}" if expected_result else placeholder
                 else:
-                    description = f"{description}\n{trimmed_part}" if description else trimmed_part
-        await state.update_data(pending_attachments=pending, description=description)
-        updated_lines = _format_pending_attachments_for_create_summary(pending)
+                    expected_result = f"{expected_result}\n{trimmed_part}" if expected_result else trimmed_part
+        await state.update_data(pending_attachments=pending, expected_result=expected_result)
+        data = await state.get_data()
+        origin_task_id = data.get("origin_task_id")
+        origin_task = await TASK_SERVICE.get_task(origin_task_id) if origin_task_id else None
+        updated_lines = _build_defect_confirm_summary_lines(
+            title=(data.get("title") or "").strip(),
+            origin_task=origin_task,
+            origin_task_id=origin_task_id,
+            reproduction=data.get("reproduction"),
+            expected_result=expected_result,
+            pending_attachments=pending,
+        )
         await message.answer(
-            "已记录补充的描述/附件，请继续选择“确认创建”或“取消”。\n" + "\n".join(updated_lines),
+            "已记录补充的期望结果/附件，请继续选择“确认创建”或“取消”。\n" + "\n".join(updated_lines),
             reply_markup=_build_confirm_keyboard(),
         )
         return
@@ -17428,9 +17597,11 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
     data = await state.get_data()
     origin_task_id = data.get("origin_task_id")
     title = (data.get("title") or "").strip()
-    description = (data.get("description") or "").strip()
+    reproduction = (data.get("reproduction") or "").strip()
+    expected_result = (data.get("expected_result") or "").strip()
+    description = _build_defect_description(reproduction, expected_result)
     reporter = data.get("reporter") or _actor_from_message(message)
-    # 缺陷描述可为空，仅校验关键上下文与标题。
+    # 复现步骤与期望结果均可为空，仅校验关键上下文与标题。
     if not origin_task_id or not title:
         await state.clear()
         await message.answer("会话已失效，请重新操作。", reply_markup=_build_worker_main_keyboard())

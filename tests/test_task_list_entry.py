@@ -755,6 +755,40 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
     assert "\\!" not in detail_text
 
 
+def test_format_task_detail_defect_sections_keep_special_chars_in_markdown_v2(monkeypatch):
+    """缺陷详情的双字段在 MarkdownV2 模式下也应保持原始特殊字符。"""
+
+    monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", True)
+    monkeypatch.setattr(bot, "_IS_MARKDOWN", False)
+
+    task = TaskRecord(
+        id="TASK_DEFECT_SECTIONS",
+        project_slug="demo",
+        title="缺陷标题",
+        status="research",
+        priority=3,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="复现步骤：\n点击 [登录](按钮)\n\n期望结果：\n显示 success_message!",
+        parent_id=None,
+        root_id="TASK_DEFECT_SECTIONS",
+        depth=0,
+        lineage="0001",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    detail_text = bot._format_task_detail(task, notes=[])
+
+    assert "🧪 复现步骤：点击 [登录](按钮)" in detail_text
+    assert "🎯 期望结果：显示 success_message!" in detail_text
+    assert "\\[" not in detail_text
+    assert "\\(" not in detail_text
+    assert "\\!" not in detail_text
+
+
 def test_format_task_detail_with_special_chars_legacy_markdown(monkeypatch):
     """测试向后兼容：在传统 Markdown 模式下保持手动转义"""
     # 模拟传统 Markdown 模式
