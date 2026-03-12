@@ -98,6 +98,16 @@ class DummyCallback:
         self._answers.append((text, show_alert))
 
 
+class _FakeAsyncProcess:
+    """模拟 asyncio 子进程，避免测试真正执行脚本。"""
+
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+
+    async def wait(self) -> int:
+        return self.returncode
+
+
 def test_restart_master_does_not_refresh_project_list(repo: ProjectRepository, tmp_path: Path, monkeypatch):
     """
     测试用例 1：点击"重启 Master"按钮后，不应该刷新项目列表
@@ -163,6 +173,37 @@ def test_restart_master_does_not_refresh_project_list(repo: ProjectRepository, t
     assert hasattr(callback_message, '_restart_called'), "重启请求应该被调用"
 
 
+@pytest.mark.asyncio
+async def test_stop_worker_clears_project_related_tmux_sessions(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """停止单项目时，应额外清理该项目相关并行 tmux 会话。"""
+
+    manager = _build_manager(repo, tmp_path)
+    manager.state_store.update("test", model="codex", status="running")
+
+    create_calls: list[tuple[tuple[str, ...], str]] = []
+
+    async def fake_create_subprocess_exec(*cmd, cwd=None, **kwargs):
+        create_calls.append((tuple(str(part) for part in cmd), str(cwd)))
+        return _FakeAsyncProcess()
+
+    cleared_projects: list[str | None] = []
+
+    monkeypatch.setattr(master.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(master, "_clear_related_tmux_sessions", lambda project_slug=None: cleared_projects.append(project_slug))
+
+    cfg = manager.require_project("test")
+    await manager.stop_worker(cfg, update_state=True)
+
+    assert create_calls, "应调用 stop_bot.sh 停止主 worker"
+    assert create_calls[0][0][:4] == (str(master.STOP_SCRIPT), "--model", "codex", "--project")
+    assert cleared_projects == ["test"]
+    assert manager.state_store.data["test"].status == "stopped"
+
+
 def test_other_actions_still_refresh_project_list(repo: ProjectRepository, tmp_path: Path, monkeypatch):
     """
     测试用例 2：其他按钮操作（如停止项目）仍然应该刷新项目列表
@@ -207,6 +248,39 @@ def test_other_actions_still_refresh_project_list(repo: ProjectRepository, tmp_p
     # 验证：编辑的内容应该是项目概览
     text, kwargs = callback_message._edits[0]
     assert text == "请选择操作：", "应该刷新项目概览"
+
+
+@pytest.mark.asyncio
+async def test_perform_restart_clears_all_related_tmux_sessions_before_start_script(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """重启 master 前，应先清理全部 vibego 相关 tmux 会话。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    message = DummyMessage()
+    start_script = tmp_path / "scripts" / "start.sh"
+    start_script.parent.mkdir(parents=True, exist_ok=True)
+    start_script.write_text("#!/bin/bash\necho 'mock start'", encoding="utf-8")
+
+    call_order: list[tuple[str, str | None]] = []
+
+    monkeypatch.setattr(master.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(master, "_ensure_restart_lock", lambda: asyncio.Lock())
+    monkeypatch.setattr(master, "_clear_related_tmux_sessions", lambda project_slug=None: call_order.append(("clear", project_slug)))
+
+    class _Popen:
+        def __init__(self, *args, **kwargs) -> None:
+            call_order.append(("spawn", args[0][-1]))
+            self.pid = 9527
+
+    monkeypatch.setattr(master.subprocess, "Popen", _Popen)
+
+    await master._perform_restart(message, start_script)
+
+    assert call_order == [("clear", None), ("spawn", str(start_script))]
 
 
 def test_restart_master_without_message_object(repo: ProjectRepository, tmp_path: Path):

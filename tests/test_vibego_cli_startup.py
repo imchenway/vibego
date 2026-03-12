@@ -87,3 +87,22 @@ def test_command_start_ignores_dead_master_pid_before_launch(
 
     assert calls["popen"] == 1
     assert config.MASTER_PID_FILE.read_text(encoding="utf-8") == "4321"
+
+
+def test_command_stop_triggers_worker_and_process_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """vibego stop 应始终触发 worker 清理与残留进程清理。"""
+
+    cleanup_calls: list[str] = []
+
+    monkeypatch.setattr(cli_main, "_read_pid", lambda: None)
+    monkeypatch.setattr(cli_main, "_stop_all_workers_via_script", lambda: cleanup_calls.append("workers"))
+    monkeypatch.setattr(cli_main, "_kill_all_vibego_processes", lambda: cleanup_calls.append("processes"))
+
+    cli_main.command_stop(argparse.Namespace())
+
+    assert cleanup_calls == ["workers", "processes"]
+    stdout = capsys.readouterr().out
+    assert "正在停止所有 worker..." in stdout

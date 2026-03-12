@@ -826,6 +826,66 @@ def _kill_existing_tmux(prefix: str) -> None:
         subprocess.run(["tmux", "-u", "kill-session", "-t", name], check=False)
 
 
+def _list_tmux_session_names() -> list[str]:
+    """读取当前全部 tmux 会话名，供精细化清理使用。"""
+
+    if shutil.which("tmux") is None:
+        return []
+    try:
+        result = subprocess.run(
+            ["tmux", "-u", "list-sessions"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+
+    sessions: list[str] = []
+    for line in result.stdout.splitlines():
+        name = line.split(":", 1)[0].strip()
+        if name:
+            sessions.append(name)
+    return sessions
+
+
+def _parallel_tmux_prefix_for_project(project_slug: str) -> str:
+    """根据项目 slug 计算该项目并行 tmux 会话前缀。"""
+
+    normalized = (project_slug or "").strip().lower()
+    if not normalized:
+        return "vibe-par-"
+    return f"vibe-par-{normalized[:12]}-"
+
+
+def _clear_related_tmux_sessions(project_slug: Optional[str] = None) -> None:
+    """清理 vibego 相关 tmux；指定项目时仅清理该项目主会话与并行会话。"""
+
+    sessions = _list_tmux_session_names()
+    if not sessions:
+        return
+
+    tmux_prefix = os.environ.get("TMUX_SESSION_PREFIX", "vibe").strip() or "vibe"
+    worker_prefix = tmux_prefix if tmux_prefix.endswith("-") else f"{tmux_prefix}-"
+    matched: list[str] = []
+
+    if project_slug:
+        normalized_slug = (project_slug or "").strip().lower()
+        worker_session = f"{worker_prefix}{normalized_slug}"
+        parallel_prefix = _parallel_tmux_prefix_for_project(normalized_slug)
+        for name in sessions:
+            if name == worker_session or name.startswith(parallel_prefix):
+                matched.append(name)
+    else:
+        for name in sessions:
+            if name.startswith(worker_prefix) or name.startswith("vibe-par-"):
+                matched.append(name)
+
+    for name in dict.fromkeys(matched):
+        subprocess.run(["tmux", "-u", "kill-session", "-t", name], check=False)
+
+
 def _mask_proxy(url: str) -> str:
     """隐藏代理 URL 中的凭据，仅保留主机与端口。"""
 
@@ -2159,6 +2219,7 @@ class MasterManager:
         cmd = [str(STOP_SCRIPT), "--model", model, "--project", cfg.project_slug]
         proc = await asyncio.create_subprocess_exec(*cmd, cwd=str(ROOT_DIR))
         await proc.wait()
+        _clear_related_tmux_sessions(cfg.project_slug)
         if update_state:
             self.state_store.update(cfg.project_slug, status="stopped")
         log.info("已停止 worker: %s", cfg.display_name, extra={"project": cfg.project_slug})
@@ -3240,6 +3301,7 @@ async def _perform_restart(message: Message, start_script: Path) -> None:
         notice_error = notice_exc
         log.warning("发送启动通知失败: %s", notice_exc)
     try:
+        _clear_related_tmux_sessions()
         # 使用 DEVNULL 避免继承当前 stdout/stderr，防止父进程退出导致 start.sh 写入管道时触发 BrokenPipe。
         proc = subprocess.Popen(
             ["/bin/bash", str(start_script)],
@@ -4750,8 +4812,7 @@ async def bootstrap_manager() -> MasterManager:
     """初始化项目仓库、状态存储与 manager，启动前清理旧 worker。"""
 
     load_env()
-    tmux_prefix = os.environ.get("TMUX_SESSION_PREFIX", "vibe")
-    _kill_existing_tmux(tmux_prefix)
+    _clear_related_tmux_sessions()
     try:
         repository = ProjectRepository(CONFIG_DB_PATH, CONFIG_PATH)
     except Exception as exc:
