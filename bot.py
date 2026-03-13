@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio, os, sys, time, uuid, shlex, subprocess, socket, re, json, shutil, hashlib, html, mimetypes
+from io import BytesIO
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python<3.11 兼容兜底
@@ -80,6 +81,7 @@ from tasks.fsm import (
     TaskCreateStates,
     TaskDefectReportStates,
     TaskDescriptionStates,
+    TaskDefectExcelImportStates,
     TaskAttachmentStates,
     TaskEditStates,
     TaskListSearchStates,
@@ -6027,6 +6029,10 @@ TASK_LIST_CREATE_CALLBACK = "task:list_create"
 TASK_LIST_SEARCH_CALLBACK = "task:list_search"
 TASK_LIST_SEARCH_PAGE_CALLBACK = "task:list_search_page"
 TASK_LIST_RETURN_CALLBACK = "task:list_return"
+TASK_DEFECT_EXCEL_IMPORT_CALLBACK = "task:defect_excel_import"
+TASK_DEFECT_EXCEL_TEMPLATE_CALLBACK = "task:defect_excel_template"
+TASK_DEFECT_EXCEL_UPLOAD_CALLBACK = "task:defect_excel_upload"
+TASK_DEFECT_EXCEL_BACK_CALLBACK = "task:defect_excel_back"
 TASK_BATCH_PUSH_START_CALLBACK = "task:batch_push:start"
 TASK_BATCH_PUSH_TOGGLE_PREFIX = "task:batch_push:toggle:"
 TASK_BATCH_PUSH_PAGE_PREFIX = "task:batch_push:page:"
@@ -6071,6 +6077,15 @@ DESCRIPTION_MAX_LENGTH = 3000
 SEARCH_KEYWORD_MIN_LENGTH = 2
 SEARCH_KEYWORD_MAX_LENGTH = 100
 RESEARCH_DESIGN_STATUSES = {"research"}
+DEFECT_EXCEL_TEMPLATE_HEADERS: tuple[str, ...] = (
+    "缺陷标题",
+    "复现步骤",
+    "期望结果",
+    "关联任务编码",
+    "优先级",
+)
+DEFECT_EXCEL_TEMPLATE_FILENAME = "vibego_缺陷批量导入模板.xlsx"
+DEFECT_EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 HISTORY_EVENT_FIELD_CHANGE = "field_change"
 HISTORY_EVENT_TASK_ACTION = "task_action"
@@ -10503,7 +10518,7 @@ async def _render_parallel_branch_flow_message(
         await _answer_with_markdown(message, text, reply_markup=reply_markup)
 
 # --- 任务视图上下文缓存 ---
-TaskViewKind = Literal["list", "search", "detail", "history", "batch_push"]
+TaskViewKind = Literal["list", "search", "detail", "history", "batch_push", "defect_excel_import"]
 
 
 @dataclass
@@ -10682,6 +10697,11 @@ async def _render_task_view_from_state(state: TaskViewState) -> tuple[str, Inlin
             selected_task_ids=selected_task_ids,
             selected_task_order=selected_order,
         )
+    if state.kind == "defect_excel_import":
+        status = state.data.get("status")
+        page = int(state.data.get("page", 1) or 1)
+        limit = int(state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+        return _build_defect_excel_import_view(status=status, page=page, limit=limit)
     raise ValueError(f"未知的任务视图类型：{state.kind}")
 
 
@@ -10740,6 +10760,24 @@ def _make_batch_push_view_state(
             "limit": limit,
             "selected_task_ids": normalized_selected,
             "selected_task_order": normalized_order,
+        },
+    )
+
+
+def _make_defect_excel_import_view_state(
+    *,
+    status: Optional[str],
+    page: int,
+    limit: int,
+) -> TaskViewState:
+    """构造 Excel 导入视图的上下文。"""
+
+    return TaskViewState(
+        kind="defect_excel_import",
+        data={
+            "status": status,
+            "page": page,
+            "limit": limit,
         },
     )
 
@@ -13756,7 +13794,11 @@ async def _build_task_list_view(
             InlineKeyboardButton(
                 text="🚀 批量推送任务",
                 callback_data=TASK_BATCH_PUSH_START_CALLBACK,
-            )
+            ),
+            InlineKeyboardButton(
+                text="📥 Excel批量创建缺陷",
+                callback_data=TASK_DEFECT_EXCEL_IMPORT_CALLBACK,
+            ),
         ]
     )
 
@@ -13858,6 +13900,155 @@ async def _build_task_batch_push_view(
         ]
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _require_openpyxl() -> tuple[Any, Any]:
+    """按需加载 openpyxl，缺失时给出明确错误。"""
+
+    try:
+        from openpyxl import Workbook, load_workbook  # type: ignore
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise RuntimeError("当前环境缺少 openpyxl，请先安装后再使用 Excel 导入功能。") from exc
+    return Workbook, load_workbook
+
+
+def _build_defect_excel_template_bytes() -> bytes:
+    """生成缺陷 Excel 导入模板文件内容。"""
+
+    Workbook, _load_workbook = _require_openpyxl()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "缺陷导入模板"
+    ws.append(list(DEFECT_EXCEL_TEMPLATE_HEADERS))
+    ws.append(["示例：登录按钮无响应", "1. 打开登录页", "点击后应进入首页", "/TASK_0001", DEFAULT_PRIORITY])
+    buffer = BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def _build_defect_excel_import_view(*, status: Optional[str], page: int, limit: int) -> tuple[str, InlineKeyboardMarkup]:
+    """构造 Excel 批量创建缺陷入口页。"""
+
+    status_text = _format_status(status) if status else "全部"
+    lines = [
+        "*Excel 批量创建缺陷*",
+        f"返回列表定位：状态 {status_text} · 页码 {page} · 每页 {limit} 条",
+        "使用步骤：",
+        "1. 先下载 Excel 模板",
+        "2. 按模板填写缺陷数据",
+        "3. 上传 .xlsx 文件进行预检",
+        "4. 预检通过后确认创建",
+    ]
+    rows = [
+        [InlineKeyboardButton(text="⬇️ 下载模板", callback_data=TASK_DEFECT_EXCEL_TEMPLATE_CALLBACK)],
+        [InlineKeyboardButton(text="📤 上传 Excel", callback_data=TASK_DEFECT_EXCEL_UPLOAD_CALLBACK)],
+        [InlineKeyboardButton(text="⬅️ 返回任务列表", callback_data=TASK_DEFECT_EXCEL_BACK_CALLBACK)],
+    ]
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_defect_excel_upload_keyboard() -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text="取消")]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+def _build_defect_excel_confirm_summary(
+    *,
+    file_name: str,
+    total_rows: int,
+    valid_rows: int,
+    preview_titles: Sequence[str],
+) -> str:
+    lines = [
+        "*Excel 预检通过*",
+        f"文件：{_escape_markdown_text(file_name) if not _IS_MARKDOWN_V2 else file_name}",
+        f"总数据行：{total_rows}",
+        f"可创建缺陷：{valid_rows}",
+    ]
+    if preview_titles:
+        lines.append("")
+        lines.append("前几条缺陷标题：")
+        lines.extend(f"- {title}" for title in preview_titles[:5])
+    lines.append("")
+    lines.append("请确认是否批量创建这些缺陷任务。")
+    return "\n".join(lines)
+
+
+def _build_defect_excel_error_summary(
+    *,
+    file_name: str,
+    errors: Sequence[str],
+) -> str:
+    lines = [
+        "*Excel 预检失败*",
+        f"文件：{_escape_markdown_text(file_name) if not _IS_MARKDOWN_V2 else file_name}",
+        f"错误数：{len(errors)}",
+        "请修正后重新上传。",
+        "",
+        "错误摘要：",
+    ]
+    lines.extend(f"- {item}" for item in errors[:10])
+    if len(errors) > 10:
+        lines.append(f"- … 其余 {len(errors) - 10} 条未展开")
+    return "\n".join(lines)
+
+
+async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, Any]], list[str], int]:
+    """解析并预检上传的缺陷 Excel。"""
+
+    _Workbook, load_workbook = _require_openpyxl()
+    workbook = load_workbook(filename=path, data_only=True)
+    worksheet = workbook.active
+    headers = [str(cell.value).strip() if cell.value is not None else "" for cell in worksheet[1]]
+    expected_headers = list(DEFECT_EXCEL_TEMPLATE_HEADERS)
+    if headers[: len(expected_headers)] != expected_headers:
+        return [], [f"模板表头不匹配，期望：{' / '.join(expected_headers)}"], 0
+
+    valid_rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    total_rows = 0
+    for row_index, row in enumerate(worksheet.iter_rows(min_row=2, values_only=True), start=2):
+        title, reproduction, expected_result, related_task_code, priority = (list(row) + [None] * len(expected_headers))[: len(expected_headers)]
+        values = [title, reproduction, expected_result, related_task_code, priority]
+        if all(value in {None, ""} for value in values):
+            continue
+        total_rows += 1
+        normalized_title = str(title).strip() if title is not None else ""
+        if not normalized_title:
+            errors.append(f"第 {row_index} 行：缺陷标题不能为空")
+            continue
+        normalized_related_task_id: Optional[str] = None
+        if related_task_code not in {None, ""}:
+            normalized_related_task_id = _normalize_task_id(str(related_task_code).strip())
+            if not normalized_related_task_id:
+                errors.append(f"第 {row_index} 行：关联任务编码无效")
+                continue
+            related_task = await TASK_SERVICE.get_task(normalized_related_task_id)
+            if related_task is None:
+                errors.append(f"第 {row_index} 行：关联任务 {normalized_related_task_id} 不存在")
+                continue
+        normalized_priority = DEFAULT_PRIORITY
+        if priority not in {None, ""}:
+            try:
+                normalized_priority = int(priority)
+            except (TypeError, ValueError):
+                errors.append(f"第 {row_index} 行：优先级必须为整数")
+                continue
+            if normalized_priority < 1 or normalized_priority > 5:
+                errors.append(f"第 {row_index} 行：优先级仅支持 1-5")
+                continue
+        valid_rows.append(
+            {
+                "title": normalized_title,
+                "reproduction": (str(reproduction).strip() if reproduction is not None else ""),
+                "expected_result": (str(expected_result).strip() if expected_result is not None else ""),
+                "related_task_id": normalized_related_task_id,
+                "priority": normalized_priority,
+            }
+        )
+    if total_rows == 0:
+        errors.append("Excel 中未发现可导入的数据行")
+    return valid_rows, errors, total_rows
 
 
 async def _build_task_search_view(
@@ -14012,6 +14203,120 @@ def _extract_task_batch_push_view_state(message: Optional[Message]) -> Optional[
     if state is None or state.kind != "batch_push":
         return None
     return state
+
+
+def _extract_defect_excel_import_view_state(message: Optional[Message]) -> Optional[TaskViewState]:
+    """读取当前消息绑定的 Excel 导入视图状态。"""
+
+    if message is None:
+        return None
+    chat = getattr(message, "chat", None)
+    if chat is None:
+        return None
+    state = _peek_task_view(chat.id, message.message_id)
+    if state is None or state.kind != "defect_excel_import":
+        return None
+    return state
+
+
+@router.callback_query(F.data == TASK_DEFECT_EXCEL_IMPORT_CALLBACK)
+async def on_task_defect_excel_import(callback: CallbackQuery) -> None:
+    """从任务列表进入 Excel 批量创建缺陷入口页。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原始消息", show_alert=True)
+        return
+    chat = getattr(message, "chat", None)
+    state = _peek_task_view(chat.id, message.message_id) if chat else None
+    if state is None or state.kind != "list":
+        await callback.answer("请先打开任务列表后再试。", show_alert=True)
+        return
+    view_state = _make_defect_excel_import_view_state(
+        status=state.data.get("status"),
+        page=int(state.data.get("page", 1) or 1),
+        limit=int(state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE),
+    )
+    text, markup = await _render_task_view_from_state(view_state)
+    if await _try_edit_message(message, text, reply_markup=markup):
+        _set_task_view_context(message, view_state)
+    else:
+        origin_chat = getattr(message, "chat", None)
+        if origin_chat is not None:
+            _clear_task_view(origin_chat.id, message.message_id)
+        sent = await _answer_with_markdown(message, text, reply_markup=markup)
+        if sent is not None:
+            _init_task_view_context(sent, view_state)
+    await callback.answer("已打开 Excel 批量创建缺陷")
+
+
+@router.callback_query(F.data == TASK_DEFECT_EXCEL_BACK_CALLBACK)
+async def on_task_defect_excel_back(callback: CallbackQuery) -> None:
+    """从 Excel 导入页返回任务列表。"""
+
+    message = callback.message
+    view_state = _extract_defect_excel_import_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("导入页已失效，请重新打开任务列表。", show_alert=True)
+        return
+    status = view_state.data.get("status")
+    page = int(view_state.data.get("page", 1) or 1)
+    limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    await _restore_task_list_after_batch_push(
+        target_message=message,
+        fallback_message=message,
+        status=status,
+        page=page,
+        limit=limit,
+    )
+    await callback.answer("已返回任务列表")
+
+
+@router.callback_query(F.data == TASK_DEFECT_EXCEL_TEMPLATE_CALLBACK)
+async def on_task_defect_excel_template(callback: CallbackQuery) -> None:
+    """发送 Excel 导入模板。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    try:
+        payload = _build_defect_excel_template_bytes()
+    except RuntimeError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    document = BufferedInputFile(payload, filename=DEFECT_EXCEL_TEMPLATE_FILENAME)
+    answer_document = getattr(message, "answer_document", None)
+    if answer_document is None:
+        await callback.answer("当前消息不支持发送文档", show_alert=True)
+        return
+    await answer_document(document, caption="请按模板填写后再上传 .xlsx 文件。")
+    await callback.answer("模板已发送")
+
+
+@router.callback_query(F.data == TASK_DEFECT_EXCEL_UPLOAD_CALLBACK)
+async def on_task_defect_excel_upload_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    """进入 Excel 上传等待态。"""
+
+    message = callback.message
+    view_state = _extract_defect_excel_import_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("导入页已失效，请重新打开任务列表。", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(
+        origin_message=message,
+        origin_status=view_state.data.get("status"),
+        origin_page=int(view_state.data.get("page", 1) or 1),
+        origin_limit=int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE),
+        actor=_actor_from_callback(callback),
+    )
+    await state.set_state(TaskDefectExcelImportStates.waiting_upload)
+    await callback.answer("请上传 Excel")
+    await message.answer(
+        "请上传按照模板填写的 .xlsx 文件，发送“取消”可返回任务列表。",
+        reply_markup=_build_defect_excel_upload_keyboard(),
+    )
 
 
 @router.callback_query(F.data == TASK_BATCH_PUSH_START_CALLBACK)
@@ -17967,6 +18272,159 @@ async def on_task_batch_push_session_parallel_callback(callback: CallbackQuery, 
     await state.set_state(TaskBatchPushStates.waiting_choice)
     await callback.answer("已选择并行会话")
     await _prompt_push_mode_input(message)
+
+
+@router.message(TaskDefectExcelImportStates.waiting_upload)
+async def on_task_defect_excel_upload(message: Message, state: FSMContext) -> None:
+    """接收 Excel 文件并执行预检。"""
+
+    raw_text = (message.text or "").strip()
+    data = await state.get_data()
+    origin_message = data.get("origin_message")
+    origin_status = data.get("origin_status")
+    origin_page = int(data.get("origin_page", 1) or 1)
+    origin_limit = int(data.get("origin_limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    if _is_cancel_message(raw_text):
+        await state.clear()
+        await _restore_task_list_after_batch_push(
+            target_message=origin_message,
+            fallback_message=message,
+            status=origin_status,
+            page=origin_page,
+            limit=origin_limit,
+        )
+        await message.answer("已取消 Excel 导入。", reply_markup=_build_worker_main_keyboard())
+        return
+    if not getattr(message, "document", None):
+        await message.answer("请上传 .xlsx 文件，发送“取消”可返回任务列表。", reply_markup=_build_defect_excel_upload_keyboard())
+        return
+    document = message.document
+    file_name = (document.file_name or "").strip()
+    if not file_name.lower().endswith(".xlsx"):
+        await message.answer("仅支持上传 .xlsx 文件，请修正后重试。", reply_markup=_build_defect_excel_upload_keyboard())
+        return
+
+    attachment_dir = _attachment_dir_for_message(message)
+    attachments = await _collect_saved_attachments(message, attachment_dir)
+    if not attachments:
+        await message.answer("Excel 文件保存失败，请重试。", reply_markup=_build_defect_excel_upload_keyboard())
+        return
+    excel_file = next((item for item in attachments if item.kind == "document"), attachments[0])
+    valid_rows, errors, total_rows = await _parse_defect_excel_import_file(excel_file.absolute_path)
+    if errors:
+        await message.answer(
+            _build_defect_excel_error_summary(file_name=file_name or excel_file.display_name, errors=errors),
+            reply_markup=_build_defect_excel_upload_keyboard(),
+        )
+        return
+
+    await state.update_data(
+        validated_rows=valid_rows,
+        imported_file_name=file_name or excel_file.display_name,
+        imported_total_rows=total_rows,
+    )
+    await state.set_state(TaskDefectExcelImportStates.waiting_confirm)
+    await message.answer(
+        _build_defect_excel_confirm_summary(
+            file_name=file_name or excel_file.display_name,
+            total_rows=total_rows,
+            valid_rows=len(valid_rows),
+            preview_titles=[str(item.get("title") or "-") for item in valid_rows],
+        ),
+        reply_markup=_build_confirm_keyboard(),
+    )
+
+
+@router.message(TaskDefectExcelImportStates.waiting_confirm)
+async def on_task_defect_excel_confirm(message: Message, state: FSMContext) -> None:
+    """确认创建 Excel 中的缺陷任务。"""
+
+    options = ["✅ 确认创建", "❌ 取消"]
+    resolved = _resolve_reply_choice(message.text, options=options)
+    data = await state.get_data()
+    origin_message = data.get("origin_message")
+    origin_status = data.get("origin_status")
+    origin_page = int(data.get("origin_page", 1) or 1)
+    origin_limit = int(data.get("origin_limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    actor = data.get("actor") or _actor_from_message(message)
+    rows = data.get("validated_rows") or []
+    if not rows:
+        await state.clear()
+        await _restore_task_list_after_batch_push(
+            target_message=origin_message,
+            fallback_message=message,
+            status=origin_status,
+            page=origin_page,
+            limit=origin_limit,
+        )
+        await message.answer("导入会话已失效，请重新上传 Excel。", reply_markup=_build_worker_main_keyboard())
+        return
+    if resolved == options[1] or _is_cancel_message(message.text or ""):
+        await state.clear()
+        await _restore_task_list_after_batch_push(
+            target_message=origin_message,
+            fallback_message=message,
+            status=origin_status,
+            page=origin_page,
+            limit=origin_limit,
+        )
+        await message.answer("已取消 Excel 导入。", reply_markup=_build_worker_main_keyboard())
+        return
+    if resolved != options[0]:
+        await message.answer("请选择“确认创建”或“取消”。", reply_markup=_build_confirm_keyboard())
+        return
+
+    created_task_ids: list[str] = []
+    failed_rows: list[tuple[int, str]] = []
+    for index, row in enumerate(rows, start=1):
+        try:
+            defect_task = await TASK_SERVICE.create_root_task(
+                title=str(row.get("title") or "").strip(),
+                status=TASK_STATUSES[0],
+                priority=int(row.get("priority") or DEFAULT_PRIORITY),
+                task_type="defect",
+                tags=(),
+                due_date=None,
+                description=_build_defect_description(
+                    str(row.get("reproduction") or "").strip(),
+                    str(row.get("expected_result") or "").strip(),
+                ),
+                related_task_id=row.get("related_task_id"),
+                actor=actor,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed_rows.append((index, str(exc)))
+            continue
+        created_task_ids.append(defect_task.id)
+
+    await state.clear()
+    await _restore_task_list_after_batch_push(
+        target_message=origin_message,
+        fallback_message=message,
+        status=origin_status,
+        page=origin_page,
+        limit=origin_limit,
+    )
+    lines = [
+        "*Excel 导入结果*",
+        f"文件：{data.get('imported_file_name') or '-'}",
+        f"总行数：{data.get('imported_total_rows') or len(rows)}",
+        f"成功创建：{len(created_task_ids)}",
+        f"失败：{len(failed_rows)}",
+    ]
+    if created_task_ids:
+        lines.append("")
+        lines.append("已创建任务：")
+        lines.extend(f"- /{task_id}" for task_id in created_task_ids)
+    if failed_rows:
+        lines.append("")
+        lines.append("失败行：")
+        lines.extend(f"- 第 {row_no} 行：{reason}" for row_no, reason in failed_rows)
+    await _answer_with_markdown(
+        message,
+        "\n".join(lines),
+        reply_markup=_build_worker_main_keyboard(),
+    )
 
 
 @router.message(TaskBatchPushStates.waiting_choice)

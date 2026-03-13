@@ -88,6 +88,13 @@ class TaskListSearchStates(StatesGroup):
     waiting_keyword = State()
 
 
+class TaskDefectExcelImportStates(StatesGroup):
+    """Excel 批量创建缺陷流程状态。"""
+
+    waiting_upload = State()
+    waiting_confirm = State()
+
+
 class TaskBatchPushStates(StatesGroup):
     """任务列表批量推送流程状态。"""
 
