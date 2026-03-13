@@ -531,12 +531,22 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_PLAN
         await bot.on_task_push_model_choice(choice_message, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
+        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
         assert choice_message.calls
         choice_text, _, choice_markup, _ = choice_message.calls[0]
         assert f"已选择 {bot.PUSH_MODE_PLAN} 模式" in choice_text
-        assert bot._build_push_supplement_prompt() in choice_text
+        assert bot._build_push_send_mode_prompt() in choice_text
         assert choice_markup is not None
+
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
+        assert send_mode_message.calls
+        send_mode_text, _, send_mode_markup, _ = send_mode_message.calls[0]
+        assert bot._build_push_supplement_prompt() in send_mode_text
+        assert bot.PUSH_SEND_MODE_IMMEDIATE_LABEL in send_mode_text
+        assert send_mode_markup is not None
 
         skip_message = DummyMessage()
         skip_message.text = bot.SKIP_TEXT
@@ -588,6 +598,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
             chat_id=message.chat.id,
             origin_message=None,
             push_mode=bot.PUSH_MODE_PLAN,
+            send_mode=bot.PUSH_SEND_MODE_IMMEDIATE,
             processed_media_groups=[],
         )
     )
@@ -608,13 +619,14 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
 
     push_calls: list[dict] = []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
         push_calls.append(
             {
                 "task_id": task_arg.id,
                 "chat_id": chat_id,
                 "supplement": supplement,
                 "actor": actor,
+                "send_mode": send_mode,
             }
         )
         return True, "PROMPT", None
@@ -632,10 +644,11 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
 
     assert push_calls, "应触发推送"
     assert push_calls[0]["supplement"] == message.caption
+    assert push_calls[0]["send_mode"] == bot.PUSH_SEND_MODE_IMMEDIATE
 
 
 def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
-    """点击“跳过补充”回调时，应透传已选的 PLAN/YOLO 模式。"""
+    """点击“跳过补充”回调时，应透传已选的 PLAN/YOLO 模式与发送方式。"""
 
     message = DummyMessage()
     callback = DummyCallback("task:push_model_skip:TASK_0099", message)
@@ -647,6 +660,7 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
             origin_message=message,
             actor="Tester#1",
             push_mode=bot.PUSH_MODE_PLAN,
+            send_mode=bot.PUSH_SEND_MODE_QUEUED,
         )
     )
 
@@ -662,6 +676,7 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
         return task
 
     recorded_modes: list[str | None] = []
+    recorded_send_modes: list[str | None] = []
 
     async def fake_push_task(
         task_arg,
@@ -672,8 +687,10 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
         actor,
         is_bug_report=False,
         push_mode=None,
+        send_mode=None,
     ):
         recorded_modes.append(push_mode)
+        recorded_send_modes.append(send_mode)
         return True, "PROMPT", tmp_path / "session.jsonl"
 
     async def fake_preview(*_args, **_kwargs):
@@ -690,6 +707,7 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
     asyncio.run(bot.on_task_push_model_skip(callback, state))
 
     assert recorded_modes == [bot.PUSH_MODE_PLAN]
+    assert recorded_send_modes == [bot.PUSH_SEND_MODE_QUEUED]
 
 
 def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_path: Path):
@@ -709,6 +727,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
             chat_id=message.chat.id,
             origin_message=None,
             push_mode=bot.PUSH_MODE_PLAN,
+            send_mode=bot.PUSH_SEND_MODE_IMMEDIATE,
             processed_media_groups=[],
         )
     )
@@ -745,13 +764,14 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
 
     push_calls: list[dict] = []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
         push_calls.append(
             {
                 "task_id": task_arg.id,
                 "chat_id": chat_id,
                 "supplement": supplement,
                 "actor": actor,
+                "send_mode": send_mode,
             }
         )
         return True, "PROMPT", None
@@ -771,6 +791,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
     assert bound_calls, "应绑定附件"
     assert push_calls, "应触发推送"
     assert push_calls[0]["supplement"] == "见附件：photo.jpg"
+    assert push_calls[0]["send_mode"] == bot.PUSH_SEND_MODE_IMMEDIATE
 
 
 def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
@@ -789,6 +810,7 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
             chat_id=message.chat.id,
             origin_message=None,
             push_mode=bot.PUSH_MODE_PLAN,
+            send_mode=bot.PUSH_SEND_MODE_IMMEDIATE,
         )
     )
 
@@ -822,7 +844,7 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
         bound_calls.append((task_arg.id, list(attachments), actor))
         return []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
         return True, "PROMPT", None
 
     async def fake_reply_to_chat(chat_id, text, reply_to=None, parse_mode=None, reply_markup=None):
@@ -912,7 +934,7 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(bot, "reply_large_text", fake_reply_large_text)
     monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
         long_prompt = "A" * (bot.TELEGRAM_MESSAGE_LIMIT + 100)
         return True, long_prompt, tmp_path / "session.jsonl"
 
@@ -923,6 +945,9 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_YOLO
         await bot.on_task_push_model_choice(choice_message, state)
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
         skip_message = DummyMessage()
         skip_message.text = "补充"
         await bot.on_task_push_model_supplement(skip_message, state)
@@ -1023,6 +1048,11 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_YOLO
         await bot.on_task_push_model_choice(choice_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
+
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
         assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
 
         input_message = DummyMessage()
@@ -1055,6 +1085,32 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         assert not logged_events
 
     asyncio.run(_scenario())
+
+
+def test_push_model_choice_for_non_codex_skips_send_mode(monkeypatch):
+    """非 Codex 模型选择 PLAN/YOLO 后，应直接进入补充阶段。"""
+
+    message = DummyMessage()
+    state, _storage = make_state(message)
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_0001",
+            chat_id=message.chat.id,
+        )
+    )
+    asyncio.run(state.set_state(bot.TaskPushStates.waiting_choice))
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "claudecode")
+
+    choice_message = DummyMessage()
+    choice_message.text = bot.PUSH_MODE_PLAN
+
+    asyncio.run(bot.on_task_push_model_choice(choice_message, state))
+
+    assert asyncio.run(state.get_state()) == bot.TaskPushStates.waiting_supplement.state
+    assert choice_message.calls
+    choice_text, _, _, _ = choice_message.calls[0]
+    assert bot._build_push_supplement_prompt() in choice_text
 
 
 def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_path: Path):
@@ -1157,6 +1213,9 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_YOLO
         await bot.on_task_push_model_choice(choice_message, state)
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
         input_message = DummyMessage()
         input_message.text = "补充说明内容"
         await bot.on_task_push_model_supplement(input_message, state)
@@ -3174,6 +3233,80 @@ def test_dispatch_prompt_plan_mode_sends_plan_switch_for_codex(monkeypatch, tmp_
 
     assert sent_lines[0] == bot.PLAN_MODE_SWITCH_COMMAND
     assert sent_lines[1] == f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def test_dispatch_prompt_plan_mode_queued_skips_plan_switch_for_codex(monkeypatch, tmp_path: Path):
+    """Codex + 排队发送：不应先发 /plan，而应直接用 Tab 排队正文。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent_lines: list[str] = []
+    queued_lines: list[str] = []
+
+    monkeypatch.setattr(bot, "tmux_send_line", lambda _session, line: sent_lines.append(line))
+    monkeypatch.setattr(bot, "tmux_queue_line", lambda _session, line: queued_lines.append(line))
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            1701,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+            intended_mode=bot.PUSH_MODE_PLAN,
+            send_mode=bot.PUSH_SEND_MODE_QUEUED,
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent_lines == []
+    assert queued_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
 
     for coro in created_tasks:
         try:

@@ -65,6 +65,7 @@ class TaskPushStates(StatesGroup):
 
     waiting_dispatch_target = State()
     waiting_choice = State()
+    waiting_send_mode = State()
     waiting_supplement = State()
 
 

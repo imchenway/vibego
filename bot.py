@@ -235,6 +235,10 @@ PUSH_MODE_PLAN = "PLAN"
 PUSH_MODE_YOLO = "YOLO"
 PUSH_TARGET_CURRENT = "当前 CLI 处理"
 PUSH_TARGET_PARALLEL = "新建分支 + 新 CLI 并行处理"
+PUSH_SEND_MODE_IMMEDIATE = "immediate"
+PUSH_SEND_MODE_QUEUED = "queued"
+PUSH_SEND_MODE_IMMEDIATE_LABEL = "立即发送"
+PUSH_SEND_MODE_QUEUED_LABEL = "排队发送（Codex）"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -1422,7 +1426,15 @@ def _tmux_cmd(tmux: str, *args: str) -> list[str]:
     return [tmux, "-u", *args]
 
 
-def tmux_send_line(session: str, line: str):
+def _tmux_submit_line(
+    session: str,
+    line: str,
+    *,
+    submit_key: str,
+    double_submit: bool,
+):
+    """向 tmux 注入文本，并使用指定提交键发送。"""
+
     tmux = tmux_bin()
     subprocess.check_call(_tmux_cmd(tmux, "has-session", "-t", session))
     # 发送一次 ESC，退出 Codex 可能的菜单或输入模式
@@ -1451,8 +1463,8 @@ def tmux_send_line(session: str, line: str):
             time.sleep(0.05)
     # 首次发送前，给不同模型一个轻量稳定窗口，避免输入事件丢失。
     time.sleep(0.2 if _is_claudecode_model() else 0.05)
-    subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-m"))
-    if not TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED:
+    subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, submit_key))
+    if not double_submit or not TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED or submit_key != "C-m":
         return
 
     # 统一兜底：固定延迟后补发 1 次 Enter，覆盖“输入框有文案但未提交”的黑盒场景。
@@ -1482,6 +1494,18 @@ def tmux_send_line(session: str, line: str):
                 "double_enter_fallback_sent": "true",
             },
         )
+
+
+def tmux_send_line(session: str, line: str):
+    """立即发送：使用 Enter 提交当前 prompt。"""
+
+    _tmux_submit_line(session, line, submit_key="C-m", double_submit=True)
+
+
+def tmux_queue_line(session: str, line: str):
+    """排队发送：使用 Tab 将 prompt 排到下一轮。"""
+
+    _tmux_submit_line(session, line, submit_key="Tab", double_submit=False)
 
 
 _TMUX_SHELL_COMMANDS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh"}
@@ -2171,10 +2195,30 @@ def _resolve_dispatch_mode(*, intended_mode: Optional[str], prompt: str) -> Opti
     return _infer_dispatch_mode_from_prompt(prompt)
 
 
-def _should_send_plan_switch_command(*, intended_mode: Optional[str], prompt: str) -> bool:
+def _normalize_push_send_mode(send_mode: Optional[str]) -> str:
+    """归一化发送方式；未知值回退为立即发送。"""
+
+    normalized = (send_mode or "").strip().lower()
+    if normalized == PUSH_SEND_MODE_QUEUED:
+        return PUSH_SEND_MODE_QUEUED
+    return PUSH_SEND_MODE_IMMEDIATE
+
+
+def _push_send_mode_label(send_mode: Optional[str]) -> str:
+    """返回发送方式的人类可读文案。"""
+
+    normalized = _normalize_push_send_mode(send_mode)
+    if normalized == PUSH_SEND_MODE_QUEUED:
+        return PUSH_SEND_MODE_QUEUED_LABEL
+    return PUSH_SEND_MODE_IMMEDIATE_LABEL
+
+
+def _should_send_plan_switch_command(*, intended_mode: Optional[str], prompt: str, send_mode: Optional[str] = None) -> bool:
     """判断本次推送前是否需要先发送 /plan。"""
 
     if not _is_codex_model():
+        return False
+    if _normalize_push_send_mode(send_mode) == PUSH_SEND_MODE_QUEUED:
         return False
     resolved_mode = _resolve_dispatch_mode(intended_mode=intended_mode, prompt=prompt)
     if resolved_mode != PUSH_MODE_PLAN:
@@ -2190,11 +2234,12 @@ async def _maybe_send_plan_switch_command(
     chat_id: int,
     intended_mode: Optional[str],
     prompt: str,
+    send_mode: Optional[str] = None,
     tmux_session: Optional[str] = None,
 ) -> bool:
     """按条件先向 tmux 发送 /plan，再短暂等待模式切换稳定。"""
 
-    if not _should_send_plan_switch_command(intended_mode=intended_mode, prompt=prompt):
+    if not _should_send_plan_switch_command(intended_mode=intended_mode, prompt=prompt, send_mode=send_mode):
         return False
     if tmux_session and tmux_session != TMUX_SESSION:
         ready = await _wait_tmux_session_ready_for_plan_switch(tmux_session)
@@ -2256,6 +2301,7 @@ async def _dispatch_prompt_to_model(
     reply_to: Optional[Message],
     ack_immediately: bool = True,
     intended_mode: Optional[str] = None,
+    send_mode: Optional[str] = None,
     force_exit_plan_ui: bool = False,
     force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
     force_exit_plan_ui_max_rounds: Optional[int] = None,
@@ -2424,6 +2470,7 @@ async def _dispatch_prompt_to_model(
         chat_id=chat_id,
         intended_mode=intended_mode,
         prompt=prompt,
+        send_mode=send_mode,
         tmux_session=dispatch_context.tmux_session if dispatch_context is not None else None,
     )
     await _maybe_force_exit_plan_ui(
@@ -2435,14 +2482,28 @@ async def _dispatch_prompt_to_model(
         force_exit_plan_ui_max_rounds=force_exit_plan_ui_max_rounds,
     )
 
+    resolved_send_mode = _normalize_push_send_mode(send_mode)
+    if resolved_send_mode == PUSH_SEND_MODE_QUEUED and not _is_codex_model():
+        worker_log.warning(
+            "非 Codex 模型不支持排队发送，已回退为立即发送",
+            extra={"chat": chat_id, "model": MODEL_CANONICAL_NAME},
+        )
+        resolved_send_mode = PUSH_SEND_MODE_IMMEDIATE
+
     try:
-        tmux_send_line(dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION, _prepend_enforced_agents_notice(prompt))
+        dispatch_text = _prepend_enforced_agents_notice(prompt)
+        target_session = dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION
+        if resolved_send_mode == PUSH_SEND_MODE_QUEUED:
+            tmux_queue_line(target_session, dispatch_text)
+        else:
+            tmux_send_line(target_session, dispatch_text)
     except subprocess.CalledProcessError as exc:
+        manual_hint = "若终端输入框仍停留未发送，请手动按 Tab 后重试一次推送。" if resolved_send_mode == PUSH_SEND_MODE_QUEUED else "若终端输入框仍停留未发送，请手动按 Enter 后重试一次推送。"
         await _reply_to_chat(
             chat_id,
             (
                 f"tmux错误：{exc}\n"
-                "若终端输入框仍停留未发送，请手动按 Enter 后重试一次推送。"
+                f"{manual_hint}"
             ),
             reply_to=reply_to,
         )
@@ -2651,6 +2712,7 @@ async def _push_task_to_model(
     actor: Optional[str],
     is_bug_report: bool = False,
     push_mode: Optional[str] = None,
+    send_mode: Optional[str] = None,
     dispatch_context: Optional[ParallelDispatchContext] = None,
 ) -> tuple[bool, str, Optional[Path]]:
     """推送任务信息到模型，并附带补充描述。
@@ -2663,6 +2725,7 @@ async def _push_task_to_model(
         actor: 操作者
         is_bug_report: 是否为缺陷报告推送
         push_mode: 推送模式（PLAN/YOLO），仅对推送到模型按钮流程生效
+        send_mode: 发送方式（立即发送/排队发送）
     """
 
     history_text, history_count = await _build_history_context_for_model(task.id)
@@ -2705,6 +2768,7 @@ async def _push_task_to_model(
         "reply_to": reply_to,
         "ack_immediately": False,
         "intended_mode": push_mode,
+        "send_mode": send_mode,
     }
     if dispatch_context is not None:
         dispatch_kwargs["dispatch_context"] = dispatch_context
@@ -2726,6 +2790,7 @@ async def _push_task_to_model(
         "history_chars": len(history_text),
         "prompt_chars": len(dispatch_prompt),
         "model": ACTIVE_MODEL or "",
+        "send_mode": _normalize_push_send_mode(send_mode),
     }
     if dispatch_prompt != prompt:
         payload["original_prompt_chars"] = len(prompt)
@@ -8157,6 +8222,12 @@ def _build_push_mode_prompt() -> str:
     return "请选择本次推送到模型的模式：PLAN / YOLO（发送“取消”退出）"
 
 
+def _build_push_send_mode_prompt() -> str:
+    """推送到模型：构建立即/排队发送方式选择提示。"""
+
+    return "请选择本次发送方式：立即发送 / 排队发送（Codex）（发送“取消”退出）"
+
+
 def _build_push_dispatch_target_prompt() -> str:
     """推送到模型：构建“当前 CLI / 并行 CLI”选择提示。"""
 
@@ -8186,6 +8257,30 @@ async def _prompt_push_mode_input(message: Message) -> None:
     await message.answer(
         _build_push_mode_prompt(),
         reply_markup=_build_push_mode_keyboard(),
+    )
+
+
+def _build_push_send_mode_keyboard() -> ReplyKeyboardMarkup:
+    """推送到模型：发送方式选择阶段菜单按钮。"""
+
+    rows = [
+        [KeyboardButton(text=PUSH_SEND_MODE_IMMEDIATE_LABEL)],
+        [KeyboardButton(text=PUSH_SEND_MODE_QUEUED_LABEL)],
+        [KeyboardButton(text="取消")],
+    ]
+    _number_reply_buttons(rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+async def _prompt_push_send_mode_input(message: Message, *, push_mode: Optional[str] = None) -> None:
+    """推送到模型：提示用户选择立即发送或排队发送。"""
+
+    prompt = _build_push_send_mode_prompt()
+    if push_mode:
+        prompt = f"已选择 {push_mode} 模式。\n{prompt}"
+    await message.answer(
+        prompt,
+        reply_markup=_build_push_send_mode_keyboard(),
     )
 
 
@@ -8225,6 +8320,7 @@ async def _begin_parallel_launch(
     origin_message: Optional[Message],
     actor: Optional[str],
     push_mode: Optional[str],
+    send_mode: Optional[str],
     supplement: Optional[str],
 ) -> None:
     """开始并行分支选择与创建流程。"""
@@ -8239,6 +8335,7 @@ async def _begin_parallel_launch(
                 supplement=supplement,
                 actor=actor,
                 push_mode=push_mode,
+                send_mode=send_mode,
                 dispatch_context=_parallel_dispatch_context_from_session(existing),
             )
         except ValueError as exc:
@@ -8297,6 +8394,7 @@ async def _begin_parallel_launch(
         actor=actor,
         origin_message=origin_message,
         push_mode=push_mode,
+        send_mode=send_mode,
         supplement=supplement,
         repo_options=repo_options,
         selections={},
@@ -8563,6 +8661,7 @@ async def _start_parallel_launch_session(
             supplement=session.supplement,
             actor=session.actor,
             push_mode=session.push_mode,
+            send_mode=session.send_mode,
             dispatch_context=ParallelDispatchContext(
                 task_id=task.id,
                 tmux_session=tmux_session,
@@ -8669,12 +8768,22 @@ async def on_parallel_branch_prefix_cancel_callback(callback: CallbackQuery) -> 
     await _start_parallel_launch_session(session, trigger_message=callback.message)
 
 
-async def _prompt_model_supplement_input(message: Message, *, push_mode: Optional[str] = None) -> None:
-    """推送到模型：提示用户输入补充描述，可选展示已选择的模式。"""
+async def _prompt_model_supplement_input(
+    message: Message,
+    *,
+    push_mode: Optional[str] = None,
+    send_mode: Optional[str] = None,
+) -> None:
+    """推送到模型：提示用户输入补充描述，可选展示已选择的模式与发送方式。"""
 
     prompt = _build_push_supplement_prompt()
+    prefix_parts: list[str] = []
     if push_mode:
-        prompt = f"已选择 {push_mode} 模式。\n{prompt}"
+        prefix_parts.append(f"已选择 {push_mode} 模式")
+    if send_mode:
+        prefix_parts.append(_push_send_mode_label(send_mode))
+    if prefix_parts:
+        prompt = f"{'，'.join(prefix_parts)}。\n{prompt}"
     await message.answer(
         prompt,
         reply_markup=_build_description_keyboard(),
@@ -9083,6 +9192,7 @@ class ParallelLaunchSession:
     actor: Optional[str]
     origin_message: Optional[Message]
     push_mode: Optional[str]
+    send_mode: Optional[str]
     supplement: Optional[str]
     repo_options: list[tuple[str, Path, str, list[BranchRef]]]
     selections: dict[str, BranchRef]
@@ -16859,6 +16969,7 @@ async def on_task_push_model_dispatch_target(message: Message, state: FSMContext
         origin_message=data.get("origin_message") or message,
         actor=data.get("actor") or _actor_from_message(message),
         push_mode=None,
+        send_mode=PUSH_SEND_MODE_IMMEDIATE,
         supplement=None,
     )
 
@@ -16898,8 +17009,47 @@ async def on_task_push_model_choice(message: Message, state: FSMContext) -> None
     # 选择 PLAN/YOLO 后即刷新一次缓存（仅更新状态，不回写主菜单，避免覆盖流程键盘）。
     await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
     await state.update_data(push_mode=resolved)
+    if _is_codex_model():
+        await state.set_state(TaskPushStates.waiting_send_mode)
+        await _prompt_push_send_mode_input(message, push_mode=resolved)
+        return
     await state.set_state(TaskPushStates.waiting_supplement)
     await _prompt_model_supplement_input(message, push_mode=resolved)
+
+
+@router.message(TaskPushStates.waiting_send_mode)
+async def on_task_push_model_send_mode(message: Message, state: FSMContext) -> None:
+    """推送到模型：处理立即发送/排队发送方式选择。"""
+
+    data = await state.get_data()
+    task_id = (data.get("task_id") or "").strip()
+    if not task_id:
+        await state.clear()
+        await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    raw_text = message.text or ""
+    resolved = _resolve_reply_choice(raw_text, options=[PUSH_SEND_MODE_IMMEDIATE_LABEL, PUSH_SEND_MODE_QUEUED_LABEL, "取消"])
+    if resolved == "取消" or _is_cancel_message(raw_text):
+        await state.clear()
+        await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    if resolved == PUSH_SEND_MODE_QUEUED_LABEL:
+        send_mode = PUSH_SEND_MODE_QUEUED
+    elif resolved == PUSH_SEND_MODE_IMMEDIATE_LABEL:
+        send_mode = PUSH_SEND_MODE_IMMEDIATE
+    else:
+        await message.answer(
+            "请选择立即发送或排队发送，发送“取消”可退出：",
+            reply_markup=_build_push_send_mode_keyboard(),
+        )
+        return
+
+    await state.update_data(send_mode=send_mode)
+    push_mode = (data.get("push_mode") or "").strip().upper() or None
+    await state.set_state(TaskPushStates.waiting_supplement)
+    await _prompt_model_supplement_input(message, push_mode=push_mode, send_mode=send_mode)
 
 
 @router.callback_query(F.data.startswith("task:push_model_skip:"))
@@ -16922,6 +17072,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
     chat_id = data.get("chat_id") or (callback.message.chat.id if callback.message else callback.from_user.id)
     origin_message = data.get("origin_message") or callback.message
     push_mode = (data.get("push_mode") or "").strip().upper()
+    send_mode = _normalize_push_send_mode(data.get("send_mode"))
     dispatch_target = (data.get("dispatch_target") or "").strip()
     await state.clear()
     if dispatch_target == PUSH_TARGET_PARALLEL:
@@ -16932,6 +17083,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
             origin_message=origin_message,
             actor=actor,
             push_mode=push_mode or None,
+            send_mode=send_mode,
             supplement=None,
         )
         return
@@ -16944,6 +17096,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
             supplement=None,
             actor=actor,
             push_mode=push_mode or None,
+            send_mode=send_mode,
         )
     except ValueError as exc:
         worker_log.error(
@@ -17020,6 +17173,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
         return
     push_mode = (data.get("push_mode") or "").strip().upper()
+    send_mode = _normalize_push_send_mode(data.get("send_mode"))
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
@@ -17078,6 +17232,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
             origin_message=origin_message,
             actor=actor,
             push_mode=push_mode or None,
+            send_mode=send_mode,
             supplement=supplement,
         )
         return
@@ -17090,6 +17245,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
             supplement=supplement,
             actor=actor,
             push_mode=push_mode or None,
+            send_mode=send_mode,
         )
     except ValueError as exc:
         worker_log.error(

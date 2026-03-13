@@ -100,6 +100,33 @@ def test_tmux_send_line_second_enter_failure_does_not_raise(monkeypatch):
     assert enter_count["value"] == 2
 
 
+def test_tmux_queue_line_uses_tab_without_double_enter(monkeypatch):
+    """排队发送应使用 Tab 提交，且不补发第二次 Enter。"""
+
+    _setup_tmux_send_line_mocks(monkeypatch)
+    monkeypatch.setattr(bot, "TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED", True)
+    monkeypatch.setattr(bot, "TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS", 2.0)
+    monkeypatch.setattr(bot, "_is_claudecode_model", lambda: False)
+
+    sleep_calls: list[float] = []
+    sent_calls: list[list[str]] = []
+
+    monkeypatch.setattr(time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(
+        subprocess,
+        "check_call",
+        lambda cmd, *args, **kwargs: sent_calls.append(cmd) or 0,
+    )
+
+    bot.tmux_queue_line("demo", "hello")
+
+    tab_calls = [cmd for cmd in sent_calls if cmd[-1] == "Tab"]
+    enter_calls = [cmd for cmd in sent_calls if cmd[-1] == "C-m"]
+    assert len(tab_calls) == 1
+    assert enter_calls == []
+    assert 2.0 not in sleep_calls
+
+
 def test_dispatch_prompt_tmux_error_suggests_manual_enter(monkeypatch, tmp_path: Path):
     """tmux 推送失败时，应给出“手动按 Enter”提示。"""
 
@@ -137,3 +164,43 @@ def test_dispatch_prompt_tmux_error_suggests_manual_enter(monkeypatch, tmp_path:
     assert not ok
     assert session_path is None
     assert replies and "手动按 Enter" in replies[-1]
+
+
+def test_dispatch_prompt_tmux_queue_error_suggests_manual_tab(monkeypatch, tmp_path: Path):
+    """排队发送失败时，应给出“手动按 Tab”提示。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    replies: list[str] = []
+
+    async def fake_reply(chat_id: int, text: str, **kwargs):
+        replies.append(text)
+        return None
+
+    def fake_tmux_queue_line(_session: str, _prompt: str) -> None:
+        raise subprocess.CalledProcessError(1, ["tmux", "-u", "send-keys"], "failure")
+
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+    monkeypatch.setattr(bot, "tmux_queue_line", fake_tmux_queue_line)
+
+    ok, session_path = asyncio.run(
+        bot._dispatch_prompt_to_model(
+            9528,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+            send_mode=bot.PUSH_SEND_MODE_QUEUED,
+        )
+    )
+
+    assert not ok
+    assert session_path is None
+    assert replies and "手动按 Tab" in replies[-1]
