@@ -30,12 +30,14 @@ class DummyMessage:
     def __init__(self, *, chat_id: int = 1, user_id: int = 1):
         self.calls = []
         self.edits = []
+        self.reply_markup_edits = []
         self.chat = SimpleNamespace(id=chat_id)
         self.from_user = SimpleNamespace(id=user_id, full_name="Tester")
         self.message_id = 100
         self.date = datetime.now(bot.UTC)
         self.text = None
         self.caption = None
+        self.reply_markup = None
 
     async def answer(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
         self.calls.append((text, parse_mode, reply_markup, kwargs))
@@ -43,6 +45,11 @@ class DummyMessage:
 
     async def edit_text(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
         self.edits.append((text, parse_mode, reply_markup, kwargs))
+        return SimpleNamespace(message_id=self.message_id, chat=self.chat)
+
+    async def edit_reply_markup(self, reply_markup=None, **kwargs):
+        self.reply_markup = reply_markup
+        self.reply_markup_edits.append((reply_markup, kwargs))
         return SimpleNamespace(message_id=self.message_id, chat=self.chat)
 
 
@@ -64,6 +71,17 @@ def make_state(message: DummyMessage) -> tuple[FSMContext, MemoryStorage]:
         key=StorageKey(bot_id=999, chat_id=message.chat.id, user_id=message.from_user.id),
     )
     return state, storage
+
+
+def _callback_data_list(markup) -> list[str]:
+    if markup is None:
+        return []
+    return [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if getattr(button, "callback_data", None)
+    ]
 
 
 def _task() -> TaskRecord:
@@ -182,6 +200,12 @@ def test_model_quick_reply_keyboard_includes_parallel_actions():
 def test_parallel_reply_mode_auto_prefixes_next_message(monkeypatch):
     origin = DummyMessage()
     callback = DummyCallback(f"{bot.PARALLEL_REPLY_CALLBACK_PREFIX}TASK_0001", origin)
+    origin.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0001",
+        parallel_task_title="调研任务",
+        enable_parallel_actions=True,
+        parallel_callback_payload="TASK_0001",
+    )
 
     recorded: list[tuple[str, object]] = []
 
@@ -221,6 +245,12 @@ def test_parallel_reply_mode_auto_prefixes_next_message(monkeypatch):
         reply_keyboard = origin.calls[-1][2]
         labels = [button.text for row in reply_keyboard.keyboard for button in row]
         assert labels == ["取消"]
+        assert origin.reply_markup_edits, "回复模式进入成功后应移除已点击的回复按钮"
+        callback_data = _callback_data_list(origin.reply_markup_edits[-1][0])
+        assert f"{bot.PARALLEL_REPLY_CALLBACK_PREFIX}TASK_0001" not in callback_data
+        assert f"{bot.PARALLEL_COMMIT_CALLBACK_PREFIX}TASK_0001" in callback_data
+        assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0001" in callback_data
+        assert "task:detail:TASK_0001" in callback_data
 
         message = DummyMessage(chat_id=origin.chat.id, user_id=origin.from_user.id)
         message.text = "继续完善方案"
@@ -1475,6 +1505,12 @@ def test_parallel_commit_callback_reports_runtime_failure(monkeypatch):
 
     message = DummyMessage()
     callback = DummyCallback(f"{bot.PARALLEL_COMMIT_CALLBACK_PREFIX}TASK_0001", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0001",
+        parallel_task_title="调研任务",
+        enable_parallel_actions=True,
+        parallel_callback_payload="TASK_0001",
+    )
 
     async def fake_active_parallel_session(_task_id: str):
         return SimpleNamespace(task_id="TASK_0001")
@@ -1506,6 +1542,7 @@ def test_parallel_commit_callback_reports_runtime_failure(monkeypatch):
     assert "提交失败" in text
     assert "git 输出解码失败" in text
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
+    assert not message.reply_markup_edits, "提交失败时不应移除按钮"
 
 
 def test_parallel_commit_callback_formats_grouped_result(monkeypatch):
@@ -1513,6 +1550,12 @@ def test_parallel_commit_callback_formats_grouped_result(monkeypatch):
 
     message = DummyMessage()
     callback = DummyCallback(f"{bot.PARALLEL_COMMIT_CALLBACK_PREFIX}TASK_0001", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0001",
+        parallel_task_title="并行任务标题",
+        enable_parallel_actions=True,
+        parallel_callback_payload="TASK_0001",
+    )
 
     async def fake_active_parallel_session(_task_id: str):
         return SimpleNamespace(task_id="TASK_0001")
@@ -1555,6 +1598,12 @@ def test_parallel_commit_callback_formats_grouped_result(monkeypatch):
     assert "总览：3 个仓库｜失败 1｜成功 1｜跳过 1" in text
     assert text.index("❌ 失败（1）") < text.index("✅ 成功（1）") < text.index("⏭️ 已跳过（1）")
     assert "  请检查权限" in text
+    assert message.reply_markup_edits, "提交成功后应移除已点击的并行提交按钮"
+    callback_data = _callback_data_list(message.reply_markup_edits[-1][0])
+    assert f"{bot.PARALLEL_COMMIT_CALLBACK_PREFIX}TASK_0001" not in callback_data
+    assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0001" in callback_data
+    assert f"{bot.PARALLEL_REPLY_CALLBACK_PREFIX}TASK_0001" in callback_data
+    assert "task:detail:TASK_0001" in callback_data
 
 
 def test_parallel_merge_callback_reports_runtime_failure(monkeypatch):

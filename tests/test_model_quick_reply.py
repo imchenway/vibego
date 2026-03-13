@@ -37,16 +37,23 @@ class DummyMessage:
 
     def __init__(self, *, chat_id: int = 1, user_id: int = 1):
         self.calls = []
+        self.reply_markup_edits = []
         self.chat = SimpleNamespace(id=chat_id)
         self.from_user = SimpleNamespace(id=user_id, full_name="Tester")
         self.message_id = 100
         self.date = datetime.now(bot.UTC)
         self.text = None
         self.caption = None
+        self.reply_markup = None
 
     async def answer(self, text: str, parse_mode=None, reply_markup=None, **kwargs):
         self.calls.append((text, parse_mode, reply_markup, kwargs))
         return SimpleNamespace(message_id=self.message_id + len(self.calls), chat=self.chat)
+
+    async def edit_reply_markup(self, reply_markup=None, **kwargs):
+        self.reply_markup = reply_markup
+        self.reply_markup_edits.append((reply_markup, kwargs))
+        return SimpleNamespace(message_id=self.message_id, chat=self.chat)
 
 
 class DummyCallback:
@@ -73,6 +80,17 @@ def make_state(message: DummyMessage) -> tuple[FSMContext, MemoryStorage]:
     return state, storage
 
 
+def _callback_data_list(markup) -> list[str]:
+    if markup is None:
+        return []
+    return [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if getattr(button, "callback_data", None)
+    ]
+
+
 def _assistant_event(text: str, *, cwd: str) -> dict:
     """构造最小 assistant_message 事件，携带 cwd 供会话路由测试复用。"""
 
@@ -91,7 +109,18 @@ def test_quick_reply_partial_enters_supplement_state():
     """点击“部分按推荐（需补充）”应进入补充输入状态，不应立即推送到模型。"""
 
     message = DummyMessage()
-    callback = DummyCallback(bot.MODEL_QUICK_REPLY_PARTIAL_CALLBACK, message)
+    session_key = "session-native"
+    bot.CHAT_SESSION_MAP[message.chat.id] = session_key
+    quick_token = bot._ensure_session_quick_reply_binding(session_key, "TASK_0200")
+    commit_token = bot._ensure_session_commit_binding(session_key, "TASK_0200", Path("/tmp/native-workspace"))
+    quick_payload = bot._build_session_quick_reply_callback_payload("TASK_0200", quick_token)
+    commit_payload = bot._build_session_commit_callback_payload("TASK_0200", commit_token)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0200",
+        native_quick_reply_payload=quick_payload,
+        native_commit_callback_payload=commit_payload,
+    )
+    callback = DummyCallback(f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{quick_payload}", message)
     state, _ = make_state(message)
 
     async def _scenario() -> None:
@@ -102,6 +131,7 @@ def test_quick_reply_partial_enters_supplement_state():
         prompt_text, _, reply_markup, _ = message.calls[-1]
         assert "请发送需要补充的说明" in prompt_text
         assert isinstance(reply_markup, ReplyKeyboardMarkup)
+        assert not message.reply_markup_edits, "仅进入补充态时不应提前移除按钮"
 
     asyncio.run(_scenario())
 
@@ -164,6 +194,14 @@ def test_native_session_commit_callback_uses_bound_workspace_root(monkeypatch, t
         workspace_root=workspace_root,
     )
     bot.SESSION_COMMIT_CALLBACK_BINDINGS = {"deadbeef": binding}
+    quick_token = bot._ensure_session_quick_reply_binding(binding.session_key, "TASK_0200")
+    quick_payload = bot._build_session_quick_reply_callback_payload("TASK_0200", quick_token)
+    commit_payload = bot._build_session_commit_callback_payload("TASK_0200", "deadbeef")
+    message.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0200",
+        native_quick_reply_payload=quick_payload,
+        native_commit_callback_payload=commit_payload,
+    )
 
     async def fake_get_task(task_id: str):
         assert task_id == "TASK_0200"
@@ -204,6 +242,12 @@ def test_native_session_commit_callback_uses_bound_workspace_root(monkeypatch, t
     assert "✅ 成功（1）" in text
     assert "- service" in text
     assert "提交并推送成功" in text
+    assert message.reply_markup_edits, "提交成功后应移除已点击的提交按钮"
+    callback_data = _callback_data_list(message.reply_markup_edits[-1][0])
+    assert f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}{commit_payload}" not in callback_data
+    assert f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}{quick_payload}" in callback_data
+    assert f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{quick_payload}" in callback_data
+    assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0200" in callback_data
 
 
 def test_native_session_commit_callback_reports_runtime_failure(monkeypatch, tmp_path: Path):
@@ -220,6 +264,14 @@ def test_native_session_commit_callback_reports_runtime_failure(monkeypatch, tmp
         workspace_root=workspace_root,
     )
     bot.SESSION_COMMIT_CALLBACK_BINDINGS = {"deadbeef": binding}
+    quick_token = bot._ensure_session_quick_reply_binding(binding.session_key, "TASK_0200")
+    quick_payload = bot._build_session_quick_reply_callback_payload("TASK_0200", quick_token)
+    commit_payload = bot._build_session_commit_callback_payload("TASK_0200", "deadbeef")
+    message.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0200",
+        native_quick_reply_payload=quick_payload,
+        native_commit_callback_payload=commit_payload,
+    )
 
     async def fake_get_task(task_id: str):
         assert task_id == "TASK_0200"
@@ -246,13 +298,25 @@ def test_native_session_commit_callback_reports_runtime_failure(monkeypatch, tmp
     assert "提交失败" in text
     assert "git push 失败" in text
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
+    assert not message.reply_markup_edits, "提交失败时不应移除按钮"
 
 
 def test_quick_reply_all_dispatches_prompt_and_restores_main_keyboard(monkeypatch, tmp_path: Path):
     """点击“全部按推荐”后应推送固定提示，并恢复主菜单键盘。"""
 
     origin = DummyMessage()
-    callback = DummyCallback(bot.MODEL_QUICK_REPLY_ALL_CALLBACK, origin)
+    session_key = "session-native"
+    bot.CHAT_SESSION_MAP[origin.chat.id] = session_key
+    quick_token = bot._ensure_session_quick_reply_binding(session_key, "TASK_0200")
+    commit_token = bot._ensure_session_commit_binding(session_key, "TASK_0200", tmp_path / "workspace")
+    quick_payload = bot._build_session_quick_reply_callback_payload("TASK_0200", quick_token)
+    commit_payload = bot._build_session_commit_callback_payload("TASK_0200", commit_token)
+    origin.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0200",
+        native_quick_reply_payload=quick_payload,
+        native_commit_callback_payload=commit_payload,
+    )
+    callback = DummyCallback(f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}{quick_payload}", origin)
 
     recorded: list[tuple[int, str, object, bool]] = []
     previews: list[tuple[int, str, object, object]] = []
@@ -283,6 +347,12 @@ def test_quick_reply_all_dispatches_prompt_and_restores_main_keyboard(monkeypatc
         assert previews, "应回显推送预览"
         assert isinstance(previews[-1][3], ReplyKeyboardMarkup), "预览消息应恢复主菜单键盘"
         assert ack_calls, "应发送 session ack"
+        assert origin.reply_markup_edits, "完整成功后应移除已点击的按钮"
+        callback_data = _callback_data_list(origin.reply_markup_edits[-1][0])
+        assert f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}{quick_payload}" not in callback_data
+        assert f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{quick_payload}" in callback_data
+        assert f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}{commit_payload}" in callback_data
+        assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0200" in callback_data
 
     asyncio.run(_scenario())
 
@@ -305,6 +375,7 @@ def test_quick_reply_all_dispatch_failure_restores_main_keyboard(monkeypatch):
         text, _, reply_markup, _ = origin.calls[-1]
         assert "推送失败" in text
         assert isinstance(reply_markup, ReplyKeyboardMarkup)
+        assert not origin.reply_markup_edits, "推送失败时不应移除按钮"
 
     asyncio.run(_scenario())
 
@@ -430,7 +501,18 @@ def test_quick_reply_partial_supplement_dispatches_prompt(monkeypatch, tmp_path:
     """补充阶段输入文案后，应推送“未提及按推荐 + 用户补充说明”到模型。"""
 
     origin = DummyMessage()
-    callback = DummyCallback(bot.MODEL_QUICK_REPLY_PARTIAL_CALLBACK, origin)
+    session_key = "session-native"
+    bot.CHAT_SESSION_MAP[origin.chat.id] = session_key
+    quick_token = bot._ensure_session_quick_reply_binding(session_key, "TASK_0200")
+    commit_token = bot._ensure_session_commit_binding(session_key, "TASK_0200", tmp_path / "workspace")
+    quick_payload = bot._build_session_quick_reply_callback_payload("TASK_0200", quick_token)
+    commit_payload = bot._build_session_commit_callback_payload("TASK_0200", commit_token)
+    origin.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0200",
+        native_quick_reply_payload=quick_payload,
+        native_commit_callback_payload=commit_payload,
+    )
+    callback = DummyCallback(f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{quick_payload}", origin)
     state, _ = make_state(origin)
 
     recorded: list[tuple[int, str, object, bool]] = []
@@ -468,6 +550,12 @@ def test_quick_reply_partial_supplement_dispatches_prompt(monkeypatch, tmp_path:
         assert await state.get_state() is None
         assert previews, "应回显推送预览"
         assert ack_calls, "应回显 session ack"
+        assert origin.reply_markup_edits, "最终成功后应移除已点击的部分按推荐按钮"
+        callback_data = _callback_data_list(origin.reply_markup_edits[-1][0])
+        assert f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{quick_payload}" not in callback_data
+        assert f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}{quick_payload}" in callback_data
+        assert f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}{commit_payload}" in callback_data
+        assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0200" in callback_data
 
     asyncio.run(_scenario())
 
@@ -477,7 +565,18 @@ def test_quick_reply_partial_skip_sends_all_recommended(monkeypatch, tmp_path: P
     """补充阶段发送跳过/空消息时，应等价“全部按推荐”。"""
 
     origin = DummyMessage()
-    callback = DummyCallback(bot.MODEL_QUICK_REPLY_PARTIAL_CALLBACK, origin)
+    session_key = "session-native"
+    bot.CHAT_SESSION_MAP[origin.chat.id] = session_key
+    quick_token = bot._ensure_session_quick_reply_binding(session_key, "TASK_0200")
+    commit_token = bot._ensure_session_commit_binding(session_key, "TASK_0200", tmp_path / "workspace")
+    quick_payload = bot._build_session_quick_reply_callback_payload("TASK_0200", quick_token)
+    commit_payload = bot._build_session_commit_callback_payload("TASK_0200", commit_token)
+    origin.reply_markup = bot._build_model_quick_reply_keyboard(
+        task_id="TASK_0200",
+        native_quick_reply_payload=quick_payload,
+        native_commit_callback_payload=commit_payload,
+    )
+    callback = DummyCallback(f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{quick_payload}", origin)
     state, _ = make_state(origin)
 
     recorded: list[str] = []
@@ -504,6 +603,11 @@ def test_quick_reply_partial_skip_sends_all_recommended(monkeypatch, tmp_path: P
         await bot.on_model_quick_reply_partial_supplement(supplement_message, state)
         assert recorded and recorded[-1] == "待决策项全部按模型推荐"
         assert await state.get_state() is None
+        assert origin.reply_markup_edits, "跳过补充但成功提交时也应移除部分按推荐按钮"
+        callback_data = _callback_data_list(origin.reply_markup_edits[-1][0])
+        assert f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}{quick_payload}" not in callback_data
+        assert f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}{quick_payload}" in callback_data
+        assert f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}{commit_payload}" in callback_data
 
     asyncio.run(_scenario())
 
@@ -531,5 +635,6 @@ def test_quick_reply_partial_cancel(monkeypatch):
         text, _, reply_markup, _ = supplement_message.calls[-1]
         assert "已取消" in text
         assert isinstance(reply_markup, ReplyKeyboardMarkup)
+        assert not origin.reply_markup_edits, "取消时不应移除按钮"
 
     asyncio.run(_scenario())

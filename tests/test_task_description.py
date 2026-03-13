@@ -2551,6 +2551,7 @@ def test_model_quick_reply_keyboard_includes_task_to_test_button():
 def test_model_task_to_test_callback_updates_status(monkeypatch):
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:TASK_0600", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0600")
 
     base_task = TaskRecord(
         id="TASK_0600",
@@ -2617,12 +2618,22 @@ def test_model_task_to_test_callback_updates_status(monkeypatch):
     assert "任务列表" in list_text
     assert isinstance(list_markup, InlineKeyboardMarkup)
     assert not message.edits, "不应编辑原消息内容"
+    assert message.reply_markup_edits, "成功更新后应移除已点击的测试按钮"
+    updated_markup, _kwargs = message.reply_markup_edits[-1]
+    callback_data = [
+        button.callback_data
+        for row in updated_markup.inline_keyboard
+        for button in row
+        if getattr(button, "callback_data", None)
+    ]
+    assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0600" not in callback_data
     bot.TASK_VIEW_STACK.clear()
 
 
 def test_model_task_to_test_callback_still_shows_task_list_when_already_test(monkeypatch):
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:TASK_0601", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0601")
 
     task = TaskRecord(
         id="TASK_0601",
@@ -2664,12 +2675,22 @@ def test_model_task_to_test_callback_still_shows_task_list_when_already_test(mon
     list_text, _, list_markup, _ = message.calls[0]
     assert "任务列表" in list_text
     assert isinstance(list_markup, InlineKeyboardMarkup)
+    assert message.reply_markup_edits, "已是测试状态且流程成功时也应移除测试按钮"
+    updated_markup, _kwargs = message.reply_markup_edits[-1]
+    callback_data = [
+        button.callback_data
+        for row in updated_markup.inline_keyboard
+        for button in row
+        if getattr(button, "callback_data", None)
+    ]
+    assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0601" not in callback_data
     bot.TASK_VIEW_STACK.clear()
 
 
 def test_model_task_to_test_callback_handles_missing_task(monkeypatch):
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:TASK_0602", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0602")
 
     async def fake_get_task(task_id: str):
         return None
@@ -2681,17 +2702,20 @@ def test_model_task_to_test_callback_handles_missing_task(monkeypatch):
 
     asyncio.run(scenario())
     assert callback.answers[-1] == ("任务不存在", True)
+    assert not message.reply_markup_edits, "失败时不应移除按钮"
 
 
 def test_model_task_to_test_callback_rejects_invalid_task_id():
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:BAD_TASK_ID", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0603")
 
     async def scenario() -> None:
         await bot.on_model_task_to_test(callback)
 
     asyncio.run(scenario())
     assert callback.answers[-1] == ("任务 ID 无效", True)
+    assert not message.reply_markup_edits, "参数无效时不应移除按钮"
 
 
 def test_task_summary_command_handles_missing_task(monkeypatch):

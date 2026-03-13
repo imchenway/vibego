@@ -4324,6 +4324,69 @@ def _build_model_quick_reply_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _remove_inline_button_from_markup(
+    reply_markup: Any,
+    *,
+    callback_data: Optional[str],
+) -> tuple[Optional[InlineKeyboardMarkup], bool]:
+    """从 inline keyboard 中精确移除一个 callback 对应的按钮。"""
+
+    normalized_callback = (callback_data or "").strip()
+    if not normalized_callback or not isinstance(reply_markup, InlineKeyboardMarkup):
+        return reply_markup if isinstance(reply_markup, InlineKeyboardMarkup) else None, False
+
+    rows: list[list[InlineKeyboardButton]] = []
+    removed = False
+    for row in reply_markup.inline_keyboard:
+        next_row: list[InlineKeyboardButton] = []
+        for button in row:
+            if not removed and (getattr(button, "callback_data", None) or "").strip() == normalized_callback:
+                removed = True
+                continue
+            next_row.append(button)
+        if next_row:
+            rows.append(next_row)
+
+    if not removed:
+        return reply_markup, False
+    if not rows:
+        return None, True
+    return InlineKeyboardMarkup(inline_keyboard=rows), True
+
+
+async def _try_remove_clicked_inline_button(
+    message: Optional[Message],
+    *,
+    callback_data: Optional[str],
+) -> bool:
+    """在业务成功后，尝试从原消息中仅移除当前点击的那个 inline 按钮。"""
+
+    if message is None:
+        return False
+    edit_reply_markup = getattr(message, "edit_reply_markup", None)
+    if edit_reply_markup is None:
+        return False
+
+    current_markup = getattr(message, "reply_markup", None)
+    next_markup, changed = _remove_inline_button_from_markup(
+        current_markup,
+        callback_data=callback_data,
+    )
+    if not changed:
+        return False
+
+    try:
+        await edit_reply_markup(reply_markup=next_markup)
+    except (TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter) as exc:
+        worker_log.warning(
+            "业务成功后移除已点击按钮失败：%s",
+            exc,
+            extra={"callback_data": str(callback_data or "")},
+        )
+        return False
+    return True
+
+
 def _build_parallel_post_commit_keyboard(task_id: str, *, can_merge: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_merge:
@@ -8433,6 +8496,10 @@ async def _continue_push_after_existing_session_selected(
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
+    await _try_remove_clicked_inline_button(
+        callback.message,
+        callback_data=callback.data,
+    )
 
 
 def _create_parallel_launch_token() -> str:
@@ -13809,6 +13876,10 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
+    await _try_remove_clicked_inline_button(
+        callback.message,
+        callback_data=callback.data,
+    )
 
 
 @router.callback_query(F.data.startswith(MODEL_QUICK_REPLY_PARTIAL_CALLBACK))
@@ -13873,6 +13944,7 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
         parallel_task_id=parallel_task_id,
         parallel_dispatch_context=parallel_dispatch_context,
         native_quick_reply_session_key=native_quick_reply_session_key,
+        partial_callback_data=(callback.data or MODEL_QUICK_REPLY_PARTIAL_CALLBACK),
         # 用于后续超时清理或排查问题（单位：秒）。
         started_at=time.time(),
     )
@@ -13902,6 +13974,10 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
         await callback.answer("任务已处于“测试”状态")
         if callback.message is not None:
             await _handle_task_list_request(callback.message)
+            await _try_remove_clicked_inline_button(
+                callback.message,
+                callback_data=callback.data,
+            )
         return
 
     actor = _actor_from_callback(callback)
@@ -13923,6 +13999,10 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
         )
         # 体验优化：状态更新为“测试”后自动展示任务列表，减少用户一次额外点击/输入。
         await _handle_task_list_request(callback.message)
+        await _try_remove_clicked_inline_button(
+            callback.message,
+            callback_data=callback.data,
+        )
 
 
 @router.callback_query(F.data.startswith(PARALLEL_REPLY_CALLBACK_PREFIX))
@@ -13948,6 +14028,10 @@ async def on_parallel_reply_callback(callback: CallbackQuery) -> None:
         await callback.message.answer(
             f"已进入 /{resolved_task_id or task_id} 回复模式。",
             reply_markup=_build_parallel_reply_input_keyboard(),
+        )
+        await _try_remove_clicked_inline_button(
+            callback.message,
+            callback_data=callback.data,
         )
 
 
@@ -14085,6 +14169,10 @@ async def on_session_commit_callback(callback: CallbackQuery) -> None:
     combined_results = [*skipped_results, *result.results]
     if callback.message is not None:
         await callback.message.answer(_format_parallel_operation_lines("分支提交结果：", combined_results))
+        await _try_remove_clicked_inline_button(
+            callback.message,
+            callback_data=callback.data,
+        )
 
 
 @router.callback_query(F.data.startswith(PARALLEL_COMMIT_CALLBACK_PREFIX))
@@ -14136,6 +14224,10 @@ async def on_parallel_commit_callback(callback: CallbackQuery) -> None:
         await callback.message.answer(
             _format_parallel_operation_lines("并行分支提交结果：", result.results),
             reply_markup=_build_parallel_post_commit_keyboard(task_id, can_merge=not result.failed),
+        )
+        await _try_remove_clicked_inline_button(
+            callback.message,
+            callback_data=callback.data,
         )
 
 
@@ -14250,6 +14342,7 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
     data = await state.get_data()
     chat_id = int(data.get("chat_id") or message.chat.id)
     origin_message = data.get("origin_message") or message
+    partial_callback_data = (data.get("partial_callback_data") or "").strip() or MODEL_QUICK_REPLY_PARTIAL_CALLBACK
 
     raw_text = (message.text or message.caption or "")
     trimmed = raw_text.strip()
@@ -14322,6 +14415,10 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
     )
     if session_path is not None:
         await _send_session_ack(chat_id, session_path, reply_to=origin_message)
+    await _try_remove_clicked_inline_button(
+        origin_message,
+        callback_data=partial_callback_data,
+    )
 
 
 def _is_request_input_question_answered(session: RequestInputSession, question_id: str) -> bool:
