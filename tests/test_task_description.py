@@ -3315,6 +3315,13 @@ def test_dispatch_prompt_plan_mode_queued_skips_plan_switch_for_codex(monkeypatc
             pass
 
 
+def test_push_send_mode_prompt_uses_generic_queue_label():
+    """排队发送文案不应再显式绑定 Codex 名称。"""
+
+    assert bot.PUSH_SEND_MODE_QUEUED_LABEL == "排队发送"
+    assert "Codex" not in bot._build_push_send_mode_prompt()
+
+
 def test_dispatch_prompt_yolo_mode_skips_plan_switch(monkeypatch, tmp_path: Path):
     """YOLO 模式：不应发送 /plan。"""
 

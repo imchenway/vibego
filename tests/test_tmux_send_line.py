@@ -100,6 +100,28 @@ def test_tmux_send_line_second_enter_failure_does_not_raise(monkeypatch):
     assert enter_count["value"] == 2
 
 
+def test_tmux_send_line_keeps_escape_preflight(monkeypatch):
+    """立即发送保持既有前置 Escape，避免误改其他发送链路。"""
+
+    _setup_tmux_send_line_mocks(monkeypatch)
+    monkeypatch.setattr(bot, "TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED", False)
+    monkeypatch.setattr(bot, "_is_claudecode_model", lambda: False)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    preflight_calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        subprocess,
+        "call",
+        lambda cmd, *args, **kwargs: preflight_calls.append(cmd) or 0,
+    )
+    monkeypatch.setattr(subprocess, "check_call", lambda *args, **kwargs: 0)
+
+    bot.tmux_send_line("demo", "hello")
+
+    assert any(cmd[-1] == "Escape" for cmd in preflight_calls)
+
+
 def test_tmux_queue_line_uses_tab_without_double_enter(monkeypatch):
     """排队发送应使用 Tab 提交，且不补发第二次 Enter。"""
 
@@ -125,6 +147,34 @@ def test_tmux_queue_line_uses_tab_without_double_enter(monkeypatch):
     assert len(tab_calls) == 1
     assert enter_calls == []
     assert 2.0 not in sleep_calls
+
+
+def test_tmux_queue_line_skips_escape_preflight(monkeypatch):
+    """排队发送应尽量贴近手动 Tab，不应额外发送前置 Escape。"""
+
+    _setup_tmux_send_line_mocks(monkeypatch)
+    monkeypatch.setattr(bot, "TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED", True)
+    monkeypatch.setattr(bot, "_is_claudecode_model", lambda: False)
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    preflight_calls: list[list[str]] = []
+    sent_calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        subprocess,
+        "call",
+        lambda cmd, *args, **kwargs: preflight_calls.append(cmd) or 0,
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "check_call",
+        lambda cmd, *args, **kwargs: sent_calls.append(cmd) or 0,
+    )
+
+    bot.tmux_queue_line("demo", "hello")
+
+    assert not any(cmd[-1] == "Escape" for cmd in preflight_calls)
+    assert any(cmd[-1] == "Tab" for cmd in sent_calls)
 
 
 def test_dispatch_prompt_tmux_error_suggests_manual_enter(monkeypatch, tmp_path: Path):

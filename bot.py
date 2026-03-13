@@ -238,7 +238,7 @@ PUSH_TARGET_PARALLEL = "新建分支 + 新 CLI 并行处理"
 PUSH_SEND_MODE_IMMEDIATE = "immediate"
 PUSH_SEND_MODE_QUEUED = "queued"
 PUSH_SEND_MODE_IMMEDIATE_LABEL = "立即发送"
-PUSH_SEND_MODE_QUEUED_LABEL = "排队发送（Codex）"
+PUSH_SEND_MODE_QUEUED_LABEL = "排队发送"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -1437,30 +1437,8 @@ def _tmux_submit_line(
 
     tmux = tmux_bin()
     subprocess.check_call(_tmux_cmd(tmux, "has-session", "-t", session))
-    # 发送一次 ESC，退出 Codex 可能的菜单或输入模式
-    subprocess.call(
-        _tmux_cmd(tmux, "send-keys", "-t", session, "Escape"),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(0.05)
-    try:
-        pane_in_mode = subprocess.check_output(
-            _tmux_cmd(tmux, "display-message", "-p", "-t", session, "#{pane_in_mode}"),
-            text=True,
-        ).strip()
-    except subprocess.CalledProcessError:
-        pane_in_mode = "0"
-    if pane_in_mode == "1":
-        subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "-X", "cancel"))
-        time.sleep(0.05)
-    chunks = line.split("\n")
-    for idx, chunk in enumerate(chunks):
-        if chunk:
-            subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "--", chunk))
-        if idx < len(chunks) - 1:
-            subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-j"))
-            time.sleep(0.05)
+    _tmux_prepare_immediate_submit(tmux, session)
+    _tmux_send_text_chunks(tmux, session, line)
     # 首次发送前，给不同模型一个轻量稳定窗口，避免输入事件丢失。
     time.sleep(0.2 if _is_claudecode_model() else 0.05)
     subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, submit_key))
@@ -1496,6 +1474,40 @@ def _tmux_submit_line(
         )
 
 
+def _tmux_prepare_immediate_submit(tmux: str, session: str) -> None:
+    """立即发送前的既有预处理：退出菜单态并清理 tmux copy-mode。"""
+
+    # 发送一次 ESC，退出 Codex 可能的菜单或输入模式
+    subprocess.call(
+        _tmux_cmd(tmux, "send-keys", "-t", session, "Escape"),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(0.05)
+    try:
+        pane_in_mode = subprocess.check_output(
+            _tmux_cmd(tmux, "display-message", "-p", "-t", session, "#{pane_in_mode}"),
+            text=True,
+        ).strip()
+    except subprocess.CalledProcessError:
+        pane_in_mode = "0"
+    if pane_in_mode == "1":
+        subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "-X", "cancel"))
+        time.sleep(0.05)
+
+
+def _tmux_send_text_chunks(tmux: str, session: str, line: str) -> None:
+    """向 tmux 输入文本正文，保留多行输入的既有拆分策略。"""
+
+    chunks = line.split("\n")
+    for idx, chunk in enumerate(chunks):
+        if chunk:
+            subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "--", chunk))
+        if idx < len(chunks) - 1:
+            subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "C-j"))
+            time.sleep(0.05)
+
+
 def tmux_send_line(session: str, line: str):
     """立即发送：使用 Enter 提交当前 prompt。"""
 
@@ -1503,9 +1515,14 @@ def tmux_send_line(session: str, line: str):
 
 
 def tmux_queue_line(session: str, line: str):
-    """排队发送：使用 Tab 将 prompt 排到下一轮。"""
+    """排队发送：尽量贴近用户手动输入后按 Tab 的行为，仅影响 queued 链路。"""
 
-    _tmux_submit_line(session, line, submit_key="Tab", double_submit=False)
+    tmux = tmux_bin()
+    subprocess.check_call(_tmux_cmd(tmux, "has-session", "-t", session))
+    # 排队发送不复用“立即发送”的前置 Escape，避免干扰 Codex 当前会话状态。
+    _tmux_send_text_chunks(tmux, session, line)
+    time.sleep(0.2 if _is_claudecode_model() else 0.05)
+    subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "Tab"))
 
 
 _TMUX_SHELL_COMMANDS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh"}
@@ -8225,7 +8242,7 @@ def _build_push_mode_prompt() -> str:
 def _build_push_send_mode_prompt() -> str:
     """推送到模型：构建立即/排队发送方式选择提示。"""
 
-    return "请选择本次发送方式：立即发送 / 排队发送（Codex）（发送“取消”退出）"
+    return "请选择本次发送方式：立即发送 / 排队发送（发送“取消”退出）"
 
 
 def _build_push_dispatch_target_prompt() -> str:
