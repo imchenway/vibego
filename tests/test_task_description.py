@@ -468,6 +468,11 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
 
+    async def fake_list_project_live_sessions():
+        return [bot.SessionLiveEntry(key="main", label="💻 主会话（vibe）", tmux_session="vibe", kind="main")]
+
+    monkeypatch.setattr(bot, "_list_project_live_sessions", fake_list_project_live_sessions)
+
     async def fake_list_history(task_id: str):
         return []
 
@@ -619,7 +624,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
 
     push_calls: list[dict] = []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None, dispatch_context=None):
         push_calls.append(
             {
                 "task_id": task_arg.id,
@@ -688,6 +693,7 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
         is_bug_report=False,
         push_mode=None,
         send_mode=None,
+        dispatch_context=None,
     ):
         recorded_modes.append(push_mode)
         recorded_send_modes.append(send_mode)
@@ -764,7 +770,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
 
     push_calls: list[dict] = []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None, dispatch_context=None):
         push_calls.append(
             {
                 "task_id": task_arg.id,
@@ -844,7 +850,7 @@ def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
         bound_calls.append((task_arg.id, list(attachments), actor))
         return []
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None, dispatch_context=None):
         return True, "PROMPT", None
 
     async def fake_reply_to_chat(chat_id, text, reply_to=None, parse_mode=None, reply_markup=None):
@@ -888,6 +894,11 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
         return task
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    async def fake_list_project_live_sessions():
+        return [bot.SessionLiveEntry(key="main", label="💻 主会话（vibe）", tmux_session="vibe", kind="main")]
+
+    monkeypatch.setattr(bot, "_list_project_live_sessions", fake_list_project_live_sessions)
 
     async def fake_list_history(task_id: str):
         return []
@@ -934,7 +945,7 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(bot, "reply_large_text", fake_reply_large_text)
     monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
 
-    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None):
+    async def fake_push(task_arg, *, chat_id, reply_to, supplement, actor, is_bug_report=False, push_mode=None, send_mode=None, dispatch_context=None):
         long_prompt = "A" * (bot.TELEGRAM_MESSAGE_LIMIT + 100)
         return True, long_prompt, tmp_path / "session.jsonl"
 
@@ -1169,6 +1180,11 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
 
+    async def fake_list_project_live_sessions():
+        return [bot.SessionLiveEntry(key="main", label="💻 主会话（vibe）", tmux_session="vibe", kind="main")]
+
+    monkeypatch.setattr(bot, "_list_project_live_sessions", fake_list_project_live_sessions)
+
     async def fake_list_history(task_id: str):
         return []
 
@@ -1262,6 +1278,12 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
         return task
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    async def fake_list_project_live_sessions():
+        return [bot.SessionLiveEntry(key="main", label="💻 主会话（vibe）", tmux_session="vibe", kind="main")]
+
+    monkeypatch.setattr(bot, "_list_project_live_sessions", fake_list_project_live_sessions)
+
     async def fake_list_history(task_id: str):
         return []
     monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
@@ -1314,6 +1336,144 @@ def test_push_model_done_push(monkeypatch, tmp_path: Path):
         assert not logged_events
 
     asyncio.run(_scenario())
+
+
+def test_push_model_selected_existing_parallel_session_routes_to_parallel_context(monkeypatch, tmp_path: Path):
+    """现有 CLI 会话处理：选择并行会话后，应继续发到所选并行会话。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_0001", message)
+    state, _storage = make_state(message)
+
+    task = _make_task(
+        task_id="TASK_0001",
+        title="调研任务",
+        status="research",
+        task_type="requirement",
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0001"
+        return task
+
+    async def fake_list_project_live_sessions():
+        return [
+            bot.SessionLiveEntry(key="main", label="💻 主会话（vibe）", tmux_session="vibe", kind="main"),
+            bot.SessionLiveEntry(
+                key="parallel:TASK_0115",
+                label="/TASK_0115 并行会话",
+                tmux_session="vibe-par-demo-115",
+                kind="parallel",
+                task_id="TASK_0115",
+            ),
+        ]
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    pointer_file = tmp_path / "pointer.txt"
+    pointer_file.write_text("", encoding="utf-8")
+
+    async def fake_get_active_parallel_session_for_task(task_id: str):
+        assert task_id == "TASK_0115"
+        return SimpleNamespace(
+            task_id="TASK_0115",
+            title_snapshot="并行会话",
+            tmux_session="vibe-par-demo-115",
+            pointer_file=str(pointer_file),
+            workspace_root=str(workspace_root),
+        )
+
+    push_calls: list[dict] = []
+    preview_calls: list[dict] = []
+    ack_calls: list[tuple[int, Path | None, object]] = []
+
+    async def fake_push_task(
+        task_arg,
+        *,
+        chat_id,
+        reply_to,
+        supplement,
+        actor,
+        is_bug_report=False,
+        push_mode=None,
+        send_mode=None,
+        dispatch_context=None,
+    ):
+        push_calls.append(
+            {
+                "task_id": task_arg.id,
+                "chat_id": chat_id,
+                "reply_to": reply_to,
+                "supplement": supplement,
+                "actor": actor,
+                "push_mode": push_mode,
+                "send_mode": send_mode,
+                "dispatch_context": dispatch_context,
+            }
+        )
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_preview(chat_id, preview_block, *, reply_to, parse_mode=None, reply_markup=None):
+        preview_calls.append(
+            {
+                "chat_id": chat_id,
+                "preview_block": preview_block,
+                "reply_to": reply_to,
+                "parse_mode": parse_mode,
+                "reply_markup": reply_markup,
+            }
+        )
+        return None
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        ack_calls.append((chat_id, session_path, reply_to))
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_list_project_live_sessions", fake_list_project_live_sessions)
+    monkeypatch.setattr(bot, "_get_active_parallel_session_for_task", fake_get_active_parallel_session_for_task)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "claudecode")
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+
+        dispatch_target_message = DummyMessage()
+        dispatch_target_message.text = bot.PUSH_TARGET_CURRENT
+        await bot.on_task_push_model_dispatch_target(dispatch_target_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_existing_session.state
+
+        picker_message = DummyMessage()
+        picker_callback = DummyCallback(
+            f"{bot.PUSH_EXISTING_SESSION_PARALLEL_PREFIX}TASK_0115",
+            picker_message,
+        )
+        await bot.on_push_existing_session_parallel_callback(picker_callback, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_choice.state
+        assert picker_callback.answers[-1] == ("已选择并行会话", False)
+
+        choice_message = DummyMessage()
+        choice_message.text = bot.PUSH_MODE_YOLO
+        await bot.on_task_push_model_choice(choice_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
+
+        supplement_message = DummyMessage()
+        supplement_message.text = bot.SKIP_TEXT
+        await bot.on_task_push_model_supplement(supplement_message, state)
+        assert await state.get_state() is None
+
+    asyncio.run(_scenario())
+
+    assert push_calls, "应将任务推送到选中的并行会话"
+    dispatch_context = push_calls[0]["dispatch_context"]
+    assert dispatch_context is not None
+    assert dispatch_context.task_id == "TASK_0115"
+    assert dispatch_context.tmux_session == "vibe-par-demo-115"
+    assert push_calls[0]["reply_to"] is message
+    assert push_calls[0]["push_mode"] == bot.PUSH_MODE_YOLO
+    assert preview_calls and preview_calls[0]["reply_to"] is message
+    assert ack_calls and ack_calls[0][2] is message
 
 
 def test_history_context_respects_limits(monkeypatch):

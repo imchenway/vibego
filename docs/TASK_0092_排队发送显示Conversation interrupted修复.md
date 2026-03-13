@@ -199,3 +199,60 @@ python3.11 -m vibego_cli doctor
    - `排队发送`
 2. `排队发送` 不再复用立即发送的前置 `Escape`
 3. 其他消息发送链路保持既有行为不变
+
+## 8. 2026-03-13 回归复核（/TASK_0092）
+
+### 8.1 复核结论
+
+经当前仓库代码与类级测试复核，**当前实现中未保留 `Ctrl + C` 发送逻辑**；排队发送链路也**不会再注入前置 `Escape`**。
+
+因此，若线上仍看到：
+
+```text
+Conversation interrupted - tell the model what to do differently.
+Something went wrong? Hit /feedback to report the issue.
+```
+
+更高概率是**运行中的实例未使用包含 /TASK_0092 修复的代码**，而不是当前仓库里仍残留 `Ctrl + C` 逻辑。
+
+### 8.2 关键证据
+
+1. 仓库内检索 `C-c / ctrl+c / send-keys.*C-c`，未命中排队发送链路  
+   - 只读检索：`rg -n 'C-c|ctrl\\+c|send-keys.*C-c' bot.py tests master.py vibego_cli`  
+   - 结果仅见：`master.py:4895` 的 `KeyboardInterrupt`，未见 tmux 发送 `C-c`
+
+2. 当前排队发送实现仅注入正文后发送 `Tab`  
+   - `bot.py`（锚点：`def tmux_queue_line(session: str, line: str):`）
+   - 关键片段：`_tmux_send_text_chunks(tmux, session, line)` + `send-keys ... "Tab"`
+
+3. 当前立即发送的预处理仅存在于 immediate 专用路径  
+   - `bot.py`（锚点：`def _tmux_prepare_immediate_submit(tmux: str, session: str) -> None:`）
+   - 关键片段：`send-keys ... "Escape"` 仅由 `_tmux_submit_line(...)` 调用
+
+4. 当前排队发送的类级回归测试仍为绿色  
+   - `tests/test_tmux_send_line.py`（锚点：`def test_tmux_queue_line_skips_escape_preflight`）
+   - `tests/test_task_description.py`（锚点：`def test_dispatch_prompt_plan_mode_queued_skips_plan_switch_for_codex`）
+
+### 8.3 本次复核执行记录
+
+```bash
+python3.11 -m pytest -q tests/test_tmux_send_line.py tests/test_task_description.py
+```
+
+结果：
+
+```text
+171 passed in 14.76s
+```
+
+```bash
+python3.11 -m vibego_cli doctor
+```
+
+结果：
+
+```json
+{
+  "python_ok": true
+}
+```

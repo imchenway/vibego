@@ -64,6 +64,7 @@ class TaskPushStates(StatesGroup):
     """任务推送补充信息流程的状态集。"""
 
     waiting_dispatch_target = State()
+    waiting_existing_session = State()
     waiting_choice = State()
     waiting_send_mode = State()
     waiting_supplement = State()

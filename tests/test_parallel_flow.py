@@ -13,7 +13,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -106,6 +106,58 @@ def test_push_model_starts_with_dispatch_target_choice(monkeypatch):
         prompt_text, _, reply_markup, _ = message.calls[-1]
         assert prompt_text == bot._build_push_dispatch_target_prompt()
         assert isinstance(reply_markup, ReplyKeyboardMarkup)
+
+    asyncio.run(_scenario())
+
+
+def test_existing_cli_target_with_multiple_sessions_opens_session_picker(monkeypatch):
+    """现有 CLI 会话处理：当主会话外还存在活动并行会话时，应先让用户选择目标会话。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_0001", message)
+    state, _storage = make_state(message)
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0001"
+        return _task()
+
+    async def fake_list_project_live_sessions():
+        return [
+            bot.SessionLiveEntry(key="main", label="💻 主会话（vibe）", tmux_session="vibe", kind="main"),
+            bot.SessionLiveEntry(
+                key="parallel:TASK_0115",
+                label="/TASK_0115 并行会话",
+                tmux_session="vibe-par-demo-115",
+                kind="parallel",
+                task_id="TASK_0115",
+            ),
+        ]
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_list_project_live_sessions", fake_list_project_live_sessions)
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+
+        dispatch_target_message = DummyMessage()
+        dispatch_target_message.text = bot.PUSH_TARGET_CURRENT
+        await bot.on_task_push_model_dispatch_target(dispatch_target_message, state)
+
+        assert await state.get_state() == bot.TaskPushStates.waiting_existing_session.state
+        assert dispatch_target_message.calls, "应展示现有会话选择页"
+        prompt_text, _, reply_markup, _ = dispatch_target_message.calls[-1]
+        assert prompt_text == bot._build_push_existing_session_prompt(session_count=2)
+        assert isinstance(reply_markup, InlineKeyboardMarkup)
+        callback_data = [
+            button.callback_data
+            for row in reply_markup.inline_keyboard
+            for button in row
+            if button.callback_data
+        ]
+        assert bot.PUSH_EXISTING_SESSION_MAIN_CALLBACK in callback_data
+        assert f"{bot.PUSH_EXISTING_SESSION_PARALLEL_PREFIX}TASK_0115" in callback_data
+        assert bot.PUSH_EXISTING_SESSION_REFRESH_CALLBACK in callback_data
+        assert bot.PUSH_EXISTING_SESSION_CANCEL_CALLBACK in callback_data
 
     asyncio.run(_scenario())
 

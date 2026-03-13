@@ -233,7 +233,7 @@ BUG_REPORT_PREFIX = "报告一个缺陷，详见底部最新的缺陷描述。\n
 # 推送到模型模式（PLAN / YOLO）
 PUSH_MODE_PLAN = "PLAN"
 PUSH_MODE_YOLO = "YOLO"
-PUSH_TARGET_CURRENT = "当前 CLI 处理"
+PUSH_TARGET_CURRENT = "现有 CLI 会话处理"
 PUSH_TARGET_PARALLEL = "新建分支 + 新 CLI 并行处理"
 PUSH_SEND_MODE_IMMEDIATE = "immediate"
 PUSH_SEND_MODE_QUEUED = "queued"
@@ -5968,6 +5968,10 @@ SESSION_LIVE_MAIN_CALLBACK = "session:view:main"
 SESSION_LIVE_PARALLEL_PREFIX = "session:view:parallel:"
 SESSION_LIVE_REFRESH_MAIN_CALLBACK = "session:view:refresh:main"
 SESSION_LIVE_REFRESH_PARALLEL_PREFIX = "session:view:refresh:parallel:"
+PUSH_EXISTING_SESSION_MAIN_CALLBACK = "task:push_existing_session:main"
+PUSH_EXISTING_SESSION_PARALLEL_PREFIX = "task:push_existing_session:parallel:"
+PUSH_EXISTING_SESSION_REFRESH_CALLBACK = "task:push_existing_session:refresh"
+PUSH_EXISTING_SESSION_CANCEL_CALLBACK = "task:push_existing_session:cancel"
 TASK_DETAIL_BACK_CALLBACK = "task:detail_back"
 TASK_DETAIL_DELETE_PROMPT_CALLBACK = "task:delete_prompt"
 TASK_DETAIL_DELETE_CONFIRM_CALLBACK = "task:delete_confirm"
@@ -7158,6 +7162,56 @@ async def _resolve_session_live_entry(entry_key: str) -> Optional[SessionLiveEnt
     return None
 
 
+def _build_push_existing_session_markup(entries: Sequence[SessionLiveEntry]) -> InlineKeyboardMarkup:
+    """构造“现有 CLI 会话处理”的会话选择按钮。"""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for entry in entries:
+        if entry.kind == "main":
+            callback_data = PUSH_EXISTING_SESSION_MAIN_CALLBACK
+        else:
+            callback_data = f"{PUSH_EXISTING_SESSION_PARALLEL_PREFIX}{entry.task_id}"
+        rows.append([InlineKeyboardButton(text=entry.label, callback_data=callback_data)])
+    rows.append([InlineKeyboardButton(text="🔄 刷新会话列表", callback_data=PUSH_EXISTING_SESSION_REFRESH_CALLBACK)])
+    rows.append([InlineKeyboardButton(text="❌ 取消推送", callback_data=PUSH_EXISTING_SESSION_CANCEL_CALLBACK)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _build_push_existing_session_view() -> tuple[str, InlineKeyboardMarkup]:
+    """构造“现有 CLI 会话处理”的会话选择页。"""
+
+    entries = await _list_project_live_sessions()
+    return _build_push_existing_session_prompt(session_count=len(entries)), _build_push_existing_session_markup(entries)
+
+
+async def _show_push_existing_session_view(message: Message, *, prefer_edit: bool = False) -> bool:
+    """展示现有 CLI 会话选择页；编辑失败时回退为发送新消息。"""
+
+    text, markup = await _build_push_existing_session_view()
+    if prefer_edit and await _try_edit_message(message, text, reply_markup=markup):
+        return True
+    sent = await message.answer(text, reply_markup=markup)
+    return sent is not None
+
+
+async def _resolve_selected_existing_dispatch_context(data: Mapping[str, Any]) -> Optional[ParallelDispatchContext]:
+    """根据状态中记录的“现有会话选择”解析真实派发上下文。"""
+
+    selected_key = str(data.get("selected_existing_session_key") or "main").strip()
+    if not selected_key or selected_key == "main":
+        return None
+    if not selected_key.startswith("parallel:"):
+        raise ValueError("会话选择已失效，请重新点击推送到模型。")
+
+    task_id = _normalize_task_id(selected_key.split(":", 1)[1])
+    if not task_id:
+        raise ValueError("会话选择已失效，请重新点击推送到模型。")
+    session = await _get_active_parallel_session_for_task(task_id)
+    if session is None:
+        raise ValueError("所选会话已失效，请重新选择。")
+    return _parallel_dispatch_context_from_session(session)
+
+
 def _build_session_live_list_markup(entries: Sequence[SessionLiveEntry]) -> InlineKeyboardMarkup:
     """构造会话列表页按钮。"""
 
@@ -8246,9 +8300,15 @@ def _build_push_send_mode_prompt() -> str:
 
 
 def _build_push_dispatch_target_prompt() -> str:
-    """推送到模型：构建“当前 CLI / 并行 CLI”选择提示。"""
+    """推送到模型：构建“现有 CLI 会话 / 并行 CLI”选择提示。"""
 
-    return "请选择处理方式：当前 CLI 处理 / 新建分支 + 新 CLI 并行处理（发送“取消”退出）"
+    return "请选择处理方式：现有 CLI 会话处理 / 新建分支 + 新 CLI 并行处理（发送“取消”退出）"
+
+
+def _build_push_existing_session_prompt(*, session_count: int) -> str:
+    """推送到模型：构建“现有 CLI 会话选择”提示。"""
+
+    return f"请选择要推送到哪个现有 CLI 会话（当前共 {session_count} 个，发送“取消”可退出）"
 
 
 def _build_quick_reply_partial_supplement_prompt() -> str:
@@ -8308,6 +8368,71 @@ async def _prompt_push_dispatch_target_input(message: Message) -> None:
         _build_push_dispatch_target_prompt(),
         reply_markup=_build_push_dispatch_target_keyboard(),
     )
+
+
+async def _continue_push_after_existing_session_selected(
+    *,
+    message: Message,
+    state: FSMContext,
+    selected_entry_key: str,
+) -> None:
+    """在用户选定“现有 CLI 会话”后，继续原推送流程。"""
+
+    data = await state.get_data()
+    task_id = (data.get("task_id") or "").strip()
+    if not task_id:
+        await state.clear()
+        await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await state.clear()
+        await message.answer("任务不存在，已取消推送。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    entry = await _resolve_session_live_entry(selected_entry_key)
+    if entry is None:
+        raise ValueError("会话不存在或已失活，请刷新会话列表后重试。")
+
+    await state.update_data(selected_existing_session_key=entry.key)
+    if task.status in MODEL_PUSH_SUPPLEMENT_STATUSES:
+        await state.set_state(TaskPushStates.waiting_choice)
+        await _prompt_push_mode_input(message)
+        return
+
+    chat_id = data.get("chat_id") or message.chat.id
+    origin_message = data.get("origin_message") or message
+    actor = data.get("actor") or _actor_from_message(message)
+    dispatch_context = await _resolve_selected_existing_dispatch_context(await state.get_data())
+    await state.clear()
+    try:
+        success, prompt, session_path = await _push_task_to_model(
+            task,
+            chat_id=chat_id,
+            reply_to=origin_message,
+            supplement=None,
+            actor=actor,
+            dispatch_context=dispatch_context,
+        )
+    except ValueError as exc:
+        await message.answer(f"推送失败：{exc}", reply_markup=_build_worker_main_keyboard())
+        return
+
+    if not success:
+        await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+    await _send_model_push_preview(
+        chat_id,
+        preview_block,
+        reply_to=origin_message,
+        parse_mode=preview_parse_mode,
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    if session_path is not None:
+        await _send_session_ack(chat_id, session_path, reply_to=origin_message)
 
 
 def _create_parallel_launch_token() -> str:
@@ -16918,7 +17043,7 @@ async def on_task_push_model(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.message(TaskPushStates.waiting_dispatch_target)
 async def on_task_push_model_dispatch_target(message: Message, state: FSMContext) -> None:
-    """推送到模型：先选择当前 CLI 或并行 CLI。"""
+    """推送到模型：先选择现有 CLI 会话或并行 CLI。"""
 
     data = await state.get_data()
     task_id = (data.get("task_id") or "").strip()
@@ -16935,7 +17060,7 @@ async def on_task_push_model_dispatch_target(message: Message, state: FSMContext
         return
     if resolved not in {PUSH_TARGET_CURRENT, PUSH_TARGET_PARALLEL}:
         await message.answer(
-            "请选择处理方式：当前 CLI 处理 / 新建分支 + 新 CLI 并行处理，发送“取消”可退出。",
+            "请选择处理方式：现有 CLI 会话处理 / 新建分支 + 新 CLI 并行处理，发送“取消”可退出。",
             reply_markup=_build_push_dispatch_target_keyboard(),
         )
         return
@@ -16947,37 +17072,17 @@ async def on_task_push_model_dispatch_target(message: Message, state: FSMContext
         return
 
     await state.update_data(dispatch_target=resolved)
-    if task.status in MODEL_PUSH_SUPPLEMENT_STATUSES:
-        await state.set_state(TaskPushStates.waiting_choice)
-        await _prompt_push_mode_input(message)
-        return
-
-    await state.clear()
     if resolved == PUSH_TARGET_CURRENT:
-        try:
-            success, prompt, session_path = await _push_task_to_model(
-                task,
-                chat_id=data.get("chat_id") or message.chat.id,
-                reply_to=data.get("origin_message") or message,
-                supplement=None,
-                actor=data.get("actor") or _actor_from_message(message),
+        entries = await _list_project_live_sessions()
+        if len(entries) == 1 and entries[0].kind == "main":
+            await _continue_push_after_existing_session_selected(
+                message=message,
+                state=state,
+                selected_entry_key="main",
             )
-        except ValueError as exc:
-            await message.answer(f"推送失败：{exc}", reply_markup=_build_worker_main_keyboard())
             return
-        if not success:
-            await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
-            return
-        preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-        await _send_model_push_preview(
-            data.get("chat_id") or message.chat.id,
-            preview_block,
-            reply_to=data.get("origin_message") or message,
-            parse_mode=preview_parse_mode,
-            reply_markup=_build_worker_main_keyboard(),
-        )
-        if session_path is not None:
-            await _send_session_ack(data.get("chat_id") or message.chat.id, session_path, reply_to=data.get("origin_message") or message)
+        await state.set_state(TaskPushStates.waiting_existing_session)
+        await _show_push_existing_session_view(message)
         return
 
     await _begin_parallel_launch(
@@ -16989,6 +17094,94 @@ async def on_task_push_model_dispatch_target(message: Message, state: FSMContext
         send_mode=PUSH_SEND_MODE_IMMEDIATE,
         supplement=None,
     )
+
+
+@router.message(TaskPushStates.waiting_existing_session)
+async def on_push_existing_session_message(message: Message, state: FSMContext) -> None:
+    """现有 CLI 会话选择阶段：允许用户发送“取消”，其余输入提示点击按钮。"""
+
+    raw_text = (message.text or "").strip()
+    if _is_cancel_message(raw_text) or _strip_number_prefix(raw_text) == "取消":
+        await state.clear()
+        await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
+        return
+    await message.answer("请点击要推送到的现有 CLI 会话，发送“取消”可退出。")
+
+
+@router.callback_query(F.data == PUSH_EXISTING_SESSION_REFRESH_CALLBACK)
+async def on_push_existing_session_refresh_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    data = await state.get_data()
+    if current_state != TaskPushStates.waiting_existing_session.state or not (data.get("task_id") or "").strip():
+        await state.clear()
+        await callback.answer("会话选择已失效，请重新点击推送到模型。", show_alert=True)
+        return
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    success = await _show_push_existing_session_view(message, prefer_edit=True)
+    await callback.answer("已刷新会话列表" if success else "会话列表发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data == PUSH_EXISTING_SESSION_CANCEL_CALLBACK)
+async def on_push_existing_session_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("已取消推送到模型")
+    if callback.message is not None:
+        await callback.message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
+
+
+@router.callback_query(F.data == PUSH_EXISTING_SESSION_MAIN_CALLBACK)
+async def on_push_existing_session_main_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    data = await state.get_data()
+    if current_state != TaskPushStates.waiting_existing_session.state or not (data.get("task_id") or "").strip():
+        await state.clear()
+        await callback.answer("会话选择已失效，请重新点击推送到模型。", show_alert=True)
+        return
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    try:
+        await _continue_push_after_existing_session_selected(
+            message=message,
+            state=state,
+            selected_entry_key="main",
+        )
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("已选择主会话")
+
+
+@router.callback_query(F.data.startswith(PUSH_EXISTING_SESSION_PARALLEL_PREFIX))
+async def on_push_existing_session_parallel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    data = await state.get_data()
+    if current_state != TaskPushStates.waiting_existing_session.state or not (data.get("task_id") or "").strip():
+        await state.clear()
+        await callback.answer("会话选择已失效，请重新点击推送到模型。", show_alert=True)
+        return
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    task_id = _normalize_task_id((callback.data or "")[len(PUSH_EXISTING_SESSION_PARALLEL_PREFIX) :])
+    if not task_id:
+        await callback.answer("会话参数错误", show_alert=True)
+        return
+    try:
+        await _continue_push_after_existing_session_selected(
+            message=message,
+            state=state,
+            selected_entry_key=f"parallel:{task_id}",
+        )
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("已选择并行会话")
 
 
 @router.message(TaskPushStates.waiting_choice)
@@ -17106,6 +17299,12 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
         return
 
     try:
+        dispatch_context = await _resolve_selected_existing_dispatch_context(data)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    try:
         success, prompt, session_path = await _push_task_to_model(
             task,
             chat_id=chat_id,
@@ -17114,6 +17313,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
             actor=actor,
             push_mode=push_mode or None,
             send_mode=send_mode,
+            dispatch_context=dispatch_context,
         )
     except ValueError as exc:
         worker_log.error(
@@ -17255,6 +17455,12 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         return
 
     try:
+        dispatch_context = await _resolve_selected_existing_dispatch_context(data)
+    except ValueError as exc:
+        await message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
+        return
+
+    try:
         success, prompt, session_path = await _push_task_to_model(
             task,
             chat_id=chat_id,
@@ -17263,6 +17469,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
             actor=actor,
             push_mode=push_mode or None,
             send_mode=send_mode,
+            dispatch_context=dispatch_context,
         )
     except ValueError as exc:
         worker_log.error(
