@@ -88,6 +88,13 @@ class TaskListSearchStates(StatesGroup):
     waiting_keyword = State()
 
 
+class TaskBatchPushStates(StatesGroup):
+    """任务列表批量推送流程状态。"""
+
+    waiting_existing_session = State()
+    waiting_choice = State()
+
+
 class ProjectDeleteStates(StatesGroup):
     """Master 项目删除确认流程的状态定义。"""
 
