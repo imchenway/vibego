@@ -6036,6 +6036,8 @@ TASK_DEFECT_EXCEL_BACK_CALLBACK = "task:defect_excel_back"
 TASK_BATCH_PUSH_START_CALLBACK = "task:batch_push:start"
 TASK_BATCH_PUSH_TOGGLE_PREFIX = "task:batch_push:toggle:"
 TASK_BATCH_PUSH_PAGE_PREFIX = "task:batch_push:page:"
+TASK_BATCH_PUSH_SELECT_PAGE_CALLBACK = "task:batch_push:select_page"
+TASK_BATCH_PUSH_INVERT_PAGE_CALLBACK = "task:batch_push:invert_page"
 TASK_BATCH_PUSH_CONFIRM_CALLBACK = "task:batch_push:confirm"
 TASK_BATCH_PUSH_CANCEL_CALLBACK = "task:batch_push:cancel"
 TASK_BATCH_PUSH_SESSION_MAIN_CALLBACK = "task:batch_push_session:main"
@@ -13816,17 +13818,10 @@ async def _build_task_batch_push_view(
 ) -> tuple[str, InlineKeyboardMarkup]:
     """构造任务列表多选批量推送视图。"""
 
-    exclude_statuses: Optional[Sequence[str]] = None if status else ("done",)
-    tasks, total_pages = await TASK_SERVICE.paginate(
+    tasks, total_pages, total = await _load_task_batch_push_page(
         status=status,
         page=page,
-        page_size=limit,
-        exclude_statuses=exclude_statuses,
-    )
-    total = await TASK_SERVICE.count_tasks(
-        status=status,
-        include_archived=False,
-        exclude_statuses=exclude_statuses,
+        limit=limit,
     )
     display_pages = total_pages or 1
     current_page_display = min(page, display_pages)
@@ -13883,6 +13878,20 @@ async def _build_task_batch_push_view(
     if nav_row:
         rows.append(nav_row)
 
+    if tasks:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ 全选当前页",
+                    callback_data=TASK_BATCH_PUSH_SELECT_PAGE_CALLBACK,
+                ),
+                InlineKeyboardButton(
+                    text="🔁 反选当前页",
+                    callback_data=TASK_BATCH_PUSH_INVERT_PAGE_CALLBACK,
+                ),
+            ]
+        )
+
     rows.append(
         [
             InlineKeyboardButton(
@@ -13900,6 +13909,65 @@ async def _build_task_batch_push_view(
         ]
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _load_task_batch_push_page(
+    *,
+    status: Optional[str],
+    page: int,
+    limit: int,
+) -> tuple[list[TaskRecord], int, int]:
+    """读取批量推送勾选页当前页任务与分页统计。"""
+
+    exclude_statuses: Optional[Sequence[str]] = None if status else ("done",)
+    tasks, total_pages = await TASK_SERVICE.paginate(
+        status=status,
+        page=page,
+        page_size=limit,
+        exclude_statuses=exclude_statuses,
+    )
+    total = await TASK_SERVICE.count_tasks(
+        status=status,
+        include_archived=False,
+        exclude_statuses=exclude_statuses,
+    )
+    return tasks, total_pages, total
+
+
+def _extract_task_batch_push_selection(view_state: TaskViewState) -> tuple[set[str], list[str]]:
+    """从批量推送视图状态中提取去重后的已选集合与顺序。"""
+
+    selected_order: list[str] = []
+    selected_set: set[str] = set()
+    for value in (view_state.data.get("selected_task_order") or []):
+        task_id = _normalize_task_id(value)
+        if not task_id or task_id in selected_set:
+            continue
+        selected_order.append(task_id)
+        selected_set.add(task_id)
+    for value in (view_state.data.get("selected_task_ids") or []):
+        task_id = _normalize_task_id(value)
+        if not task_id or task_id in selected_set:
+            continue
+        selected_order.append(task_id)
+        selected_set.add(task_id)
+    return selected_set, selected_order
+
+
+async def _list_task_batch_push_page_ids(
+    *,
+    status: Optional[str],
+    page: int,
+    limit: int,
+) -> list[str]:
+    """返回批量推送当前页可见任务编码，保持页面展示顺序。"""
+
+    tasks, _total_pages, _total = await _load_task_batch_push_page(
+        status=status,
+        page=page,
+        limit=limit,
+    )
+    return [_normalize_task_id(task.id) or task.id for task in tasks]
 
 
 def _require_openpyxl() -> tuple[Any, Any]:
@@ -14374,16 +14442,7 @@ async def on_task_batch_push_toggle(callback: CallbackQuery) -> None:
     if not task_id:
         await callback.answer("任务参数错误", show_alert=True)
         return
-    selected_set = {
-        item
-        for item in (_normalize_task_id(value) for value in (view_state.data.get("selected_task_ids") or []))
-        if item
-    }
-    selected_order = [
-        item
-        for item in (_normalize_task_id(value) for value in (view_state.data.get("selected_task_order") or []))
-        if item
-    ]
+    selected_set, selected_order = _extract_task_batch_push_selection(view_state)
     if task_id in selected_set:
         selected_set.remove(task_id)
         selected_order = [item for item in selected_order if item != task_id]
@@ -14395,29 +14454,15 @@ async def on_task_batch_push_toggle(callback: CallbackQuery) -> None:
     status = view_state.data.get("status")
     page = int(view_state.data.get("page", 1) or 1)
     limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
-    text, markup = await _build_task_batch_push_view(
+    await _restore_task_batch_push_view(
+        target_message=message,
+        fallback_message=message,
         status=status,
         page=page,
         limit=limit,
-        selected_task_ids=list(selected_set),
+        selected_task_ids=selected_order,
         selected_task_order=selected_order,
     )
-    next_state = _make_batch_push_view_state(
-        status=status,
-        page=page,
-        limit=limit,
-        selected_task_ids=list(selected_set),
-        selected_task_order=selected_order,
-    )
-    if await _try_edit_message(message, text, reply_markup=markup):
-        _set_task_view_context(message, next_state)
-    else:
-        origin_chat = getattr(message, "chat", None)
-        if origin_chat is not None:
-            _clear_task_view(origin_chat.id, message.message_id)
-        sent = await _answer_with_markdown(message, text, reply_markup=markup)
-        if sent is not None:
-            _init_task_view_context(sent, next_state)
     await callback.answer(notice)
 
 
@@ -14438,32 +14483,90 @@ async def on_task_batch_push_page(callback: CallbackQuery) -> None:
         return
     status = view_state.data.get("status")
     limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
-    selected_task_ids = [str(item).strip() for item in (view_state.data.get("selected_task_ids") or []) if str(item).strip()]
-    selected_task_order = [str(item).strip() for item in (view_state.data.get("selected_task_order") or []) if str(item).strip()]
-    text, markup = await _build_task_batch_push_view(
+    _selected_set, selected_order = _extract_task_batch_push_selection(view_state)
+    await _restore_task_batch_push_view(
+        target_message=message,
+        fallback_message=message,
         status=status,
         page=target_page,
         limit=limit,
-        selected_task_ids=selected_task_ids,
-        selected_task_order=selected_task_order,
+        selected_task_ids=selected_order,
+        selected_task_order=selected_order,
     )
-    next_state = _make_batch_push_view_state(
-        status=status,
-        page=target_page,
-        limit=limit,
-        selected_task_ids=selected_task_ids,
-        selected_task_order=selected_task_order,
-    )
-    if await _try_edit_message(message, text, reply_markup=markup):
-        _set_task_view_context(message, next_state)
-    else:
-        origin_chat = getattr(message, "chat", None)
-        if origin_chat is not None:
-            _clear_task_view(origin_chat.id, message.message_id)
-        sent = await _answer_with_markdown(message, text, reply_markup=markup)
-        if sent is not None:
-            _init_task_view_context(sent, next_state)
     await callback.answer()
+
+
+async def _apply_task_batch_push_page_shortcut(
+    callback: CallbackQuery,
+    *,
+    action: Literal["select", "invert"],
+    success_notice: str,
+) -> None:
+    """对当前页可见任务应用“全选/反选”快捷操作。"""
+
+    message = callback.message
+    view_state = _extract_task_batch_push_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("批量推送视图已失效，请重新进入。", show_alert=True)
+        return
+    status = view_state.data.get("status")
+    page = int(view_state.data.get("page", 1) or 1)
+    limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    page_task_ids = await _list_task_batch_push_page_ids(
+        status=status,
+        page=page,
+        limit=limit,
+    )
+    if not page_task_ids:
+        await callback.answer("当前页没有可操作的任务。", show_alert=True)
+        return
+    selected_set, selected_order = _extract_task_batch_push_selection(view_state)
+    if action == "select":
+        for task_id in page_task_ids:
+            if task_id in selected_set:
+                continue
+            selected_set.add(task_id)
+            selected_order.append(task_id)
+    else:
+        for task_id in page_task_ids:
+            if task_id in selected_set:
+                selected_set.remove(task_id)
+                selected_order = [item for item in selected_order if item != task_id]
+                continue
+            selected_set.add(task_id)
+            selected_order.append(task_id)
+    await _restore_task_batch_push_view(
+        target_message=message,
+        fallback_message=message,
+        status=status,
+        page=page,
+        limit=limit,
+        selected_task_ids=selected_order,
+        selected_task_order=selected_order,
+    )
+    await callback.answer(success_notice)
+
+
+@router.callback_query(F.data == TASK_BATCH_PUSH_SELECT_PAGE_CALLBACK)
+async def on_task_batch_push_select_page(callback: CallbackQuery) -> None:
+    """批量推送勾选视图：全选当前页。"""
+
+    await _apply_task_batch_push_page_shortcut(
+        callback,
+        action="select",
+        success_notice="已全选当前页",
+    )
+
+
+@router.callback_query(F.data == TASK_BATCH_PUSH_INVERT_PAGE_CALLBACK)
+async def on_task_batch_push_invert_page(callback: CallbackQuery) -> None:
+    """批量推送勾选视图：反选当前页。"""
+
+    await _apply_task_batch_push_page_shortcut(
+        callback,
+        action="invert",
+        success_notice="已反选当前页",
+    )
 
 
 @router.callback_query(F.data == TASK_BATCH_PUSH_CANCEL_CALLBACK)

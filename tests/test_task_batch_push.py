@@ -128,6 +128,112 @@ def test_start_batch_push_from_task_list_enters_batch_view(monkeypatch):
     asyncio.run(_scenario())
 
 
+def test_batch_push_view_includes_page_shortcuts_before_confirm(monkeypatch):
+    """批量勾选页应在确认按钮前提供“全选/反选当前页”快捷操作。"""
+
+    class DummyService:
+        async def paginate(self, **kwargs):
+            return [_task("TASK_0001", title="任务一"), _task("TASK_0002", title="任务二")], 1
+
+        async def count_tasks(self, **kwargs):
+            return 2
+
+    monkeypatch.setattr(bot, "TASK_SERVICE", DummyService())
+
+    text, markup = asyncio.run(
+        bot._build_task_batch_push_view(
+            status=None,
+            page=1,
+            limit=10,
+            selected_task_ids=[],
+            selected_task_order=[],
+        )
+    )
+
+    assert "批量推送任务" in text
+    rows = [[button.text for button in row] for row in markup.inline_keyboard]
+    shortcut_row = next(row for row in rows if "✅ 全选当前页" in row)
+    confirm_row = next(row for row in rows if any(text.startswith("🚀 确认批量推送") for text in row))
+    assert shortcut_row == ["✅ 全选当前页", "🔁 反选当前页"]
+    assert rows.index(shortcut_row) + 1 == rows.index(confirm_row)
+
+
+def test_batch_push_select_current_page_keeps_other_page_selection(monkeypatch):
+    """全选当前页只补齐当前页任务，并保留其他页已选结果。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(bot.TASK_BATCH_PUSH_SELECT_PAGE_CALLBACK, message)
+
+    class DummyService:
+        async def paginate(self, **kwargs):
+            return [_task("TASK_0003", title="任务三"), _task("TASK_0004", title="任务四")], 3
+
+        async def count_tasks(self, **kwargs):
+            return 6
+
+    monkeypatch.setattr(bot, "TASK_SERVICE", DummyService())
+
+    bot._init_task_view_context(
+        message,
+        bot._make_batch_push_view_state(
+            status=None,
+            page=2,
+            limit=2,
+            selected_task_ids=["TASK_0001"],
+            selected_task_order=["TASK_0001"],
+        ),
+    )
+
+    async def _scenario() -> None:
+        await bot.on_task_batch_push_select_page(callback)
+        state = bot._peek_task_view(message.chat.id, message.message_id)
+        assert state is not None
+        assert state.kind == "batch_push"
+        assert state.data["selected_task_ids"] == ["TASK_0001", "TASK_0003", "TASK_0004"]
+        assert state.data["selected_task_order"] == ["TASK_0001", "TASK_0003", "TASK_0004"]
+        assert callback.answers[-1] == ("已全选当前页", False)
+
+    asyncio.run(_scenario())
+
+
+def test_batch_push_invert_current_page_only_toggles_visible_tasks(monkeypatch):
+    """反选当前页只切换当前页任务，不影响其他页已选项。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(bot.TASK_BATCH_PUSH_INVERT_PAGE_CALLBACK, message)
+
+    class DummyService:
+        async def paginate(self, **kwargs):
+            return [_task("TASK_0003", title="任务三"), _task("TASK_0004", title="任务四")], 3
+
+        async def count_tasks(self, **kwargs):
+            return 6
+
+    monkeypatch.setattr(bot, "TASK_SERVICE", DummyService())
+
+    bot._init_task_view_context(
+        message,
+        bot._make_batch_push_view_state(
+            status=None,
+            page=2,
+            limit=2,
+            selected_task_ids=["TASK_0001", "TASK_0003"],
+            selected_task_order=["TASK_0001", "TASK_0003"],
+        ),
+    )
+
+    async def _scenario() -> None:
+        await bot.on_task_batch_push_invert_page(callback)
+        state = bot._peek_task_view(message.chat.id, message.message_id)
+        assert state is not None
+        assert state.kind == "batch_push"
+        assert state.data["selected_task_ids"] == ["TASK_0001", "TASK_0004"]
+        assert state.data["selected_task_order"] == ["TASK_0001", "TASK_0004"]
+        assert callback.answers[-1] == ("已反选当前页", False)
+
+    asyncio.run(_scenario())
+
+
 def test_batch_push_confirm_skips_session_selection_when_only_main_session(monkeypatch):
     message = DummyMessage()
     callback = DummyCallback(bot.TASK_BATCH_PUSH_CONFIRM_CALLBACK, message)
