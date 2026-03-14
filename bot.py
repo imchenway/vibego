@@ -14976,10 +14976,6 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
                     exc,
                     extra={**_session_extra(), "task_id": task_id},
                 )
-            await _try_remove_clicked_inline_button(
-                callback.message,
-                callback_data=callback.data,
-            )
         return
 
     actor = _actor_from_callback(callback)

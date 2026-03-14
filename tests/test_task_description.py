@@ -2749,20 +2749,12 @@ def test_model_task_to_test_callback_still_shows_task_list_when_already_test(mon
     list_text, _, list_markup, _ = message.calls[0]
     assert "任务列表" in list_text
     assert isinstance(list_markup, InlineKeyboardMarkup)
-    assert message.reply_markup_edits, "已是测试状态且流程成功时也应移除测试按钮"
-    updated_markup, _kwargs = message.reply_markup_edits[-1]
-    callback_data = [
-        button.callback_data
-        for row in updated_markup.inline_keyboard
-        for button in row
-        if getattr(button, "callback_data", None)
-    ]
-    assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0601" not in callback_data
+    assert not message.reply_markup_edits, "任务状态未实际修改成功时，不应移除测试按钮"
     bot.TASK_VIEW_STACK.clear()
 
 
 def test_model_task_to_test_callback_already_test_still_continues_when_callback_answer_expired(monkeypatch):
-    """已处于 test 时，callback 过期也不应阻断自动任务列表与按钮移除。"""
+    """已处于 test 时，callback 过期也不应阻断自动任务列表，但按钮仍应保留。"""
 
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:TASK_0605", message)
@@ -2812,7 +2804,7 @@ def test_model_task_to_test_callback_already_test_still_continues_when_callback_
     asyncio.run(scenario())
     assert len(message.calls) >= 1
     assert "任务列表" in message.calls[0][0]
-    assert message.reply_markup_edits, "callback 过期后仍应尝试移除测试按钮"
+    assert not message.reply_markup_edits, "任务状态未实际修改成功时，callback 过期也不应移除测试按钮"
     bot.TASK_VIEW_STACK.clear()
 
 
@@ -2878,6 +2870,45 @@ def test_model_task_to_test_callback_keeps_success_when_task_list_send_fails(mon
     assert "状态已更新为“测试”" in message.calls[0][0]
     assert message.reply_markup_edits, "后置任务列表失败时仍应尝试移除测试按钮"
     bot.TASK_VIEW_STACK.clear()
+
+
+def test_model_task_to_test_callback_keeps_button_when_update_fails(monkeypatch):
+    """状态更新失败时，测试按钮必须保留。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:TASK_0607", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0607")
+
+    task = TaskRecord(
+        id="TASK_0607",
+        project_slug="demo",
+        title="准备测试",
+        status="research",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0607",
+        depth=0,
+        lineage="0607",
+        archived=False,
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0607"
+        return task
+
+    async def fake_update_task(*args, **kwargs):
+        raise ValueError("数据库写入失败")
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert callback.answers[-1] == ("任务状态更新失败：数据库写入失败", True)
+    assert not message.reply_markup_edits, "状态更新失败时不应移除测试按钮"
 
 
 def test_model_task_to_test_callback_handles_missing_task(monkeypatch):
