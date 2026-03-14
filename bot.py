@@ -14965,9 +14965,17 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
         return
 
     if task.status == "test":
-        await callback.answer("任务已处于“测试”状态")
+        # callback 可能已过期；此时只要后续任务列表还能发出，就不应把整条链路判定为失败。
+        await _answer_callback_safely(callback, "任务已处于“测试”状态")
         if callback.message is not None:
-            await _handle_task_list_request(callback.message)
+            try:
+                await _handle_task_list_request(callback.message)
+            except (TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter) as exc:
+                worker_log.warning(
+                    "测试状态按钮在已是 test 时自动展示任务列表失败：%s",
+                    exc,
+                    extra={**_session_extra(), "task_id": task_id},
+                )
             await _try_remove_clicked_inline_button(
                 callback.message,
                 callback_data=callback.data,
@@ -14985,14 +14993,29 @@ async def on_model_task_to_test(callback: CallbackQuery) -> None:
         await callback.answer(f"任务状态更新失败：{exc}", show_alert=True)
         return
 
-    await callback.answer("已切换到测试")
+    # 业务成功口径以“写库成功”为准；callback 过期不应再打断主流程。
+    await _answer_callback_safely(callback, "已切换到测试")
     if callback.message is not None:
-        await callback.message.answer(
-            f"任务 /{task_id} 状态已更新为“测试”。",
-            reply_markup=_build_worker_main_keyboard(),
-        )
+        try:
+            await callback.message.answer(
+                f"任务 /{task_id} 状态已更新为“测试”。",
+                reply_markup=_build_worker_main_keyboard(),
+            )
+        except (TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter) as exc:
+            worker_log.warning(
+                "测试状态按钮发送成功确认消息失败：%s",
+                exc,
+                extra={**_session_extra(), "task_id": task_id},
+            )
         # 体验优化：状态更新为“测试”后自动展示任务列表，减少用户一次额外点击/输入。
-        await _handle_task_list_request(callback.message)
+        try:
+            await _handle_task_list_request(callback.message)
+        except (TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter) as exc:
+            worker_log.warning(
+                "测试状态按钮自动展示任务列表失败：%s",
+                exc,
+                extra={**_session_extra(), "task_id": task_id},
+            )
         await _try_remove_clicked_inline_button(
             callback.message,
             callback_data=callback.data,

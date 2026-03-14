@@ -17,7 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -2630,6 +2630,80 @@ def test_model_task_to_test_callback_updates_status(monkeypatch):
     bot.TASK_VIEW_STACK.clear()
 
 
+def test_model_task_to_test_callback_updates_status_even_if_callback_answer_expired(monkeypatch):
+    """callback 过期时，只要写库成功，后续确认消息/任务列表/按钮移除仍应继续。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:TASK_0604", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0604")
+
+    base_task = TaskRecord(
+        id="TASK_0604",
+        project_slug="demo",
+        title="准备测试",
+        status="research",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0604",
+        depth=0,
+        lineage="0604",
+        archived=False,
+    )
+    updated_task = TaskRecord(
+        id="TASK_0604",
+        project_slug="demo",
+        title="准备测试",
+        status="test",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0604",
+        depth=0,
+        lineage="0604",
+        archived=False,
+    )
+
+    updates: list[tuple] = []
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0604"
+        return base_task
+
+    async def fake_update_task(task_id: str, *, actor, status=None, **kwargs):
+        updates.append((task_id, actor, status))
+        assert status == "test"
+        return updated_task
+
+    async def fake_paginate(*args, **kwargs):
+        return [], 1
+
+    async def fake_count_tasks(*args, **kwargs):
+        return 0
+
+    async def flaky_answer(text: str | None = None, show_alert: bool = False):
+        if text == "已切换到测试":
+            raise TelegramBadRequest(method="answerCallbackQuery", message="Bad Request: query is too old")
+        callback.answers.append((text, show_alert))
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "paginate", fake_paginate)
+    monkeypatch.setattr(bot.TASK_SERVICE, "count_tasks", fake_count_tasks)
+    monkeypatch.setattr(callback, "answer", flaky_answer)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert updates, "即使 callback 过期，也应先完成状态写库"
+    assert len(message.calls) >= 2, "callback 过期后仍应继续发送确认消息与任务列表"
+    assert "状态已更新为“测试”" in message.calls[0][0]
+    assert "任务列表" in message.calls[1][0]
+    assert message.reply_markup_edits, "写库成功后仍应尝试移除测试按钮"
+    bot.TASK_VIEW_STACK.clear()
+
+
 def test_model_task_to_test_callback_still_shows_task_list_when_already_test(monkeypatch):
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:TASK_0601", message)
@@ -2684,6 +2758,125 @@ def test_model_task_to_test_callback_still_shows_task_list_when_already_test(mon
         if getattr(button, "callback_data", None)
     ]
     assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0601" not in callback_data
+    bot.TASK_VIEW_STACK.clear()
+
+
+def test_model_task_to_test_callback_already_test_still_continues_when_callback_answer_expired(monkeypatch):
+    """已处于 test 时，callback 过期也不应阻断自动任务列表与按钮移除。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:TASK_0605", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0605")
+
+    task = TaskRecord(
+        id="TASK_0605",
+        project_slug="demo",
+        title="已在测试",
+        status="test",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0605",
+        depth=0,
+        lineage="0605",
+        archived=False,
+    )
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0605"
+        return task
+
+    async def fake_update_task(*args, **kwargs):
+        raise AssertionError("不应在状态已为 test 时调用 update_task")
+
+    async def fake_paginate(*args, **kwargs):
+        return [], 1
+
+    async def fake_count_tasks(*args, **kwargs):
+        return 0
+
+    async def flaky_answer(text: str | None = None, show_alert: bool = False):
+        if text == "任务已处于“测试”状态":
+            raise TelegramBadRequest(method="answerCallbackQuery", message="Bad Request: query is too old")
+        callback.answers.append((text, show_alert))
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "paginate", fake_paginate)
+    monkeypatch.setattr(bot.TASK_SERVICE, "count_tasks", fake_count_tasks)
+    monkeypatch.setattr(callback, "answer", flaky_answer)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert len(message.calls) >= 1
+    assert "任务列表" in message.calls[0][0]
+    assert message.reply_markup_edits, "callback 过期后仍应尝试移除测试按钮"
+    bot.TASK_VIEW_STACK.clear()
+
+
+def test_model_task_to_test_callback_keeps_success_when_task_list_send_fails(monkeypatch):
+    """写库成功后，即使任务列表发送异常，也不应让主流程失败。"""
+
+    message = DummyMessage()
+    callback = DummyCallback("model:task_to_test:TASK_0606", message)
+    message.reply_markup = bot._build_model_quick_reply_keyboard(task_id="TASK_0606")
+
+    base_task = TaskRecord(
+        id="TASK_0606",
+        project_slug="demo",
+        title="准备测试",
+        status="research",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0606",
+        depth=0,
+        lineage="0606",
+        archived=False,
+    )
+    updated_task = TaskRecord(
+        id="TASK_0606",
+        project_slug="demo",
+        title="准备测试",
+        status="test",
+        priority=2,
+        description="说明",
+        parent_id=None,
+        root_id="TASK_0606",
+        depth=0,
+        lineage="0606",
+        archived=False,
+    )
+
+    updates: list[tuple] = []
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0606"
+        return base_task
+
+    async def fake_update_task(task_id: str, *, actor, status=None, **kwargs):
+        updates.append((task_id, actor, status))
+        assert status == "test"
+        return updated_task
+
+    async def broken_task_list_request(_message):
+        raise TelegramNetworkError(method="sendMessage", message="ServerDisconnectedError: Server disconnected")
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+    monkeypatch.setattr(bot, "_handle_task_list_request", broken_task_list_request)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(callback)
+
+    asyncio.run(scenario())
+    assert updates, "任务状态应已成功写库"
+    assert callback.answers[-1] == ("已切换到测试", False)
+    assert len(message.calls) == 1, "任务列表失败时，不应影响前置成功确认消息"
+    assert "状态已更新为“测试”" in message.calls[0][0]
+    assert message.reply_markup_edits, "后置任务列表失败时仍应尝试移除测试按钮"
     bot.TASK_VIEW_STACK.clear()
 
 
