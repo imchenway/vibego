@@ -27,9 +27,13 @@ import bot  # noqa: E402
 def _reset_quick_reply_runtime():
     bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS.clear()
     bot.CHAT_SESSION_MAP.clear()
+    if hasattr(bot, "SESSION_PENDING_TASK_BINDINGS"):
+        bot.SESSION_PENDING_TASK_BINDINGS.clear()
     yield
     bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS.clear()
     bot.CHAT_SESSION_MAP.clear()
+    if hasattr(bot, "SESSION_PENDING_TASK_BINDINGS"):
+        bot.SESSION_PENDING_TASK_BINDINGS.clear()
 
 
 class DummyMessage:
@@ -178,6 +182,86 @@ def test_deliver_pending_messages_for_bound_native_session_includes_commit_butto
     assert any(data.startswith(bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX) for data in callback_data)
     assert any(data.startswith(bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX) for data in callback_data)
     assert any(data.startswith(bot.SESSION_COMMIT_CALLBACK_PREFIX) for data in callback_data)
+
+
+def test_deliver_pending_messages_for_batch_bound_native_session_uses_per_message_task_binding(monkeypatch, tmp_path: Path):
+    """同一原生主会话批量返回多条消息时，每条消息都应绑定各自原始任务。"""
+
+    session_file = tmp_path / "session.jsonl"
+    workspace_root = tmp_path / "native-workspace"
+    workspace_root.mkdir()
+    session_file.write_text(
+        "\n".join(
+            [
+                json.dumps(_assistant_event("第一条任务回复", cwd=str(workspace_root)), ensure_ascii=False),
+                json.dumps(_assistant_event("第二条任务回复", cwd=str(workspace_root)), ensure_ascii=False),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    session_key = str(session_file)
+    bot.SESSION_OFFSETS[session_key] = 0
+    bot.SESSION_TASK_BINDINGS[session_key] = "TASK_0201"
+    monkeypatch.setattr(
+        bot,
+        "SESSION_PENDING_TASK_BINDINGS",
+        {session_key: ["TASK_0200", "TASK_0201"]},
+        raising=False,
+    )
+
+    captured_markups: list[object] = []
+
+    async def fake_reply(
+        _chat_id: int,
+        text: str,
+        *,
+        parse_mode=None,
+        preformatted: bool = False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+    ):
+        captured_markups.append(reply_markup)
+        return text
+
+    monkeypatch.setattr(bot, "reply_large_text", fake_reply)
+
+    delivered = asyncio.run(bot._deliver_pending_messages(42, session_file))
+
+    assert delivered is True
+    assert len(captured_markups) == 2, "两条模型答案都应成功发送"
+
+    first_callback_data = _callback_data_list(captured_markups[0])
+    second_callback_data = _callback_data_list(captured_markups[1])
+
+    assert any(
+        data.startswith(f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}TASK_0200:")
+        for data in first_callback_data
+    )
+    assert any(
+        data.startswith(f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}TASK_0200:")
+        for data in first_callback_data
+    )
+    assert any(
+        data.startswith(f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}TASK_0200:")
+        for data in first_callback_data
+    )
+    assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0200" in first_callback_data
+
+    assert any(
+        data.startswith(f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}TASK_0201:")
+        for data in second_callback_data
+    )
+    assert any(
+        data.startswith(f"{bot.MODEL_QUICK_REPLY_PARTIAL_SESSION_PREFIX}TASK_0201:")
+        for data in second_callback_data
+    )
+    assert any(
+        data.startswith(f"{bot.SESSION_COMMIT_CALLBACK_PREFIX}TASK_0201:")
+        for data in second_callback_data
+    )
+    assert f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0201" in second_callback_data
 
 
 def test_native_session_commit_callback_uses_bound_workspace_root(monkeypatch, tmp_path: Path):

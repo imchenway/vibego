@@ -2911,6 +2911,130 @@ def test_model_task_to_test_callback_keeps_button_when_update_fails(monkeypatch)
     assert not message.reply_markup_edits, "状态更新失败时不应移除测试按钮"
 
 
+def test_model_task_to_test_callback_updates_distinct_tasks_for_batch_bound_messages(monkeypatch, tmp_path: Path):
+    """批量推送到同一主会话后，多条返回消息上的“测试中”按钮应分别命中各自任务。"""
+
+    session_file = tmp_path / "session.jsonl"
+    session_key = str(session_file)
+    session_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2025-01-01T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "assistant_message",
+                            "message": "第一条任务回复",
+                            "cwd": str(tmp_path),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2025-01-01T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "assistant_message",
+                            "message": "第二条任务回复",
+                            "cwd": str(tmp_path),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bot.SESSION_OFFSETS[session_key] = 0
+    bot.SESSION_TASK_BINDINGS[session_key] = "TASK_0609"
+    monkeypatch.setattr(
+        bot,
+        "SESSION_PENDING_TASK_BINDINGS",
+        {session_key: ["TASK_0608", "TASK_0609"]},
+        raising=False,
+    )
+
+    delivered_markups: list[InlineKeyboardMarkup] = []
+
+    async def fake_reply_large_text(
+        _chat_id: int,
+        text: str,
+        *,
+        parse_mode=None,
+        preformatted: bool = False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+    ):
+        assert isinstance(reply_markup, InlineKeyboardMarkup)
+        delivered_markups.append(reply_markup)
+        return text
+
+    monkeypatch.setattr(bot, "reply_large_text", fake_reply_large_text)
+
+    asyncio.run(bot._deliver_pending_messages(1, session_file))
+    assert len(delivered_markups) == 2, "应生成两条可点击的模型答案消息"
+
+    first_message = DummyMessage()
+    first_message.reply_markup = delivered_markups[0]
+    second_message = DummyMessage()
+    second_message.reply_markup = delivered_markups[1]
+
+    def _extract_test_callback(markup: InlineKeyboardMarkup) -> str:
+        for row in markup.inline_keyboard:
+            for button in row:
+                if getattr(button, "text", None) == "🧪 任务状态更新为测试中":
+                    return button.callback_data
+        raise AssertionError("未找到测试中按钮")
+
+    first_callback = DummyCallback(_extract_test_callback(delivered_markups[0]), first_message)
+    second_callback = DummyCallback(_extract_test_callback(delivered_markups[1]), second_message)
+
+    tasks = {
+        "TASK_0608": _make_task(task_id="TASK_0608", title="第一条任务", status="research"),
+        "TASK_0609": _make_task(task_id="TASK_0609", title="第二条任务", status="research"),
+    }
+    updated_tasks = {
+        "TASK_0608": _make_task(task_id="TASK_0608", title="第一条任务", status="test"),
+        "TASK_0609": _make_task(task_id="TASK_0609", title="第二条任务", status="test"),
+    }
+    updates: list[str] = []
+
+    async def fake_get_task(task_id: str):
+        return tasks[task_id]
+
+    async def fake_update_task(task_id: str, *, actor, status=None, **kwargs):
+        assert status == "test"
+        updates.append(task_id)
+        tasks[task_id] = updated_tasks[task_id]
+        return updated_tasks[task_id]
+
+    async def fake_paginate(*args, **kwargs):
+        return [], 1
+
+    async def fake_count_tasks(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "update_task", fake_update_task)
+    monkeypatch.setattr(bot.TASK_SERVICE, "paginate", fake_paginate)
+    monkeypatch.setattr(bot.TASK_SERVICE, "count_tasks", fake_count_tasks)
+
+    async def scenario() -> None:
+        await bot.on_model_task_to_test(first_callback)
+        await bot.on_model_task_to_test(second_callback)
+
+    asyncio.run(scenario())
+
+    assert updates == ["TASK_0608", "TASK_0609"], "两条消息应分别更新各自任务状态"
+    assert first_message.reply_markup_edits, "第一条成功后应移除第一条消息上的测试按钮"
+    assert second_message.reply_markup_edits, "第二条成功后应移除第二条消息上的测试按钮"
+    bot.TASK_VIEW_STACK.clear()
+
+
 def test_model_task_to_test_callback_handles_missing_task(monkeypatch):
     message = DummyMessage()
     callback = DummyCallback("model:task_to_test:TASK_0602", message)
@@ -4950,6 +5074,79 @@ def test_push_task_to_model_forwards_push_mode_as_intended_mode(monkeypatch, tmp
     assert success is True
     assert session_path == tmp_path / "session.jsonl"
     assert captured == [push_mode]
+
+
+def test_push_task_to_model_enqueues_pending_binding_for_native_session(monkeypatch, tmp_path: Path):
+    """原生主会话推送成功后，应登记待消费任务绑定，供后续逐消息生成按钮。"""
+
+    task = TaskRecord(
+        id="TASK_PUSH_QUEUE",
+        project_slug="demo",
+        title="绑定队列任务",
+        status="research",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="验证主会话逐消息绑定",
+        parent_id=None,
+        root_id="TASK_PUSH_QUEUE",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    message = DummyMessage()
+    message.chat = SimpleNamespace(id=9753)
+    session_path = tmp_path / "session.jsonl"
+
+    async def fake_history(task_id: str):
+        assert task_id == task.id
+        return "", 0
+
+    async def fake_notes(task_id: str):
+        assert task_id == task.id
+        return []
+
+    async def fake_attachments(task_id: str):
+        assert task_id == task.id
+        return []
+
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        **_kwargs,
+    ):
+        return True, session_path
+
+    bot.SESSION_TASK_BINDINGS.clear()
+    if hasattr(bot, "SESSION_PENDING_TASK_BINDINGS"):
+        bot.SESSION_PENDING_TASK_BINDINGS.clear()
+
+    monkeypatch.setattr(bot, "_build_history_context_for_model", fake_history)
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_notes", fake_notes)
+    monkeypatch.setattr(bot.TASK_SERVICE, "list_attachments", fake_attachments)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    async def _scenario() -> tuple[bool, str, Optional[Path]]:
+        return await bot._push_task_to_model(
+            task,
+            chat_id=message.chat.id,
+            reply_to=message,
+            supplement=None,
+            actor="Tester",
+        )
+
+    success, _prompt, resolved_session_path = asyncio.run(_scenario())
+
+    assert success is True
+    assert resolved_session_path == session_path
+    assert bot.SESSION_TASK_BINDINGS[str(session_path)] == task.id
+    assert bot.SESSION_PENDING_TASK_BINDINGS[str(session_path)] == [task.id]
 
 
 def test_on_status_callback_done_schedules_parallel_cleanup(monkeypatch):

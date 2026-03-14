@@ -2375,6 +2375,7 @@ async def _dispatch_prompt_to_model(
                 PARALLEL_SESSION_CONTEXTS.pop(existing, None)
             else:
                 CHAT_SESSION_MAP.pop(chat_id, None)
+                SESSION_PENDING_TASK_BINDINGS.pop(existing, None)
             _reset_delivered_hashes(chat_id, existing)
             _reset_delivered_offsets(chat_id, existing)
     elif not is_parallel_dispatch:
@@ -2798,9 +2799,12 @@ async def _push_task_to_model(
         **dispatch_kwargs,
     )
     if success and session_path is not None:
-        _bind_session_task(str(session_path), task.id)
+        session_key = str(session_path)
+        _bind_session_task(session_key, task.id)
         if dispatch_context is not None:
-            _bind_parallel_session_task(str(session_path), task.id)
+            _bind_parallel_session_task(session_key, task.id)
+        else:
+            _enqueue_pending_session_task_binding(session_key, task.id)
     has_supplement = bool((supplement or "").strip())
     result_status = "success" if success else "failed"
     payload: dict[str, Any] = {
@@ -7151,6 +7155,10 @@ def _list_native_active_task_ids() -> set[str]:
         normalized_task_id = _normalize_task_id(SESSION_TASK_BINDINGS.get(session_key))
         if normalized_task_id:
             active_task_ids.add(normalized_task_id)
+        for pending_task_id in SESSION_PENDING_TASK_BINDINGS.get(session_key, []):
+            normalized_pending_task_id = _normalize_task_id(pending_task_id)
+            if normalized_pending_task_id:
+                active_task_ids.add(normalized_pending_task_id)
     return active_task_ids
 
 
@@ -9620,6 +9628,9 @@ class PendingSummary:
 PENDING_SUMMARIES: Dict[str, PendingSummary] = {}
 # 会话与任务的绑定关系：用于在“模型答案消息”底部提供一键入口（如切换到测试）
 SESSION_TASK_BINDINGS: Dict[str, str] = {}
+# 原生主会话批量推送时，同一 session 可能在模型返回前连续排入多个任务；
+# 这里按最终答案消息的投递顺序记录待消费任务，确保每条消息绑定各自原始任务。
+SESSION_PENDING_TASK_BINDINGS: Dict[str, List[str]] = {}
 PARALLEL_SESSION_TASK_BINDINGS: Dict[str, str] = {}
 CHAT_PARALLEL_REPLY_TARGETS: Dict[int, dict[str, Any]] = {}
 SESSION_COMMIT_CALLBACK_BINDINGS: Dict[str, "SessionCommitBinding"] = {}
@@ -9706,6 +9717,78 @@ def _bind_session_task(session_key: str, task_id: str) -> None:
     if not key or not normalized_task_id:
         return
     SESSION_TASK_BINDINGS[key] = normalized_task_id
+
+
+def _enqueue_pending_session_task_binding(session_key: str, task_id: str) -> None:
+    """为原生主会话追加待消费任务，供后续每条模型答案逐条绑定。"""
+
+    key = (session_key or "").strip()
+    normalized_task_id = _normalize_task_id(task_id)
+    if not key or not normalized_task_id:
+        return
+    queue = SESSION_PENDING_TASK_BINDINGS.setdefault(key, [])
+    queue.append(normalized_task_id)
+
+
+def _peek_pending_session_task_binding(session_key: str) -> Optional[str]:
+    """查看原生主会话下一条模型答案应命中的任务，不消费队列。"""
+
+    key = (session_key or "").strip()
+    if not key:
+        return None
+    queue = SESSION_PENDING_TASK_BINDINGS.get(key)
+    if not queue:
+        return None
+    while queue:
+        normalized_task_id = _normalize_task_id(queue[0])
+        if normalized_task_id:
+            queue[0] = normalized_task_id
+            return normalized_task_id
+        queue.pop(0)
+    SESSION_PENDING_TASK_BINDINGS.pop(key, None)
+    return None
+
+
+def _consume_pending_session_task_binding(
+    session_key: str,
+    *,
+    expected_task_id: Optional[str] = None,
+) -> Optional[str]:
+    """消费原生主会话已处理完成的任务绑定，避免后续消息继续串绑。"""
+
+    key = (session_key or "").strip()
+    if not key:
+        return None
+    queue = SESSION_PENDING_TASK_BINDINGS.get(key)
+    if not queue:
+        return None
+
+    normalized_expected = _normalize_task_id(expected_task_id) if expected_task_id else None
+    removed_task_id: Optional[str] = None
+
+    if normalized_expected:
+        current_task_id = _normalize_task_id(queue[0]) if queue else None
+        if current_task_id == normalized_expected:
+            removed_task_id = queue.pop(0)
+        else:
+            for index, candidate in enumerate(queue):
+                if _normalize_task_id(candidate) == normalized_expected:
+                    removed_task_id = queue.pop(index)
+                    worker_log.warning(
+                        "原生主会话待消费任务队列出现错位，已按预期任务跳过前序项",
+                        extra={
+                            "session": key,
+                            "expected_task_id": normalized_expected,
+                            "queue_length": str(len(queue)),
+                        },
+                    )
+                    break
+    else:
+        removed_task_id = queue.pop(0)
+
+    if not queue:
+        SESSION_PENDING_TASK_BINDINGS.pop(key, None)
+    return _normalize_task_id(removed_task_id) if removed_task_id else None
 
 
 def _bind_parallel_session_task(session_key: str, task_id: str) -> None:
@@ -9941,6 +10024,7 @@ def _clear_parallel_session_scoped_runtime_state(session_key: Optional[str]) -> 
     SESSION_OFFSETS.pop(normalized_key, None)
     PENDING_SUMMARIES.pop(normalized_key, None)
     SESSION_TASK_BINDINGS.pop(normalized_key, None)
+    SESSION_PENDING_TASK_BINDINGS.pop(normalized_key, None)
 
     stale_native_commit_tokens = [
         token
@@ -11882,8 +11966,7 @@ async def _deliver_pending_messages(
     parallel_title = None
     parallel_dispatch_context = None
     parallel_callback_payload = None
-    native_quick_reply_payload = None
-    native_commit_callback_payload = None
+    native_session_cwd = _read_session_meta_cwd(session_path)
     if parallel_task_id:
         parallel_session = await _get_active_parallel_session_for_task(parallel_task_id)
         if parallel_session is not None:
@@ -11896,21 +11979,6 @@ async def _deliver_pending_messages(
                 title_snapshot=parallel_title,
             )
             parallel_callback_payload = _build_parallel_callback_payload(resolved_task_id, token)
-    elif bound_task_id:
-        token = _ensure_session_quick_reply_binding(session_key, bound_task_id)
-        native_quick_reply_payload = _build_session_quick_reply_callback_payload(bound_task_id, token)
-        current_cwd = _read_session_meta_cwd(session_path)
-        if current_cwd:
-            token = _ensure_session_commit_binding(session_key, bound_task_id, Path(current_cwd))
-            native_commit_callback_payload = _build_session_commit_callback_payload(bound_task_id, token)
-    quick_reply_markup = _build_model_quick_reply_keyboard(
-        task_id=bound_task_id or parallel_task_id,
-        parallel_task_title=parallel_title,
-        enable_parallel_actions=bool(parallel_task_id),
-        parallel_callback_payload=parallel_callback_payload,
-        native_quick_reply_payload=native_quick_reply_payload,
-        native_commit_callback_payload=native_commit_callback_payload,
-    )
     delivered_hashes = _get_delivered_hashes(chat_id, session_key)
     delivered_offsets = _get_delivered_offsets(chat_id, session_key)
     last_committed_offset = previous_offset
@@ -11988,6 +12056,23 @@ async def _deliver_pending_messages(
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset
             continue
+        message_task_id = parallel_task_id or _peek_pending_session_task_binding(session_key) or bound_task_id
+        native_quick_reply_payload = None
+        native_commit_callback_payload = None
+        if not parallel_task_id and message_task_id:
+            token = _ensure_session_quick_reply_binding(session_key, message_task_id)
+            native_quick_reply_payload = _build_session_quick_reply_callback_payload(message_task_id, token)
+            if native_session_cwd:
+                token = _ensure_session_commit_binding(session_key, message_task_id, Path(native_session_cwd))
+                native_commit_callback_payload = _build_session_commit_callback_payload(message_task_id, token)
+        quick_reply_markup = _build_model_quick_reply_keyboard(
+            task_id=message_task_id,
+            parallel_task_title=parallel_title,
+            enable_parallel_actions=bool(parallel_task_id),
+            parallel_callback_payload=parallel_callback_payload,
+            native_quick_reply_payload=native_quick_reply_payload,
+            native_commit_callback_payload=native_commit_callback_payload,
+        )
         should_prompt_plan_confirm = _contains_proposed_plan_block(text_to_send)
         # 根据轮询阶段决定是否添加完成前缀
         formatted_text = _prepend_completion_header(text_to_send) if add_completion_header else text_to_send
@@ -12002,6 +12087,11 @@ async def _deliver_pending_messages(
                     "offset": str(event_offset),
                 },
             )
+            if not parallel_task_id and message_task_id:
+                _consume_pending_session_task_binding(
+                    session_key,
+                    expected_task_id=message_task_id,
+                )
             delivered_offsets.add(event_offset)
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset
@@ -12062,6 +12152,11 @@ async def _deliver_pending_messages(
             CHAT_FAILURE_NOTICES.pop(chat_id, None)
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset
+            if not parallel_task_id and message_task_id:
+                _consume_pending_session_task_binding(
+                    session_key,
+                    expected_task_id=message_task_id,
+                )
             worker_log.info(
                 "模型输出发送成功",
                 extra={
