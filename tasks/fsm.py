@@ -102,6 +102,12 @@ class TaskBatchPushStates(StatesGroup):
     waiting_choice = State()
 
 
+class TaskBatchStatusStates(StatesGroup):
+    """任务列表批量修改状态流程状态。"""
+
+    waiting_status = State()
+
+
 class ProjectDeleteStates(StatesGroup):
     """Master 项目删除确认流程的状态定义。"""
 

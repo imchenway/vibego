@@ -76,6 +76,7 @@ from tasks.constants import (
     TASK_TYPES,
 )
 from tasks.fsm import (
+    TaskBatchStatusStates,
     TaskBugReportStates,
     TaskBatchPushStates,
     TaskCreateStates,
@@ -6044,6 +6045,14 @@ TASK_BATCH_PUSH_SELECT_PAGE_CALLBACK = "task:batch_push:select_page"
 TASK_BATCH_PUSH_INVERT_PAGE_CALLBACK = "task:batch_push:invert_page"
 TASK_BATCH_PUSH_CONFIRM_CALLBACK = "task:batch_push:confirm"
 TASK_BATCH_PUSH_CANCEL_CALLBACK = "task:batch_push:cancel"
+TASK_BATCH_STATUS_START_CALLBACK = "task:batch_status:start"
+TASK_BATCH_STATUS_TOGGLE_PREFIX = "task:batch_status:toggle:"
+TASK_BATCH_STATUS_PAGE_PREFIX = "task:batch_status:page:"
+TASK_BATCH_STATUS_LIMIT_PREFIX = "task:batch_status:limit:"
+TASK_BATCH_STATUS_SELECT_PAGE_CALLBACK = "task:batch_status:select_page"
+TASK_BATCH_STATUS_INVERT_PAGE_CALLBACK = "task:batch_status:invert_page"
+TASK_BATCH_STATUS_CONFIRM_CALLBACK = "task:batch_status:confirm"
+TASK_BATCH_STATUS_CANCEL_CALLBACK = "task:batch_status:cancel"
 TASK_BATCH_PUSH_SESSION_MAIN_CALLBACK = "task:batch_push_session:main"
 TASK_BATCH_PUSH_SESSION_PARALLEL_PREFIX = "task:batch_push_session:parallel:"
 TASK_BATCH_PUSH_SESSION_REFRESH_CALLBACK = "task:batch_push_session:refresh"
@@ -6074,6 +6083,7 @@ TASK_DESC_CONFIRM_TEXT = "✅ 确认更新"
 TASK_DESC_RETRY_TEXT = "✏️ 重新输入"
 
 TASK_RELATED_PAGE_SIZE = 5
+TASK_LIST_PAGE_SIZE_OPTIONS: tuple[int, ...] = (10, 20, 50)
 TASK_RELATED_SELECT_PREFIX = "task:rel_sel"
 TASK_RELATED_PAGE_PREFIX = "task:rel_page"
 TASK_RELATED_SKIP_CALLBACK = "task:rel_skip"
@@ -7085,6 +7095,27 @@ def _build_status_filter_row(current_status: Optional[str], limit: int) -> list[
     if row:
         rows.append(row)
     return rows
+
+
+def _build_page_size_selector_row(
+    current_limit: int,
+    *,
+    callback_data_builder: Callable[[int], str],
+) -> list[list[InlineKeyboardButton]]:
+    """构造每页条数切换按钮行。"""
+
+    row: list[InlineKeyboardButton] = []
+    for option in TASK_LIST_PAGE_SIZE_OPTIONS:
+        label = f"{option}条/页"
+        if option == current_limit:
+            label = f"✔️ {label}"
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=callback_data_builder(option),
+            )
+        )
+    return [row]
 
 
 
@@ -8209,6 +8240,15 @@ def _build_push_mode_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
+def _build_task_batch_status_keyboard() -> ReplyKeyboardMarkup:
+    """批量修改状态：目标状态选择阶段菜单按钮。"""
+
+    rows = [[KeyboardButton(text=_format_status(status)) for status in STATUS_DISPLAY_ORDER]]
+    rows.append([KeyboardButton(text="取消")])
+    _number_reply_buttons(rows)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def _build_push_dispatch_target_keyboard() -> ReplyKeyboardMarkup:
     """推送到模型：处理方式选择阶段菜单按钮。"""
 
@@ -8450,6 +8490,31 @@ def _build_task_batch_push_existing_session_prompt(*, session_count: int) -> str
     return f"请选择本批任务要推送到哪个现有 CLI 会话（当前共 {session_count} 个，发送“取消”可返回勾选列表）"
 
 
+def _build_task_batch_status_prompt() -> str:
+    """批量改状态：构建目标状态选择提示文案。"""
+
+    return "请选择本批任务要统一修改成的目标状态（发送“取消”可返回勾选列表）"
+
+
+def _resolve_task_batch_status_choice(value: Optional[str]) -> Optional[str]:
+    """解析批量改状态输入，兼容数字序号、状态标签与状态编码。"""
+
+    display_to_status: dict[str, str] = {}
+    for status in STATUS_DISPLAY_ORDER:
+        label = _format_status(status)
+        display_to_status[label] = status
+        display_to_status[_strip_number_prefix(label)] = status
+        if " " in label:
+            display_to_status[label.split(" ", 1)[1].strip()] = status
+
+    options = [_format_status(status) for status in STATUS_DISPLAY_ORDER]
+    resolved = _resolve_reply_choice(value, options=[*options, "取消"])
+    normalized = _normalize_choice_token(resolved or value)
+    if normalized in display_to_status:
+        return display_to_status[normalized]
+    return _normalize_status(normalized)
+
+
 def _build_quick_reply_partial_supplement_prompt() -> str:
     """构建“部分按推荐（需补充）”的补充输入提示文案。"""
 
@@ -8498,6 +8563,110 @@ async def _prompt_push_send_mode_input(message: Message, *, push_mode: Optional[
         prompt,
         reply_markup=_build_push_send_mode_keyboard(),
     )
+
+
+async def _execute_task_push_from_state_data(
+    *,
+    task: TaskRecord,
+    state: FSMContext,
+    trigger_message: Message | CallbackQuery,
+    data: Mapping[str, Any],
+    supplement: Optional[str],
+    push_mode: Optional[str],
+    send_mode: Optional[str],
+    pending_attachments: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> None:
+    """根据 FSM 中已选参数执行最终推送。"""
+
+    chat_id = data.get("chat_id") or (
+        trigger_message.message.chat.id  # type: ignore[attr-defined]
+        if isinstance(trigger_message, CallbackQuery) and trigger_message.message is not None
+        else getattr(getattr(trigger_message, "chat", None), "id", None)
+    )
+    if not chat_id:
+        await state.clear()
+        target_message = trigger_message.message if isinstance(trigger_message, CallbackQuery) else trigger_message
+        if target_message is not None:
+            await target_message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
+        return
+    origin_message = data.get("origin_message")
+    actor = data.get("actor") or (
+        _actor_from_callback(trigger_message)
+        if isinstance(trigger_message, CallbackQuery)
+        else _actor_from_message(trigger_message)
+    )
+    dispatch_target = (data.get("dispatch_target") or "").strip()
+    serialized_attachments = list(pending_attachments or [])
+    if serialized_attachments:
+        await _bind_serialized_attachments(task, serialized_attachments, actor=actor)
+
+    await state.clear()
+    if dispatch_target == PUSH_TARGET_PARALLEL:
+        if isinstance(trigger_message, CallbackQuery):
+            await trigger_message.answer("已进入并行分支选择")
+        await _begin_parallel_launch(
+            task=task,
+            chat_id=chat_id,
+            origin_message=origin_message,
+            actor=actor,
+            push_mode=push_mode,
+            send_mode=send_mode,
+            supplement=supplement,
+        )
+        return
+
+    try:
+        dispatch_context = await _resolve_selected_existing_dispatch_context(data)
+    except ValueError as exc:
+        target_message = trigger_message.message if isinstance(trigger_message, CallbackQuery) else trigger_message
+        if target_message is not None:
+            await target_message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
+        return
+
+    try:
+        success, prompt, session_path = await _push_task_to_model(
+            task,
+            chat_id=chat_id,
+            reply_to=origin_message,
+            supplement=supplement,
+            actor=actor,
+            push_mode=push_mode or None,
+            send_mode=send_mode,
+            dispatch_context=dispatch_context,
+        )
+    except ValueError as exc:
+        worker_log.error(
+            "推送模板缺失：%s",
+            exc,
+            extra={"task_id": task.id, "status": task.status},
+        )
+        target_message = trigger_message.message if isinstance(trigger_message, CallbackQuery) else trigger_message
+        if isinstance(trigger_message, CallbackQuery):
+            await trigger_message.answer("推送失败：缺少模板配置", show_alert=True)
+        elif target_message is not None:
+            await target_message.answer("推送失败：缺少模板配置", reply_markup=_build_worker_main_keyboard())
+        return
+    if not success:
+        target_message = trigger_message.message if isinstance(trigger_message, CallbackQuery) else trigger_message
+        if isinstance(trigger_message, CallbackQuery):
+            await trigger_message.answer("推送失败：模型未就绪", show_alert=True)
+        elif target_message is not None:
+            await target_message.answer("推送失败：模型未就绪", reply_markup=_build_worker_main_keyboard())
+        return
+
+    preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
+    if isinstance(trigger_message, CallbackQuery):
+        await trigger_message.answer("已推送到模型")
+    target_message = trigger_message.message if isinstance(trigger_message, CallbackQuery) else trigger_message
+    await _send_model_push_preview(
+        chat_id,
+        preview_block,
+        reply_to=origin_message,
+        parse_mode=preview_parse_mode,
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    if session_path is not None:
+        await _send_session_ack(chat_id, session_path, reply_to=origin_message)
 
 
 async def _prompt_push_dispatch_target_input(message: Message) -> None:
@@ -8611,6 +8780,43 @@ async def _restore_task_batch_push_view(
         _init_task_view_context(sent, view_state)
 
 
+async def _restore_task_batch_status_view(
+    *,
+    target_message: Optional[Message],
+    fallback_message: Message,
+    status: Optional[str],
+    page: int,
+    limit: int,
+    selected_task_ids: Sequence[str],
+    selected_task_order: Sequence[str],
+) -> None:
+    """恢复批量状态修改勾选视图。"""
+
+    text, markup = await _build_task_batch_status_view(
+        status=status,
+        page=page,
+        limit=limit,
+        selected_task_ids=selected_task_ids,
+        selected_task_order=selected_task_order,
+    )
+    view_state = _make_batch_status_view_state(
+        status=status,
+        page=page,
+        limit=limit,
+        selected_task_ids=selected_task_ids,
+        selected_task_order=selected_task_order,
+    )
+    if await _try_edit_message(target_message, text, reply_markup=markup):
+        _set_task_view_context(target_message, view_state)
+        return
+    origin_chat = getattr(target_message, "chat", None)
+    if target_message is not None and origin_chat is not None:
+        _clear_task_view(origin_chat.id, target_message.message_id)
+    sent = await _answer_with_markdown(fallback_message, text, reply_markup=markup)
+    if sent is not None:
+        _init_task_view_context(sent, view_state)
+
+
 async def _restore_task_list_after_batch_push(
     *,
     target_message: Optional[Message],
@@ -8668,6 +8874,44 @@ def _format_task_batch_push_summary(
         lines.append("")
         lines.append(f"⏭️ 已跳过（{len(skipped_items)}）")
         for task_id, reason in skipped_items:
+            lines.append(f"- /{task_id}：{reason}")
+    return "\n".join(lines)
+
+
+def _format_task_batch_status_summary(
+    *,
+    task_ids: Sequence[str],
+    target_status: str,
+    success_items: Sequence[str],
+    failed_items: Sequence[tuple[str, str]],
+    skipped_items: Sequence[tuple[str, str]],
+) -> str:
+    """格式化批量修改状态结果摘要。"""
+
+    lines = [
+        "*批量修改任务状态结果*",
+        f"目标状态：{_format_status(target_status)}",
+        (
+            f"总览：{len(task_ids)} 个任务｜成功 {len(success_items)}"
+            f"｜失败 {len(failed_items)}｜跳过 {len(skipped_items)}"
+        ),
+        f"成功：{len(success_items)}",
+        f"失败：{len(failed_items)}",
+        f"跳过：{len(skipped_items)}",
+    ]
+    if success_items:
+        lines.append("")
+        lines.append(f"✅ 已更新（{len(success_items)}）")
+        lines.extend(f"- /{task_id}" for task_id in success_items)
+    if skipped_items:
+        lines.append("")
+        lines.append(f"⏭️ 已跳过（{len(skipped_items)}）")
+        for task_id, reason in skipped_items:
+            lines.append(f"- /{task_id}：{reason}")
+    if failed_items:
+        lines.append("")
+        lines.append(f"❌ 失败（{len(failed_items)}）")
+        for task_id, reason in failed_items:
             lines.append(f"- /{task_id}：{reason}")
     return "\n".join(lines)
 
@@ -8734,6 +8978,69 @@ async def _execute_task_batch_push(
         task_ids=task_ids,
         push_mode=push_mode,
         session_label=session_label,
+        success_items=success_items,
+        failed_items=failed_items,
+        skipped_items=skipped_items,
+    )
+    await _answer_with_markdown(
+        trigger_message,
+        summary,
+        reply_markup=_build_worker_main_keyboard(),
+    )
+
+
+async def _execute_task_batch_status_update(
+    *,
+    trigger_message: Message,
+    state: FSMContext,
+    target_status: str,
+) -> None:
+    """执行批量任务状态修改。"""
+
+    data = await state.get_data()
+    task_ids = [str(item).strip() for item in (data.get("batch_status_task_ids") or []) if str(item).strip()]
+    origin_message = data.get("batch_status_origin_message")
+    actor = data.get("actor") or _actor_from_message(trigger_message)
+    status = data.get("batch_status_status")
+    page = int(data.get("batch_status_page", 1) or 1)
+    limit = int(data.get("batch_status_limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+
+    success_items: list[str] = []
+    failed_items: list[tuple[str, str]] = []
+    skipped_items: list[tuple[str, str]] = []
+
+    for task_id in task_ids:
+        task = await TASK_SERVICE.get_task(task_id)
+        if task is None:
+            failed_items.append((task_id, "任务不存在"))
+            continue
+        if task.status == target_status:
+            skipped_items.append((task_id, "已是目标状态"))
+            continue
+        try:
+            updated = await TASK_SERVICE.update_task(
+                task_id,
+                actor=actor,
+                status=target_status,
+            )
+        except ValueError as exc:
+            failed_items.append((task_id, str(exc)))
+            continue
+        success_items.append(updated.id)
+        if updated.status == "done":
+            _schedule_parallel_cleanup_for_done(updated.id)
+
+    await state.clear()
+    await _restore_task_list_after_batch_push(
+        target_message=origin_message,
+        fallback_message=trigger_message,
+        status=status,
+        page=page,
+        limit=limit,
+    )
+    summary = _format_task_batch_status_summary(
+        task_ids=task_ids,
+        target_status=target_status,
         success_items=success_items,
         failed_items=failed_items,
         skipped_items=skipped_items,
@@ -10783,6 +11090,19 @@ async def _render_task_view_from_state(state: TaskViewState) -> tuple[str, Inlin
             selected_task_ids=selected_task_ids,
             selected_task_order=selected_order,
         )
+    if state.kind == "batch_status":
+        status = state.data.get("status")
+        page = int(state.data.get("page", 1) or 1)
+        limit = int(state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+        selected_task_ids = [str(item).strip() for item in (state.data.get("selected_task_ids") or []) if str(item).strip()]
+        selected_order = [str(item).strip() for item in (state.data.get("selected_task_order") or []) if str(item).strip()]
+        return await _build_task_batch_status_view(
+            status=status,
+            page=page,
+            limit=limit,
+            selected_task_ids=selected_task_ids,
+            selected_task_order=selected_order,
+        )
     if state.kind == "defect_excel_import":
         status = state.data.get("status")
         page = int(state.data.get("page", 1) or 1)
@@ -10840,6 +11160,30 @@ def _make_batch_push_view_state(
     normalized_order = [item for item in (_normalize_task_id(task_id) for task_id in selected_task_order) if item]
     return TaskViewState(
         kind="batch_push",
+        data={
+            "status": status,
+            "page": page,
+            "limit": limit,
+            "selected_task_ids": normalized_selected,
+            "selected_task_order": normalized_order,
+        },
+    )
+
+
+def _make_batch_status_view_state(
+    *,
+    status: Optional[str],
+    page: int,
+    limit: int,
+    selected_task_ids: Sequence[str],
+    selected_task_order: Sequence[str],
+) -> TaskViewState:
+    """构造批量状态修改选择视图的上下文。"""
+
+    normalized_selected = [item for item in (_normalize_task_id(task_id) for task_id in selected_task_ids) if item]
+    normalized_order = [item for item in (_normalize_task_id(task_id) for task_id in selected_task_order) if item]
+    return TaskViewState(
+        kind="batch_status",
         data={
             "status": status,
             "page": page,
@@ -13838,9 +14182,16 @@ async def _build_task_list_view(
         lines.append("当前没有匹配的任务，可使用上方状态按钮切换。")
     text = "\n".join(lines)
     running_task_ids = await _list_running_task_ids_for_task_list()
+    status_token = status or "-"
 
     rows: list[list[InlineKeyboardButton]] = []
     rows.extend(_build_status_filter_row(status, limit))
+    rows.extend(
+        _build_page_size_selector_row(
+            limit,
+            callback_data_builder=lambda option: f"task:list_page:{status_token}:1:{option}",
+        )
+    )
     for task in tasks:
         label = _compose_task_button_label(
             task,
@@ -13855,7 +14206,6 @@ async def _build_task_list_view(
             ]
         )
 
-    status_token = status or "-"
     nav_row: list[InlineKeyboardButton] = []
     if page > 1:
         nav_row.append(
@@ -13892,6 +14242,14 @@ async def _build_task_list_view(
                 text="🚀 批量推送任务",
                 callback_data=TASK_BATCH_PUSH_START_CALLBACK,
             ),
+            InlineKeyboardButton(
+                text="🔁 批量修改状态",
+                callback_data=TASK_BATCH_STATUS_START_CALLBACK,
+            ),
+        ]
+    )
+    rows.append(
+        [
             InlineKeyboardButton(
                 text="📥 Excel批量创建缺陷",
                 callback_data=TASK_DEFECT_EXCEL_IMPORT_CALLBACK,
@@ -14000,6 +14358,116 @@ async def _build_task_batch_push_view(
             InlineKeyboardButton(
                 text="❌ 取消批量推送",
                 callback_data=TASK_BATCH_PUSH_CANCEL_CALLBACK,
+            )
+        ]
+    )
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _build_task_batch_status_view(
+    *,
+    status: Optional[str],
+    page: int,
+    limit: int,
+    selected_task_ids: Sequence[str],
+    selected_task_order: Sequence[str],
+) -> tuple[str, InlineKeyboardMarkup]:
+    """构造任务列表多选批量状态修改视图。"""
+
+    tasks, total_pages, total = await _load_task_batch_push_page(
+        status=status,
+        page=page,
+        limit=limit,
+    )
+    display_pages = total_pages or 1
+    current_page_display = min(page, display_pages)
+    status_text = _format_status(status) if status else "全部"
+    selected_set = {
+        item
+        for item in (_normalize_task_id(task_id) for task_id in selected_task_ids)
+        if item
+    }
+    selection_order = [
+        item
+        for item in (_normalize_task_id(task_id) for task_id in selected_task_order)
+        if item
+    ]
+    lines = [
+        "*批量修改任务状态*",
+        f"筛选状态：{status_text} · 页码 {current_page_display}/{display_pages} · 每页 {limit} 条 · 总数 {total}",
+        f"已选任务：{len(selection_order)} 个",
+        "点击任务可切换勾选；确认后统一选择目标状态，并按勾选顺序逐个执行。",
+    ]
+    if not tasks:
+        lines.append("当前页没有可选择的任务。")
+    text = "\n".join(lines)
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for task in tasks:
+        normalized_task_id = _normalize_task_id(task.id) or task.id
+        marker = "✅" if normalized_task_id in selected_set else "⬜️"
+        label = f"{marker} {_compose_task_button_label(task, max_length=56)}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label[:64],
+                    callback_data=f"{TASK_BATCH_STATUS_TOGGLE_PREFIX}{normalized_task_id}",
+                )
+            ]
+        )
+
+    nav_row: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ 上一页",
+                callback_data=f"{TASK_BATCH_STATUS_PAGE_PREFIX}{page-1}",
+            )
+        )
+    if total_pages and page < total_pages:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="下一页 ➡️",
+                callback_data=f"{TASK_BATCH_STATUS_PAGE_PREFIX}{page+1}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.extend(
+        _build_page_size_selector_row(
+            limit,
+            callback_data_builder=lambda option: f"{TASK_BATCH_STATUS_LIMIT_PREFIX}{option}",
+        )
+    )
+
+    if tasks:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ 全选当前页",
+                    callback_data=TASK_BATCH_STATUS_SELECT_PAGE_CALLBACK,
+                ),
+                InlineKeyboardButton(
+                    text="🔁 反选当前页",
+                    callback_data=TASK_BATCH_STATUS_INVERT_PAGE_CALLBACK,
+                ),
+            ]
+        )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"🚀 确认批量修改状态（{len(selection_order)}）",
+                callback_data=TASK_BATCH_STATUS_CONFIRM_CALLBACK,
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="❌ 取消批量修改状态",
+                callback_data=TASK_BATCH_STATUS_CANCEL_CALLBACK,
             )
         ]
     )
@@ -14368,6 +14836,20 @@ def _extract_task_batch_push_view_state(message: Optional[Message]) -> Optional[
     return state
 
 
+def _extract_task_batch_status_view_state(message: Optional[Message]) -> Optional[TaskViewState]:
+    """读取当前消息绑定的批量状态修改视图状态。"""
+
+    if message is None:
+        return None
+    chat = getattr(message, "chat", None)
+    if chat is None:
+        return None
+    state = _peek_task_view(chat.id, message.message_id)
+    if state is None or state.kind != "batch_status":
+        return None
+    return state
+
+
 def _extract_defect_excel_import_view_state(message: Optional[Message]) -> Optional[TaskViewState]:
     """读取当前消息绑定的 Excel 导入视图状态。"""
 
@@ -14479,6 +14961,273 @@ async def on_task_defect_excel_upload_prompt(callback: CallbackQuery, state: FSM
     await message.answer(
         "请上传按照模板填写的 .xlsx 文件，发送“取消”可返回任务列表。",
         reply_markup=_build_defect_excel_upload_keyboard(),
+    )
+
+
+@router.callback_query(F.data == TASK_BATCH_STATUS_START_CALLBACK)
+async def on_task_batch_status_start(callback: CallbackQuery) -> None:
+    """从任务列表进入批量状态修改勾选模式。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原始消息", show_alert=True)
+        return
+    chat = getattr(message, "chat", None)
+    state = _peek_task_view(chat.id, message.message_id) if chat else None
+    if state is None or state.kind != "list":
+        await callback.answer("请先打开任务列表后再试。", show_alert=True)
+        return
+    status = state.data.get("status")
+    page = int(state.data.get("page", 1) or 1)
+    limit = int(state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    text, markup = await _build_task_batch_status_view(
+        status=status,
+        page=page,
+        limit=limit,
+        selected_task_ids=[],
+        selected_task_order=[],
+    )
+    next_state = _make_batch_status_view_state(
+        status=status,
+        page=page,
+        limit=limit,
+        selected_task_ids=[],
+        selected_task_order=[],
+    )
+    if await _try_edit_message(message, text, reply_markup=markup):
+        _set_task_view_context(message, next_state)
+    else:
+        origin_chat = getattr(message, "chat", None)
+        if origin_chat is not None:
+            _clear_task_view(origin_chat.id, message.message_id)
+        sent = await _answer_with_markdown(message, text, reply_markup=markup)
+        if sent is not None:
+            _init_task_view_context(sent, next_state)
+    await callback.answer("已进入批量状态修改模式")
+
+
+@router.callback_query(F.data.startswith(TASK_BATCH_STATUS_TOGGLE_PREFIX))
+async def on_task_batch_status_toggle(callback: CallbackQuery) -> None:
+    """在批量状态修改视图中切换任务选择状态。"""
+
+    message = callback.message
+    view_state = _extract_task_batch_status_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("批量状态修改视图已失效，请重新进入。", show_alert=True)
+        return
+    task_id = _normalize_task_id((callback.data or "")[len(TASK_BATCH_STATUS_TOGGLE_PREFIX) :])
+    if not task_id:
+        await callback.answer("任务参数错误", show_alert=True)
+        return
+    selected_set, selected_order = _extract_task_batch_push_selection(view_state)
+    if task_id in selected_set:
+        selected_set.remove(task_id)
+        selected_order = [item for item in selected_order if item != task_id]
+        notice = f"已取消 {task_id}"
+    else:
+        selected_set.add(task_id)
+        selected_order.append(task_id)
+        notice = f"已选择 {task_id}"
+    status = view_state.data.get("status")
+    page = int(view_state.data.get("page", 1) or 1)
+    limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    await _restore_task_batch_status_view(
+        target_message=message,
+        fallback_message=message,
+        status=status,
+        page=page,
+        limit=limit,
+        selected_task_ids=selected_order,
+        selected_task_order=selected_order,
+    )
+    await callback.answer(notice)
+
+
+@router.callback_query(F.data.startswith(TASK_BATCH_STATUS_PAGE_PREFIX))
+async def on_task_batch_status_page(callback: CallbackQuery) -> None:
+    """批量状态修改勾选视图分页。"""
+
+    message = callback.message
+    view_state = _extract_task_batch_status_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("批量状态修改视图已失效，请重新进入。", show_alert=True)
+        return
+    page_text = (callback.data or "")[len(TASK_BATCH_STATUS_PAGE_PREFIX) :].strip()
+    try:
+        target_page = max(int(page_text), 1)
+    except ValueError:
+        await callback.answer("分页参数错误", show_alert=True)
+        return
+    status = view_state.data.get("status")
+    limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    _selected_set, selected_order = _extract_task_batch_push_selection(view_state)
+    await _restore_task_batch_status_view(
+        target_message=message,
+        fallback_message=message,
+        status=status,
+        page=target_page,
+        limit=limit,
+        selected_task_ids=selected_order,
+        selected_task_order=selected_order,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(TASK_BATCH_STATUS_LIMIT_PREFIX))
+async def on_task_batch_status_limit(callback: CallbackQuery) -> None:
+    """批量状态修改视图切换每页条数。"""
+
+    message = callback.message
+    view_state = _extract_task_batch_status_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("批量状态修改视图已失效，请重新进入。", show_alert=True)
+        return
+    limit_text = (callback.data or "")[len(TASK_BATCH_STATUS_LIMIT_PREFIX) :].strip()
+    try:
+        target_limit = int(limit_text)
+    except ValueError:
+        await callback.answer("分页数量参数错误", show_alert=True)
+        return
+    if target_limit not in TASK_LIST_PAGE_SIZE_OPTIONS:
+        await callback.answer("不支持的分页数量", show_alert=True)
+        return
+    status = view_state.data.get("status")
+    _selected_set, selected_order = _extract_task_batch_push_selection(view_state)
+    await _restore_task_batch_status_view(
+        target_message=message,
+        fallback_message=message,
+        status=status,
+        page=1,
+        limit=target_limit,
+        selected_task_ids=selected_order,
+        selected_task_order=selected_order,
+    )
+    await callback.answer(f"已切换为每页 {target_limit} 条")
+
+
+async def _apply_task_batch_status_page_shortcut(
+    callback: CallbackQuery,
+    *,
+    action: Literal["select", "invert"],
+    success_notice: str,
+) -> None:
+    """对当前页可见任务应用批量状态修改快捷操作。"""
+
+    message = callback.message
+    view_state = _extract_task_batch_status_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("批量状态修改视图已失效，请重新进入。", show_alert=True)
+        return
+    status = view_state.data.get("status")
+    page = int(view_state.data.get("page", 1) or 1)
+    limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    page_task_ids = await _list_task_batch_push_page_ids(
+        status=status,
+        page=page,
+        limit=limit,
+    )
+    if not page_task_ids:
+        await callback.answer("当前页没有可操作的任务。", show_alert=True)
+        return
+    selected_set, selected_order = _extract_task_batch_push_selection(view_state)
+    if action == "select":
+        for task_id in page_task_ids:
+            if task_id in selected_set:
+                continue
+            selected_set.add(task_id)
+            selected_order.append(task_id)
+    else:
+        for task_id in page_task_ids:
+            if task_id in selected_set:
+                selected_set.remove(task_id)
+                selected_order = [item for item in selected_order if item != task_id]
+                continue
+            selected_set.add(task_id)
+            selected_order.append(task_id)
+    await _restore_task_batch_status_view(
+        target_message=message,
+        fallback_message=message,
+        status=status,
+        page=page,
+        limit=limit,
+        selected_task_ids=selected_order,
+        selected_task_order=selected_order,
+    )
+    await callback.answer(success_notice)
+
+
+@router.callback_query(F.data == TASK_BATCH_STATUS_SELECT_PAGE_CALLBACK)
+async def on_task_batch_status_select_page(callback: CallbackQuery) -> None:
+    """批量状态修改勾选视图：全选当前页。"""
+
+    await _apply_task_batch_status_page_shortcut(
+        callback,
+        action="select",
+        success_notice="已全选当前页",
+    )
+
+
+@router.callback_query(F.data == TASK_BATCH_STATUS_INVERT_PAGE_CALLBACK)
+async def on_task_batch_status_invert_page(callback: CallbackQuery) -> None:
+    """批量状态修改勾选视图：反选当前页。"""
+
+    await _apply_task_batch_status_page_shortcut(
+        callback,
+        action="invert",
+        success_notice="已反选当前页",
+    )
+
+
+@router.callback_query(F.data == TASK_BATCH_STATUS_CANCEL_CALLBACK)
+async def on_task_batch_status_cancel(callback: CallbackQuery) -> None:
+    """退出批量状态修改勾选模式并恢复任务列表。"""
+
+    message = callback.message
+    view_state = _extract_task_batch_status_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("批量状态修改视图已失效，请重新打开任务列表。", show_alert=True)
+        return
+    status = view_state.data.get("status")
+    page = int(view_state.data.get("page", 1) or 1)
+    limit = int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+    await _restore_task_list_after_batch_push(
+        target_message=message,
+        fallback_message=message,
+        status=status,
+        page=page,
+        limit=limit,
+    )
+    await callback.answer("已取消批量状态修改")
+
+
+@router.callback_query(F.data == TASK_BATCH_STATUS_CONFIRM_CALLBACK)
+async def on_task_batch_status_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    """确认勾选结果，进入统一状态选择流程。"""
+
+    message = callback.message
+    view_state = _extract_task_batch_status_view_state(message)
+    if view_state is None or message is None:
+        await callback.answer("批量状态修改视图已失效，请重新进入。", show_alert=True)
+        return
+    selected_task_ids = [str(item).strip() for item in (view_state.data.get("selected_task_order") or []) if str(item).strip()]
+    if not selected_task_ids:
+        await callback.answer("请先勾选至少一个任务。", show_alert=True)
+        return
+
+    await state.clear()
+    await state.update_data(
+        batch_status_task_ids=selected_task_ids,
+        batch_status_origin_message=message,
+        batch_status_status=view_state.data.get("status"),
+        batch_status_page=int(view_state.data.get("page", 1) or 1),
+        batch_status_limit=int(view_state.data.get("limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE),
+        actor=_actor_from_callback(callback),
+    )
+    await state.set_state(TaskBatchStatusStates.waiting_status)
+    await callback.answer("请选择目标状态")
+    await message.answer(
+        _build_task_batch_status_prompt(),
+        reply_markup=_build_task_batch_status_keyboard(),
     )
 
 
@@ -18389,6 +19138,52 @@ async def on_push_existing_session_parallel_callback(callback: CallbackQuery, st
     await callback.answer("已选择并行会话")
 
 
+@router.message(TaskBatchStatusStates.waiting_status)
+async def on_task_batch_status_choice(message: Message, state: FSMContext) -> None:
+    """批量修改状态：统一选择目标状态后执行。"""
+
+    data = await state.get_data()
+    task_ids = data.get("batch_status_task_ids") or []
+    if not task_ids:
+        await state.clear()
+        await message.answer("批量状态修改会话已失效，请重新勾选任务。", reply_markup=_build_worker_main_keyboard())
+        return
+    raw_text = message.text or ""
+    if _is_cancel_message(raw_text) or _strip_number_prefix(raw_text) == "取消":
+        await state.clear()
+        await _restore_task_batch_status_view(
+            target_message=data.get("batch_status_origin_message"),
+            fallback_message=message,
+            status=data.get("batch_status_status"),
+            page=int(data.get("batch_status_page", 1) or 1),
+            limit=int(data.get("batch_status_limit", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE),
+            selected_task_ids=task_ids,
+            selected_task_order=task_ids,
+        )
+        await message.answer("已取消批量状态修改。", reply_markup=_build_worker_main_keyboard())
+        return
+    target_status = _resolve_task_batch_status_choice(raw_text)
+    if target_status is None:
+        await message.answer(
+            "请选择一个有效的目标状态，发送“取消”可返回勾选列表：",
+            reply_markup=_build_task_batch_status_keyboard(),
+        )
+        return
+
+    await message.answer(
+        (
+            f"开始批量修改 {len(task_ids)} 个任务的状态。\n"
+            f"目标状态：{_format_status(target_status)}"
+        ),
+        reply_markup=_build_worker_main_keyboard(),
+    )
+    await _execute_task_batch_status_update(
+        trigger_message=message,
+        state=state,
+        target_status=target_status,
+    )
+
+
 @router.message(TaskBatchPushStates.waiting_existing_session)
 async def on_task_batch_push_existing_session_message(message: Message, state: FSMContext) -> None:
     raw_text = (message.text or "").strip()
@@ -18741,17 +19536,13 @@ async def on_task_push_model_choice(message: Message, state: FSMContext) -> None
     # 选择 PLAN/YOLO 后即刷新一次缓存（仅更新状态，不回写主菜单，避免覆盖流程键盘）。
     await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
     await state.update_data(push_mode=resolved)
-    if _is_codex_model():
-        await state.set_state(TaskPushStates.waiting_send_mode)
-        await _prompt_push_send_mode_input(message, push_mode=resolved)
-        return
     await state.set_state(TaskPushStates.waiting_supplement)
     await _prompt_model_supplement_input(message, push_mode=resolved)
 
 
 @router.message(TaskPushStates.waiting_send_mode)
 async def on_task_push_model_send_mode(message: Message, state: FSMContext) -> None:
-    """推送到模型：处理立即发送/排队发送方式选择。"""
+    """推送到模型：在补充描述之后，最后处理立即发送/排队发送选择。"""
 
     data = await state.get_data()
     task_id = (data.get("task_id") or "").strip()
@@ -18778,10 +19569,22 @@ async def on_task_push_model_send_mode(message: Message, state: FSMContext) -> N
         )
         return
 
-    await state.update_data(send_mode=send_mode)
     push_mode = (data.get("push_mode") or "").strip().upper() or None
-    await state.set_state(TaskPushStates.waiting_supplement)
-    await _prompt_model_supplement_input(message, push_mode=push_mode, send_mode=send_mode)
+    task = await TASK_SERVICE.get_task(task_id)
+    if task is None:
+        await state.clear()
+        await message.answer("任务不存在，已取消推送。", reply_markup=_build_worker_main_keyboard())
+        return
+    await _execute_task_push_from_state_data(
+        task=task,
+        state=state,
+        trigger_message=message,
+        data=data,
+        supplement=data.get("pending_push_supplement"),
+        push_mode=push_mode or None,
+        send_mode=send_mode,
+        pending_attachments=data.get("pending_push_attachments") or [],
+    )
 
 
 @router.callback_query(F.data.startswith("task:push_model_skip:"))
@@ -18801,64 +19604,28 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("任务不存在", show_alert=True)
         return
     actor = _actor_from_callback(callback)
-    chat_id = data.get("chat_id") or (callback.message.chat.id if callback.message else callback.from_user.id)
-    origin_message = data.get("origin_message") or callback.message
     push_mode = (data.get("push_mode") or "").strip().upper()
     send_mode = _normalize_push_send_mode(data.get("send_mode"))
-    dispatch_target = (data.get("dispatch_target") or "").strip()
-    await state.clear()
-    if dispatch_target == PUSH_TARGET_PARALLEL:
-        await callback.answer("已进入并行分支选择")
-        await _begin_parallel_launch(
-            task=task,
-            chat_id=chat_id,
-            origin_message=origin_message,
-            actor=actor,
-            push_mode=push_mode or None,
-            send_mode=send_mode,
-            supplement=None,
+    if _is_codex_model() and not data.get("send_mode"):
+        await state.update_data(
+            pending_push_supplement=None,
+            pending_push_attachments=[],
         )
+        await state.set_state(TaskPushStates.waiting_send_mode)
+        await callback.answer("请选择发送方式")
+        if callback.message is not None:
+            await _prompt_push_send_mode_input(callback.message, push_mode=push_mode or None)
         return
-
-    try:
-        dispatch_context = await _resolve_selected_existing_dispatch_context(data)
-    except ValueError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-
-    try:
-        success, prompt, session_path = await _push_task_to_model(
-            task,
-            chat_id=chat_id,
-            reply_to=origin_message,
-            supplement=None,
-            actor=actor,
-            push_mode=push_mode or None,
-            send_mode=send_mode,
-            dispatch_context=dispatch_context,
-        )
-    except ValueError as exc:
-        worker_log.error(
-            "推送模板缺失：%s",
-            exc,
-            extra={"task_id": task_id, "status": task.status},
-        )
-        await callback.answer("推送失败：缺少模板配置", show_alert=True)
-        return
-    if not success:
-        await callback.answer("推送失败：模型未就绪", show_alert=True)
-        return
-    await callback.answer("已推送到模型")
-    preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-    await _send_model_push_preview(
-        chat_id,
-        preview_block,
-        reply_to=origin_message,
-        parse_mode=preview_parse_mode,
-        reply_markup=_build_worker_main_keyboard(),
+    await _execute_task_push_from_state_data(
+        task=task,
+        state=state,
+        trigger_message=callback,
+        data=data,
+        supplement=None,
+        push_mode=push_mode or None,
+        send_mode=send_mode,
+        pending_attachments=[],
     )
-    if session_path is not None:
-        await _send_session_ack(chat_id, session_path, reply_to=origin_message)
 
 
 @router.callback_query(F.data.startswith("task:push_model_fill:"))
@@ -18960,60 +19727,26 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
     elif saved_attachments:
         supplement = _build_attachment_only_supplement(saved_attachments)
 
-    if saved_attachments:
-        serialized = [_serialize_saved_attachment(item) for item in saved_attachments]
-        await _bind_serialized_attachments(task, serialized, actor=actor)
-    await state.clear()
-    if dispatch_target == PUSH_TARGET_PARALLEL:
-        await _begin_parallel_launch(
-            task=task,
-            chat_id=chat_id,
-            origin_message=origin_message,
-            actor=actor,
-            push_mode=push_mode or None,
-            send_mode=send_mode,
-            supplement=supplement,
+    serialized = [_serialize_saved_attachment(item) for item in saved_attachments] if saved_attachments else []
+    if _is_codex_model() and not data.get("send_mode"):
+        await state.update_data(
+            pending_push_supplement=supplement,
+            pending_push_attachments=serialized,
         )
+        await state.set_state(TaskPushStates.waiting_send_mode)
+        await _prompt_push_send_mode_input(message, push_mode=push_mode or None)
         return
 
-    try:
-        dispatch_context = await _resolve_selected_existing_dispatch_context(data)
-    except ValueError as exc:
-        await message.answer(str(exc), reply_markup=_build_worker_main_keyboard())
-        return
-
-    try:
-        success, prompt, session_path = await _push_task_to_model(
-            task,
-            chat_id=chat_id,
-            reply_to=origin_message,
-            supplement=supplement,
-            actor=actor,
-            push_mode=push_mode or None,
-            send_mode=send_mode,
-            dispatch_context=dispatch_context,
-        )
-    except ValueError as exc:
-        worker_log.error(
-            "推送模板缺失：%s",
-            exc,
-            extra={"task_id": task_id, "status": task.status if task else None},
-        )
-        await message.answer("推送失败：缺少模板配置。", reply_markup=_build_worker_main_keyboard())
-        return
-    if not success:
-        await message.answer("推送失败：模型未就绪，请稍后再试。", reply_markup=_build_worker_main_keyboard())
-        return
-    preview_block, preview_parse_mode = _wrap_text_in_code_block(prompt)
-    await _send_model_push_preview(
-        chat_id,
-        preview_block,
-        reply_to=origin_message,
-        parse_mode=preview_parse_mode,
-        reply_markup=_build_worker_main_keyboard(),
+    await _execute_task_push_from_state_data(
+        task=task,
+        state=state,
+        trigger_message=message,
+        data=data,
+        supplement=supplement,
+        push_mode=push_mode or None,
+        send_mode=send_mode,
+        pending_attachments=serialized,
     )
-    if session_path is not None:
-        await _send_session_ack(chat_id, session_path, reply_to=origin_message)
 
 
 @router.callback_query(F.data.startswith("task:history:"))

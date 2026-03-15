@@ -536,26 +536,25 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_PLAN
         await bot.on_task_push_model_choice(choice_message, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
+        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
         assert choice_message.calls
         choice_text, _, choice_markup, _ = choice_message.calls[0]
-        assert f"已选择 {bot.PUSH_MODE_PLAN} 模式" in choice_text
-        assert bot._build_push_send_mode_prompt() in choice_text
+        assert bot._build_push_supplement_prompt() in choice_text
         assert choice_markup is not None
+
+        supplement_message = DummyMessage()
+        supplement_message.text = bot.SKIP_TEXT
+        await bot.on_task_push_model_supplement(supplement_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
+        assert supplement_message.calls
+        supplement_text, _, supplement_markup, _ = supplement_message.calls[0]
+        assert f"已选择 {bot.PUSH_MODE_PLAN} 模式" in supplement_text
+        assert bot._build_push_send_mode_prompt() in supplement_text
+        assert supplement_markup is not None
 
         send_mode_message = DummyMessage()
         send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
         await bot.on_task_push_model_send_mode(send_mode_message, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
-        assert send_mode_message.calls
-        send_mode_text, _, send_mode_markup, _ = send_mode_message.calls[0]
-        assert bot._build_push_supplement_prompt() in send_mode_text
-        assert bot.PUSH_SEND_MODE_IMMEDIATE_LABEL in send_mode_text
-        assert send_mode_markup is not None
-
-        skip_message = DummyMessage()
-        skip_message.text = bot.SKIP_TEXT
-        await bot.on_task_push_model_supplement(skip_message, state)
 
         assert recorded
         chat_id, payload, reply_to = recorded[0]
@@ -653,7 +652,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
 
 
 def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
-    """点击“跳过补充”回调时，应透传已选的 PLAN/YOLO 模式与发送方式。"""
+    """Codex 下点击“跳过补充”后，应先选择发送方式，再透传已选 PLAN/YOLO。"""
 
     message = DummyMessage()
     callback = DummyCallback("task:push_model_skip:TASK_0099", message)
@@ -665,7 +664,6 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
             origin_message=message,
             actor="Tester#1",
             push_mode=bot.PUSH_MODE_PLAN,
-            send_mode=bot.PUSH_SEND_MODE_QUEUED,
         )
     )
 
@@ -710,7 +708,19 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
     monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
 
-    asyncio.run(bot.on_task_push_model_skip(callback, state))
+    async def _scenario() -> None:
+        await bot.on_task_push_model_skip(callback, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
+        assert message.calls
+        prompt_text, _, _markup, _kwargs = message.calls[0]
+        assert bot._build_push_send_mode_prompt() in prompt_text
+
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_QUEUED_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
+        assert await state.get_state() is None
+
+    asyncio.run(_scenario())
 
     assert recorded_modes == [bot.PUSH_MODE_PLAN]
     assert recorded_send_modes == [bot.PUSH_SEND_MODE_QUEUED]
@@ -956,12 +966,12 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_YOLO
         await bot.on_task_push_model_choice(choice_message, state)
-        send_mode_message = DummyMessage()
-        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
-        await bot.on_task_push_model_send_mode(send_mode_message, state)
         skip_message = DummyMessage()
         skip_message.text = "补充"
         await bot.on_task_push_model_supplement(skip_message, state)
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
 
     asyncio.run(_scenario())
 
@@ -1059,16 +1069,16 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_YOLO
         await bot.on_task_push_model_choice(choice_message, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
-
-        send_mode_message = DummyMessage()
-        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
-        await bot.on_task_push_model_send_mode(send_mode_message, state)
         assert await state.get_state() == bot.TaskPushStates.waiting_supplement.state
 
         input_message = DummyMessage()
         input_message.text = "补充说明内容"
         await bot.on_task_push_model_supplement(input_message, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
+
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
 
         assert recorded
         chat_id, payload, reply_to = recorded[0]
@@ -1229,12 +1239,12 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
         choice_message = DummyMessage()
         choice_message.text = bot.PUSH_MODE_YOLO
         await bot.on_task_push_model_choice(choice_message, state)
-        send_mode_message = DummyMessage()
-        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
-        await bot.on_task_push_model_send_mode(send_mode_message, state)
         input_message = DummyMessage()
         input_message.text = "补充说明内容"
         await bot.on_task_push_model_supplement(input_message, state)
+        send_mode_message = DummyMessage()
+        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
+        await bot.on_task_push_model_send_mode(send_mode_message, state)
 
     asyncio.run(_scenario())
 
