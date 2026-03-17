@@ -231,3 +231,45 @@ async def test_run_worker_fails_closed_when_project_workdir_trust_auto_config_fa
         await manager.run_worker(cfg)
 
     create_proc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_worker_skips_codex_trust_for_copilot(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Copilot 启动不应误走 Codex trusted 预处理。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    master.PROJECT_REPOSITORY = repo
+    cfg = manager.require_project("sample")
+
+    trust_calls: list[str] = []
+    launch_calls: list[tuple[str, ...]] = []
+
+    def fake_ensure_codex_project_trust(project_path: Path, *, config_path: Path | None = None):
+        trust_calls.append(str(project_path))
+        return SimpleNamespace(path=project_path, previous_trust_level=None, changed=False)
+
+    class DummyProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        launch_calls.append(tuple(str(part) for part in cmd))
+        return DummyProcess()
+
+    monkeypatch.setattr(master, "ensure_codex_project_trust", fake_ensure_codex_project_trust)
+    monkeypatch.setattr(master.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(manager, "_health_check_worker", AsyncMock(return_value=None))
+    monkeypatch.setenv("MODEL_CMD", "python3")
+
+    chosen = await manager.run_worker(cfg, model="copilot")
+
+    assert chosen == "copilot"
+    assert trust_calls == []
+    assert launch_calls, "应直接继续启动 worker"

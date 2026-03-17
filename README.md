@@ -1,6 +1,6 @@
 # vibego - 通过 telegram 随时随地的进行 vibe coding
 
-**通过 Telegram 随时随地驱动你的终端 AI CLI（支持 Codex / ClaudeCode）**
+**通过 Telegram 随时随地驱动你的终端 AI CLI（支持 Codex / ClaudeCode / Gemini / Copilot）**
 
 For the english version, see [README-en](README-en.md).
 
@@ -8,13 +8,13 @@ For the english version, see [README-en](README-en.md).
 
 1. 通过 Telegram 随时随地驱动你的终端 AI CLI;
 2. 通过 telegram 做到简单的任务管理与缺陷报告，可在 Telegram 中直接记录并追踪；
-3. 通过 telegram 随时在 Codex / ClaudeCode 终端 CLI 间一键切换；
+3. 通过 telegram 随时在 Codex / ClaudeCode / Gemini / Copilot 终端 CLI 间一键切换；
 4. 通过 Telegram Bot API 的 HTTPS 请求通道传输指令到 CLI，链路全程由 TLS 加密保护。
 5. 运行期日志和状态文件统一写入本机 ~/.config/vibego/，敏感数据不出终端；
 
 ## 环境依赖
 
-**终端环境安装且登录了 codex/claudeCode**
+**终端环境安装且登录了 codex / claudeCode / gemini / copilot（按需）**
 
 ```bash
 brew install python@3.11 tmux
@@ -40,7 +40,7 @@ source ~/.config/vibego/runtime/venv/bin/activate
 
 ### 安装 & 启动 vibego
 
-执行该步骤之前，确保您的终端已经安装并登录了 codex / claudeCode / gemini（按需），且已经准备好了 telegram bot token。
+执行该步骤之前，确保您的终端已经安装并登录了 codex / claudeCode / gemini / copilot（按需），且已经准备好了 telegram bot token。
 
 - `demo` 启动脚本会在运行前自动把仓库根目录的 [AGENTS-template.md](AGENTS-template.md) 写入 `$HOME/.codex/AGENTS.md` /
   `$HOME/.claude/CLAUDE.md` 的 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->`
@@ -56,11 +56,11 @@ vibego start         # 启动 master 服务
 
 ## 目录结构
 
-- `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / Gemini）。
+- `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / Gemini / Copilot）。
 - `scripts/run_bot.sh`：一键启动脚本（自动建 venv、启动 tmux + 模型 CLI + bot）。
 - `scripts/stop_bot.sh`：终止当前项目 worker（tmux + bot 进程）。
 - `scripts/start_tmux_codex.sh`：底层 tmux/CLI 启动器，被 `run_bot.sh` 调用，默认以 `tmux -u` 强制启用 UTF-8。
-- `scripts/models/`：模型配置模块（`common.sh`/`codex.sh`/`claudecode.sh`/`gemini.sh`）。
+- `scripts/models/`：模型配置模块（`common.sh`/`codex.sh`/`claudecode.sh`/`gemini.sh`/`copilot.sh`）。
 - `logs/<model>/<project>/`：运行日志（`run_bot.log`、`model.log`、`bot.pid`、`current_session.txt`），默认位于
   `~/.config/vibego/logs/`。
     - `model.log` 由 `scripts/log_writer.py` 控制，单文件上限 20MB，仅保留最近 24 小时的归档（可通过 `MODEL_LOG_MAX_BYTES`、
@@ -101,7 +101,7 @@ vibego 仓库内包含 `.specify/` 脚本与模板，可用于按 Spec-Driven De
 
 ## 模型切换
 
-- 支持参数：`codex`、`claudecode`、`gemini`。
+- 支持参数：`codex`、`claudecode`、`gemini`、`copilot`。
 - 切换流程：`stop_bot.sh --model <旧>` → `run_bot.sh --model <新>`。
 - 每个模型在 `scripts/models/<model>.sh` 中维护独立配置，互不依赖；公共逻辑位于 `scripts/models/common.sh`。
 - `ACTIVE_MODEL` 会在 `/start` 回复及日志中显示，并写入环境变量供 `bot.py` 使用。
@@ -146,12 +146,23 @@ Gemini 基于官方 `gemini-cli`（Homebrew 包名 `gemini-cli`，命令为 `gem
 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` 区块，
 用于让 Gemini CLI 自动继承 vibego 的强制规约。
 
+### Copilot
+
+Copilot 基于 GitHub Copilot CLI，默认命令为 `copilot`，正式回推来源为 `~/.copilot/session-state/**/events.jsonl`。
+
+| 变量 | 说明 |
+|------|------|
+| `COPILOT_WORKDIR` | 工程目录（默认与 `MODEL_WORKDIR` 相同） |
+| `COPILOT_CMD` | CLI 启动命令，默认 `copilot` |
+| `COPILOT_SESSION_ROOT` | 会话根目录，默认 `~/.copilot/session-state` |
+| `COPILOT_SESSION_GLOB` | 会话文件匹配，默认 `events.jsonl` |
+
 ## aiogram Worker 行为
 
 - `/start`：返回 `chat_id`、`MODE`、`ACTIVE_MODEL`；日志打印 `chat_id` 与 `user_id`。
 - 文本消息：
-    1. 依据 `ACTIVE_MODEL` 解析会话文件：Codex/ClaudeCode 为 JSONL，Gemini 为 `session-*.json`；
-       默认读取 `current_session.txt` 中记录的会话路径，必要时搜索 `MODEL_SESSION_ROOT` 以回填。
+    1. 依据 `ACTIVE_MODEL` 解析会话文件：Codex / ClaudeCode / Copilot 为 JSONL，Gemini 为 `session-*.json`；
+        默认读取 `current_session.txt` 中记录的会话路径，必要时搜索 `MODEL_SESSION_ROOT` 以回填。
     2. 将 prompt 注入 tmux（发送 `Esc` 清空模式、`C-j` 换行、`Enter` 提交）。
     3. 首次读取 `SESSION_OFFSETS` 初始化偏移；随后通过 `_deliver_pending_messages()` 补发当前尾部内容并持续轮询 JSONL。
     4. watcher 阶段提示 `ACTIVE_MODEL` 正在处理中，完成后自动推送结果（保留 Markdown）。
@@ -202,7 +213,7 @@ Gemini 基于官方 `gemini-cli`（Homebrew 包名 `gemini-cli`，命令为 `gem
 
 - Master bot 将统一轮询多个项目 bot，并调用 run/stop 脚本管理
   worker；当前版本先提供 worker 端结构与日志规范。
-- Gemini 已接入；后续可按需补充更细粒度的工具调用回推与会话管理能力。
+- Gemini / Copilot 已接入；后续可按需补充更细粒度的工具调用回推与会话管理能力。
 
 ## 注意
 
@@ -219,7 +230,7 @@ Gemini 基于官方 `gemini-cli`（Homebrew 包名 `gemini-cli`，命令为 `gem
   `~/.config/vibego/config/projects.json` 同步文件更新。示例字段：
     - `bot_name`：对应 Telegram 机器人的用户名（可带或不带 `@`，展示与交互时自动加 `@`）
     - `bot_token`：对应 worker 的 Telegram Token
-    - `default_model`：默认模型（codex / claudecode / gemini）
+    - `default_model`：默认模型（codex / claudecode / gemini / copilot）
     - `project_slug`：日志/目录名称
     - `workdir`：项目工作目录（可选）
     - `allowed_chat_id`：项目 worker 的授权 chat（用于 run_bot 时注入环境）

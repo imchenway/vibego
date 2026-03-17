@@ -285,6 +285,63 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     assert 10 not in bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS
 
 
+def test_ask_user_submit_dispatches_schema_payload(monkeypatch, tmp_path: Path):
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[
+            bot.RequestInputOption(label="仅库存页", value="inventory"),
+            bot.RequestInputOption(label="两页都改", value="all_pages"),
+        ],
+    )
+    session = bot.RequestInputSession(
+        token="token_submit_ask_user",
+        chat_id=11,
+        user_id=11,
+        call_id="tool_ask_submit_1",
+        tool_name="ask_user",
+        session_key="session-key-ask-user",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": 1},
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[11] = session.token
+
+    dispatched: list[str] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+        assert chat_id == 11
+        dispatched.append(prompt)
+        return True, tmp_path / "copilot-events.jsonl"
+
+    async def fake_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_SUBMIT),
+        message=DummyMessage(chat_id=11, user_id=11),
+        user_id=11,
+    )
+
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert dispatched, "提交后应推送到模型"
+    prompt = dispatched[-1]
+    assert "ask_user 工具结果" in prompt
+    assert "call_id=tool_ask_submit_1" in prompt
+    assert '{"scope":"all_pages"}' in prompt
+
+
 def test_request_input_submit_dispatches_parallel_context(monkeypatch, tmp_path: Path):
     """并行会话里的 request_input 提交，应继续发回对应并行 CLI。"""
 

@@ -295,6 +295,7 @@ SWITCHABLE_MODELS: Tuple[Tuple[str, str], ...] = (
     ("codex", "⚙️ Codex"),
     ("claudecode", "⚙️ ClaudeCode"),
     ("gemini", "⚙️ Gemini"),
+    ("copilot", "⚙️ Copilot"),
 )
 SYSTEM_SETTINGS_MENU_CALLBACK = "system:menu"
 SYSTEM_SETTINGS_BACK_CALLBACK = "system:back"
@@ -1970,6 +1971,8 @@ class MasterManager:
             elif model_lower == "gemini":
                 # Gemini 默认可直接通过 `gemini` 命令启动（Homebrew: gemini-cli）
                 model_cmd = os.environ.get("GEMINI_CMD") or "gemini"
+            elif model_lower == "copilot":
+                model_cmd = os.environ.get("COPILOT_CMD") or "copilot"
 
         if model_cmd:
             try:
@@ -2133,16 +2136,17 @@ class MasterManager:
             )
             raise RuntimeError(message)
         workdir_path = Path(os.path.expandvars(os.path.expanduser(cfg.workdir or "")))
-        try:
-            ensure_codex_project_trust(workdir_path, config_path=CODEX_CONFIG_PATH)
-        except Exception as exc:
-            message = f"项目目录 Codex trusted 自动配置失败：{exc}"
-            log.error(
-                "项目启动前的 Codex trusted 校验失败: %s",
-                message,
-                extra={"project": cfg.project_slug, "model": target_model, "workdir": str(workdir_path)},
-            )
-            raise RuntimeError(message) from exc
+        if (target_model or "").strip().lower() == "codex":
+            try:
+                ensure_codex_project_trust(workdir_path, config_path=CODEX_CONFIG_PATH)
+            except Exception as exc:
+                message = f"项目目录 Codex trusted 自动配置失败：{exc}"
+                log.error(
+                    "项目启动前的 Codex trusted 校验失败: %s",
+                    message,
+                    extra={"project": cfg.project_slug, "model": target_model, "workdir": str(workdir_path)},
+                )
+                raise RuntimeError(message) from exc
         chat_id_env = state.chat_id or cfg.allowed_chat_id
         env = os.environ.copy()
         boot_id = uuid.uuid4().hex
@@ -2332,14 +2336,14 @@ PROJECT_WIZARD_FIELDS_EDIT: Tuple[ProjectField, ...] = (
     "allowed_chat_id",
 )
 PROJECT_WIZARD_OPTIONAL_FIELDS: Tuple[ProjectField, ...] = ("workdir", "allowed_chat_id")
-PROJECT_MODEL_CHOICES: Tuple[str, ...] = ("codex", "claudecode", "gemini")
+PROJECT_MODEL_CHOICES: Tuple[str, ...] = ("codex", "claudecode", "gemini", "copilot")
 PROJECT_WIZARD_SESSIONS: Dict[int, ProjectWizardSession] = {}
 PROJECT_WIZARD_LOCK: Optional[asyncio.Lock] = None
 PROJECT_FIELD_PROMPTS_CREATE: Dict[ProjectField, str] = {
     "bot_name": "请输入 bot 名称（不含 @，仅字母、数字、下划线或点）：",
     "bot_token": "请输入 Telegram Bot Token（格式类似 123456:ABCdef）：",
     "project_slug": "请输入项目 slug（用于日志目录，留空自动根据 bot 名生成）：",
-    "default_model": "请输入默认模型（codex/claudecode/gemini，留空采用 codex）：",
+    "default_model": "请输入默认模型（codex/claudecode/gemini/copilot，留空采用 codex）：",
     "workdir": "请输入 worker 工作目录绝对路径（可留空稍后补全）：",
     "allowed_chat_id": "请输入预设 chat_id（可留空，暂不支持多个）：",
 }
@@ -2347,7 +2351,7 @@ PROJECT_FIELD_PROMPTS_EDIT: Dict[ProjectField, str] = {
     "bot_name": "请输入新的 bot 名（不含 @，发送 - 保持当前值：{current}）：",
     "bot_token": "请输入新的 Bot Token（发送 - 保持当前值）：",
     "project_slug": "请输入新的项目 slug（发送 - 保持当前值：{current}）：",
-    "default_model": "请输入新的默认模型（codex/claudecode/gemini，发送 - 保持当前值：{current}）：",
+    "default_model": "请输入新的默认模型（codex/claudecode/gemini/copilot，发送 - 保持当前值：{current}）：",
     "workdir": "请输入新的工作目录（发送 - 保持当前值：{current}，可留空改为未设置）：",
     "allowed_chat_id": "请输入新的 chat_id（发送 - 保持当前值：{current}，留空表示取消预设）：",
 }

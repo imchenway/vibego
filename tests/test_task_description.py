@@ -3927,7 +3927,8 @@ def test_dispatch_prompt_yolo_mode_skips_plan_switch(monkeypatch, tmp_path: Path
             pass
 
 
-def test_dispatch_prompt_plan_mode_skips_switch_for_non_codex(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("model_name", ["claudecode", "copilot"])
+def test_dispatch_prompt_plan_mode_skips_switch_for_non_codex(monkeypatch, tmp_path: Path, model_name: str):
     """非 Codex 模型即使 PLAN，也不发送 /plan。"""
 
     pointer = tmp_path / "pointer.txt"
@@ -3939,14 +3940,18 @@ def test_dispatch_prompt_plan_mode_skips_switch_for_non_codex(monkeypatch, tmp_p
     monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
     monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
-    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "claudecode")
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", model_name)
 
     sent_lines: list[str] = []
 
     def fake_tmux_send_line(_session: str, line: str) -> None:
         sent_lines.append(line)
 
+    async def fake_send_session_ack(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
     monkeypatch.setattr(bot, "_interrupt_long_poll", lambda _chat_id: asyncio.sleep(0))
 
     created_tasks: list = []

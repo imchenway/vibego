@@ -68,7 +68,7 @@ PROJECT_DEFAULT="${PROJECT_NAME:-}"
 usage() {
   cat <<USAGE
 用法：${0##*/} [--model 名称] [--project 名称] [--foreground] [--no-stop]
-  --model        启动指定模型 (codex|claudecode|gemini)，默认: $MODEL_DEFAULT
+  --model        启动指定模型 (codex|claudecode|gemini|copilot)，默认: $MODEL_DEFAULT
   --project      指定项目别名，用于日志/会话区分
   --foreground   在前台运行（调试用），默认后台
   --no-stop      启动前不执行 stop_bot.sh（默认会先停旧实例）

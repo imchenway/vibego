@@ -3,7 +3,7 @@
     "bot_name": "your_project_bot",
     "bot_token": "__REPLACE_WITH_PROJECT_BOT_TOKEN__",
     "allowed_chat_id": null,
-    "default_model": "codex",
+    "default_model": "copilot",
     "project_slug": "your_project_slug",
     "workdir": "/absolute/path/to/your/project"
   }

@@ -509,6 +509,7 @@ def _model_display_label() -> str:
         "codex": "Codex",
         "claudecode": "ClaudeCode",
         "gemini": "Gemini",
+        "copilot": "Copilot",
     }
     return mapping.get(normalized, raw or "模型")
 
@@ -535,6 +536,12 @@ def _is_codex_model() -> bool:
     return MODEL_CANONICAL_NAME == "codex"
 
 
+def _is_copilot_model() -> bool:
+    """判断当前 worker 是否运行 Copilot 模型。"""
+
+    return MODEL_CANONICAL_NAME == "copilot"
+
+
 @dataclass
 class SessionDeliverable:
     """描述 JSONL 会话中的单个推送事件。"""
@@ -552,6 +559,7 @@ class RequestInputOption:
 
     label: str
     description: str = ""
+    value: Any = None
 
 
 @dataclass(**_DATACLASS_SLOT_KW)
@@ -577,6 +585,7 @@ class RequestInputSession:
     current_index: int
     created_at: float
     expires_at: float
+    tool_name: str = "request_user_input"
     selected_option_indexes: Dict[str, int] = field(default_factory=dict)
     custom_answers: Dict[str, str] = field(default_factory=dict)
     question_message_ids: Dict[str, int] = field(default_factory=dict)
@@ -2870,8 +2879,12 @@ def _detect_environment_issues() -> tuple[list[str], Optional[Path]]:
         issues.append("未检测到 tmux，可通过 'brew install tmux' 安装")
 
     model_cmd = os.environ.get("MODEL_CMD")
-    if not model_cmd and (ACTIVE_MODEL or "").lower() == "codex":
-        model_cmd = os.environ.get("CODEX_CMD") or "codex"
+    if not model_cmd:
+        current_model = MODEL_CANONICAL_NAME or _canonical_model_name()
+        if current_model == "codex":
+            model_cmd = os.environ.get("CODEX_CMD") or "codex"
+        elif current_model == "copilot":
+            model_cmd = os.environ.get("COPILOT_CMD") or "copilot"
     if model_cmd:
         executable = _extract_executable(model_cmd)
         if executable and shutil.which(executable) is None:
@@ -11849,7 +11862,13 @@ def _normalize_request_input_questions(raw: Any) -> List[RequestInputQuestion]:
             if not label:
                 continue
             description = str(option.get("description") or "").strip()
-            options.append(RequestInputOption(label=label, description=description))
+            options.append(
+                RequestInputOption(
+                    label=label,
+                    description=description,
+                    value=option.get("value"),
+                )
+            )
 
         if not options:
             continue
@@ -11866,6 +11885,65 @@ def _normalize_request_input_questions(raw: Any) -> List[RequestInputQuestion]:
     return normalized
 
 
+def _serialize_request_input_questions(questions: Sequence[RequestInputQuestion]) -> List[Dict[str, Any]]:
+    """将题目序列化为可放入 metadata 的纯 JSON 结构。"""
+
+    serialized: List[Dict[str, Any]] = []
+    for question in questions:
+        serialized_options: List[Dict[str, Any]] = []
+        for option in question.options:
+            item: Dict[str, Any] = {
+                "label": option.label,
+                "description": option.description,
+            }
+            if option.value is not None:
+                item["value"] = option.value
+            serialized_options.append(item)
+        serialized.append(
+            {
+                "id": question.question_id,
+                "question": question.question,
+                "header": question.header,
+                "options": serialized_options,
+            }
+        )
+    return serialized
+
+
+def _parse_mapping_arguments(arguments: Any) -> Optional[Dict[str, Any]]:
+    """将字符串 / dict 形式的 arguments 统一解析为 dict。"""
+
+    if isinstance(arguments, dict):
+        return arguments
+    if not isinstance(arguments, str):
+        return None
+    try:
+        candidate = json.loads(arguments)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return candidate if isinstance(candidate, dict) else None
+
+
+def _build_request_input_deliverable(
+    *,
+    call_id: str,
+    questions: Sequence[RequestInputQuestion],
+    tool_name: str = "request_user_input",
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """基于统一题目结构构造 Telegram 交互元数据。"""
+
+    serialized_questions = _serialize_request_input_questions(questions)
+    if not serialized_questions:
+        return None
+    summary = f"🧩 模型请求你补充决策（共 {len(serialized_questions)} 题），请点击按钮作答。"
+    metadata = {
+        "call_id": call_id,
+        "questions": serialized_questions,
+        "tool_name": tool_name,
+    }
+    return summary, metadata
+
+
 def _parse_request_user_input_function_call(payload: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
     """解析 Codex 的 request_user_input function_call。"""
 
@@ -11873,18 +11951,7 @@ def _parse_request_user_input_function_call(payload: Dict[str, Any]) -> Optional
     if not call_id:
         return None
 
-    arguments = payload.get("arguments")
-    parsed_args: Optional[Dict[str, Any]] = None
-    if isinstance(arguments, str):
-        try:
-            candidate = json.loads(arguments)
-        except (TypeError, json.JSONDecodeError):
-            candidate = None
-        if isinstance(candidate, dict):
-            parsed_args = candidate
-    elif isinstance(arguments, dict):
-        parsed_args = arguments
-
+    parsed_args = _parse_mapping_arguments(payload.get("arguments"))
     if not isinstance(parsed_args, dict):
         return None
 
@@ -11892,28 +11959,104 @@ def _parse_request_user_input_function_call(payload: Dict[str, Any]) -> Optional
     if not questions:
         return None
 
-    # 仅存储可序列化结构，避免 metadata 中出现复杂对象。
-    serialized_questions = [
-        {
-            "id": question.question_id,
-            "question": question.question,
-            "header": question.header,
-            "options": [
-                {
-                    "label": option.label,
-                    "description": option.description,
-                }
-                for option in question.options
-            ],
-        }
-        for question in questions
-    ]
-    summary = f"🧩 模型请求你补充决策（共 {len(serialized_questions)} 题），请点击按钮作答。"
-    metadata = {
-        "call_id": call_id,
-        "questions": serialized_questions,
-    }
-    return summary, metadata
+    return _build_request_input_deliverable(call_id=call_id, questions=questions)
+
+
+def _normalize_ask_user_questions(
+    *,
+    prompt_message: str,
+    requested_schema: Mapping[str, Any],
+) -> List[RequestInputQuestion]:
+    """将 Copilot ask_user 的 requestedSchema 映射为按钮题目。"""
+
+    properties = requested_schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+
+    required_raw = requested_schema.get("required")
+    required_fields = set(required_raw) if isinstance(required_raw, list) else set()
+
+    normalized: List[RequestInputQuestion] = []
+    used_ids: set[str] = set()
+    for index, (field_name, field_schema) in enumerate(properties.items(), 1):
+        if len(normalized) >= REQUEST_INPUT_MAX_QUESTIONS:
+            break
+        if not isinstance(field_schema, dict):
+            continue
+
+        raw_id = str(field_name or "").strip() or f"question_{index}"
+        safe_id = re.sub(r"[^a-zA-Z0-9_]+", "_", raw_id).strip("_") or f"question_{index}"
+        base_id = safe_id
+        suffix = 2
+        while safe_id in used_ids:
+            safe_id = f"{base_id}_{suffix}"
+            suffix += 1
+        used_ids.add(safe_id)
+
+        field_type = str(field_schema.get("type") or "string").strip().lower()
+        options: List[RequestInputOption] = []
+        enum_values = field_schema.get("enum")
+        if isinstance(enum_values, list) and field_type in {"string", "integer", "number"}:
+            for raw_value in enum_values[:REQUEST_INPUT_MAX_OPTIONS]:
+                label = str(raw_value).strip()
+                if not label:
+                    continue
+                options.append(RequestInputOption(label=label, value=raw_value))
+        elif field_type == "boolean":
+            options = [
+                RequestInputOption(label="是", value=True),
+                RequestInputOption(label="否", value=False),
+            ]
+        if not options:
+            continue
+
+        title = str(field_schema.get("title") or "").strip()
+        description = str(field_schema.get("description") or "").strip()
+        question_text = title or description or raw_id
+        if safe_id not in required_fields:
+            question_text = f"{question_text}（可选）"
+
+        header_text = description or prompt_message
+        normalized.append(
+            RequestInputQuestion(
+                question_id=safe_id,
+                question=question_text,
+                header=header_text,
+                options=options,
+            )
+        )
+
+    return normalized
+
+
+def _parse_ask_user_tool_request(tool_request: Mapping[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """解析 Copilot ask_user 工具请求。"""
+
+    call_id = str(tool_request.get("toolCallId") or tool_request.get("call_id") or "").strip()
+    if not call_id:
+        return None
+
+    parsed_args = _parse_mapping_arguments(tool_request.get("arguments"))
+    if not isinstance(parsed_args, dict):
+        return None
+
+    prompt_message = str(parsed_args.get("message") or "").strip()
+    requested_schema = parsed_args.get("requestedSchema")
+    if not isinstance(requested_schema, dict):
+        return None
+
+    questions = _normalize_ask_user_questions(
+        prompt_message=prompt_message,
+        requested_schema=requested_schema,
+    )
+    if not questions:
+        return None
+
+    return _build_request_input_deliverable(
+        call_id=call_id,
+        questions=questions,
+        tool_name="ask_user",
+    )
 
 
 def _build_request_input_session(
@@ -11924,6 +12067,7 @@ def _build_request_input_session(
     user_id: int,
     call_id: str,
     questions_raw: Sequence[Mapping[str, Any]],
+    tool_name: str = "request_user_input",
     parallel_task_id: Optional[str] = None,
     parallel_dispatch_context: Optional["ParallelDispatchContext"] = None,
 ) -> Optional[RequestInputSession]:
@@ -11938,6 +12082,7 @@ def _build_request_input_session(
         chat_id=chat_id,
         user_id=user_id,
         call_id=call_id,
+        tool_name=tool_name or "request_user_input",
         session_key=session_key,
         questions=questions,
         current_index=0,
@@ -12085,6 +12230,26 @@ async def _send_request_input_question(session: RequestInputSession, *, reply_to
 def _build_request_input_output_payload(session: RequestInputSession) -> Dict[str, Any]:
     """构建 request_user_input 的结构化 answers 负载。"""
 
+    if session.tool_name == "ask_user":
+        answers: Dict[str, Any] = {}
+        for question in session.questions:
+            selected_index = session.selected_option_indexes.get(question.question_id)
+            if selected_index is None:
+                continue
+            if selected_index == REQUEST_INPUT_CUSTOM_OPTION_INDEX:
+                custom_text = (session.custom_answers.get(question.question_id) or "").strip()
+                if not custom_text:
+                    continue
+                answers[question.question_id] = custom_text
+                continue
+            if selected_index < 0 or selected_index >= len(question.options):
+                continue
+            selected_option = question.options[selected_index]
+            answers[question.question_id] = (
+                selected_option.value if selected_option.value is not None else selected_option.label
+            )
+        return answers
+
     answers: Dict[str, Dict[str, List[str]]] = {}
     for question in session.questions:
         selected_index = session.selected_option_indexes.get(question.question_id)
@@ -12099,7 +12264,10 @@ def _build_request_input_output_payload(session: RequestInputSession) -> Dict[st
             continue
         if selected_index < 0 or selected_index >= len(question.options):
             continue
-        selected_label = question.options[selected_index].label
+        selected_option = question.options[selected_index]
+        selected_label = (
+            selected_option.value if selected_option.value is not None else selected_option.label
+        )
         answers[question.question_id] = {"answers": [selected_label]}
     return {"answers": answers}
 
@@ -12118,13 +12286,18 @@ def _request_input_message_has_media(message: Message) -> bool:
     )
 
 
-def _build_request_input_submission_prompt(call_id: str, output_payload: Mapping[str, Any]) -> str:
+def _build_request_input_submission_prompt(
+    call_id: str,
+    output_payload: Mapping[str, Any],
+    *,
+    tool_name: str = "request_user_input",
+) -> str:
     """构造回推到模型的提示词（结构化 JSON + call_id 绑定）。"""
 
     payload_json = json.dumps(output_payload, ensure_ascii=False, separators=(",", ":"))
     return "\n".join(
         [
-            "request_user_input 工具结果（来自 Telegram 按钮交互）：",
+            f"{tool_name} 工具结果（来自 Telegram 按钮交互）：",
             f"call_id={call_id}",
             payload_json,
             "请基于上述工具结果继续执行后续步骤。",
@@ -12144,9 +12317,10 @@ async def _start_request_input_interaction(
     _cleanup_expired_request_input_sessions()
     metadata = metadata or {}
     call_id = str(metadata.get("call_id") or "").strip()
+    tool_name = str(metadata.get("tool_name") or "request_user_input").strip() or "request_user_input"
     questions_raw = metadata.get("questions")
     if not call_id or not isinstance(questions_raw, list):
-        fallback_text = summary_text.strip() or "⚠️ 检测到 request_user_input，但解析失败，请手动回复模型。"
+        fallback_text = summary_text.strip() or f"⚠️ 检测到 {tool_name}，但解析失败，请手动回复模型。"
         await reply_large_text(chat_id, fallback_text, parse_mode=None, preformatted=True)
         return True
 
@@ -12160,11 +12334,12 @@ async def _start_request_input_interaction(
         user_id=owner_user_id,
         call_id=call_id,
         questions_raw=questions_raw,
+        tool_name=tool_name,
         parallel_task_id=parallel_task_id,
         parallel_dispatch_context=parallel_dispatch_context,
     )
     if session is None:
-        fallback_text = summary_text.strip() or "⚠️ request_user_input 题目为空，请手动回复模型。"
+        fallback_text = summary_text.strip() or f"⚠️ {tool_name} 题目为空，请手动回复模型。"
         await reply_large_text(chat_id, fallback_text, parse_mode=None, preformatted=True)
         return True
 
@@ -12687,8 +12862,9 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
 
     if session_path is None:
         worker_log.warning(
-            "[session-map] chat=%s 无法确定 Codex 会话",
+            "[session-map] chat=%s 无法确定 %s 会话",
             chat_id,
+            MODEL_DISPLAY_LABEL,
         )
         return None
 
@@ -13427,8 +13603,7 @@ def _read_session_meta_cwd(path: Path) -> Optional[str]:
         data = json.loads(first_line)
     except json.JSONDecodeError:
         return None
-    payload = data.get("payload") or {}
-    return payload.get("cwd")
+    return _extract_session_cwd_from_event(data)
 
 
 def _find_latest_claudecode_rollout(pointer: Path) -> Optional[Path]:
@@ -13690,11 +13865,14 @@ def _update_pointer(pointer: Path, rollout: Path) -> None:
 
 
 def _format_plan_update(arguments: Any, *, event_timestamp: Optional[str]) -> Optional[Tuple[str, bool]]:
-    if not isinstance(arguments, str):
-        return None
-    try:
-        data = json.loads(arguments)
-    except (TypeError, json.JSONDecodeError):
+    if isinstance(arguments, dict):
+        data = arguments
+    elif isinstance(arguments, str):
+        try:
+            data = json.loads(arguments)
+        except (TypeError, json.JSONDecodeError):
+            return None
+    else:
         return None
 
     plan_items = data.get("plan")
@@ -13896,9 +14074,118 @@ def _extract_claudecode_payload(
     return _extract_codex_payload(data, event_timestamp=event_timestamp)
 
 
+def _extract_copilot_tool_request(
+    tool_request: Mapping[str, Any],
+    *,
+    event_timestamp: Optional[str],
+) -> Optional[Tuple[str, str, Optional[Dict[str, Any]]]]:
+    """提取 Copilot toolRequests 中的控制型交互事件。"""
+
+    function_name = str(tool_request.get("name") or "").strip()
+    if not function_name:
+        return None
+
+    if function_name == "ask_user":
+        request_input_result = _parse_ask_user_tool_request(tool_request)
+        if request_input_result:
+            text, extra = request_input_result
+            return DELIVERABLE_KIND_REQUEST_INPUT, text, extra
+        worker_log.warning(
+            "检测到 Copilot ask_user 但解析失败，已降级为提示文本",
+            extra={"timestamp": event_timestamp or "-"},
+        )
+        return (
+            DELIVERABLE_KIND_REQUEST_INPUT,
+            "⚠️ 检测到 ask_user，但题目解析失败，请手动在终端中继续交互。",
+            {"error": "ask_user_parse_failed", "tool_name": "ask_user"},
+        )
+
+    if function_name == "request_user_input":
+        payload = {
+            "call_id": tool_request.get("toolCallId") or tool_request.get("call_id"),
+            "arguments": tool_request.get("arguments"),
+        }
+        request_input_result = _parse_request_user_input_function_call(payload)
+        if request_input_result:
+            text, extra = request_input_result
+            return DELIVERABLE_KIND_REQUEST_INPUT, text, extra
+        return (
+            DELIVERABLE_KIND_REQUEST_INPUT,
+            "⚠️ 检测到 request_user_input，但题目解析失败，请手动在终端中继续交互。",
+            {"error": "request_user_input_parse_failed"},
+        )
+
+    if function_name == "update_plan":
+        plan_result = _format_plan_update(tool_request.get("arguments"), event_timestamp=event_timestamp)
+        if plan_result:
+            plan_text, plan_completed = plan_result
+            extra: Dict[str, Any] = {"plan_completed": plan_completed}
+            call_id = tool_request.get("toolCallId") or tool_request.get("call_id")
+            if call_id:
+                extra["call_id"] = str(call_id)
+            return DELIVERABLE_KIND_PLAN, plan_text, extra
+
+    return None
+
+
+def _extract_copilot_message_content(raw_content: Any) -> Optional[str]:
+    """提取 Copilot final_answer 的最终正文。"""
+
+    if isinstance(raw_content, str) and raw_content.strip():
+        return raw_content
+    if not isinstance(raw_content, list):
+        return None
+
+    fragments: List[str] = []
+    for item in raw_content:
+        if not isinstance(item, dict):
+            continue
+        for key in ("text", "markdown", "content"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                fragments.append(value)
+                break
+    if not fragments:
+        return None
+    return "\n".join(fragments)
+
+
+def _extract_copilot_payload(
+    data: dict, *, event_timestamp: Optional[str]
+) -> Optional[Tuple[str, str, Optional[Dict[str, Any]]]]:
+    """解析 Copilot events.jsonl 中可投递到 Telegram 的事件。"""
+
+    if data.get("type") != "assistant.message":
+        return None
+
+    payload = data.get("data")
+    if not isinstance(payload, dict):
+        return None
+
+    tool_requests = payload.get("toolRequests")
+    if isinstance(tool_requests, list):
+        for tool_request in tool_requests:
+            if not isinstance(tool_request, dict):
+                continue
+            candidate = _extract_copilot_tool_request(tool_request, event_timestamp=event_timestamp)
+            if candidate is not None:
+                return candidate
+
+    phase = payload.get("phase")
+    if not isinstance(phase, str) or phase.strip().lower() != CODEX_MESSAGE_PHASE_FINAL_ANSWER:
+        return None
+
+    content = _extract_copilot_message_content(payload.get("content"))
+    if not content:
+        return None
+    return DELIVERABLE_KIND_MESSAGE, content, None
+
+
 def _extract_deliverable_payload(data: dict, *, event_timestamp: Optional[str]) -> Optional[Tuple[str, str, Optional[Dict[str, Any]]]]:
     if _is_claudecode_model():
         return _extract_claudecode_payload(data, event_timestamp=event_timestamp)
+    if _is_copilot_model():
+        return _extract_copilot_payload(data, event_timestamp=event_timestamp)
     return _extract_codex_payload(data, event_timestamp=event_timestamp)
 
 
@@ -13926,8 +14213,31 @@ def _collapse_codex_response_item_duplicates(events: List[SessionDeliverable]) -
     return collapsed
 
 
+def _extract_session_cwd_from_event(data: Any) -> Optional[str]:
+    """从不同模型的首事件结构中提取 cwd。"""
+
+    if not isinstance(data, dict):
+        return None
+
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        cwd = payload.get("cwd")
+        if isinstance(cwd, str) and cwd.strip():
+            return cwd
+
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        context = nested.get("context")
+        if isinstance(context, dict):
+            cwd = context.get("cwd")
+            if isinstance(cwd, str) and cwd.strip():
+                return cwd
+
+    return None
+
+
 def _read_session_events_jsonl(path: Path, offset: int) -> Tuple[int, List[SessionDeliverable]]:
-    """读取 Codex/ClaudeCode 的 JSONL 会话增量事件（按字节偏移）。"""
+    """读取 Codex/ClaudeCode/Copilot 的 JSONL 会话增量事件（按字节偏移）。"""
 
     events: List[SessionDeliverable] = []
     new_offset = offset
@@ -16428,7 +16738,11 @@ async def _submit_request_input_session(
     """将当前 request_user_input 会话答案推送到模型。"""
 
     output_payload = _build_request_input_output_payload(session)
-    prompt = _build_request_input_submission_prompt(session.call_id, output_payload)
+    prompt = _build_request_input_submission_prompt(
+        session.call_id,
+        output_payload,
+        tool_name=session.tool_name,
+    )
     _remember_chat_active_user(session.chat_id, actor_user_id)
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": reply_to,

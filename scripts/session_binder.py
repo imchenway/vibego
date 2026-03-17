@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""监听 Codex/Claude JSONL 会话文件并在首次生成时绑定 session。
+"""监听 Codex/Claude/Copilot JSONL 会话文件并在首次生成时绑定 session。
 
 此脚本在后台运行：
 1. 周期性扫描会话目录，只要发现符合条件（同 CWD、满足启动时间）的 rollout 文件，
@@ -21,7 +21,7 @@ from typing import Iterable, List, Optional, Sequence, Set
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="绑定首个可用的 Codex/Claude/Gemini 会话文件")
+    parser = argparse.ArgumentParser(description="绑定首个可用的 Codex/Claude/Copilot/Gemini 会话文件")
     parser.add_argument("--pointer", required=True, help="current_session.txt 路径")
     parser.add_argument(
         "--session-root",
@@ -128,11 +128,21 @@ def _read_session_cwd(path: Path) -> Optional[str]:
         data = json.loads(first_line)
     except json.JSONDecodeError:
         return None
-    payload = data.get("payload") if isinstance(data, dict) else None
-    if not isinstance(payload, dict):
+    if not isinstance(data, dict):
         return None
-    cwd = payload.get("cwd")
-    return cwd if isinstance(cwd, str) else None
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        cwd = payload.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            return cwd
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        context = nested.get("context")
+        if isinstance(context, dict):
+            cwd = context.get("cwd")
+            if isinstance(cwd, str) and cwd:
+                return cwd
+    return None
 
 
 def _sha256_hex(text: str) -> str:

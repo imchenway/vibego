@@ -665,6 +665,7 @@ def test_switch_prompt_displays_model_options(repo: ProjectRepository, tmp_path:
     ]
     assert any(cb.startswith("project:switch_to:") for cb in model_callbacks), "应包含切换模型回调"
     assert any(text.startswith("✅ ") for text in model_texts), "当前模型应以 ✅ 标记"
+    assert any("Copilot" in text for text in model_texts), "模型列表应包含 Copilot"
     assert "project:refresh:*" in model_callbacks, "应提供返回列表按钮"
 
 
@@ -737,7 +738,20 @@ def test_switch_all_action_displays_model_options(repo: ProjectRepository, tmp_p
     assert any("Codex" in text for text in button_texts)
     assert any("ClaudeCode" in text for text in button_texts)
     assert any("Gemini" in text for text in button_texts)
+    assert any("Copilot" in text for text in button_texts)
     assert any("取消" in text for text in button_texts)
+
+
+def test_default_model_validation_accepts_copilot(repo: ProjectRepository, tmp_path: Path):
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    master.PROJECT_REPOSITORY = repo
+    session = master.ProjectWizardSession(chat_id=1, user_id=1, mode="create")
+
+    value, error = master._validate_field_value(session, "default_model", "copilot")
+
+    assert error is None
+    assert value == "copilot"
 
 
 def test_switch_all_to_updates_all_models(repo: ProjectRepository, tmp_path: Path, monkeypatch):
