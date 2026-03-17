@@ -1972,7 +1972,7 @@ class MasterManager:
                 # Gemini 默认可直接通过 `gemini` 命令启动（Homebrew: gemini-cli）
                 model_cmd = os.environ.get("GEMINI_CMD") or "gemini"
             elif model_lower == "copilot":
-                model_cmd = os.environ.get("COPILOT_CMD") or "copilot"
+                model_cmd = os.environ.get("COPILOT_CMD") or "copilot --yolo"
 
         if model_cmd:
             try:

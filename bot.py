@@ -2884,7 +2884,7 @@ def _detect_environment_issues() -> tuple[list[str], Optional[Path]]:
         if current_model == "codex":
             model_cmd = os.environ.get("CODEX_CMD") or "codex"
         elif current_model == "copilot":
-            model_cmd = os.environ.get("COPILOT_CMD") or "copilot"
+            model_cmd = os.environ.get("COPILOT_CMD") or "copilot --yolo"
     if model_cmd:
         executable = _extract_executable(model_cmd)
         if executable and shutil.which(executable) is None:

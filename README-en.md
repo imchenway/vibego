@@ -1,6 +1,6 @@
 # vibego - vibe coding via Telegram anytime, anywhere
 
-**Drive your terminal AI CLI via Telegram anytime and anywhere (supports Codex / ClaudeCode)**
+**Drive your terminal AI CLI via Telegram anytime and anywhere (supports Codex / ClaudeCode / Gemini / Copilot)**
 
 For the Simplified Chinese version, see [中文文档](README.md).
 
@@ -8,7 +8,7 @@ For the Simplified Chinese version, see [中文文档](README.md).
 
 1. Control your terminal AI CLI through Telegram whenever you need it.
 2. Capture lightweight task management and bug reports directly inside Telegram.
-3. Switch between Codex / ClaudeCode terminal CLIs in one tap from Telegram.
+3. Switch between Codex / ClaudeCode / Gemini / Copilot terminal CLIs in one tap from Telegram.
 4. Send commands over the HTTPS channel provided by the Telegram Bot API, protected by end‑to‑end TLS.
 5. Keep runtime logs and state files under `~/.config/vibego/` so sensitive data never leaves the machine.
 
@@ -38,7 +38,7 @@ Use the official Telegram BotFather guide (<https://core.telegram.org/bots#botfa
 
 ### Install and start vibego
 
-Before continuing, make sure Codex / ClaudeCode CLIs are installed and logged in, and that you have a Telegram bot token
+Before continuing, make sure Codex / ClaudeCode / Gemini / Copilot CLIs are installed and logged in, and that you have a Telegram bot token
 ready.
 
 - The startup scripts automatically inject the repository-level [AGENTS-template.md](AGENTS-template.md) into
@@ -57,7 +57,7 @@ Then click on `/start` in the bot created by Telegram ,Enjoy it!
 
 ## Directory Layout
 
-- `bot.py`: aiogram 3 worker that supports multiple model sessions (Codex / ClaudeCode / Gemini).
+- `bot.py`: aiogram 3 worker that supports multiple model sessions (Codex / ClaudeCode / Gemini / Copilot).
 - `scripts/run_bot.sh`: one-click bootstrap (builds venv, starts tmux + model CLI + bot).
 - `scripts/stop_bot.sh`: terminates the worker for a project (tmux session + bot process).
 - `scripts/start_tmux_codex.sh`: low-level tmux/CLI launcher invoked by `run_bot.sh`, forces UTF‑8 via `tmux -u`.
@@ -130,11 +130,22 @@ Default session files (verifiable on disk):
 On startup, vibego syncs the repository `AGENTS-template.md` block into `~/.gemini/GEMINI.md` between the
 `<!-- vibego-agents:start -->...<!-- vibego-agents:end -->` markers so Gemini CLI can inherit the same enforced rules.
 
+### Copilot
+
+Copilot is powered by GitHub Copilot CLI, with `copilot --yolo` as the default launch command.
+
+| Variable | Description |
+|----------|-------------|
+| `COPILOT_WORKDIR` | Project directory (defaults to `MODEL_WORKDIR`) |
+| `COPILOT_CMD` | CLI launch command, defaults to `copilot --yolo` |
+| `COPILOT_SESSION_ROOT` | Session root directory, defaults to `~/.copilot/session-state` |
+| `COPILOT_SESSION_GLOB` | Session file glob, defaults to `events.jsonl` |
+
 ## aiogram Worker Behaviour
 
 - `/start`: returns `chat_id`, `MODE`, and `ACTIVE_MODEL`; logs record `chat_id` and `user_id`.
 - Text messages:
-    1. Resolve the session file based on `ACTIVE_MODEL`: Codex/ClaudeCode uses JSONL, Gemini uses `session-*.json`.
+    1. Resolve the session file based on `ACTIVE_MODEL`: Codex / ClaudeCode / Copilot use JSONL, Gemini uses `session-*.json`.
        Read `current_session.txt` first, then search `MODEL_SESSION_ROOT` if needed.
     2. Inject the prompt into tmux (send `Esc` to clear modes, `Ctrl+J` for newline, `Enter` to submit).
     3. Initialise offsets from `SESSION_OFFSETS`; `_deliver_pending_messages()` streams updates from the session log.
@@ -186,7 +197,7 @@ On startup, vibego syncs the repository `AGENTS-template.md` block into `~/.gemi
 
 - Master bot will poll all project bots and invoke run/stop scripts to orchestrate workers; current version ships the
   worker layout and logging standard first.
-- Gemini CLI is supported; next iterations can extend tool-call handling and richer session management if needed.
+- Gemini / Copilot CLIs are supported; next iterations can extend tool-call handling and richer session management if needed.
 
 ## Notes
 

@@ -148,12 +148,12 @@ Gemini 基于官方 `gemini-cli`（Homebrew 包名 `gemini-cli`，命令为 `gem
 
 ### Copilot
 
-Copilot 基于 GitHub Copilot CLI，默认命令为 `copilot`，正式回推来源为 `~/.copilot/session-state/**/events.jsonl`。
+Copilot 基于 GitHub Copilot CLI，默认命令为 `copilot --yolo`，正式回推来源为 `~/.copilot/session-state/**/events.jsonl`。
 
 | 变量 | 说明 |
 |------|------|
 | `COPILOT_WORKDIR` | 工程目录（默认与 `MODEL_WORKDIR` 相同） |
-| `COPILOT_CMD` | CLI 启动命令，默认 `copilot` |
+| `COPILOT_CMD` | CLI 启动命令，默认 `copilot --yolo` |
 | `COPILOT_SESSION_ROOT` | 会话根目录，默认 `~/.copilot/session-state` |
 | `COPILOT_SESSION_GLOB` | 会话文件匹配，默认 `events.jsonl` |
 
