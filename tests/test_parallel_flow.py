@@ -1156,6 +1156,102 @@ def test_parallel_branch_prefix_text_uses_custom_prefix_and_continues(monkeypatc
     assert origin.chat.id not in bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS
 
 
+def test_parallel_dispatch_target_clears_fsm_before_branch_prefix_input(monkeypatch, tmp_path: Path):
+    """选择并行 CLI 后，应先退出 dispatch_target 状态，避免分支前缀输入被旧处理器吞掉。"""
+
+    origin = DummyMessage()
+    callback = DummyCallback("task:push_model:TASK_0001", origin)
+    state, _storage = make_state(origin)
+
+    async def fake_get_task(task_id: str):
+        assert task_id == "TASK_0001"
+        return _task()
+
+    async def fake_begin_parallel_launch(
+        *,
+        task,
+        chat_id: int,
+        origin_message,
+        actor,
+        push_mode,
+        send_mode,
+        supplement,
+    ) -> None:
+        bot.PARALLEL_LAUNCH_SESSIONS["demo"] = bot.ParallelLaunchSession(
+            token="demo",
+            task=task,
+            chat_id=chat_id,
+            actor=actor,
+            origin_message=origin_message,
+            push_mode=push_mode,
+            send_mode=send_mode,
+            supplement=supplement,
+            repo_options=[
+                (
+                    "backend-java",
+                    Path("/tmp/backend-java"),
+                    "backend-java",
+                    [BranchRef(name="develop", source="local")],
+                )
+            ],
+            selections={"backend-java": BranchRef(name="develop", source="local")},
+            current_branch_labels={"backend-java": "develop"},
+        )
+
+    captured: dict[str, object] = {}
+
+    def fake_prepare_parallel_workspace(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    async def fake_start_parallel_tmux_session(task, workspace_root):
+        return "vibe-par-demo", tmp_path / "pointer.txt"
+
+    async def fake_upsert_session(**_kwargs):
+        return None
+
+    async def fake_push_task_to_model(*_args, **_kwargs):
+        return True, "PROMPT", tmp_path / "session.jsonl"
+
+    async def fake_send_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_begin_parallel_launch", fake_begin_parallel_launch)
+    monkeypatch.setattr(bot, "prepare_parallel_workspace", fake_prepare_parallel_workspace)
+    monkeypatch.setattr(bot, "_start_parallel_tmux_session", fake_start_parallel_tmux_session)
+    monkeypatch.setattr(bot.PARALLEL_SESSION_STORE, "upsert_session", fake_upsert_session)
+    monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_send_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    async def _scenario() -> None:
+        await bot.on_task_push_model(callback, state)
+        assert await state.get_state() == bot.TaskPushStates.waiting_dispatch_target.state
+
+        dispatch_target_message = DummyMessage(chat_id=origin.chat.id, user_id=origin.from_user.id)
+        dispatch_target_message.text = bot.PUSH_TARGET_PARALLEL
+        await bot.on_task_push_model_dispatch_target(dispatch_target_message, state)
+
+        assert await state.get_state() is None
+        assert "demo" in bot.PARALLEL_LAUNCH_SESSIONS
+
+        confirm_callback = DummyCallback(f"{bot.PARALLEL_BRANCH_CONFIRM_PREFIX}demo", origin)
+        await bot.on_parallel_branch_confirm_callback(confirm_callback)
+
+        prefix_message = DummyMessage(chat_id=origin.chat.id, user_id=origin.from_user.id)
+        prefix_message.text = "TRADE114"
+        await bot.on_text(prefix_message, state)
+
+    asyncio.run(_scenario())
+
+    assert captured["branch_prefix"] == "TRADE114"
+    assert origin.chat.id not in bot.CHAT_PARALLEL_BRANCH_PREFIX_INPUTS
+
+
 def test_parallel_branch_confirm_callback_acknowledges_callback_before_prepare(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     session = bot.ParallelLaunchSession(

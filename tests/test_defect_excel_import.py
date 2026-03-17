@@ -138,7 +138,7 @@ def test_task_defect_excel_template_callback_sends_xlsx_document():
 def test_task_defect_excel_upload_valid_file_enters_confirm(monkeypatch, tmp_path: Path):
     workbook_path = _build_workbook(
         tmp_path / "defects.xlsx",
-        [["登录按钮无响应", "1. 打开页面", "页面应进入首页", "", 3]],
+        [["登录按钮无响应", "已登录测试账号", "1. 打开页面", "页面应进入首页", "", 3]],
     )
     message = DummyMessage()
     message.document = SimpleNamespace(file_name="defects.xlsx")
@@ -172,6 +172,7 @@ def test_task_defect_excel_upload_valid_file_enters_confirm(monkeypatch, tmp_pat
         assert await state.get_state() == bot.TaskDefectExcelImportStates.waiting_confirm.state
         data = await state.get_data()
         assert len(data["validated_rows"]) == 1
+        assert data["validated_rows"][0]["precondition"] == "已登录测试账号"
         assert message.calls
         assert "Excel 预检通过" in message.calls[-1][0]
 
@@ -237,6 +238,7 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
             validated_rows=[
                 {
                     "title": "缺陷一",
+                    "precondition": "已登录测试账号",
                     "reproduction": "步骤1",
                     "expected_result": "结果1",
                     "related_task_id": None,
@@ -244,6 +246,7 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
                 },
                 {
                     "title": "缺陷二",
+                    "precondition": "",
                     "reproduction": "",
                     "expected_result": "",
                     "related_task_id": None,
@@ -254,10 +257,10 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
     )
     asyncio.run(state.set_state(bot.TaskDefectExcelImportStates.waiting_confirm))
 
-    created: list[tuple[str, int]] = []
+    created: list[dict[str, object]] = []
 
     async def fake_create_root_task(*, title, status, priority, task_type, tags, due_date, description, related_task_id, actor):
-        created.append((title, priority))
+        created.append({"title": title, "priority": priority, "description": description})
         return SimpleNamespace(id=f"TASK_{len(created):04d}")
 
     async def fake_build_task_list_view(*, status, page, limit):
@@ -269,7 +272,12 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
     async def _scenario() -> None:
         await bot.on_task_defect_excel_confirm(message, state)
         assert await state.get_state() is None
-        assert created == [("缺陷一", 3), ("缺陷二", 2)]
+        assert created[0]["title"] == "缺陷一"
+        assert created[0]["priority"] == 3
+        assert created[0]["description"] == "前置条件：\n已登录测试账号\n\n复现步骤：\n步骤1\n\n预期结果：\n结果1"
+        assert created[1]["title"] == "缺陷二"
+        assert created[1]["priority"] == 2
+        assert created[1]["description"] == "前置条件：\n-\n\n复现步骤：\n-\n\n预期结果：\n-"
         assert origin_message.edits, "创建完成后应恢复原任务列表"
         assert message.calls
         assert "Excel 导入结果" in message.calls[-1][0]

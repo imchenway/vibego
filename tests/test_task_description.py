@@ -249,17 +249,33 @@ def test_format_task_detail_without_history():
     assert "📊 状态：" not in result
 
 
-def test_format_task_detail_defect_uses_reproduction_and_expected_result():
-    """缺陷任务详情应优先展示复现步骤与期望结果。"""
+def test_format_task_detail_defect_uses_precondition_reproduction_and_expected_result():
+    """缺陷任务详情应优先展示前置条件、复现步骤与预期结果。"""
 
     task = _make_task(task_id="TASK_0111", title="缺陷任务", status="research", task_type="defect")
+    task.description = "前置条件：\n已登录测试账号\n\n复现步骤：\n1. 打开页面\n\n预期结果：\n页面应正常显示"
+
+    result = bot._format_task_detail(task, notes=())
+
+    assert "📌 前置条件：已登录测试账号" in result
+    assert "🧪 复现步骤：" in result
+    assert "打开页面" in result
+    assert "🎯 预期结果：页面应正常显示" in result
+    assert "🖊️ 描述：" not in result
+
+
+def test_format_task_detail_defect_legacy_two_fields_fill_default_precondition():
+    """历史双字段缺陷描述仍应被识别，并补齐默认前置条件。"""
+
+    task = _make_task(task_id="TASK_0115", title="历史双字段缺陷", status="research", task_type="defect")
     task.description = "复现步骤：\n1. 打开页面\n\n期望结果：\n页面应正常显示"
 
     result = bot._format_task_detail(task, notes=())
 
+    assert "📌 前置条件：-" in result
     assert "🧪 复现步骤：" in result
     assert "打开页面" in result
-    assert "🎯 期望结果：页面应正常显示" in result
+    assert "🎯 预期结果：页面应正常显示" in result
     assert "🖊️ 描述：" not in result
 
 
@@ -4829,8 +4845,8 @@ def test_build_model_push_payload_with_supplement():
     assert "测试阶段补充说明：" not in payload
 
 
-def test_build_model_push_payload_defect_uses_reproduction_and_expected_result():
-    """缺陷任务推送到模型时应展示复现步骤与期望结果。"""
+def test_build_model_push_payload_defect_uses_precondition_reproduction_and_expected_result():
+    """缺陷任务推送到模型时应展示前置条件、复现步骤与预期结果。"""
 
     task = TaskRecord(
         id="TASK_DEFECT_PUSH",
@@ -4841,7 +4857,7 @@ def test_build_model_push_payload_defect_uses_reproduction_and_expected_result()
         task_type="defect",
         tags=(),
         due_date=None,
-        description="复现步骤：\n1. 点击按钮\n\n期望结果：\n应弹出成功提示",
+        description="前置条件：\n已登录测试账号\n\n复现步骤：\n1. 点击按钮\n\n预期结果：\n应弹出成功提示",
         parent_id=None,
         root_id="TASK_DEFECT_PUSH",
         depth=0,
@@ -4853,14 +4869,15 @@ def test_build_model_push_payload_defect_uses_reproduction_and_expected_result()
 
     payload = bot._build_model_push_payload(task, supplement="补充内容")
 
+    assert "前置条件：\n~~~\n已登录测试账号\n~~~" in payload
     assert "复现步骤：\n~~~\n1. 点击按钮\n~~~" in payload
-    assert "期望结果：\n~~~\n应弹出成功提示\n~~~" in payload
+    assert "预期结果：\n~~~\n应弹出成功提示\n~~~" in payload
     assert "补充任务描述：\n~~~\n补充内容\n~~~" in payload
-    assert "任务描述：\n~~~\n复现步骤：" not in payload
+    assert "任务描述：\n~~~\n前置条件：" not in payload
 
 
-def test_build_task_context_block_for_model_defect_uses_reproduction_and_expected_result():
-    """任务上下文块在缺陷任务下也应输出双字段结构。"""
+def test_build_task_context_block_for_model_defect_uses_precondition_reproduction_and_expected_result():
+    """任务上下文块在缺陷任务下也应输出三字段结构。"""
 
     task = TaskRecord(
         id="TASK_DEFECT_CTX",
@@ -4871,7 +4888,7 @@ def test_build_task_context_block_for_model_defect_uses_reproduction_and_expecte
         task_type="defect",
         tags=(),
         due_date=None,
-        description="复现步骤：\n打开控制台\n\n期望结果：\n不应报错",
+        description="前置条件：\n已登录测试账号\n\n复现步骤：\n打开控制台\n\n预期结果：\n不应报错",
         parent_id=None,
         root_id="TASK_DEFECT_CTX",
         depth=0,
@@ -4888,10 +4905,11 @@ def test_build_task_context_block_for_model_defect_uses_reproduction_and_expecte
         attachments=(),
     )
 
+    assert "前置条件：\n~~~\n已登录测试账号\n~~~" in block
     assert "复现步骤：\n~~~\n打开控制台\n~~~" in block
-    assert "期望结果：\n~~~\n不应报错\n~~~" in block
+    assert "预期结果：\n~~~\n不应报错\n~~~" in block
     assert "补充任务描述：\n~~~\n补充说明\n~~~" in block
-    assert "任务描述：\n~~~\n复现步骤：" not in block
+    assert "任务描述：\n~~~\n前置条件：" not in block
 
 
 def test_build_model_push_payload_task_uses_current_and_expected_effect():
