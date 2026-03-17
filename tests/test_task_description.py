@@ -1134,6 +1134,43 @@ def test_push_model_choice_for_non_codex_skips_send_mode(monkeypatch):
     assert bot._build_push_supplement_prompt() in choice_text
 
 
+def test_push_model_choice_for_copilot_prompts_send_mode(monkeypatch):
+    """Copilot 在补充描述后，也应进入发送方式选择。"""
+
+    message = DummyMessage()
+    state, _storage = make_state(message)
+    asyncio.run(
+        state.update_data(
+            task_id="TASK_0001",
+            chat_id=message.chat.id,
+        )
+    )
+    asyncio.run(state.set_state(bot.TaskPushStates.waiting_choice))
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
+    async def fake_get_task(_task_id: str):
+        return object()
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+
+    choice_message = DummyMessage()
+    choice_message.text = bot.PUSH_MODE_PLAN
+
+    asyncio.run(bot.on_task_push_model_choice(choice_message, state))
+
+    assert asyncio.run(state.get_state()) == bot.TaskPushStates.waiting_supplement.state
+
+    supplement_message = DummyMessage()
+    supplement_message.text = "补充上下文"
+    asyncio.run(bot.on_task_push_model_supplement(supplement_message, state))
+
+    assert asyncio.run(state.get_state()) == bot.TaskPushStates.waiting_send_mode.state
+    assert choice_message.calls
+    assert supplement_message.calls
+    prompt_text, _, _, _ = supplement_message.calls[0]
+    assert bot._build_push_send_mode_prompt() in prompt_text
+
+
 def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_path: Path):
     """推送到模型：当任务存在关联任务时，仅包含关联任务编码（不再展开关联任务详情）。"""
 

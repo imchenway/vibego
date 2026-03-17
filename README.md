@@ -149,6 +149,7 @@ Gemini 基于官方 `gemini-cli`（Homebrew 包名 `gemini-cli`，命令为 `gem
 ### Copilot
 
 Copilot 基于 GitHub Copilot CLI，默认命令为 `copilot --yolo`，正式回推来源为 `~/.copilot/session-state/**/events.jsonl`。
+Telegram 主菜单会按 Copilot 的 `interactive / plan / autopilot` 三态显示 `🧭 MODE`；排队发送默认使用 `Ctrl+Enter`，立即发送仍使用 `Enter`。
 
 | 变量 | 说明 |
 |------|------|
@@ -156,6 +157,7 @@ Copilot 基于 GitHub Copilot CLI，默认命令为 `copilot --yolo`，正式回
 | `COPILOT_CMD` | CLI 启动命令，默认 `copilot --yolo` |
 | `COPILOT_SESSION_ROOT` | 会话根目录，默认 `~/.copilot/session-state` |
 | `COPILOT_SESSION_GLOB` | 会话文件匹配，默认 `events.jsonl` |
+| `COPILOT_QUEUE_SUBMIT_KEY` | 排队发送提交键，默认 `C-Enter`；若终端不区分 `Ctrl+Enter` 可改为 `C-q` |
 
 ## aiogram Worker 行为
 

@@ -42,8 +42,10 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
     monkeypatch.setattr(bot, "MODEL_DISPLAY_LABEL", "Copilot")
     bot.SESSION_OFFSETS.clear()
+    bot.WORKER_COPILOT_MODE_STATE_CACHE.clear()
     yield
     bot.SESSION_OFFSETS.clear()
+    bot.WORKER_COPILOT_MODE_STATE_CACHE.clear()
 
 
 def test_extract_copilot_final_answer_message() -> None:
@@ -130,6 +132,106 @@ def test_extract_copilot_ask_user_as_request_input() -> None:
     assert metadata["questions"][0]["id"] == "scope"
     assert metadata["questions"][0]["options"][0]["label"] == "仅库存页"
     assert metadata["questions"][0]["options"][1]["label"] == "两页都改"
+
+
+def test_extract_copilot_ask_user_free_text_schema_as_request_input() -> None:
+    event = _build_copilot_assistant_message(
+        phase="commentary",
+        tool_requests=[
+            {
+                "name": "ask_user",
+                "toolCallId": "tool_ask_free_text",
+                "type": "tool_request",
+                "arguments": {
+                    "message": "请输入自定义分支名",
+                    "requestedSchema": {
+                        "properties": {
+                            "branch_name": {
+                                "type": "string",
+                                "title": "分支名",
+                                "description": "请输入分支名",
+                            }
+                        },
+                        "required": ["branch_name"],
+                    },
+                },
+            }
+        ],
+    )
+
+    result = bot._extract_deliverable_payload(event, event_timestamp=event["timestamp"])
+
+    assert result is not None
+    kind, text, metadata = result
+    assert kind == bot.DELIVERABLE_KIND_REQUEST_INPUT
+    assert "模型请求你补充决策" in text
+    assert metadata is not None
+    assert metadata["tool_name"] == "ask_user"
+    assert metadata["call_id"] == "tool_ask_free_text"
+    assert metadata["questions"][0]["id"] == "branch_name"
+    assert metadata["questions"][0]["options"] == []
+
+
+def test_extract_copilot_ask_user_missing_schema_reports_reason() -> None:
+    event = _build_copilot_assistant_message(
+        phase="commentary",
+        tool_requests=[
+            {
+                "name": "ask_user",
+                "toolCallId": "tool_ask_bad",
+                "type": "tool_request",
+                "arguments": {
+                    "message": "请补充信息",
+                    "requestedSchema": None,
+                },
+            }
+        ],
+    )
+
+    result = bot._extract_deliverable_payload(event, event_timestamp=event["timestamp"])
+
+    assert result is not None
+    kind, text, metadata = result
+    assert kind == bot.DELIVERABLE_KIND_REQUEST_INPUT
+    assert "缺少 requestedSchema" in text
+    assert metadata == {
+        "error": "ask_user_parse_failed",
+        "tool_name": "ask_user",
+        "call_id": "tool_ask_bad",
+        "reason": "missing_requested_schema",
+    }
+
+
+def test_read_session_events_jsonl_updates_copilot_mode_cache_for_primary_session(tmp_path: Path) -> None:
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    session_file = session_dir / "events.jsonl"
+    pointer = tmp_path / "pointer.txt"
+    pointer.write_text(str(session_file), encoding="utf-8")
+    session_file.write_text(
+        json.dumps(
+            {
+                "type": "session.mode_changed",
+                "timestamp": "2026-03-17T10:01:00.000Z",
+                "data": {"oldMode": "interactive", "newMode": "autopilot"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bot.WORKER_COPILOT_MODE_STATE_CACHE.clear()
+    original_pointer = bot.CODEX_SESSION_FILE_PATH
+    try:
+        bot.CODEX_SESSION_FILE_PATH = str(pointer)
+        new_offset, deliverables = bot._read_session_events_jsonl(session_file, 0)
+    finally:
+        bot.CODEX_SESSION_FILE_PATH = original_pointer
+
+    assert new_offset > 0
+    assert deliverables == []
+    assert bot._get_worker_copilot_mode_state_cache() == "autopilot"
 
 
 def test_read_session_meta_cwd_supports_copilot_session_start(tmp_path: Path) -> None:

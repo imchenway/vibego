@@ -243,6 +243,8 @@ PUSH_SEND_MODE_IMMEDIATE = "immediate"
 PUSH_SEND_MODE_QUEUED = "queued"
 PUSH_SEND_MODE_IMMEDIATE_LABEL = "立即发送"
 PUSH_SEND_MODE_QUEUED_LABEL = "排队发送"
+CODEX_QUEUE_SUBMIT_KEY = "Tab"
+COPILOT_QUEUE_SUBMIT_KEY = (os.environ.get("COPILOT_QUEUE_SUBMIT_KEY") or "C-Enter").strip() or "C-Enter"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -540,6 +542,39 @@ def _is_copilot_model() -> bool:
     """判断当前 worker 是否运行 Copilot 模型。"""
 
     return MODEL_CANONICAL_NAME == "copilot"
+
+
+def _supports_queued_send_mode() -> bool:
+    """判断当前模型是否支持“排队发送”能力。"""
+
+    return _is_codex_model() or _is_copilot_model()
+
+
+def _queue_send_submit_key() -> str:
+    """返回当前模型在 tmux 中执行排队发送时使用的提交键。"""
+
+    if _is_copilot_model():
+        return COPILOT_QUEUE_SUBMIT_KEY
+    return CODEX_QUEUE_SUBMIT_KEY
+
+
+def _humanize_tmux_submit_key(key_name: str) -> str:
+    """将 tmux 键名转换为更适合展示给用户的提示文案。"""
+
+    normalized = (key_name or "").strip()
+    return {
+        "Tab": "Tab",
+        "C-m": "Enter",
+        "C-Enter": "Ctrl+Enter",
+        "C-q": "Ctrl+Q",
+    }.get(normalized, normalized or "Enter")
+
+
+def _queued_send_manual_hint() -> str:
+    """返回当前模型排队发送失败时的人工兜底提示。"""
+
+    key_label = _humanize_tmux_submit_key(_queue_send_submit_key())
+    return f"若终端输入框仍停留未发送，请手动按 {key_label} 后重试一次推送。"
 
 
 @dataclass
@@ -1528,14 +1563,14 @@ def tmux_send_line(session: str, line: str):
 
 
 def tmux_queue_line(session: str, line: str):
-    """排队发送：尽量贴近用户手动输入后按 Tab 的行为，仅影响 queued 链路。"""
+    """排队发送：按模型选择对应提交键，仅影响 queued 链路。"""
 
     tmux = tmux_bin()
     subprocess.check_call(_tmux_cmd(tmux, "has-session", "-t", session))
     # 排队发送不复用“立即发送”的前置 Escape，避免干扰 Codex 当前会话状态。
     _tmux_send_text_chunks(tmux, session, line)
     time.sleep(0.2 if _is_claudecode_model() else 0.05)
-    subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, "Tab"))
+    subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, _queue_send_submit_key()))
 
 
 _TMUX_SHELL_COMMANDS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh"}
@@ -1644,7 +1679,7 @@ def _capture_tmux_recent_lines(line_count: int, tmux_session: Optional[str] = No
 
 
 def _extract_terminal_collaboration_mode(raw_output: str) -> Optional[str]:
-    """从 tmux 截图文本中提取底部协作模式（plan/default/...）。"""
+    """从 tmux 截图文本中提取底部协作模式（plan/interactive/autopilot/...）。"""
 
     text = normalize_newlines(raw_output or "")
     text = strip_ansi(text)
@@ -1656,7 +1691,7 @@ def _extract_terminal_collaboration_mode(raw_output: str) -> Optional[str]:
         if match:
             mode = (match.group(1) or "").strip().lower()
             # 仅接受已知模式，避免把普通句子（如 "no mode marker"）误判为模式值。
-            if mode in {"plan", "default"}:
+            if mode in KNOWN_TERMINAL_COLLABORATION_MODES:
                 return mode
     return None
 
@@ -2514,9 +2549,9 @@ async def _dispatch_prompt_to_model(
     )
 
     resolved_send_mode = _normalize_push_send_mode(send_mode)
-    if resolved_send_mode == PUSH_SEND_MODE_QUEUED and not _is_codex_model():
+    if resolved_send_mode == PUSH_SEND_MODE_QUEUED and not _supports_queued_send_mode():
         worker_log.warning(
-            "非 Codex 模型不支持排队发送，已回退为立即发送",
+            "当前模型不支持排队发送，已回退为立即发送",
             extra={"chat": chat_id, "model": MODEL_CANONICAL_NAME},
         )
         resolved_send_mode = PUSH_SEND_MODE_IMMEDIATE
@@ -2529,7 +2564,7 @@ async def _dispatch_prompt_to_model(
         else:
             tmux_send_line(target_session, dispatch_text)
     except subprocess.CalledProcessError as exc:
-        manual_hint = "若终端输入框仍停留未发送，请手动按 Tab 后重试一次推送。" if resolved_send_mode == PUSH_SEND_MODE_QUEUED else "若终端输入框仍停留未发送，请手动按 Enter 后重试一次推送。"
+        manual_hint = _queued_send_manual_hint() if resolved_send_mode == PUSH_SEND_MODE_QUEUED else "若终端输入框仍停留未发送，请手动按 Enter 后重试一次推送。"
         await _reply_to_chat(
             chat_id,
             (
@@ -4038,6 +4073,11 @@ WORKER_PLAN_MODE_BUTTON_PREFIX = "🧭 PLAN MODE:"
 WORKER_PLAN_MODE_BUTTON_TEXT_ON = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ON"
 WORKER_PLAN_MODE_BUTTON_TEXT_OFF = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} OFF"
 WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ?"
+WORKER_COPILOT_MODE_BUTTON_PREFIX = "🧭 MODE:"
+WORKER_COPILOT_MODE_BUTTON_TEXT_INTERACTIVE = f"{WORKER_COPILOT_MODE_BUTTON_PREFIX} INTERACTIVE"
+WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN = f"{WORKER_COPILOT_MODE_BUTTON_PREFIX} PLAN"
+WORKER_COPILOT_MODE_BUTTON_TEXT_AUTOPILOT = f"{WORKER_COPILOT_MODE_BUTTON_PREFIX} AUTOPILOT"
+WORKER_COPILOT_MODE_BUTTON_TEXT_UNKNOWN = f"{WORKER_COPILOT_MODE_BUTTON_PREFIX} ?"
 WORKER_PLAN_MODE_TOGGLE_KEY = (os.environ.get("WORKER_PLAN_MODE_TOGGLE_KEY") or PLAN_EXECUTION_EXIT_PLAN_KEY).strip() or PLAN_EXECUTION_EXIT_PLAN_KEY
 WORKER_PLAN_MODE_PROBE_LINES = max(_env_int("WORKER_PLAN_MODE_PROBE_LINES", 80), 20)
 WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS = max(_env_float("WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS", 0.8), 0.1)
@@ -4052,6 +4092,8 @@ WORKER_PLAN_MODE_STATUS_LINE_RE = re.compile(
 WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 # Worker 主菜单 PLAN MODE 状态缓存（按 tmux session 维度）。
 WORKER_PLAN_MODE_STATE_CACHE: Dict[str, Literal["on", "off", "unknown"]] = {}
+# Worker 主菜单 Copilot 三态缓存（按 tmux session 维度）。
+WORKER_COPILOT_MODE_STATE_CACHE: Dict[str, Literal["interactive", "plan", "autopilot", "unknown"]] = {}
 
 
 @dataclass
@@ -4108,6 +4150,101 @@ def _worker_plan_mode_cache_key() -> str:
 
     key = (TMUX_SESSION or "").strip()
     return key or "__default__"
+
+
+def _paths_equal(left: Optional[Path], right: Optional[Path]) -> bool:
+    """比较两个路径是否指向同一文件，兼容不存在文件的场景。"""
+
+    if left is None or right is None:
+        return False
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return str(left) == str(right)
+
+
+def _normalize_copilot_mode_state(raw_mode: Any) -> Optional[Literal["interactive", "plan", "autopilot"]]:
+    """将 Copilot/终端暴露的模式值归一化为三态枚举。"""
+
+    mode = str(raw_mode or "").strip().lower()
+    if mode in {"interactive", "standard", "default"}:
+        return "interactive"
+    if mode == "plan":
+        return "plan"
+    if mode == "autopilot":
+        return "autopilot"
+    return None
+
+
+def _set_worker_copilot_mode_state_cache(
+    state: Literal["interactive", "plan", "autopilot", "unknown"]
+) -> Literal["interactive", "plan", "autopilot", "unknown"]:
+    """写入当前 tmux session 的 Copilot 模式缓存。"""
+
+    normalized: Literal["interactive", "plan", "autopilot", "unknown"]
+    if state in {"interactive", "plan", "autopilot", "unknown"}:
+        normalized = state
+    else:  # pragma: no cover - typing 已兜底，运行时防御
+        normalized = "unknown"
+    WORKER_COPILOT_MODE_STATE_CACHE[_worker_plan_mode_cache_key()] = normalized
+    return normalized
+
+
+def _get_worker_copilot_mode_state_cache() -> Optional[Literal["interactive", "plan", "autopilot", "unknown"]]:
+    """读取当前 tmux session 的 Copilot 模式缓存。"""
+
+    cached = WORKER_COPILOT_MODE_STATE_CACHE.get(_worker_plan_mode_cache_key())
+    if cached in {"interactive", "plan", "autopilot", "unknown"}:
+        return cached
+    return None
+
+
+def _current_worker_session_path() -> Optional[Path]:
+    """返回主 worker 当前绑定的 session 文件路径。"""
+
+    if not CODEX_SESSION_FILE_PATH:
+        return None
+    pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
+    return _read_pointer_path(pointer_path)
+
+
+def _extract_copilot_mode_state_from_event(
+    event: Mapping[str, Any]
+) -> Optional[Literal["interactive", "plan", "autopilot"]]:
+    """从 Copilot 事件里提取三态模式。"""
+
+    if str(event.get("type") or "").strip() != "session.mode_changed":
+        return None
+    payload = event.get("data")
+    if not isinstance(payload, dict):
+        return None
+    return _normalize_copilot_mode_state(payload.get("newMode") or payload.get("mode"))
+
+
+def _read_latest_copilot_session_mode(
+    session_path: Path,
+) -> Optional[Literal["interactive", "plan", "autopilot"]]:
+    """扫描 session 文件，读取最近一次 Copilot 模式切换结果。"""
+
+    latest_mode: Optional[Literal["interactive", "plan", "autopilot"]] = None
+    try:
+        with open(session_path, "r", encoding="utf-8", errors="ignore") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                mode_state = _extract_copilot_mode_state_from_event(event)
+                if mode_state is not None:
+                    latest_mode = mode_state
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    return latest_mode
 
 
 def _resolve_worker_plan_mode_state_from_output(raw_output: str) -> Literal["on", "off"]:
@@ -4176,6 +4313,66 @@ async def _refresh_worker_plan_mode_state_cache_async(
     return await asyncio.to_thread(_refresh_worker_plan_mode_state_cache, force_probe=force_probe)
 
 
+def _resolve_copilot_mode_state_from_output(raw_output: str) -> Literal["interactive", "plan", "autopilot", "unknown"]:
+    """根据 tmux 输出文本解析 Copilot 三态模式。"""
+
+    return _normalize_copilot_mode_state(_extract_terminal_collaboration_mode(raw_output)) or "unknown"
+
+
+def _probe_worker_copilot_mode_state() -> Literal["interactive", "plan", "autopilot", "unknown"]:
+    """探测 Worker 主键盘上的 Copilot MODE 状态。"""
+
+    timeout = max(WORKER_PLAN_MODE_PROBE_TIMEOUT_SECONDS, 0.1)
+    try:
+        raw_output = subprocess.check_output(
+            _tmux_cmd(
+                tmux_bin(),
+                "capture-pane",
+                "-p",
+                "-t",
+                TMUX_SESSION,
+                "-S",
+                f"-{WORKER_PLAN_MODE_PROBE_LINES}",
+            ),
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        raw_output = ""
+
+    terminal_mode = _resolve_copilot_mode_state_from_output(raw_output)
+    if terminal_mode != "unknown":
+        return terminal_mode
+
+    session_path = _current_worker_session_path()
+    if session_path is not None:
+        latest_mode = _read_latest_copilot_session_mode(session_path)
+        if latest_mode is not None:
+            return latest_mode
+    return "unknown"
+
+
+def _refresh_worker_copilot_mode_state_cache(
+    *,
+    force_probe: bool = True,
+) -> Literal["interactive", "plan", "autopilot", "unknown"]:
+    """刷新 Copilot MODE 缓存；可按需仅返回已缓存状态。"""
+
+    cached = _get_worker_copilot_mode_state_cache()
+    if cached is not None and not force_probe:
+        return cached
+    return _set_worker_copilot_mode_state_cache(_probe_worker_copilot_mode_state())
+
+
+async def _refresh_worker_copilot_mode_state_cache_async(
+    *,
+    force_probe: bool = True,
+) -> Literal["interactive", "plan", "autopilot", "unknown"]:
+    """异步刷新 Copilot MODE 缓存，避免阻塞事件循环。"""
+
+    return await asyncio.to_thread(_refresh_worker_copilot_mode_state_cache, force_probe=force_probe)
+
+
 async def _refresh_worker_plan_mode_state_after_toggle_async(
     *,
     before_state: Literal["on", "off", "unknown"],
@@ -4196,6 +4393,31 @@ async def _refresh_worker_plan_mode_state_after_toggle_async(
             await asyncio.sleep(WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS)
         observed_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
         if observed_state in {"on", "off"} and observed_state != before_state:
+            return observed_state
+
+    return observed_state
+
+
+async def _refresh_worker_copilot_mode_state_after_toggle_async(
+    *,
+    before_state: Literal["interactive", "plan", "autopilot", "unknown"],
+) -> Literal["interactive", "plan", "autopilot", "unknown"]:
+    """切换 Copilot MODE 后短暂轮询，尽可能拿到稳定的新状态。"""
+
+    if WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS > 0:
+        await asyncio.sleep(WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS)
+
+    observed_state = await _refresh_worker_copilot_mode_state_cache_async(force_probe=True)
+    if before_state == "unknown":
+        return observed_state
+    if observed_state in {"interactive", "plan", "autopilot"} and observed_state != before_state:
+        return observed_state
+
+    for _ in range(WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS):
+        if WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS > 0:
+            await asyncio.sleep(WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS)
+        observed_state = await _refresh_worker_copilot_mode_state_cache_async(force_probe=True)
+        if observed_state in {"interactive", "plan", "autopilot"} and observed_state != before_state:
             return observed_state
 
     return observed_state
@@ -4229,6 +4451,7 @@ def _probe_worker_plan_mode_state() -> Literal["on", "off", "unknown"]:
 def _build_worker_main_keyboard(
     *,
     plan_mode_state: Optional[Literal["on", "off", "unknown"]] = None,
+    copilot_mode_state: Optional[Literal["interactive", "plan", "autopilot", "unknown"]] = None,
     refresh_plan_mode_state: bool = True,
 ) -> ReplyKeyboardMarkup:
     """Worker 端常驻键盘，提供任务列表与 PLAN MODE 切换入口。
@@ -4237,18 +4460,34 @@ def _build_worker_main_keyboard(
     仅当 refresh_plan_mode_state=False 时，才允许使用显式状态或缓存状态。
     """
 
-    if refresh_plan_mode_state:
-        resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=True)
-    elif plan_mode_state is not None:
-        resolved_plan_mode_state = _set_worker_plan_mode_state_cache(plan_mode_state)
+    if _is_copilot_model():
+        if refresh_plan_mode_state:
+            resolved_copilot_mode_state = _refresh_worker_copilot_mode_state_cache(force_probe=True)
+        elif copilot_mode_state is not None:
+            resolved_copilot_mode_state = _set_worker_copilot_mode_state_cache(copilot_mode_state)
+        else:
+            resolved_copilot_mode_state = _refresh_worker_copilot_mode_state_cache(force_probe=False)
+        if resolved_copilot_mode_state == "interactive":
+            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_INTERACTIVE
+        elif resolved_copilot_mode_state == "plan":
+            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN
+        elif resolved_copilot_mode_state == "autopilot":
+            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_AUTOPILOT
+        else:
+            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_UNKNOWN
     else:
-        resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=False)
-    if resolved_plan_mode_state == "on":
-        plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_ON
-    elif resolved_plan_mode_state == "off":
-        plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_OFF
-    else:
-        plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN
+        if refresh_plan_mode_state:
+            resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=True)
+        elif plan_mode_state is not None:
+            resolved_plan_mode_state = _set_worker_plan_mode_state_cache(plan_mode_state)
+        else:
+            resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=False)
+        if resolved_plan_mode_state == "on":
+            plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_ON
+        elif resolved_plan_mode_state == "off":
+            plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_OFF
+        else:
+            plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN
 
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -7455,7 +7694,10 @@ async def _build_session_live_snapshot_view(entry_key: str) -> tuple[str, Inline
         raise RuntimeError(f"无法读取 tmux 会话 {entry.tmux_session} 的输出，请确认会话仍在运行。") from exc
 
     if entry.kind == "main":
-        _set_worker_plan_mode_state_cache(_resolve_worker_plan_mode_state_from_output(raw_output))
+        if _is_copilot_model():
+            _set_worker_copilot_mode_state_cache(_resolve_copilot_mode_state_from_output(raw_output))
+        else:
+            _set_worker_plan_mode_state_cache(_resolve_worker_plan_mode_state_from_output(raw_output))
 
     cleaned = postprocess_tmux_output(raw_output)
     header = "\n".join(
@@ -9801,11 +10043,12 @@ def normalize_newlines(text: str) -> str:
 
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
-# 终端底部协作模式标识，例如：Plan mode / Plan mode (shift+tab to cycle)
+# 终端底部协作模式标识，例如：Plan mode / Standard mode / Autopilot mode
 TERMINAL_COLLABORATION_MODE_RE = re.compile(
     r"\b([a-z]+)\s+mode(?:\s*\(shift\+tab\s+to\s+cycle\))?\b",
     re.IGNORECASE,
 )
+KNOWN_TERMINAL_COLLABORATION_MODES = {"plan", "default", "interactive", "standard", "autopilot"}
 
 
 def strip_ansi(text: str) -> str:
@@ -12007,13 +12250,14 @@ def _normalize_ask_user_questions(
                 RequestInputOption(label="是", value=True),
                 RequestInputOption(label="否", value=False),
             ]
-        if not options:
+        supports_custom_input_only = field_type in {"string", "integer", "number"}
+        if not options and not supports_custom_input_only:
             continue
 
         title = str(field_schema.get("title") or "").strip()
         description = str(field_schema.get("description") or "").strip()
         question_text = title or description or raw_id
-        if safe_id not in required_fields:
+        if raw_id not in required_fields and field_name not in required_fields and safe_id not in required_fields:
             question_text = f"{question_text}（可选）"
 
         header_text = description or prompt_message
@@ -12027,6 +12271,34 @@ def _normalize_ask_user_questions(
         )
 
     return normalized
+
+
+def _describe_ask_user_parse_failure(tool_request: Mapping[str, Any]) -> Dict[str, Any]:
+    """生成 Copilot ask_user 解析失败时的诊断信息。"""
+
+    extra: Dict[str, Any] = {"error": "ask_user_parse_failed", "tool_name": "ask_user"}
+    call_id = str(tool_request.get("toolCallId") or tool_request.get("call_id") or "").strip()
+    if call_id:
+        extra["call_id"] = call_id
+
+    parsed_args = _parse_mapping_arguments(tool_request.get("arguments"))
+    if not isinstance(parsed_args, dict):
+        extra["reason"] = "invalid_arguments"
+        return extra
+
+    requested_schema = parsed_args.get("requestedSchema")
+    if not isinstance(requested_schema, dict):
+        extra["reason"] = "missing_requested_schema"
+        return extra
+
+    prompt_message = str(parsed_args.get("message") or "").strip()
+    questions = _normalize_ask_user_questions(
+        prompt_message=prompt_message,
+        requested_schema=requested_schema,
+    )
+    if not questions:
+        extra["reason"] = "no_supported_questions"
+    return extra
 
 
 def _parse_ask_user_tool_request(tool_request: Mapping[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -14090,14 +14362,24 @@ def _extract_copilot_tool_request(
         if request_input_result:
             text, extra = request_input_result
             return DELIVERABLE_KIND_REQUEST_INPUT, text, extra
+        error_extra = _describe_ask_user_parse_failure(tool_request)
+        reason_label = {
+            "invalid_arguments": "arguments 无法解析",
+            "missing_requested_schema": "缺少 requestedSchema",
+            "no_supported_questions": "未解析出可交互字段",
+        }.get(str(error_extra.get("reason") or "").strip(), "结构异常")
         worker_log.warning(
             "检测到 Copilot ask_user 但解析失败，已降级为提示文本",
-            extra={"timestamp": event_timestamp or "-"},
+            extra={
+                "timestamp": event_timestamp or "-",
+                "reason": str(error_extra.get("reason") or "-"),
+                "call_id": str(error_extra.get("call_id") or "-"),
+            },
         )
         return (
             DELIVERABLE_KIND_REQUEST_INPUT,
-            "⚠️ 检测到 ask_user，但题目解析失败，请手动在终端中继续交互。",
-            {"error": "ask_user_parse_failed", "tool_name": "ask_user"},
+            f"⚠️ 检测到 ask_user，但题目解析失败（{reason_label}），请手动在终端中继续交互。",
+            error_extra,
         )
 
     if function_name == "request_user_input":
@@ -14241,6 +14523,7 @@ def _read_session_events_jsonl(path: Path, offset: int) -> Tuple[int, List[Sessi
 
     events: List[SessionDeliverable] = []
     new_offset = offset
+    should_track_copilot_mode = _is_copilot_model() and _paths_equal(path, _current_worker_session_path())
 
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
@@ -14260,6 +14543,10 @@ def _read_session_events_jsonl(path: Path, offset: int) -> Tuple[int, List[Sessi
                 event_timestamp = event.get("timestamp")
                 if not isinstance(event_timestamp, str):
                     event_timestamp = None
+                if should_track_copilot_mode:
+                    copilot_mode_state = _extract_copilot_mode_state_from_event(event)
+                    if copilot_mode_state is not None:
+                        _set_worker_copilot_mode_state_cache(copilot_mode_state)
                 candidate = _extract_deliverable_payload(event, event_timestamp=event_timestamp)
                 if candidate:
                     kind, text, extra = candidate
@@ -15758,8 +16045,8 @@ async def on_task_batch_push_confirm(callback: CallbackQuery, state: FSMContext)
     if not selected_task_ids:
         await callback.answer("请先勾选至少一个任务。", show_alert=True)
         return
-    if not _is_codex_model():
-        await callback.answer("当前模型不支持批量排队推送，请切换到 Codex 后重试。", show_alert=True)
+    if not _supports_queued_send_mode():
+        await callback.answer("当前模型不支持批量排队推送，请切换到支持 queued 的模型后重试。", show_alert=True)
         return
 
     await state.clear()
@@ -15891,50 +16178,84 @@ async def on_session_live_refresh_parallel_callback(callback: CallbackQuery) -> 
 async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
     """处理主键盘 PLAN MODE 切换按钮。"""
 
-    before_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+    is_copilot = _is_copilot_model()
+    if is_copilot:
+        before_state = await _refresh_worker_copilot_mode_state_cache_async(force_probe=True)
+    else:
+        before_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
 
     try:
         await asyncio.to_thread(tmux_send_key, TMUX_SESSION, WORKER_PLAN_MODE_TOGGLE_KEY)
     except FileNotFoundError:
-        _set_worker_plan_mode_state_cache("unknown")
-        await message.answer(
-            "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
-            reply_markup=_build_worker_main_keyboard(
+        if is_copilot:
+            _set_worker_copilot_mode_state_cache("unknown")
+            reply_markup = _build_worker_main_keyboard(
+                copilot_mode_state="unknown",
+                refresh_plan_mode_state=False,
+            )
+        else:
+            _set_worker_plan_mode_state_cache("unknown")
+            reply_markup = _build_worker_main_keyboard(
                 plan_mode_state="unknown",
                 refresh_plan_mode_state=False,
-            ),
+            )
+        await message.answer(
+            "未检测到 tmux，可通过 'brew install tmux' 安装后重试。",
+            reply_markup=reply_markup,
         )
         return
     except subprocess.CalledProcessError:
-        _set_worker_plan_mode_state_cache("unknown")
-        await message.answer(
-            f"无法切换 PLAN MODE，请确认 tmux 会话 {TMUX_SESSION} 已启动。",
-            reply_markup=_build_worker_main_keyboard(
+        if is_copilot:
+            _set_worker_copilot_mode_state_cache("unknown")
+            reply_markup = _build_worker_main_keyboard(
+                copilot_mode_state="unknown",
+                refresh_plan_mode_state=False,
+            )
+        else:
+            _set_worker_plan_mode_state_cache("unknown")
+            reply_markup = _build_worker_main_keyboard(
                 plan_mode_state="unknown",
                 refresh_plan_mode_state=False,
-            ),
+            )
+        await message.answer(
+            f"无法切换{'模式' if is_copilot else 'PLAN MODE'}，请确认 tmux 会话 {TMUX_SESSION} 已启动。",
+            reply_markup=reply_markup,
         )
         return
 
-    after_state = await _refresh_worker_plan_mode_state_after_toggle_async(before_state=before_state)
-    state_label = {
-        "on": "ON",
-        "off": "OFF",
-        "unknown": "?",
-    }.get(after_state, "?")
-
-    summary = f"主菜单已刷新，当前 PLAN MODE：{state_label}"
+    if is_copilot:
+        after_state = await _refresh_worker_copilot_mode_state_after_toggle_async(before_state=before_state)
+        state_label = {
+            "interactive": "INTERACTIVE",
+            "plan": "PLAN",
+            "autopilot": "AUTOPILOT",
+            "unknown": "?",
+        }.get(after_state, "?")
+        summary = f"主菜单已刷新，当前 MODE：{state_label}"
+        reply_markup = _build_worker_main_keyboard(
+            copilot_mode_state=after_state,
+            refresh_plan_mode_state=False,
+        )
+    else:
+        after_state = await _refresh_worker_plan_mode_state_after_toggle_async(before_state=before_state)
+        state_label = {
+            "on": "ON",
+            "off": "OFF",
+            "unknown": "?",
+        }.get(after_state, "?")
+        summary = f"主菜单已刷新，当前 PLAN MODE：{state_label}"
+        reply_markup = _build_worker_main_keyboard(
+            plan_mode_state=after_state,
+            refresh_plan_mode_state=False,
+        )
 
     await message.answer(
         summary,
-        reply_markup=_build_worker_main_keyboard(
-            plan_mode_state=after_state,
-            refresh_plan_mode_state=False,
-        ),
+        reply_markup=reply_markup,
     )
 
 
-@router.message(F.text.regexp(r"^🧭 PLAN MODE:"))
+@router.message(F.text.regexp(r"^🧭 (?:PLAN MODE:|MODE:)"))
 async def on_worker_plan_mode_button(message: Message) -> None:
     await _handle_worker_plan_mode_toggle_request(message)
 
@@ -19785,7 +20106,7 @@ async def on_task_batch_push_mode_choice(message: Message, state: FSMContext) ->
             reply_markup=_build_push_mode_keyboard(),
         )
         return
-    if not _is_codex_model():
+    if not _supports_queued_send_mode():
         await state.clear()
         await _restore_task_batch_push_view(
             target_message=data.get("batch_origin_message"),
@@ -19796,7 +20117,7 @@ async def on_task_batch_push_mode_choice(message: Message, state: FSMContext) ->
             selected_task_ids=task_ids,
             selected_task_order=task_ids,
         )
-        await message.answer("当前模型不支持批量排队推送，请切换到 Codex 后重试。", reply_markup=_build_worker_main_keyboard())
+        await message.answer("当前模型不支持批量排队推送，请切换到支持 queued 的模型后重试。", reply_markup=_build_worker_main_keyboard())
         return
 
     await message.answer(
@@ -19920,7 +20241,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
     actor = _actor_from_callback(callback)
     push_mode = (data.get("push_mode") or "").strip().upper()
     send_mode = _normalize_push_send_mode(data.get("send_mode"))
-    if _is_codex_model() and not data.get("send_mode"):
+    if _supports_queued_send_mode() and not data.get("send_mode"):
         await state.update_data(
             pending_push_supplement=None,
             pending_push_attachments=[],
@@ -20042,7 +20363,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         supplement = _build_attachment_only_supplement(saved_attachments)
 
     serialized = [_serialize_saved_attachment(item) for item in saved_attachments] if saved_attachments else []
-    if _is_codex_model() and not data.get("send_mode"):
+    if _supports_queued_send_mode() and not data.get("send_mode"):
         await state.update_data(
             pending_push_supplement=supplement,
             pending_push_attachments=serialized,

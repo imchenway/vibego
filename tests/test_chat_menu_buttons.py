@@ -399,6 +399,54 @@ def test_refresh_worker_plan_mode_state_cache_updates_cache(monkeypatch):
     assert bot._get_worker_plan_mode_state_cache() == "off"
 
 
+def test_worker_main_keyboard_uses_copilot_mode_button(monkeypatch):
+    bot.WORKER_COPILOT_MODE_STATE_CACHE.clear()
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
+    monkeypatch.setattr(bot, "_probe_worker_copilot_mode_state", lambda: "autopilot")
+
+    markup = bot._build_worker_main_keyboard()
+
+    assert markup.keyboard[1][1].text == bot.WORKER_COPILOT_MODE_BUTTON_TEXT_AUTOPILOT
+    assert bot._get_worker_copilot_mode_state_cache() == "autopilot"
+
+
+def test_refresh_worker_copilot_mode_state_cache_updates_cache(monkeypatch):
+    bot.WORKER_COPILOT_MODE_STATE_CACHE.clear()
+    monkeypatch.setattr(bot, "_probe_worker_copilot_mode_state", lambda: "plan")
+
+    refreshed = bot._refresh_worker_copilot_mode_state_cache(force_probe=True)
+
+    assert refreshed == "plan"
+    assert bot._get_worker_copilot_mode_state_cache() == "plan"
+
+
+def test_worker_copilot_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
+    states = iter(["interactive", "plan"])
+    sent_keys = []
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_STABILIZE_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_ROUNDS", 0)
+    monkeypatch.setattr(bot, "WORKER_PLAN_MODE_TOGGLE_RETRY_GAP_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "_probe_worker_copilot_mode_state", lambda: next(states))
+    monkeypatch.setattr(
+        bot,
+        "tmux_send_key",
+        lambda session, key: sent_keys.append((session, key)),
+    )
+
+    message = _DummyMessage(bot.WORKER_COPILOT_MODE_BUTTON_TEXT_INTERACTIVE)
+    asyncio.run(bot.on_worker_plan_mode_button(message))
+
+    assert sent_keys == [(bot.TMUX_SESSION, bot.WORKER_PLAN_MODE_TOGGLE_KEY)]
+    assert len(message._answers) == 1
+    text, kwargs = message._answers[0]
+    assert "当前 MODE：PLAN" in text
+    reply_markup = kwargs.get("reply_markup")
+    assert isinstance(reply_markup, ReplyKeyboardMarkup)
+    assert reply_markup.keyboard[1][1].text == bot.WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN
+
+
 def test_refresh_worker_plan_mode_state_after_toggle_retries_until_changed(monkeypatch):
     states = iter(["off", "off", "on"])
 

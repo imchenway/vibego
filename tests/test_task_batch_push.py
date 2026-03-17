@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -317,7 +318,8 @@ def test_batch_push_confirm_with_multiple_sessions_opens_session_picker(monkeypa
     asyncio.run(_scenario())
 
 
-def test_batch_push_mode_choice_dispatches_selected_tasks_in_order_with_queued_send_mode(monkeypatch):
+@pytest.mark.parametrize("model_name", ["codex", "copilot"])
+def test_batch_push_mode_choice_dispatches_selected_tasks_in_order_with_queued_send_mode(monkeypatch, model_name):
     message = DummyMessage(text=bot.PUSH_MODE_PLAN)
     state, _storage = make_state(message)
 
@@ -355,7 +357,7 @@ def test_batch_push_mode_choice_dispatches_selected_tasks_in_order_with_queued_s
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
     monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
     monkeypatch.setattr(bot, "_build_task_list_view", fake_build_task_list_view)
-    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", model_name)
 
     async def _scenario() -> None:
         await bot.on_task_batch_push_mode_choice(message, state)

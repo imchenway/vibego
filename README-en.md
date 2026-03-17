@@ -133,6 +133,7 @@ On startup, vibego syncs the repository `AGENTS-template.md` block into `~/.gemi
 ### Copilot
 
 Copilot is powered by GitHub Copilot CLI, with `copilot --yolo` as the default launch command.
+The Telegram main keyboard shows Copilot's `interactive / plan / autopilot` state as `🧭 MODE`; queued send defaults to `Ctrl+Enter`, while immediate send still uses `Enter`.
 
 | Variable | Description |
 |----------|-------------|
@@ -140,6 +141,7 @@ Copilot is powered by GitHub Copilot CLI, with `copilot --yolo` as the default l
 | `COPILOT_CMD` | CLI launch command, defaults to `copilot --yolo` |
 | `COPILOT_SESSION_ROOT` | Session root directory, defaults to `~/.copilot/session-state` |
 | `COPILOT_SESSION_GLOB` | Session file glob, defaults to `events.jsonl` |
+| `COPILOT_QUEUE_SUBMIT_KEY` | Queued-send submit key, defaults to `C-Enter`; switch to `C-q` if your terminal does not expose `Ctrl+Enter` distinctly |
 
 ## aiogram Worker Behaviour
 
