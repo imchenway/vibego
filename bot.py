@@ -244,7 +244,7 @@ PUSH_SEND_MODE_QUEUED = "queued"
 PUSH_SEND_MODE_IMMEDIATE_LABEL = "立即发送"
 PUSH_SEND_MODE_QUEUED_LABEL = "排队发送"
 CODEX_QUEUE_SUBMIT_KEY = "Tab"
-COPILOT_QUEUE_SUBMIT_KEY = (os.environ.get("COPILOT_QUEUE_SUBMIT_KEY") or "C-Enter").strip() or "C-Enter"
+COPILOT_QUEUE_SUBMIT_KEY = (os.environ.get("COPILOT_QUEUE_SUBMIT_KEY") or "C-q").strip() or "C-q"
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()

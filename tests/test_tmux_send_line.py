@@ -150,8 +150,32 @@ def test_tmux_queue_line_uses_tab_without_double_enter(monkeypatch):
     assert 2.0 not in sleep_calls
 
 
-def test_tmux_queue_line_uses_ctrl_enter_for_copilot(monkeypatch):
-    """Copilot 排队发送应使用 Ctrl+Enter 提交。"""
+def test_tmux_queue_line_uses_ctrl_q_for_copilot_by_default(monkeypatch):
+    """Copilot 排队发送默认应使用 Ctrl+Q 提交。"""
+
+    _setup_tmux_send_line_mocks(monkeypatch)
+    monkeypatch.setattr(bot, "TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED", True)
+    monkeypatch.setattr(bot, "TMUX_SEND_LINE_DOUBLE_ENTER_DELAY_SECONDS", 2.0)
+    monkeypatch.setattr(bot, "_is_claudecode_model", lambda: False)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
+
+    sent_calls: list[list[str]] = []
+
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        subprocess,
+        "check_call",
+        lambda cmd, *args, **kwargs: sent_calls.append(cmd) or 0,
+    )
+
+    bot.tmux_queue_line("demo", "hello")
+
+    assert any(cmd[-1] == "C-q" for cmd in sent_calls)
+    assert not any(cmd[-1] == "Tab" for cmd in sent_calls)
+
+
+def test_tmux_queue_line_allows_ctrl_enter_override_for_copilot(monkeypatch):
+    """Copilot 仍可通过环境配置改回 Ctrl+Enter。"""
 
     _setup_tmux_send_line_mocks(monkeypatch)
     monkeypatch.setattr(bot, "TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED", True)
@@ -172,7 +196,6 @@ def test_tmux_queue_line_uses_ctrl_enter_for_copilot(monkeypatch):
     bot.tmux_queue_line("demo", "hello")
 
     assert any(cmd[-1] == "C-Enter" for cmd in sent_calls)
-    assert not any(cmd[-1] == "Tab" for cmd in sent_calls)
 
 
 def test_tmux_queue_line_skips_escape_preflight(monkeypatch):
@@ -284,8 +307,8 @@ def test_dispatch_prompt_tmux_queue_error_suggests_manual_tab(monkeypatch, tmp_p
     assert replies and "手动按 Tab" in replies[-1]
 
 
-def test_dispatch_prompt_tmux_queue_error_suggests_manual_ctrl_enter_for_copilot(monkeypatch, tmp_path: Path):
-    """Copilot 排队发送失败时，应给出“手动按 Ctrl+Enter”提示。"""
+def test_dispatch_prompt_tmux_queue_error_suggests_manual_ctrl_q_for_copilot(monkeypatch, tmp_path: Path):
+    """Copilot 排队发送失败时，应给出“手动按 Ctrl+Q”提示。"""
 
     pointer = tmp_path / "pointer.txt"
     session_file = tmp_path / "events.jsonl"
@@ -297,7 +320,6 @@ def test_dispatch_prompt_tmux_queue_error_suggests_manual_ctrl_enter_for_copilot
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
     monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
-    monkeypatch.setattr(bot, "COPILOT_QUEUE_SUBMIT_KEY", "C-Enter")
 
     replies: list[str] = []
 
@@ -323,4 +345,4 @@ def test_dispatch_prompt_tmux_queue_error_suggests_manual_ctrl_enter_for_copilot
 
     assert not ok
     assert session_path is None
-    assert replies and "手动按 Ctrl+Enter" in replies[-1]
+    assert replies and "手动按 Ctrl+Q" in replies[-1]
