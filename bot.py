@@ -245,6 +245,12 @@ PUSH_SEND_MODE_IMMEDIATE_LABEL = "立即发送"
 PUSH_SEND_MODE_QUEUED_LABEL = "排队发送"
 CODEX_QUEUE_SUBMIT_KEY = "Tab"
 COPILOT_QUEUE_SUBMIT_KEY = (os.environ.get("COPILOT_QUEUE_SUBMIT_KEY") or "C-q").strip() or "C-q"
+COPILOT_BATCH_QUEUE_PROBE_LINES = max(_env_int("COPILOT_BATCH_QUEUE_PROBE_LINES", 120), 20)
+COPILOT_BATCH_QUEUE_PROBE_TIMEOUT_SECONDS = max(_env_float("COPILOT_BATCH_QUEUE_PROBE_TIMEOUT_SECONDS", 0.4), 0.1)
+COPILOT_BATCH_QUEUE_SETTLE_TIMEOUT_SECONDS = max(_env_float("COPILOT_BATCH_QUEUE_SETTLE_TIMEOUT_SECONDS", 2.0), 0.2)
+COPILOT_BATCH_QUEUE_POLL_INTERVAL_SECONDS = max(_env_float("COPILOT_BATCH_QUEUE_POLL_INTERVAL_SECONDS", 0.12), 0.01)
+COPILOT_BATCH_QUEUE_RETRY_SUBMIT_ROUNDS = max(_env_int("COPILOT_BATCH_QUEUE_RETRY_SUBMIT_ROUNDS", 1), 0)
+COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS = max(_env_float("COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS", 0.15), 0.0)
 
 _parse_mode_env = (os.environ.get("TELEGRAM_PARSE_MODE") or "Markdown").strip()
 _parse_mode_key = _parse_mode_env.replace("-", "").replace("_", "").lower()
@@ -1605,6 +1611,9 @@ def tmux_send_key(session: str, key: str) -> None:
     subprocess.check_call(_tmux_cmd(tmux, "send-keys", "-t", session, key))
 
 
+COPILOT_PENDING_PASTE_RE = re.compile(r"\[Paste\s+#\d+\s*-\s*\d+\s+lines\]", re.IGNORECASE)
+
+
 def _capture_tmux_output_for_session(session: str, line_count: int, timeout: float) -> str:
     """抓取指定 tmux 会话尾部输出，供并行 CLI 就绪判断复用。"""
 
@@ -1625,6 +1634,65 @@ def _capture_tmux_output_for_session(session: str, line_count: int, timeout: flo
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
         return ""
+
+
+def _copilot_has_pending_paste(raw_output: str) -> bool:
+    """判断 Copilot 当前是否仍有未入队的粘贴内容停留在输入框。"""
+
+    text = strip_ansi(normalize_newlines(raw_output or ""))
+    return bool(COPILOT_PENDING_PASTE_RE.search(text))
+
+
+async def _wait_copilot_batch_queue_settled(tmux_session: Optional[str]) -> bool:
+    """等待 Copilot 批量排队后的输入框恢复稳定，必要时补打一遍排队键。"""
+
+    if not _is_copilot_model() or not tmux_session:
+        return True
+
+    async def _probe_once() -> str:
+        return await asyncio.to_thread(
+            _capture_tmux_output_for_session,
+            tmux_session,
+            COPILOT_BATCH_QUEUE_PROBE_LINES,
+            COPILOT_BATCH_QUEUE_PROBE_TIMEOUT_SECONDS,
+        )
+
+    async def _poll_until_settled(timeout_seconds: float) -> tuple[bool, str]:
+        last_output = ""
+        saw_capture = False
+        deadline = time.monotonic() + max(timeout_seconds, 0.0)
+        while time.monotonic() < deadline:
+            last_output = await _probe_once()
+            if last_output:
+                saw_capture = True
+                if not _copilot_has_pending_paste(last_output):
+                    if COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS > 0:
+                        await asyncio.sleep(COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS)
+                    return True, last_output
+            await asyncio.sleep(COPILOT_BATCH_QUEUE_POLL_INTERVAL_SECONDS)
+        if not saw_capture:
+            # 无法可靠读取 tmux 时，退化为最小等待，避免把已成功入队误判为失败。
+            if COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS > 0:
+                await asyncio.sleep(COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS)
+            return True, last_output
+        return False, last_output
+
+    settled, last_output = await _poll_until_settled(COPILOT_BATCH_QUEUE_SETTLE_TIMEOUT_SECONDS)
+    if settled:
+        return True
+
+    for _ in range(COPILOT_BATCH_QUEUE_RETRY_SUBMIT_ROUNDS):
+        if not _copilot_has_pending_paste(last_output):
+            return True
+        try:
+            await asyncio.to_thread(tmux_send_key, tmux_session, _queue_send_submit_key())
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return False
+        settled, last_output = await _poll_until_settled(COPILOT_BATCH_QUEUE_SETTLE_TIMEOUT_SECONDS)
+        if settled:
+            return True
+
+    return False
 
 
 def _is_tmux_session_ready_for_plan_switch(raw_output: str) -> bool:
@@ -9217,6 +9285,16 @@ async def _execute_task_batch_push(
             failed_items.append((task_id, str(exc)))
             continue
         if success:
+            if _is_copilot_model():
+                target_session = dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION
+                queue_settled = await _wait_copilot_batch_queue_settled(target_session)
+                if not queue_settled:
+                    failed_items.append((task_id, "Copilot 未确认入队，任务可能仍停留在输入框"))
+                    worker_log.warning(
+                        "Copilot 批量排队后未确认入队，已标记失败",
+                        extra={"task_id": task_id, "tmux_session": target_session, "model": MODEL_CANONICAL_NAME},
+                    )
+                    continue
             success_items.append(task_id)
         else:
             failed_items.append((task_id, "模型未就绪，请稍后再试"))

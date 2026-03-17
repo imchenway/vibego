@@ -198,6 +198,67 @@ def test_tmux_queue_line_allows_ctrl_enter_override_for_copilot(monkeypatch):
     assert any(cmd[-1] == "C-Enter" for cmd in sent_calls)
 
 
+def test_wait_copilot_batch_queue_settled_returns_when_paste_clears(monkeypatch):
+    """批量排队后若 Paste 提示消失，应视为已稳定。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
+    monkeypatch.setattr(bot, "COPILOT_BATCH_QUEUE_SETTLE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(bot, "COPILOT_BATCH_QUEUE_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS", 0.0)
+
+    outputs = iter(
+        [
+            "[Paste #1 - 20 lines]\nshift+tab switch mode · ctrl+q enqueue",
+            "Queued (1)\nshift+tab switch mode · ctrl+q enqueue",
+        ]
+    )
+    now = {"value": 0.0}
+
+    async def fake_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_capture_tmux_output_for_session", lambda *_args, **_kwargs: next(outputs))
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(bot.time, "monotonic", lambda: (now.__setitem__("value", now["value"] + 0.05) or now["value"]))
+
+    settled = asyncio.run(bot._wait_copilot_batch_queue_settled("demo"))
+
+    assert settled is True
+
+
+def test_wait_copilot_batch_queue_settled_retries_queue_key_when_paste_sticks(monkeypatch):
+    """批量排队后若仍停留 Paste，应补打一遍排队键。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
+    monkeypatch.setattr(bot, "COPILOT_BATCH_QUEUE_SETTLE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(bot, "COPILOT_BATCH_QUEUE_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "COPILOT_BATCH_QUEUE_POST_SETTLE_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(bot, "COPILOT_BATCH_QUEUE_RETRY_SUBMIT_ROUNDS", 1)
+
+    outputs = iter(
+        [
+            "[Paste #1 - 20 lines]\nshift+tab switch mode · ctrl+q enqueue",
+            "[Paste #1 - 20 lines]\nshift+tab switch mode · ctrl+q enqueue",
+            "Queued (2)\nshift+tab switch mode · ctrl+q enqueue",
+        ]
+    )
+    retried_keys: list[tuple[str, str]] = []
+    now = {"value": 0.0}
+
+    async def fake_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_capture_tmux_output_for_session", lambda *_args, **_kwargs: next(outputs))
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(bot, "tmux_send_key", lambda session, key: retried_keys.append((session, key)))
+    monkeypatch.setattr(bot.time, "monotonic", lambda: (now.__setitem__("value", now["value"] + 0.01) or now["value"]))
+
+    settled = asyncio.run(bot._wait_copilot_batch_queue_settled("demo"))
+
+    assert settled is True
+    assert retried_keys == [("demo", "C-q")]
+
+
 def test_tmux_queue_line_skips_escape_preflight(monkeypatch):
     """排队发送应尽量贴近手动 Tab，不应额外发送前置 Escape。"""
 

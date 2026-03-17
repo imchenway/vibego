@@ -343,6 +343,7 @@ def test_batch_push_mode_choice_dispatches_selected_tasks_in_order_with_queued_s
         "TASK_0002": _task("TASK_0002", status="test", title="任务二"),
     }
     pushed: list[tuple[str, str | None, str | None, object]] = []
+    settled_sessions: list[str] = []
 
     async def fake_get_task(task_id: str):
         return tasks.get(task_id)
@@ -354,9 +355,14 @@ def test_batch_push_mode_choice_dispatches_selected_tasks_in_order_with_queued_s
     async def fake_build_task_list_view(*, status, page, limit):
         return "*任务列表*", InlineKeyboardMarkup(inline_keyboard=[])
 
+    async def fake_wait_copilot_batch_queue_settled(tmux_session):
+        settled_sessions.append(tmux_session)
+        return True
+
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
     monkeypatch.setattr(bot, "_push_task_to_model", fake_push_task_to_model)
     monkeypatch.setattr(bot, "_build_task_list_view", fake_build_task_list_view)
+    monkeypatch.setattr(bot, "_wait_copilot_batch_queue_settled", fake_wait_copilot_batch_queue_settled)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", model_name)
 
     async def _scenario() -> None:
@@ -366,6 +372,8 @@ def test_batch_push_mode_choice_dispatches_selected_tasks_in_order_with_queued_s
             ("TASK_0001", bot.PUSH_MODE_PLAN, bot.PUSH_SEND_MODE_QUEUED, None),
             ("TASK_0002", bot.PUSH_MODE_PLAN, bot.PUSH_SEND_MODE_QUEUED, None),
         ]
+        expected_sessions = [bot.TMUX_SESSION, bot.TMUX_SESSION] if model_name == "copilot" else []
+        assert settled_sessions == expected_sessions
         assert origin_message.edits, "执行完成后应恢复原任务列表视图"
         assert message.calls, "应向用户输出批量推送结果摘要"
         assert "批量推送结果" in message.calls[-1][0]
