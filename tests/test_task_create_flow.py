@@ -411,8 +411,9 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
     assert state.data["description"] == "任务描述\n[附件:./data/log.txt]"
     assert message.calls
     summary = message.calls[-2]["text"]
-    assert "附件列表：" in summary
-    assert "log.txt（text/plain）→ ./data/log.txt" in summary
+    assert "[附件:./data/log.txt]" in summary
+    assert "附件列表：" not in summary
+    assert "log.txt（text/plain）→ ./data/log.txt" not in summary
 
     created_task = bot.TaskRecord(
         id="TASK_1234",
@@ -703,8 +704,44 @@ def test_task_create_confirm_media_group_appends_once(monkeypatch, tmp_path):
     assert "补充说明" in description
     assert "[附件:./data/b1.jpg]" in description
     assert "[附件:./data/b2.jpg]" in description
+    summary_text = (msg1.calls or msg2.calls)[-1]["text"]
+    assert "[附件:./data/b1.jpg]" in summary_text
+    assert "[附件:./data/b2.jpg]" in summary_text
+    assert "附件列表：" not in summary_text
     # 只应有一条消息提示“已记录补充…”
     assert sorted([len(msg1.calls), len(msg2.calls)]) == [0, 1]
+
+
+def test_format_pending_attachments_for_create_summary_hides_inlined_attachments():
+    """确认摘要中已在步骤内联展示的附件，不应再重复出现在底部附件列表。"""
+
+    lines = bot._format_pending_attachments_for_create_summary(
+        [
+            {"display_name": "a.jpg", "mime_type": "image/jpeg", "path": "./data/a.jpg"},
+            {"display_name": "b.jpg", "mime_type": "image/jpeg", "path": "./data/b.jpg"},
+        ],
+        reference_texts=(
+            "当前效果：\n[附件:./data/a.jpg]\n\n期望效果：\n[附件:./data/b.jpg]",
+        ),
+    )
+
+    assert lines == []
+
+
+def test_format_pending_attachments_for_create_summary_keeps_unreferenced_attachments():
+    """确认摘要底部仍应保留未归属到步骤文本的附件。"""
+
+    lines = bot._format_pending_attachments_for_create_summary(
+        [
+            {"display_name": "a.jpg", "mime_type": "image/jpeg", "path": "./data/a.jpg"},
+            {"display_name": "b.jpg", "mime_type": "image/jpeg", "path": "./data/b.jpg"},
+        ],
+        reference_texts=("当前效果：\n[附件:./data/a.jpg]",),
+    )
+
+    assert lines[0] == "附件列表："
+    assert all("a.jpg" not in line for line in lines[1:])
+    assert any("b.jpg（image/jpeg）→ ./data/b.jpg" in line for line in lines[1:])
 
 
 @pytest.mark.parametrize(

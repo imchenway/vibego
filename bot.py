@@ -6906,7 +6906,12 @@ def _build_defect_confirm_summary_lines(
     _append_defect_summary_field(summary_lines, label=DEFECT_REPRODUCTION_LABEL, value=reproduction)
     _append_defect_summary_field(summary_lines, label=DEFECT_EXPECTED_RESULT_LABEL, value=expected_result)
     if isinstance(pending_attachments, Sequence):
-        summary_lines.extend(_format_pending_attachments_for_create_summary(pending_attachments))
+        summary_lines.extend(
+            _format_pending_attachments_for_create_summary(
+                pending_attachments,
+                reference_texts=(precondition, reproduction, expected_result),
+            )
+        )
     else:
         summary_lines.append("附件列表：-")
     return summary_lines
@@ -6951,7 +6956,12 @@ async def _build_task_create_confirm_summary_lines(
     else:
         summary_lines.append("描述：暂无（可稍后通过 /task_desc 补充）")
     if isinstance(pending_attachments, Sequence):
-        summary_lines.extend(_format_pending_attachments_for_create_summary(pending_attachments))
+        summary_lines.extend(
+            _format_pending_attachments_for_create_summary(
+                pending_attachments,
+                reference_texts=(description,),
+            )
+        )
     else:
         summary_lines.append("附件列表：-")
     return summary_lines
@@ -19092,16 +19102,35 @@ async def _advance_task_create_to_description(message: Message, state: FSMContex
 
 def _format_pending_attachments_for_create_summary(
     pending_attachments: Sequence[Mapping[str, str]],
+    *,
+    reference_texts: Sequence[Optional[str]] = (),
 ) -> list[str]:
-    """将创建流程中暂存的附件列表格式化为确认摘要文本行（中文）。"""
+    """将创建流程中暂存的附件列表格式化为确认摘要文本行（中文）。
+
+    说明：
+    - 若附件已经通过 `[附件:path]` 内联出现在步骤文本里，则确认摘要底部不再重复展示；
+    - 若仍存在未归属步骤的附件，则只展示这些剩余附件。
+    """
 
     if not pending_attachments:
         return ["附件列表：-"]
 
+    referenced_paths = _extract_attachment_reference_paths(*reference_texts)
+    visible_attachments: list[Mapping[str, str]] = []
+    for item in pending_attachments:
+        path = (item.get("path") or "").strip()
+        if path and path in referenced_paths:
+            continue
+        visible_attachments.append(item)
+
+    # 已在步骤文本中完整展示时，底部附件列表直接隐藏，避免 Telegram 确认摘要重复预览。
+    if not visible_attachments:
+        return []
+
     # 与 _bind_serialized_attachments() 的行为保持一致：按 path 去重，避免媒体组/重放导致重复展示。
     seen_paths: set[str] = set()
     ordered: list[tuple[str, str, str]] = []
-    for item in pending_attachments:
+    for item in visible_attachments:
         display_name = (item.get("display_name") or "attachment").strip() or "attachment"
         mime_type = (item.get("mime_type") or "application/octet-stream").strip() or "application/octet-stream"
         path = (item.get("path") or "").strip() or "-"
