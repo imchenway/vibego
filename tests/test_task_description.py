@@ -264,6 +264,40 @@ def test_format_task_detail_defect_uses_precondition_reproduction_and_expected_r
     assert "🖊️ 描述：" not in result
 
 
+def test_format_task_detail_hides_step_bound_attachments_from_other_attachment_section():
+    """任务详情中已在步骤内引用的附件不应再重复显示在“其他附件”里。"""
+
+    task = _make_task(task_id="TASK_0116", title="带附件缺陷", status="research", task_type="defect")
+    task.description = (
+        "前置条件：\n已登录测试账号\n[附件:./data/step.png]\n\n"
+        "复现步骤：\n1. 打开页面\n\n"
+        "预期结果：\n页面应正常显示"
+    )
+    attachments = (
+        bot.TaskAttachmentRecord(
+            id=1,
+            task_id=task.id,
+            display_name="step.png",
+            mime_type="image/png",
+            path="./data/step.png",
+        ),
+        bot.TaskAttachmentRecord(
+            id=2,
+            task_id=task.id,
+            display_name="extra.log",
+            mime_type="text/plain",
+            path="./data/extra.log",
+        ),
+    )
+
+    result = bot._format_task_detail(task, notes=(), attachments=attachments)
+
+    assert "step\\.png" in result
+    assert "📎 其他附件：" in result
+    assert "extra\\.log（text/plain）→ \\./data/extra\\.log" in result
+    assert "step.png（image/png）→ ./data/step.png" not in result
+
+
 def test_format_task_detail_defect_legacy_two_fields_fill_default_precondition():
     """历史双字段缺陷描述仍应被识别，并补齐默认前置条件。"""
 
@@ -743,7 +777,7 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
 
 
 def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_path: Path):
-    """推送补充阶段：仅附件无文字时，补充描述应生成“见附件：文件名列表”。"""
+    """推送补充阶段：仅附件无文字时，补充描述应生成“见补充附件：文件名列表”。"""
 
     message = DummyMessage()
     message.chat = SimpleNamespace(id=1)
@@ -822,7 +856,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
 
     assert bound_calls, "应绑定附件"
     assert push_calls, "应触发推送"
-    assert push_calls[0]["supplement"] == "见附件：photo.jpg"
+    assert push_calls[0]["supplement"] == "见补充附件：photo.jpg"
     assert push_calls[0]["send_mode"] == bot.PUSH_SEND_MODE_IMMEDIATE
 
 
@@ -4876,6 +4910,52 @@ def test_build_model_push_payload_defect_uses_precondition_reproduction_and_expe
     assert "任务描述：\n~~~\n前置条件：" not in payload
 
 
+def test_build_model_push_payload_prefers_step_attachments_and_lists_only_other_attachments():
+    """推送到模型时，步骤里已引用的附件不应再出现在底部“其他附件”里。"""
+
+    task = TaskRecord(
+        id="TASK_STEP_ATTACH_PUSH",
+        project_slug="demo",
+        title="步骤附件推送",
+        status="research",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="当前效果：\n需要点击两次\n[附件:./data/step.png]\n\n期望效果：\n点击一次即可提交",
+        parent_id=None,
+        root_id="TASK_STEP_ATTACH_PUSH",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    attachments = (
+        bot.TaskAttachmentRecord(
+            id=1,
+            task_id=task.id,
+            display_name="step.png",
+            mime_type="image/png",
+            path="./data/step.png",
+        ),
+        bot.TaskAttachmentRecord(
+            id=2,
+            task_id=task.id,
+            display_name="supplement.log",
+            mime_type="text/plain",
+            path="./data/supplement.log",
+        ),
+    )
+
+    payload = bot._build_model_push_payload(task, supplement="见补充附件：supplement.log", attachments=attachments)
+
+    assert "[附件:./data/step.png]" in payload
+    assert "其他附件（未归属步骤）：" in payload
+    assert "supplement.log（text/plain）→ ./data/supplement.log" in payload
+    assert "step.png（image/png）→ ./data/step.png" not in payload
+
+
 def test_build_task_context_block_for_model_defect_uses_precondition_reproduction_and_expected_result():
     """任务上下文块在缺陷任务下也应输出三字段结构。"""
 
@@ -4910,6 +4990,57 @@ def test_build_task_context_block_for_model_defect_uses_precondition_reproductio
     assert "预期结果：\n~~~\n不应报错\n~~~" in block
     assert "补充任务描述：\n~~~\n补充说明\n~~~" in block
     assert "任务描述：\n~~~\n前置条件：" not in block
+
+
+def test_build_task_context_block_lists_only_other_attachments():
+    """上下文块也应仅列出未归属步骤的其他附件。"""
+
+    task = TaskRecord(
+        id="TASK_STEP_ATTACH_CTX",
+        project_slug="demo",
+        title="步骤附件上下文",
+        status="test",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="前置条件：\n已登录\n[附件:./data/step.png]\n\n复现步骤：\n打开页面\n\n预期结果：\n不应报错",
+        parent_id=None,
+        root_id="TASK_STEP_ATTACH_CTX",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    attachments = (
+        bot.TaskAttachmentRecord(
+            id=1,
+            task_id=task.id,
+            display_name="step.png",
+            mime_type="image/png",
+            path="./data/step.png",
+        ),
+        bot.TaskAttachmentRecord(
+            id=2,
+            task_id=task.id,
+            display_name="extra.txt",
+            mime_type="text/plain",
+            path="./data/extra.txt",
+        ),
+    )
+
+    block = bot._build_task_context_block_for_model(
+        task,
+        supplement="补充说明",
+        history="",
+        attachments=attachments,
+    )
+
+    assert "[附件:./data/step.png]" in block
+    assert "其他附件（未归属步骤）：" in block
+    assert "extra.txt（text/plain）→ ./data/extra.txt" in block
+    assert "step.png（image/png）→ ./data/step.png" not in block
 
 
 def test_build_model_push_payload_task_uses_current_and_expected_effect():

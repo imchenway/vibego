@@ -7017,6 +7017,7 @@ def _build_model_push_payload(
         title = (task.title or "").strip() or "-"
         description = (task.description or "").strip() or "-"
         supplement_value = supplement_text or "-"
+        other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_value)
         # 关联任务编码：仅透传编码，不展开关联任务详情，避免提示词过长。
         normalized_related_task_id = _normalize_task_id(getattr(task, "related_task_id", None))
         related_task_code = (
@@ -7037,16 +7038,16 @@ def _build_model_push_payload(
             supplement_value=supplement_value,
         )
         lines.extend([f"关联任务编码：{related_task_code}", ""])
-        if attachments:
-            lines.append("附件列表：")
+        if other_attachments:
+            lines.append("其他附件（未归属步骤）：")
             limit = TASK_ATTACHMENT_PREVIEW_LIMIT
-            for idx, item in enumerate(attachments[:limit], 1):
+            for idx, item in enumerate(other_attachments[:limit], 1):
                 lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
-            if len(attachments) > limit:
-                lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开")
+            if len(other_attachments) > limit:
+                lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开")
             lines.append("")
         else:
-            lines.append("附件列表：-")
+            lines.append("其他附件（未归属步骤）：-")
             lines.append("")
         history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
         if history_block:
@@ -7062,6 +7063,7 @@ def _build_model_push_payload(
             title = (task.title or "-").strip() or "-"
             description = (task.description or "").strip() or "暂无"
             supplement_value = supplement_text or "-"
+            other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_value)
             info_lines.extend([f"任务标题：{title}", f"任务编码：{task_code_plain}"])
             _append_task_prompt_description_fields(
                 info_lines,
@@ -7071,6 +7073,9 @@ def _build_model_push_payload(
             )
         elif supplement_text:
             _append_prompt_field_as_code_block(info_lines, label="补充任务描述", value=supplement_text)
+            other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_text)
+        else:
+            other_attachments = _filter_other_task_attachments(task, attachments)
 
         if history_block:
             if info_lines and info_lines[-1].strip():
@@ -7078,17 +7083,17 @@ def _build_model_push_payload(
             info_lines.append("任务执行记录：")
             info_lines.append(history_block)
 
-        if attachments:
+        if other_attachments:
             if info_lines and info_lines[-1].strip():
                 info_lines.append("")
-            info_lines.append("附件列表：")
+            info_lines.append("其他附件（未归属步骤）：")
             limit = TASK_ATTACHMENT_PREVIEW_LIMIT
-            for idx, item in enumerate(attachments[:limit], 1):
+            for idx, item in enumerate(other_attachments[:limit], 1):
                 info_lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
-            if len(attachments) > limit:
-                info_lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开")
+            if len(other_attachments) > limit:
+                info_lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开")
         elif include_task:
-            info_lines.append("附件列表：-")
+            info_lines.append("其他附件（未归属步骤）：-")
 
         if info_lines:
             info_segment = "\n".join(info_lines)
@@ -7131,6 +7136,7 @@ def _build_task_context_block_for_model(
     description = (task.description or "").strip() or "-"
     supplement_value = (supplement or "").strip() or "-"
     history_block = (history or "").strip()
+    other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_value)
 
     lines: list[str] = [
         f"任务标题：{title}",
@@ -7144,16 +7150,16 @@ def _build_task_context_block_for_model(
     )
     lines.append("")
 
-    if attachments:
-        lines.append("附件列表：")
+    if other_attachments:
+        lines.append("其他附件（未归属步骤）：")
         limit = TASK_ATTACHMENT_PREVIEW_LIMIT
-        for idx, item in enumerate(attachments[:limit], 1):
+        for idx, item in enumerate(other_attachments[:limit], 1):
             lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
-        if len(attachments) > limit:
-            lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开")
+        if len(other_attachments) > limit:
+            lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开")
         lines.append("")
     else:
-        lines.append("附件列表：-")
+        lines.append("其他附件（未归属步骤）：-")
         lines.append("")
 
     history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
@@ -7892,11 +7898,13 @@ def _format_task_detail(
     if related_task_id:
         lines.append(f"🔗 关联任务：{_format_task_command(related_task_id)}")
 
-    # 附件预览
-    if attachments:
-        lines.append("📎 附件：")
+    other_attachments = _filter_other_task_attachments(task, attachments)
+
+    # 仅展示未归属步骤的其他附件，避免与步骤内的附件路径重复。
+    if other_attachments:
+        lines.append("📎 其他附件：")
         limit = TASK_ATTACHMENT_PREVIEW_LIMIT
-        for idx, item in enumerate(attachments[:limit], 1):
+        for idx, item in enumerate(other_attachments[:limit], 1):
             display_raw = _clean_user_text(item.display_name or "-")
             mime_raw = _clean_user_text(item.mime_type or "-")
             path_raw = _clean_user_text(item.path or "-")
@@ -7909,10 +7917,10 @@ def _format_task_detail(
                 mime = _escape_markdown_text(mime_raw)
                 path_text = _escape_markdown_text(path_raw)
             lines.append(f"{idx}. {display}（{mime}）→ {path_text}")
-        if len(attachments) > limit:
-            lines.append(f"… 其余 {len(attachments) - limit} 个附件未展开，可继续使用 /attach {task.id} 查看/追加")
+        if len(other_attachments) > limit:
+            lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开，可继续使用 /attach {task.id} 查看/追加")
     else:
-        lines.append("📎 附件：-")
+        lines.append("📎 其他附件：-")
 
     return "\n".join(lines)
 
@@ -8693,6 +8701,100 @@ def _collect_message_payload(
             parts.append(f"[视频:{message.video.file_id}]")
 
     return "\n".join(parts).strip()
+
+
+ATTACHMENT_REFERENCE_PATTERN = re.compile(r"\[附件:(?P<path>[^\]]+)\]")
+
+
+def _extract_attachment_reference_paths(*texts: Optional[str]) -> set[str]:
+    """从文本中提取已内联记录的附件路径。"""
+
+    referenced: set[str] = set()
+    for text in texts:
+        normalized = normalize_newlines(text or "").strip()
+        if not normalized:
+            continue
+        for match in ATTACHMENT_REFERENCE_PATTERN.finditer(normalized):
+            path = (match.group("path") or "").strip()
+            if path:
+                referenced.add(path)
+    return referenced
+
+
+def _build_step_content_with_attachments(
+    message: Message,
+    *,
+    raw_text: str,
+    saved_attachments: Sequence[TelegramSavedAttachment],
+    field_label: str,
+) -> tuple[str, list[TelegramSavedAttachment]]:
+    """将步骤文本与附件路径合并成最终字段值；超长文本自动转附件。"""
+
+    normalized_text = (raw_text or "").strip()
+    attachments_for_value = list(saved_attachments)
+    if len(normalized_text) > DESCRIPTION_MAX_LENGTH:
+        text_attachment = _persist_text_paste_as_attachment(message, normalized_text)
+        attachments_for_value.append(text_attachment)
+        normalized_text = _build_overlong_text_placeholder(field_label)
+    parts: list[str] = []
+    if normalized_text:
+        parts.append(normalize_newlines(normalized_text).strip())
+    for item in attachments_for_value:
+        path_hint = item.relative_path or item.display_name or item.kind
+        parts.append(f"[附件:{path_hint}]")
+    value = "\n".join(parts).strip()
+    return value, attachments_for_value
+
+
+def _append_step_content(existing_value: Optional[str], new_segment: Optional[str]) -> str:
+    """把确认阶段补充内容追加到最后一个步骤，避免留下多余占位符。"""
+
+    base = normalize_newlines(existing_value or "").strip()
+    segment = normalize_newlines(new_segment or "").strip()
+    if not segment:
+        return base
+    if not base or base == "-":
+        return segment
+    return f"{base}\n{segment}"
+
+
+def _collect_task_attachment_reference_paths(
+    task: TaskRecord,
+    *,
+    supplement: Optional[str] = None,
+) -> set[str]:
+    """汇总任务描述/补充说明中已引用的附件路径。"""
+
+    texts: list[str] = []
+    normalized_task_type = _normalize_task_type(getattr(task, "task_type", None))
+    parsed_structured = _parse_structured_task_description(normalized_task_type, getattr(task, "description", None))
+    if parsed_structured is not None:
+        texts.extend(value for value in parsed_structured if value)
+    elif getattr(task, "description", None):
+        texts.append(str(task.description))
+    if supplement:
+        texts.append(str(supplement))
+    return _extract_attachment_reference_paths(*texts)
+
+
+def _filter_other_task_attachments(
+    task: TaskRecord,
+    attachments: Sequence[TaskAttachmentRecord],
+    *,
+    supplement: Optional[str] = None,
+) -> list[TaskAttachmentRecord]:
+    """过滤掉已经在任务步骤文本中出现过的附件，仅保留“其他附件”。"""
+
+    referenced_paths = _collect_task_attachment_reference_paths(task, supplement=supplement)
+    if not referenced_paths:
+        return list(attachments)
+    filtered: list[TaskAttachmentRecord] = []
+    for item in attachments:
+        path_text = (getattr(item, "path", None) or "").strip()
+        if path_text and path_text in referenced_paths:
+            continue
+        filtered.append(item)
+    return filtered
 
 
 def _summarize_note_text(value: str) -> str:
@@ -19162,10 +19264,6 @@ async def _handle_task_create_first_structured_field(
         return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
-    if saved_attachments:
-        pending = list(data.get("pending_attachments") or [])
-        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
-        await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "取消"]
@@ -19180,13 +19278,16 @@ async def _handle_task_create_first_structured_field(
     if not trimmed and not is_skip and not saved_attachments:
         await message.answer(reprompt_text, reply_markup=_build_description_keyboard())
         return
-    value = trimmed
-    if len(value) > DESCRIPTION_MAX_LENGTH:
-        attachment = _persist_text_paste_as_attachment(message, value)
+    value, attachments_for_value = _build_step_content_with_attachments(
+        message,
+        raw_text=trimmed,
+        saved_attachments=saved_attachments,
+        field_label=field_label,
+    )
+    if attachments_for_value:
         pending = list(data.get("pending_attachments") or [])
-        pending.append(_serialize_saved_attachment(attachment))
+        pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
         await state.update_data(pending_attachments=pending)
-        value = _build_overlong_text_placeholder(field_label)
     await state.update_data(**{field_key: value})
     await state.set_state(next_state)
     await message.answer(next_prompt, reply_markup=_build_description_keyboard())
@@ -19216,10 +19317,6 @@ async def _handle_task_create_final_structured_field(
         return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
-    if saved_attachments:
-        pending = list(data.get("pending_attachments") or [])
-        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
-        await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "取消"]
@@ -19234,13 +19331,16 @@ async def _handle_task_create_final_structured_field(
     if not trimmed and not is_skip and not saved_attachments:
         await message.answer(reprompt_text, reply_markup=_build_description_keyboard())
         return
-    current_value = trimmed
-    if len(current_value) > DESCRIPTION_MAX_LENGTH:
-        attachment = _persist_text_paste_as_attachment(message, current_value)
+    current_value, attachments_for_value = _build_step_content_with_attachments(
+        message,
+        raw_text=trimmed,
+        saved_attachments=saved_attachments,
+        field_label=current_label,
+    )
+    if attachments_for_value:
         pending = list(data.get("pending_attachments") or [])
-        pending.append(_serialize_saved_attachment(attachment))
+        pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
         await state.update_data(pending_attachments=pending)
-        current_value = _build_overlong_text_placeholder(current_label)
     previous_values = [data.get(key) for key in previous_keys]
     description = _build_structured_task_description(task_type, *previous_values, current_value)
     await state.update_data(**{current_key: current_value, "description": description})
@@ -19348,10 +19448,6 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
         return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
-    if saved_attachments:
-        pending = list(data.get("pending_attachments") or [])
-        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
-        await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "取消"]
@@ -19361,16 +19457,17 @@ async def on_task_create_description(message: Message, state: FSMContext) -> Non
         await message.answer("已取消创建任务。", reply_markup=_build_worker_main_keyboard())
         return
     description: str = data.get("description", "")
-    if trimmed and resolved != SKIP_TEXT:
-        if len(trimmed) > DESCRIPTION_MAX_LENGTH:
-            # 任务描述超长：自动落盘为附件，DB 写入占位文本并继续流程（无需用户手动拆分/重发）。
-            attachment = _persist_text_paste_as_attachment(message, trimmed)
+    if (trimmed and resolved != SKIP_TEXT) or saved_attachments:
+        description, attachments_for_value = _build_step_content_with_attachments(
+            message,
+            raw_text=trimmed if resolved != SKIP_TEXT else "",
+            saved_attachments=saved_attachments,
+            field_label="任务描述",
+        )
+        if attachments_for_value:
             pending = list(data.get("pending_attachments") or [])
-            pending.append(_serialize_saved_attachment(attachment))
+            pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
             await state.update_data(pending_attachments=pending)
-            description = _build_overlong_text_placeholder("任务描述")
-        else:
-            description = trimmed
     await state.update_data(description=description)
     await state.set_state(TaskCreateStates.waiting_confirm)
     data = await state.get_data()
@@ -19410,46 +19507,27 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
     is_cancel = resolved == options[1] or lowered == "取消"
     is_confirm = resolved == options[0] or lowered in {"确认", "确认创建"}
     if extra_attachments or (extra_text and not is_cancel and not is_confirm):
-        pending = list(data.get("pending_attachments") or [])
-        if extra_attachments:
-            pending.extend(_serialize_saved_attachment(item) for item in extra_attachments)
         task_type_code = _normalize_task_type(data.get("task_type"))
         description = data.get("description") or ""
         structured_labels = _get_structured_task_labels(task_type_code)
         parsed_structured = _parse_structured_task_description(task_type_code, description)
-        if extra_text and not is_confirm and not is_cancel:
-            trimmed_extra = extra_text.strip()
-            if trimmed_extra:
-                if len(trimmed_extra) > DESCRIPTION_MAX_LENGTH:
-                    attachment = _persist_text_paste_as_attachment(message, trimmed_extra)
-                    pending.append(_serialize_saved_attachment(attachment))
-                    if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels):
-                        placeholder = _build_overlong_text_placeholder(f"补充{structured_labels[-1]}")
-                    else:
-                        placeholder = _build_overlong_text_placeholder("补充任务描述")
-                    if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels):
-                        updated_values = list(parsed_structured)
-                        current_last_value = updated_values[-1]
-                        updated_values[-1] = (
-                            f"{current_last_value}\n{placeholder}"
-                            if current_last_value and current_last_value != "-"
-                            else placeholder
-                        )
-                        description = _build_structured_task_description(task_type_code, *updated_values) or description
-                    else:
-                        description = f"{description}\n{placeholder}" if description else placeholder
-                else:
-                    if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels):
-                        updated_values = list(parsed_structured)
-                        current_last_value = updated_values[-1]
-                        updated_values[-1] = (
-                            f"{current_last_value}\n{trimmed_extra}"
-                            if current_last_value and current_last_value != "-"
-                            else trimmed_extra
-                        )
-                        description = _build_structured_task_description(task_type_code, *updated_values) or description
-                    else:
-                        description = f"{description}\n{trimmed_extra}" if description else trimmed_extra
+        update_label = structured_labels[-1] if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels) else "描述"
+        segment_text = extra_text.strip() if extra_text and not is_confirm and not is_cancel else ""
+        segment, attachments_for_value = _build_step_content_with_attachments(
+            message,
+            raw_text=segment_text,
+            saved_attachments=extra_attachments,
+            field_label=f"补充{update_label}" if update_label != "描述" else "补充任务描述",
+        )
+        pending = list(data.get("pending_attachments") or [])
+        if attachments_for_value:
+            pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
+        if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels):
+            updated_values = list(parsed_structured)
+            updated_values[-1] = _append_step_content(updated_values[-1], segment)
+            description = _build_structured_task_description(task_type_code, *updated_values) or description
+        else:
+            description = _append_step_content(description, segment)
         await state.update_data(pending_attachments=pending, description=description)
         updated_lines = await _build_task_create_confirm_summary_lines(
             title=(data.get("title") or "").strip(),
@@ -19459,7 +19537,6 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
             description=description,
             pending_attachments=pending,
         )
-        update_label = structured_labels[-1] if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels) else "描述"
         await message.answer(
             f"已记录补充的{update_label}/附件，请继续选择“确认创建”或“取消”。\n" + "\n".join(updated_lines),
             reply_markup=_build_confirm_keyboard(),
@@ -20442,11 +20519,11 @@ def _build_attachment_only_supplement(attachments: Sequence[TelegramSavedAttachm
     names = [str(item.display_name or "").strip() for item in attachments]
     names = [name for name in names if name]
     if not names:
-        return "见附件"
+        return "见补充附件"
     limit = TASK_ATTACHMENT_PREVIEW_LIMIT
     shown = names[:limit]
     suffix = f"（共 {len(names)} 个）" if len(names) > limit else ""
-    return f"见附件：{'、'.join(shown)}{suffix}"
+    return f"见补充附件：{'、'.join(shown)}{suffix}"
 
 
 @router.message(TaskPushStates.waiting_supplement)
@@ -21230,10 +21307,6 @@ async def on_task_defect_report_precondition(message: Message, state: FSMContext
         return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
-    if saved_attachments:
-        pending = list(data.get("pending_attachments") or [])
-        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
-        await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "取消"]
@@ -21251,13 +21324,16 @@ async def on_task_defect_report_precondition(message: Message, state: FSMContext
             reply_markup=_build_description_keyboard(),
         )
         return
-    precondition = trimmed
-    if len(precondition) > DESCRIPTION_MAX_LENGTH:
-        attachment = _persist_text_paste_as_attachment(message, precondition)
+    precondition, attachments_for_value = _build_step_content_with_attachments(
+        message,
+        raw_text=trimmed,
+        saved_attachments=saved_attachments,
+        field_label=DEFECT_PRECONDITION_LABEL,
+    )
+    if attachments_for_value:
         pending = list(data.get("pending_attachments") or [])
-        pending.append(_serialize_saved_attachment(attachment))
+        pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
         await state.update_data(pending_attachments=pending)
-        precondition = _build_overlong_text_placeholder(DEFECT_PRECONDITION_LABEL)
     await state.update_data(precondition=precondition)
     await state.set_state(TaskDefectReportStates.waiting_reproduction)
     await message.answer(
@@ -21283,10 +21359,6 @@ async def on_task_defect_report_reproduction(message: Message, state: FSMContext
         return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
-    if saved_attachments:
-        pending = list(data.get("pending_attachments") or [])
-        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
-        await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
     # 复现步骤非必填：用户可选择“跳过”继续录入预期结果。
@@ -21306,14 +21378,16 @@ async def on_task_defect_report_reproduction(message: Message, state: FSMContext
             reply_markup=_build_description_keyboard(),
         )
         return
-    reproduction = trimmed
-    if len(reproduction) > DESCRIPTION_MAX_LENGTH:
-        # 复现步骤超长：自动落盘为附件，写入占位文本并继续流程。
-        attachment = _persist_text_paste_as_attachment(message, reproduction)
+    reproduction, attachments_for_value = _build_step_content_with_attachments(
+        message,
+        raw_text=trimmed,
+        saved_attachments=saved_attachments,
+        field_label=DEFECT_REPRODUCTION_LABEL,
+    )
+    if attachments_for_value:
         pending = list(data.get("pending_attachments") or [])
-        pending.append(_serialize_saved_attachment(attachment))
+        pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
         await state.update_data(pending_attachments=pending)
-        reproduction = _build_overlong_text_placeholder("复现步骤")
     await state.update_data(reproduction=reproduction)
     await state.set_state(TaskDefectReportStates.waiting_expected_result)
     await message.answer(
@@ -21339,10 +21413,6 @@ async def on_task_defect_report_expected_result(message: Message, state: FSMCont
         return
     if message.media_group_id:
         await state.update_data(processed_media_groups=list(processed_groups))
-    if saved_attachments:
-        pending = list(data.get("pending_attachments") or [])
-        pending.extend(_serialize_saved_attachment(item) for item in saved_attachments)
-        await state.update_data(pending_attachments=pending)
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
     options = [SKIP_TEXT, "取消"]
@@ -21360,14 +21430,16 @@ async def on_task_defect_report_expected_result(message: Message, state: FSMCont
             reply_markup=_build_description_keyboard(),
         )
         return
-    expected_result = trimmed
-    if len(expected_result) > DESCRIPTION_MAX_LENGTH:
-        # 预期结果超长：自动落盘为附件，写入占位文本并继续流程。
-        attachment = _persist_text_paste_as_attachment(message, expected_result)
+    expected_result, attachments_for_value = _build_step_content_with_attachments(
+        message,
+        raw_text=trimmed,
+        saved_attachments=saved_attachments,
+        field_label=DEFECT_EXPECTED_RESULT_LABEL,
+    )
+    if attachments_for_value:
         pending = list(data.get("pending_attachments") or [])
-        pending.append(_serialize_saved_attachment(attachment))
+        pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
         await state.update_data(pending_attachments=pending)
-        expected_result = _build_overlong_text_placeholder(DEFECT_EXPECTED_RESULT_LABEL)
     await state.update_data(expected_result=expected_result)
     await state.set_state(TaskDefectReportStates.waiting_confirm)
     data = await state.get_data()
@@ -21414,31 +21486,18 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
     is_confirm = resolved == options[0] or lowered in {"确认", "确认创建"}
 
     if extra_attachments or (extra_text and not is_cancel and not is_confirm):
-        pending = list(data.get("pending_attachments") or [])
-        if extra_attachments:
-            pending.extend(_serialize_saved_attachment(item) for item in extra_attachments)
         expected_result = data.get("expected_result") or ""
-        if extra_text and not is_confirm and not is_cancel:
-            trimmed_extra = extra_text.strip()
-            if trimmed_extra:
-                if len(trimmed_extra) > DESCRIPTION_MAX_LENGTH:
-                    attachment = _persist_text_paste_as_attachment(message, trimmed_extra)
-                    pending.append(_serialize_saved_attachment(attachment))
-                    placeholder = _build_overlong_text_placeholder(f"补充{DEFECT_EXPECTED_RESULT_LABEL}")
-                    expected_result = f"{expected_result}\n{placeholder}" if expected_result else placeholder
-                else:
-                    expected_result = f"{expected_result}\n{trimmed_extra}" if expected_result else trimmed_extra
-        # 若是媒体组，统一使用合并后的文本，避免遗漏 caption
-        if text_part and not extra_text:
-            trimmed_part = text_part.strip()
-            if trimmed_part:
-                if len(trimmed_part) > DESCRIPTION_MAX_LENGTH:
-                    attachment = _persist_text_paste_as_attachment(message, trimmed_part)
-                    pending.append(_serialize_saved_attachment(attachment))
-                    placeholder = _build_overlong_text_placeholder(f"补充{DEFECT_EXPECTED_RESULT_LABEL}")
-                    expected_result = f"{expected_result}\n{placeholder}" if expected_result else placeholder
-                else:
-                    expected_result = f"{expected_result}\n{trimmed_part}" if expected_result else trimmed_part
+        segment_text = extra_text.strip() if extra_text and not is_confirm and not is_cancel else ""
+        segment, attachments_for_value = _build_step_content_with_attachments(
+            message,
+            raw_text=segment_text,
+            saved_attachments=extra_attachments,
+            field_label=f"补充{DEFECT_EXPECTED_RESULT_LABEL}",
+        )
+        pending = list(data.get("pending_attachments") or [])
+        if attachments_for_value:
+            pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
+        expected_result = _append_step_content(expected_result, segment)
         await state.update_data(pending_attachments=pending, expected_result=expected_result)
         data = await state.get_data()
         origin_task_id = data.get("origin_task_id")

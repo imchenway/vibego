@@ -194,7 +194,7 @@ def test_defect_report_precondition_advances_to_reproduction_when_only_attachmen
 
     assert state.state == bot.TaskDefectReportStates.waiting_reproduction
     assert state.data.get("pending_attachments")
-    assert state.data.get("precondition", "") == ""
+    assert state.data.get("precondition", "") == "[附件:./data/log.txt]"
     assert message.calls and "请输入复现步骤" in message.calls[-1]["text"]
 
 

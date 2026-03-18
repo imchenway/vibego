@@ -408,6 +408,7 @@ def test_task_create_description_binds_attachments(monkeypatch, tmp_path):
     assert state.state == TaskCreateStates.waiting_confirm
     assert state.data.get("pending_attachments")
     assert state.data["pending_attachments"][0]["path"] == "./data/log.txt"
+    assert state.data["description"] == "任务描述\n[附件:./data/log.txt]"
     assert message.calls
     summary = message.calls[-2]["text"]
     assert "附件列表：" in summary
@@ -510,7 +511,7 @@ def test_task_create_album_keeps_text_and_collects_followup_attachments(monkeypa
     asyncio.run(bot.on_task_create_confirm(followup, state))
 
     assert state.state == TaskCreateStates.waiting_confirm
-    assert state.data.get("description") == "描述文本"
+    assert state.data.get("description") == "描述文本\n[附件:./data/a1.jpg]\n[附件:./data/a2.jpg]"
     assert len(state.data.get("pending_attachments", [])) == 2
 
     created_task = bot.TaskRecord(
@@ -623,7 +624,10 @@ def test_task_create_media_group_dedupes_attachments_and_advances_once(monkeypat
     asyncio.run(run_album_flow())
 
     assert state.state == TaskCreateStates.waiting_confirm
-    assert state.data.get("description") == "相册描述"
+    description = state.data.get("description") or ""
+    assert description.startswith("相册描述")
+    assert "[附件:./data/a1.jpg]" in description
+    assert "[附件:./data/a2.jpg]" in description
     pending = state.data.get("pending_attachments", [])
     assert len(pending) == 2
     assert {item.get("path") for item in pending} == {"./data/a1.jpg", "./data/a2.jpg"}
@@ -694,7 +698,11 @@ def test_task_create_confirm_media_group_appends_once(monkeypatch, tmp_path):
     pending = state.data.get("pending_attachments", [])
     assert len(pending) == 2
     assert {item.get("path") for item in pending} == {"./data/b1.jpg", "./data/b2.jpg"}
-    assert "已有描述" in (state.data.get("description") or "")
+    description = state.data.get("description") or ""
+    assert "已有描述" in description
+    assert "补充说明" in description
+    assert "[附件:./data/b1.jpg]" in description
+    assert "[附件:./data/b2.jpg]" in description
     # 只应有一条消息提示“已记录补充…”
     assert sorted([len(msg1.calls), len(msg2.calls)]) == [0, 1]
 
