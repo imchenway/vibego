@@ -2837,6 +2837,40 @@ def _convert_overlong_task_prompt_to_attachment(
     return converted
 
 
+async def _load_parent_task_context_for_model(
+    task: TaskRecord,
+) -> tuple[Optional[TaskRecord], Sequence[TaskAttachmentRecord]]:
+    """加载父任务（按关联任务口径）及其附件，用于推送提示词底部补充上下文。"""
+
+    related_task_id = _normalize_task_id(getattr(task, "related_task_id", None))
+    if not related_task_id or related_task_id == task.id:
+        return None, ()
+
+    try:
+        parent_task = await TASK_SERVICE.get_task(related_task_id)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "读取父任务详情失败，已回退旧历史区块：%s",
+            exc,
+            extra={"task_id": task.id, "parent_task_id": related_task_id},
+        )
+        return None, ()
+    if parent_task is None:
+        return None, ()
+
+    try:
+        parent_attachments = await TASK_SERVICE.list_attachments(parent_task.id)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "读取父任务附件失败，已回退为空列表：%s",
+            exc,
+            extra={"task_id": task.id, "parent_task_id": parent_task.id},
+        )
+        parent_attachments = []
+    # 与主任务保持一致：按发送顺序展示父任务附件。
+    return parent_task, list(reversed(parent_attachments))
+
+
 async def _push_task_to_model(
     task: TaskRecord,
     *,
@@ -2881,6 +2915,7 @@ async def _push_task_to_model(
             extra={"task_id": task.id},
         )
         attachments = []
+    parent_task, parent_attachments = await _load_parent_task_context_for_model(task)
     # 需求约定：附件按发送顺序展示（时间升序）；服务层默认倒序，这里反转后输出。
     attachments = list(reversed(attachments))
     prompt = _build_model_push_payload(
@@ -2889,6 +2924,8 @@ async def _push_task_to_model(
         history=history_text,
         notes=notes,
         attachments=attachments,
+        parent_task=parent_task,
+        parent_attachments=parent_attachments,
         is_bug_report=is_bug_report,
         push_mode=push_mode,
     )
@@ -6858,6 +6895,74 @@ def _append_task_prompt_description_fields(
     _append_prompt_field_as_code_block(lines, label="补充任务描述", value=supplement_value)
 
 
+def _build_task_prompt_related_task_code(task: TaskRecord) -> str:
+    """统一生成提示词中的关联任务编码，避免各处口径分叉。"""
+
+    normalized_related_task_id = _normalize_task_id(getattr(task, "related_task_id", None))
+    if normalized_related_task_id and normalized_related_task_id != task.id:
+        return f"/{normalized_related_task_id}"
+    return "-"
+
+
+def _build_task_prompt_attachment_lines(
+    task: TaskRecord,
+    *,
+    attachments: Sequence[TaskAttachmentRecord],
+    supplement_value: Optional[str],
+) -> list[str]:
+    """构建提示词中的“其他附件”区块，统一处理尾部空行。"""
+
+    other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_value)
+    lines: list[str] = []
+    if other_attachments:
+        lines.append("其他附件（未归属步骤）：")
+        limit = TASK_ATTACHMENT_PREVIEW_LIMIT
+        for idx, item in enumerate(other_attachments[:limit], 1):
+            lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
+        if len(other_attachments) > limit:
+            lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开")
+        lines.append("")
+        return lines
+    lines.append("其他附件（未归属步骤）：-")
+    lines.append("")
+    return lines
+
+
+def _build_parent_task_prompt_lines(
+    parent_task: Optional[TaskRecord],
+    *,
+    attachments: Sequence[TaskAttachmentRecord],
+) -> list[str]:
+    """构建父任务信息区块，用于替换底部历史记录提示。"""
+
+    if parent_task is None:
+        return []
+
+    title = (parent_task.title or "").strip() or "-"
+    task_code_plain = f"/{parent_task.id}" if parent_task.id else "-"
+    supplement_value = "-"
+    lines: list[str] = [
+        "以下为父任务信息，用于辅助回溯任务处理记录：",
+        f"任务标题：{title}",
+        f"任务编码：{task_code_plain}",
+    ]
+    _append_task_prompt_description_fields(
+        lines,
+        task=parent_task,
+        description=(parent_task.description or "").strip() or "-",
+        supplement_value=supplement_value,
+    )
+    lines.extend([f"关联任务编码：{_build_task_prompt_related_task_code(parent_task)}", ""])
+    lines.extend(
+        _build_task_prompt_attachment_lines(
+            parent_task,
+            attachments=attachments,
+            supplement_value=supplement_value,
+        )
+    )
+    return lines
+
+
 def _format_task_detail_value(value: Optional[str]) -> str:
     """统一格式化任务详情中的文本值，兼容 Markdown 与预转义内容。"""
 
@@ -6973,6 +7078,8 @@ def _build_model_push_payload(
     history: Optional[str] = None,
     notes: Optional[Sequence[TaskNoteRecord]] = None,
     attachments: Optional[Sequence[TaskAttachmentRecord]] = None,
+    parent_task: Optional[TaskRecord] = None,
+    parent_attachments: Optional[Sequence[TaskAttachmentRecord]] = None,
     is_bug_report: bool = False,
     push_mode: Optional[str] = None,
 ) -> str:
@@ -7010,6 +7117,7 @@ def _build_model_push_payload(
 
     notes = notes or ()  # 推送阶段暂不展示备注文本，仅保留参数兼容
     attachments = attachments or ()
+    parent_attachments = parent_attachments or ()
 
     task_code_plain = f"/{task.id}" if task.id else "-"
 
@@ -7027,14 +7135,7 @@ def _build_model_push_payload(
         title = (task.title or "").strip() or "-"
         description = (task.description or "").strip() or "-"
         supplement_value = supplement_text or "-"
-        other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_value)
-        # 关联任务编码：仅透传编码，不展开关联任务详情，避免提示词过长。
-        normalized_related_task_id = _normalize_task_id(getattr(task, "related_task_id", None))
-        related_task_code = (
-            f"/{normalized_related_task_id}"
-            if normalized_related_task_id and normalized_related_task_id != task.id
-            else "-"
-        )
+        related_task_code = _build_task_prompt_related_task_code(task)
 
         lines: list[str] = [
             phase_line,
@@ -7048,23 +7149,27 @@ def _build_model_push_payload(
             supplement_value=supplement_value,
         )
         lines.extend([f"关联任务编码：{related_task_code}", ""])
-        if other_attachments:
-            lines.append("其他附件（未归属步骤）：")
-            limit = TASK_ATTACHMENT_PREVIEW_LIMIT
-            for idx, item in enumerate(other_attachments[:limit], 1):
-                lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
-            if len(other_attachments) > limit:
-                lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开")
-            lines.append("")
+        lines.extend(
+            _build_task_prompt_attachment_lines(
+                task,
+                attachments=attachments,
+                supplement_value=supplement_value,
+            )
+        )
+        # 存在父任务详情时，按需求完全替换底部“任务执行记录”区块。
+        parent_lines = _build_parent_task_prompt_lines(
+            parent_task,
+            attachments=parent_attachments,
+        )
+        if parent_lines:
+            lines.extend(parent_lines)
         else:
-            lines.append("其他附件（未归属步骤）：-")
-            lines.append("")
-        history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
-        if history_block:
-            lines.append(history_intro)
-            lines.extend(history_block.splitlines())
-        else:
-            lines.append(f"{history_intro} -")
+            history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
+            if history_block:
+                lines.append(history_intro)
+                lines.extend(history_block.splitlines())
+            else:
+                lines.append(f"{history_intro} -")
         return _strip_legacy_bug_header("\n".join(lines))
     else:
         # 非上述状态维持旧逻辑，避免影响完成等场景
@@ -7073,7 +7178,6 @@ def _build_model_push_payload(
             title = (task.title or "-").strip() or "-"
             description = (task.description or "").strip() or "暂无"
             supplement_value = supplement_text or "-"
-            other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_value)
             info_lines.extend([f"任务标题：{title}", f"任务编码：{task_code_plain}"])
             _append_task_prompt_description_fields(
                 info_lines,
@@ -7083,9 +7187,9 @@ def _build_model_push_payload(
             )
         elif supplement_text:
             _append_prompt_field_as_code_block(info_lines, label="补充任务描述", value=supplement_text)
-            other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_text)
+            supplement_value = supplement_text
         else:
-            other_attachments = _filter_other_task_attachments(task, attachments)
+            supplement_value = None
 
         if history_block:
             if info_lines and info_lines[-1].strip():
@@ -7093,17 +7197,20 @@ def _build_model_push_payload(
             info_lines.append("任务执行记录：")
             info_lines.append(history_block)
 
-        if other_attachments:
+        attachment_lines: list[str] = []
+        if include_task or attachments:
+            attachment_lines = _build_task_prompt_attachment_lines(
+                task,
+                attachments=attachments,
+                supplement_value=supplement_value,
+            )
+        if attachment_lines:
             if info_lines and info_lines[-1].strip():
                 info_lines.append("")
-            info_lines.append("其他附件（未归属步骤）：")
-            limit = TASK_ATTACHMENT_PREVIEW_LIMIT
-            for idx, item in enumerate(other_attachments[:limit], 1):
-                info_lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
-            if len(other_attachments) > limit:
-                info_lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开")
-        elif include_task:
-            info_lines.append("其他附件（未归属步骤）：-")
+            if attachment_lines[-1] == "":
+                info_lines.extend(attachment_lines[:-1])
+            else:
+                info_lines.extend(attachment_lines)
 
         if info_lines:
             info_segment = "\n".join(info_lines)
@@ -7138,6 +7245,8 @@ def _build_task_context_block_for_model(
     supplement: Optional[str],
     history: str,
     attachments: Sequence[TaskAttachmentRecord],
+    parent_task: Optional[TaskRecord] = None,
+    parent_attachments: Optional[Sequence[TaskAttachmentRecord]] = None,
 ) -> str:
     """构建任务上下文块（字段格式与推送任务一致，但不包含阶段提示）。"""
 
@@ -7146,7 +7255,7 @@ def _build_task_context_block_for_model(
     description = (task.description or "").strip() or "-"
     supplement_value = (supplement or "").strip() or "-"
     history_block = (history or "").strip()
-    other_attachments = _filter_other_task_attachments(task, attachments, supplement=supplement_value)
+    parent_attachments = parent_attachments or ()
 
     lines: list[str] = [
         f"任务标题：{title}",
@@ -7159,25 +7268,27 @@ def _build_task_context_block_for_model(
         supplement_value=supplement_value,
     )
     lines.append("")
+    lines.extend(
+        _build_task_prompt_attachment_lines(
+            task,
+            attachments=attachments,
+            supplement_value=supplement_value,
+        )
+    )
 
-    if other_attachments:
-        lines.append("其他附件（未归属步骤）：")
-        limit = TASK_ATTACHMENT_PREVIEW_LIMIT
-        for idx, item in enumerate(other_attachments[:limit], 1):
-            lines.append(f"{idx}. {item.display_name}（{item.mime_type}）→ {item.path}")
-        if len(other_attachments) > limit:
-            lines.append(f"… 其余 {len(other_attachments) - limit} 个附件未展开")
-        lines.append("")
+    parent_lines = _build_parent_task_prompt_lines(
+        parent_task,
+        attachments=parent_attachments,
+    )
+    if parent_lines:
+        lines.extend(parent_lines)
     else:
-        lines.append("其他附件（未归属步骤）：-")
-        lines.append("")
-
-    history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
-    if history_block:
-        lines.append(history_intro)
-        lines.extend(history_block.splitlines())
-    else:
-        lines.append(f"{history_intro} -")
+        history_intro = "以下为任务执行记录，用于辅助回溯任务处理记录："
+        if history_block:
+            lines.append(history_intro)
+            lines.extend(history_block.splitlines())
+        else:
+            lines.append(f"{history_intro} -")
 
     return _strip_legacy_bug_header("\n".join(lines))
 

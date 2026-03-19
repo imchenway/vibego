@@ -1222,7 +1222,7 @@ def test_push_model_choice_for_copilot_prompts_send_mode(monkeypatch):
 
 
 def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_path: Path):
-    """推送到模型：当任务存在关联任务时，仅包含关联任务编码（不再展开关联任务详情）。"""
+    """推送到模型：当任务存在关联任务时，底部应替换为父任务详情区块。"""
 
     message = DummyMessage()
     callback = DummyCallback("task:push_model:TASK_0002", message)
@@ -1339,10 +1339,12 @@ def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_pat
     _chat_id, payload, _reply_to = recorded[0]
     assert "任务标题：测试任务" in payload
     assert "关联任务编码：/TASK_0001" in payload
-    assert "关联任务信息：" not in payload
-    assert "任务标题：关联任务标题" not in payload
-    assert "任务编码：/TASK_0001" not in [line.strip() for line in payload.splitlines()]
-    assert "任务描述：关联任务描述" not in payload
+    assert "以下为父任务信息，用于辅助回溯任务处理记录：" in payload
+    assert "以下为任务执行记录，用于辅助回溯任务处理记录：" not in payload
+    assert "任务标题：关联任务标题" in payload
+    assert "任务编码：/TASK_0001" in payload
+    assert "任务描述：\n~~~\n关联任务描述\n~~~" in payload
+    assert "补充任务描述：-" in payload
 
 
 def test_push_model_done_push(monkeypatch, tmp_path: Path):
@@ -5106,6 +5108,153 @@ def test_build_task_context_block_for_model_task_uses_current_and_expected_effec
     assert "期望效果：\n~~~\n点击一次即可提交\n~~~" in block
     assert "补充任务描述：\n~~~\n补充说明\n~~~" in block
     assert "任务描述：\n~~~\n当前效果：" not in block
+
+
+def test_build_model_push_payload_replaces_history_with_parent_task_context():
+    """存在关联任务上下文时，底部应改为父任务信息，而不是任务执行记录。"""
+
+    task = TaskRecord(
+        id="TASK_CHILD_PUSH",
+        project_slug="demo",
+        title="子任务推送",
+        status="research",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="前置条件：\n见父任务\n\n复现步骤：\n-\n\n预期结果：\n正常展示每行数据",
+        related_task_id="TASK_PARENT_PUSH",
+        parent_id=None,
+        root_id="TASK_CHILD_PUSH",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    parent_task = TaskRecord(
+        id="TASK_PARENT_PUSH",
+        project_slug="demo",
+        title="父任务标题",
+        status="done",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description=(
+            "当前效果：\n"
+            "[附件:./data/parent-step.png]\n"
+            "列表渲染错乱\n\n"
+            "期望效果：\n"
+            "恢复正常表格展示"
+        ),
+        related_task_id="TASK_GRAND_PUSH",
+        parent_id=None,
+        root_id="TASK_PARENT_PUSH",
+        depth=0,
+        lineage="0001",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    parent_attachments = (
+        bot.TaskAttachmentRecord(
+            id=1,
+            task_id=parent_task.id,
+            display_name="parent-step.png",
+            mime_type="image/png",
+            path="./data/parent-step.png",
+        ),
+        bot.TaskAttachmentRecord(
+            id=2,
+            task_id=parent_task.id,
+            display_name="parent-extra.txt",
+            mime_type="text/plain",
+            path="./data/parent-extra.txt",
+        ),
+    )
+
+    payload = bot._build_model_push_payload(
+        task,
+        supplement=None,
+        history="2025-01-01T10:00:00+08:00 | 推送到模型（结果=success）",
+        parent_task=parent_task,
+        parent_attachments=parent_attachments,
+    )
+
+    assert "以下为父任务信息，用于辅助回溯任务处理记录：" in payload
+    assert "以下为任务执行记录，用于辅助回溯任务处理记录：" not in payload
+    assert "任务标题：父任务标题" in payload
+    assert "任务编码：/TASK_PARENT_PUSH" in payload
+    assert "当前效果：\n~~~\n[附件:./data/parent-step.png]\n列表渲染错乱\n~~~" in payload
+    assert "期望效果：\n~~~\n恢复正常表格展示\n~~~" in payload
+    assert "补充任务描述：-" in payload
+    assert "关联任务编码：/TASK_GRAND_PUSH" in payload
+    assert "其他附件（未归属步骤）：" in payload
+    assert "parent-extra.txt（text/plain）→ ./data/parent-extra.txt" in payload
+    assert "parent-step.png（image/png）→ ./data/parent-step.png" not in payload
+
+
+def test_build_task_context_block_for_model_replaces_history_with_parent_task_context():
+    """任务上下文块在存在父任务上下文时，也应展示父任务信息。"""
+
+    task = TaskRecord(
+        id="TASK_CHILD_CTX",
+        project_slug="demo",
+        title="子任务上下文",
+        status="test",
+        priority=2,
+        task_type="task",
+        tags=(),
+        due_date=None,
+        description="当前效果：\n见父任务\n\n期望效果：\n正常展示",
+        related_task_id="TASK_PARENT_CTX",
+        parent_id=None,
+        root_id="TASK_CHILD_CTX",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+    parent_task = TaskRecord(
+        id="TASK_PARENT_CTX",
+        project_slug="demo",
+        title="父任务上下文标题",
+        status="done",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="前置条件：\n已登录\n\n复现步骤：\n打开列表页\n\n预期结果：\n列表展示正常",
+        related_task_id=None,
+        parent_id=None,
+        root_id="TASK_PARENT_CTX",
+        depth=0,
+        lineage="0001",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    block = bot._build_task_context_block_for_model(
+        task,
+        supplement="补充说明",
+        history="2025-01-01T10:00:00+08:00 | 推送到模型（结果=success）",
+        attachments=(),
+        parent_task=parent_task,
+        parent_attachments=(),
+    )
+
+    assert "以下为父任务信息，用于辅助回溯任务处理记录：" in block
+    assert "以下为任务执行记录，用于辅助回溯任务处理记录：" not in block
+    assert "任务标题：父任务上下文标题" in block
+    assert "任务编码：/TASK_PARENT_CTX" in block
+    assert "前置条件：\n~~~\n已登录\n~~~" in block
+    assert "复现步骤：\n~~~\n打开列表页\n~~~" in block
+    assert "预期结果：\n~~~\n列表展示正常\n~~~" in block
+    assert "补充任务描述：-" in block
+    assert "关联任务编码：-" in block
 
 
 def test_push_task_to_model_converts_overlong_prompt_to_attachment(monkeypatch, tmp_path: Path):
