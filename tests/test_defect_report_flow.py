@@ -234,8 +234,8 @@ def test_defect_report_precondition_can_skip_to_reproduction(monkeypatch):
     assert message.calls and "请输入复现步骤" in message.calls[-1]["text"]
 
 
-def test_defect_report_reproduction_can_skip_to_expected_result(monkeypatch):
-    """复现步骤阶段选择“跳过”后应进入预期结果阶段。"""
+def test_defect_report_reproduction_can_skip_to_current_state(monkeypatch):
+    """复现步骤阶段选择“跳过”后应进入现状阶段。"""
 
     origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
@@ -265,13 +265,13 @@ def test_defect_report_reproduction_can_skip_to_expected_result(monkeypatch):
 
     asyncio.run(bot.on_task_defect_report_reproduction(message, state))
 
-    assert state.state == bot.TaskDefectReportStates.waiting_expected_result
+    assert state.state == bot.TaskDefectReportStates.waiting_current_state
     assert state.data.get("reproduction", "") == ""
-    assert message.calls and "请输入预期结果" in message.calls[-1]["text"]
+    assert message.calls and "请输入现状" in message.calls[-1]["text"]
 
 
-def test_defect_report_expected_result_can_skip_to_confirm(monkeypatch):
-    """预期结果阶段选择“跳过”后应进入确认阶段，并展示三字段摘要。"""
+def test_defect_report_current_state_can_skip_to_expected_effect(monkeypatch):
+    """现状阶段选择“跳过”后应进入预期效果阶段。"""
 
     origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
@@ -296,23 +296,62 @@ def test_defect_report_expected_result_can_skip_to_confirm(monkeypatch):
             "pending_attachments": [],
             "processed_media_groups": [],
         },
-        state=bot.TaskDefectReportStates.waiting_expected_result,
+        state=bot.TaskDefectReportStates.waiting_current_state,
     )
     message = DummyMessage(text=bot.SKIP_TEXT)
 
-    asyncio.run(bot.on_task_defect_report_expected_result(message, state))
+    asyncio.run(bot.on_task_defect_report_current_state(message, state))
+
+    assert state.state == bot.TaskDefectReportStates.waiting_expected_effect
+    assert state.data.get("current_state", "") == ""
+    assert message.calls and "请输入预期效果" in message.calls[-1]["text"]
+
+
+def test_defect_report_expected_effect_can_skip_to_confirm(monkeypatch):
+    """预期效果阶段选择“跳过”后应进入确认阶段，并展示四字段摘要。"""
+
+    origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
+
+    async def fake_get_task(task_id: str):
+        assert task_id == origin.id
+        return origin
+
+    async def fake_collect(_message, _dir, *, processed):
+        return [], "", processed
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    monkeypatch.setattr(bot, "_collect_generic_media_group", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: Path("/tmp"))
+
+    state = DummyState(
+        data={
+            "origin_task_id": origin.id,
+            "reporter": "Tester",
+            "title": "缺陷标题",
+            "precondition": "已登录测试账号",
+            "reproduction": "1. 打开页面",
+            "current_state": "",
+            "pending_attachments": [],
+            "processed_media_groups": [],
+        },
+        state=bot.TaskDefectReportStates.waiting_expected_effect,
+    )
+    message = DummyMessage(text=bot.SKIP_TEXT)
+
+    asyncio.run(bot.on_task_defect_report_expected_effect(message, state))
 
     assert state.state == bot.TaskDefectReportStates.waiting_confirm
-    assert state.data.get("expected_result", "") == ""
+    assert state.data.get("expected_effect", "") == ""
     summary_text = "\n".join(call["text"] for call in message.calls)
     assert "前置条件：" in summary_text
     assert "已登录测试账号" in summary_text
     assert "复现步骤：" in summary_text
     assert "1. 打开页面" in summary_text
-    assert "预期结果：-" in summary_text
+    assert "现状：-" in summary_text
+    assert "预期效果：-" in summary_text
 
 
-def test_defect_report_expected_result_hides_duplicate_attachment_list_in_confirm_summary(monkeypatch, tmp_path: Path):
+def test_defect_report_expected_effect_hides_duplicate_attachment_list_in_confirm_summary(monkeypatch, tmp_path: Path):
     """缺陷确认摘要中，已在步骤里展示的附件不应再重复显示底部附件列表。"""
 
     origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
@@ -344,24 +383,25 @@ def test_defect_report_expected_result_hides_duplicate_attachment_list_in_confir
             "title": "缺陷标题",
             "precondition": "已登录测试账号",
             "reproduction": "1. 打开页面",
+            "current_state": "",
             "pending_attachments": [],
             "processed_media_groups": [],
         },
-        state=bot.TaskDefectReportStates.waiting_expected_result,
+        state=bot.TaskDefectReportStates.waiting_expected_effect,
     )
     message = DummyMessage(text="")
 
-    asyncio.run(bot.on_task_defect_report_expected_result(message, state))
+    asyncio.run(bot.on_task_defect_report_expected_effect(message, state))
 
     assert state.state == bot.TaskDefectReportStates.waiting_confirm
-    assert state.data.get("expected_result", "") == "[附件:./data/result.jpg]"
+    assert state.data.get("expected_effect", "") == "[附件:./data/result.jpg]"
     summary_text = "\n".join(call["text"] for call in message.calls)
     assert "[附件:./data/result.jpg]" in summary_text
     assert "附件列表：" not in summary_text
 
 
 def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, tmp_path: Path):
-    """确认创建后应创建缺陷任务、绑定附件，并写入三字段结构化描述。"""
+    """确认创建后应创建缺陷任务、绑定附件，并写入四字段结构化描述。"""
 
     origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
@@ -425,7 +465,8 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
             "title": "缺陷标题",
             "precondition": "已登录测试账号",
             "reproduction": "1. 打开页面",
-            "expected_result": "页面应正常显示",
+            "current_state": "当前页面无任何提示",
+            "expected_effect": "页面应正常显示",
             "pending_attachments": [{"path": "./data/log.txt", "display_name": "log.txt", "mime_type": "text/plain"}],
             "processed_media_groups": [],
         },
@@ -440,15 +481,15 @@ def test_defect_report_confirm_creates_task_and_binds_attachments(monkeypatch, t
     assert created_args["related_task_id"] == origin.id
     assert (
         created_args["description"]
-        == "前置条件：\n已登录测试账号\n\n复现步骤：\n1. 打开页面\n\n预期结果：\n页面应正常显示"
+        == "前置条件：\n已登录测试账号\n\n复现步骤：\n1. 打开页面\n\n现状：\n当前页面无任何提示\n\n预期效果：\n页面应正常显示"
     )
     assert bind_calls and bind_calls[0][0] == "TASK_9999"
     assert logged_actions and logged_actions[0]["task_id"] == origin.id
     assert message.calls and any("缺陷任务详情" in call["text"] for call in message.calls)
 
 
-def test_defect_report_confirm_allows_empty_precondition_reproduction_and_expected_result(monkeypatch, tmp_path: Path):
-    """确认创建时允许前置条件、复现步骤与预期结果都为空，并写入占位结构。"""
+def test_defect_report_confirm_allows_empty_defect_fields(monkeypatch, tmp_path: Path):
+    """确认创建时允许四个缺陷字段都为空，并写入占位结构。"""
 
     origin = _make_task(task_id="TASK_0001", title="触发任务", status="research")
 
@@ -502,7 +543,8 @@ def test_defect_report_confirm_allows_empty_precondition_reproduction_and_expect
             "title": "缺陷标题",
             "precondition": "",
             "reproduction": "",
-            "expected_result": "",
+            "current_state": "",
+            "expected_effect": "",
             "pending_attachments": [],
             "processed_media_groups": [],
         },
@@ -513,4 +555,4 @@ def test_defect_report_confirm_allows_empty_precondition_reproduction_and_expect
     asyncio.run(bot.on_task_defect_report_confirm(message, state))
 
     assert state.state is None
-    assert created_args["description"] == "前置条件：\n-\n\n复现步骤：\n-\n\n预期结果：\n-"
+    assert created_args["description"] == "前置条件：\n-\n\n复现步骤：\n-\n\n现状：\n-\n\n预期效果：\n-"

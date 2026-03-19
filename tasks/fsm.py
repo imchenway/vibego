@@ -13,7 +13,9 @@ class TaskCreateStates(StatesGroup):
     waiting_description = State()
     waiting_precondition = State()
     waiting_reproduction = State()
+    waiting_current_state = State()
     waiting_expected_result = State()
+    waiting_defect_expected_effect = State()
     waiting_current_effect = State()
     waiting_expected_effect = State()
     waiting_confirm = State()
@@ -51,7 +53,9 @@ class TaskDefectReportStates(StatesGroup):
     waiting_title = State()
     waiting_precondition = State()
     waiting_reproduction = State()
+    waiting_current_state = State()
     waiting_expected_result = State()
+    waiting_expected_effect = State()
     waiting_confirm = State()
 
 

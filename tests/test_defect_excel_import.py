@@ -138,7 +138,7 @@ def test_task_defect_excel_template_callback_sends_xlsx_document():
 def test_task_defect_excel_upload_valid_file_enters_confirm(monkeypatch, tmp_path: Path):
     workbook_path = _build_workbook(
         tmp_path / "defects.xlsx",
-        [["登录按钮无响应", "已登录测试账号", "1. 打开页面", "页面应进入首页", "", 3]],
+        [["登录按钮无响应", "已登录测试账号", "1. 打开页面", "页面无跳转", "页面应进入首页", "", 3]],
     )
     message = DummyMessage()
     message.document = SimpleNamespace(file_name="defects.xlsx")
@@ -173,8 +173,56 @@ def test_task_defect_excel_upload_valid_file_enters_confirm(monkeypatch, tmp_pat
         data = await state.get_data()
         assert len(data["validated_rows"]) == 1
         assert data["validated_rows"][0]["precondition"] == "已登录测试账号"
+        assert data["validated_rows"][0]["current_state"] == "页面无跳转"
         assert message.calls
         assert "Excel 预检通过" in message.calls[-1][0]
+
+    asyncio.run(_scenario())
+
+
+def test_task_defect_excel_upload_legacy_headers_still_enter_confirm(monkeypatch, tmp_path: Path):
+    workbook_path = tmp_path / "legacy_defects.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "缺陷导入模板"
+    ws.append(list(bot.DEFECT_EXCEL_TEMPLATE_LEGACY_HEADERS))
+    ws.append(["登录按钮无响应", "已登录测试账号", "1. 打开页面", "页面应进入首页", "", 3])
+    wb.save(workbook_path)
+
+    message = DummyMessage()
+    message.document = SimpleNamespace(file_name="legacy_defects.xlsx")
+    state, _storage = make_state(message)
+    asyncio.run(
+        state.update_data(
+            origin_message=message,
+            origin_status=None,
+            origin_page=1,
+            origin_limit=10,
+            actor="Tester#1",
+        )
+    )
+    asyncio.run(state.set_state(bot.TaskDefectExcelImportStates.waiting_upload))
+
+    async def fake_collect(_message, _target_dir):
+        return [
+            bot.TelegramSavedAttachment(
+                kind="document",
+                display_name="legacy_defects.xlsx",
+                mime_type=bot.DEFECT_EXCEL_MIME,
+                absolute_path=workbook_path,
+                relative_path="./data/legacy_defects.xlsx",
+            )
+        ]
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+
+    async def _scenario() -> None:
+        await bot.on_task_defect_excel_upload(message, state)
+        assert await state.get_state() == bot.TaskDefectExcelImportStates.waiting_confirm.state
+        data = await state.get_data()
+        assert len(data["validated_rows"]) == 1
+        assert data["validated_rows"][0]["current_state"] == ""
+        assert data["validated_rows"][0]["expected_effect"] == "页面应进入首页"
 
     asyncio.run(_scenario())
 
@@ -240,7 +288,8 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
                     "title": "缺陷一",
                     "precondition": "已登录测试账号",
                     "reproduction": "步骤1",
-                    "expected_result": "结果1",
+                    "current_state": "页面无反馈",
+                    "expected_effect": "结果1",
                     "related_task_id": None,
                     "priority": 3,
                 },
@@ -248,7 +297,8 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
                     "title": "缺陷二",
                     "precondition": "",
                     "reproduction": "",
-                    "expected_result": "",
+                    "current_state": "",
+                    "expected_effect": "",
                     "related_task_id": None,
                     "priority": 2,
                 },
@@ -274,10 +324,13 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
         assert await state.get_state() is None
         assert created[0]["title"] == "缺陷一"
         assert created[0]["priority"] == 3
-        assert created[0]["description"] == "前置条件：\n已登录测试账号\n\n复现步骤：\n步骤1\n\n预期结果：\n结果1"
+        assert (
+            created[0]["description"]
+            == "前置条件：\n已登录测试账号\n\n复现步骤：\n步骤1\n\n现状：\n页面无反馈\n\n预期效果：\n结果1"
+        )
         assert created[1]["title"] == "缺陷二"
         assert created[1]["priority"] == 2
-        assert created[1]["description"] == "前置条件：\n-\n\n复现步骤：\n-\n\n预期结果：\n-"
+        assert created[1]["description"] == "前置条件：\n-\n\n复现步骤：\n-\n\n现状：\n-\n\n预期效果：\n-"
         assert origin_message.edits, "创建完成后应恢复原任务列表"
         assert message.calls
         assert "Excel 导入结果" in message.calls[-1][0]

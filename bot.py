@@ -6454,6 +6454,15 @@ DEFECT_EXCEL_TEMPLATE_HEADERS: tuple[str, ...] = (
     "缺陷标题",
     "前置条件",
     "复现步骤",
+    "现状",
+    "预期效果",
+    "关联任务编码",
+    "优先级",
+)
+DEFECT_EXCEL_TEMPLATE_LEGACY_HEADERS: tuple[str, ...] = (
+    "缺陷标题",
+    "前置条件",
+    "复现步骤",
     "预期结果",
     "关联任务编码",
     "优先级",
@@ -6706,11 +6715,17 @@ def _append_prompt_field_as_code_block(lines: list[str], *, label: str, value: O
 
 DEFECT_PRECONDITION_LABEL = "前置条件"
 DEFECT_REPRODUCTION_LABEL = "复现步骤"
+DEFECT_CURRENT_STATE_LABEL = "现状"
+DEFECT_EXPECTED_EFFECT_LABEL = "预期效果"
 DEFECT_EXPECTED_RESULT_LABEL = "预期结果"
 DEFECT_EXPECTED_RESULT_LEGACY_LABEL = "期望结果"
 OPTIMIZE_CURRENT_EFFECT_LABEL = "当前效果"
 OPTIMIZE_EXPECTED_EFFECT_LABEL = "期望效果"
 DEFECT_DESCRIPTION_PATTERN = re.compile(
+    rf"^{DEFECT_PRECONDITION_LABEL}：\n(?P<precondition>.*)\n\n{DEFECT_REPRODUCTION_LABEL}：\n(?P<reproduction>.*)\n\n{DEFECT_CURRENT_STATE_LABEL}：\n(?P<current_state>.*)\n\n{DEFECT_EXPECTED_EFFECT_LABEL}：\n(?P<expected_effect>.*)$",
+    re.DOTALL,
+)
+DEFECT_DESCRIPTION_THREE_FIELD_PATTERN = re.compile(
     rf"^{DEFECT_PRECONDITION_LABEL}：\n(?P<precondition>.*)\n\n{DEFECT_REPRODUCTION_LABEL}：\n(?P<reproduction>.*)\n\n(?:{DEFECT_EXPECTED_RESULT_LABEL}|{DEFECT_EXPECTED_RESULT_LEGACY_LABEL})：\n(?P<expected_result>.*)$",
     re.DOTALL,
 )
@@ -6774,25 +6789,37 @@ def _build_defect_description(
     precondition: Optional[str],
     reproduction: Optional[str] = None,
     expected_result: Optional[str] = None,
+    *,
+    current_state: Optional[str] = None,
+    expected_effect: Optional[str] = None,
 ) -> str:
-    """将缺陷任务的前置条件、复现步骤与预期结果组装为统一存储结构。"""
+    """构建缺陷任务正文；默认输出新四字段，必要时兼容旧三字段调用。"""
 
-    if expected_result is None and reproduction is not None:
+    if current_state is None and expected_effect is None and expected_result is None and reproduction is not None:
         # 兼容旧调用：_build_defect_description(reproduction, expected_result)
         expected_result = reproduction
         reproduction = precondition
         precondition = ""
+    if current_state is None and expected_effect is None:
+        return _build_structured_description(
+            (
+                (DEFECT_PRECONDITION_LABEL, precondition),
+                (DEFECT_REPRODUCTION_LABEL, reproduction),
+                (DEFECT_EXPECTED_RESULT_LABEL, expected_result),
+            )
+        )
     return _build_structured_description(
         (
             (DEFECT_PRECONDITION_LABEL, precondition),
             (DEFECT_REPRODUCTION_LABEL, reproduction),
-            (DEFECT_EXPECTED_RESULT_LABEL, expected_result),
+            (DEFECT_CURRENT_STATE_LABEL, current_state),
+            (DEFECT_EXPECTED_EFFECT_LABEL, expected_effect),
         )
     )
 
 
-def _parse_defect_description(description: Optional[str]) -> Optional[tuple[str, str, str]]:
-    """解析缺陷任务的结构化描述；兼容历史双字段缺陷正文。"""
+def _parse_defect_description_fields(description: Optional[str]) -> Optional[tuple[tuple[str, str], ...]]:
+    """解析缺陷正文；新四字段走新口径，旧三字段与更老双字段保持兼容。"""
 
     normalized = normalize_newlines(description or "").strip()
     if not normalized:
@@ -6801,14 +6828,43 @@ def _parse_defect_description(description: Optional[str]) -> Optional[tuple[str,
     if match:
         precondition = (match.group("precondition") or "").strip() or "-"
         reproduction = (match.group("reproduction") or "").strip() or "-"
-        expected_result = (match.group("expected_result") or "").strip() or "-"
-        return precondition, reproduction, expected_result
+        current_state = (match.group("current_state") or "").strip() or "-"
+        expected_effect = (match.group("expected_effect") or "").strip() or "-"
+        return (
+            (DEFECT_PRECONDITION_LABEL, precondition),
+            (DEFECT_REPRODUCTION_LABEL, reproduction),
+            (DEFECT_CURRENT_STATE_LABEL, current_state),
+            (DEFECT_EXPECTED_EFFECT_LABEL, expected_effect),
+        )
+    three_field_match = DEFECT_DESCRIPTION_THREE_FIELD_PATTERN.match(normalized)
+    if three_field_match:
+        precondition = (three_field_match.group("precondition") or "").strip() or "-"
+        reproduction = (three_field_match.group("reproduction") or "").strip() or "-"
+        expected_result = (three_field_match.group("expected_result") or "").strip() or "-"
+        return (
+            (DEFECT_PRECONDITION_LABEL, precondition),
+            (DEFECT_REPRODUCTION_LABEL, reproduction),
+            (DEFECT_EXPECTED_RESULT_LABEL, expected_result),
+        )
     legacy_match = DEFECT_DESCRIPTION_LEGACY_PATTERN.match(normalized)
     if not legacy_match:
         return None
     reproduction = (legacy_match.group("reproduction") or "").strip() or "-"
     expected_result = (legacy_match.group("expected_result") or "").strip() or "-"
-    return "-", reproduction, expected_result
+    return (
+        (DEFECT_PRECONDITION_LABEL, "-"),
+        (DEFECT_REPRODUCTION_LABEL, reproduction),
+        (DEFECT_EXPECTED_RESULT_LABEL, expected_result),
+    )
+
+
+def _parse_defect_description(description: Optional[str]) -> Optional[tuple[str, ...]]:
+    """解析缺陷结构化描述的值列表，供通用渲染逻辑复用。"""
+
+    fields = _parse_defect_description_fields(description)
+    if fields is None:
+        return None
+    return tuple(value for _, value in fields)
 
 
 def _build_optimize_description(current_effect: Optional[str], expected_effect: Optional[str]) -> str:
@@ -6838,10 +6894,31 @@ def _get_structured_task_labels(task_type: Optional[str]) -> Optional[tuple[str,
 
     normalized_task_type = _normalize_task_type(task_type)
     if normalized_task_type == "defect":
-        return DEFECT_PRECONDITION_LABEL, DEFECT_REPRODUCTION_LABEL, DEFECT_EXPECTED_RESULT_LABEL
+        return (
+            DEFECT_PRECONDITION_LABEL,
+            DEFECT_REPRODUCTION_LABEL,
+            DEFECT_CURRENT_STATE_LABEL,
+            DEFECT_EXPECTED_EFFECT_LABEL,
+        )
     if normalized_task_type == "task":
         return OPTIMIZE_CURRENT_EFFECT_LABEL, OPTIMIZE_EXPECTED_EFFECT_LABEL
     return None
+
+
+def _get_structured_task_fields(
+    task_type: Optional[str],
+    description: Optional[str],
+) -> Optional[tuple[tuple[str, str], ...]]:
+    """返回结构化任务的“标签-值”列表，兼容新旧缺陷口径。"""
+
+    normalized_task_type = _normalize_task_type(task_type)
+    if normalized_task_type == "defect":
+        return _parse_defect_description_fields(description)
+    parsed_values = _parse_structured_task_description(normalized_task_type, description)
+    labels = _get_structured_task_labels(normalized_task_type)
+    if parsed_values is None or labels is None or len(parsed_values) != len(labels):
+        return None
+    return tuple(zip(labels, parsed_values))
 
 
 def _build_structured_task_description(
@@ -6856,6 +6933,13 @@ def _build_structured_task_description(
             return None
         if len(values) == 2:
             return _build_defect_description(values[0], values[1])
+        if len(values) >= 4:
+            return _build_defect_description(
+                values[0],
+                values[1],
+                current_state=values[2],
+                expected_effect=values[3],
+            )
         return _build_defect_description(values[0], values[1], values[2])
     if normalized_task_type == "task":
         if len(values) < 2:
@@ -6885,10 +6969,9 @@ def _append_task_prompt_description_fields(
     """按任务类型输出推送提示词中的描述字段，结构化任务优先拆成多字段。"""
 
     normalized_task_type = _normalize_task_type(getattr(task, "task_type", None))
-    parsed_structured = _parse_structured_task_description(normalized_task_type, description)
-    labels = _get_structured_task_labels(normalized_task_type)
-    if parsed_structured is not None and labels is not None and len(parsed_structured) == len(labels):
-        for label, value in zip(labels, parsed_structured):
+    structured_fields = _get_structured_task_fields(normalized_task_type, description)
+    if structured_fields is not None:
+        for label, value in structured_fields:
             _append_prompt_field_as_code_block(lines, label=label, value=value)
     else:
         _append_prompt_field_as_code_block(lines, label="任务描述", value=description)
@@ -6990,10 +7073,11 @@ def _build_defect_confirm_summary_lines(
     origin_task_id: Optional[str],
     precondition: Optional[str],
     reproduction: Optional[str],
-    expected_result: Optional[str],
+    current_state: Optional[str],
+    expected_effect: Optional[str],
     pending_attachments: Sequence[Mapping[str, str]],
 ) -> list[str]:
-    """构建缺陷确认页摘要，统一前置条件/复现步骤/预期结果与附件展示顺序。"""
+    """构建缺陷确认页摘要，统一四字段与附件展示顺序。"""
 
     summary_lines = [
         "请确认缺陷任务信息：",
@@ -7009,12 +7093,13 @@ def _build_defect_confirm_summary_lines(
         summary_lines.append("关联任务：-")
     _append_defect_summary_field(summary_lines, label=DEFECT_PRECONDITION_LABEL, value=precondition)
     _append_defect_summary_field(summary_lines, label=DEFECT_REPRODUCTION_LABEL, value=reproduction)
-    _append_defect_summary_field(summary_lines, label=DEFECT_EXPECTED_RESULT_LABEL, value=expected_result)
+    _append_defect_summary_field(summary_lines, label=DEFECT_CURRENT_STATE_LABEL, value=current_state)
+    _append_defect_summary_field(summary_lines, label=DEFECT_EXPECTED_EFFECT_LABEL, value=expected_effect)
     if isinstance(pending_attachments, Sequence):
         summary_lines.extend(
             _format_pending_attachments_for_create_summary(
                 pending_attachments,
-                reference_texts=(precondition, reproduction, expected_result),
+                reference_texts=(precondition, reproduction, current_state, expected_effect),
             )
         )
     else:
@@ -7050,10 +7135,9 @@ async def _build_task_create_confirm_summary_lines(
                 summary_lines.append(f"关联任务：/{related_task_id}")
         else:
             summary_lines.append("关联任务：-（未选择）")
-    parsed_structured = _parse_structured_task_description(normalized_task_type, description)
-    labels = _get_structured_task_labels(normalized_task_type)
-    if parsed_structured is not None and labels is not None and len(parsed_structured) == len(labels):
-        for label, value in zip(labels, parsed_structured):
+    structured_fields = _get_structured_task_fields(normalized_task_type, description)
+    if structured_fields is not None:
+        for label, value in structured_fields:
             _append_defect_summary_field(summary_lines, label=label, value=value)
     elif description:
         summary_lines.append("描述：")
@@ -7990,14 +8074,15 @@ def _format_task_detail(
 
     # 修复：描述字段智能清理预转义
     normalized_task_type = _normalize_task_type(getattr(task, "task_type", None))
-    parsed_structured = _parse_structured_task_description(normalized_task_type, task.description)
-    labels = _get_structured_task_labels(normalized_task_type)
-    if parsed_structured is not None and labels is not None and len(parsed_structured) == len(labels):
-        if normalized_task_type == "defect":
+    structured_fields = _get_structured_task_fields(normalized_task_type, task.description)
+    if structured_fields is not None:
+        if normalized_task_type == "defect" and len(structured_fields) == 4:
+            icons = ("📌", "🧪", "🧭", "🎯")
+        elif normalized_task_type == "defect":
             icons = ("📌", "🧪", "🎯")
         else:
             icons = ("🧭", "🎯")
-        for icon, label, value in zip(icons, labels, parsed_structured):
+        for icon, (label, value) in zip(icons, structured_fields):
             value_text = _format_task_detail_value(value)
             lines.append(f"{icon} {label}：{value_text}")
     else:
@@ -15023,7 +15108,8 @@ async def on_tasks_help(message: Message) -> None:
     text = (
         "*任务管理命令*\n"
         "- /task_new 标题 | type=需求 — 创建任务\n"
-        "- /task_new 标题 | type=缺陷 | precondition=前置条件 | reproduction=复现步骤 | expected_result=预期结果 — 创建结构化缺陷\n"
+        "- /task_new 标题 | type=缺陷 | precondition=前置条件 | reproduction=复现步骤 | current_state=现状 | expected_effect=预期效果 — 创建结构化缺陷\n"
+        "- /task_new 标题 | type=缺陷 | ... | expected_result=预期结果 — 兼容旧参数，仍按新四字段创建\n"
         "- /task_new 标题 | type=优化 | current_effect=当前效果 | expected_effect=期望效果 — 创建结构化优化\n"
         "- /task_list [status=test] [limit=10] [offset=0] — 列出任务\n"
         "- /task_show TASK_0001 — 查看详情\n"
@@ -15575,15 +15661,26 @@ async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, An
     worksheet = workbook.active
     headers = [str(cell.value).strip() if cell.value is not None else "" for cell in worksheet[1]]
     expected_headers = list(DEFECT_EXCEL_TEMPLATE_HEADERS)
-    if headers[: len(expected_headers)] != expected_headers:
+    legacy_headers = list(DEFECT_EXCEL_TEMPLATE_LEGACY_HEADERS)
+    use_legacy_headers = headers[: len(legacy_headers)] == legacy_headers
+    if headers[: len(expected_headers)] != expected_headers and not use_legacy_headers:
         return [], [f"模板表头不匹配，期望：{' / '.join(expected_headers)}"], 0
 
     valid_rows: list[dict[str, Any]] = []
     errors: list[str] = []
     total_rows = 0
     for row_index, row in enumerate(worksheet.iter_rows(min_row=2, values_only=True), start=2):
-        title, precondition, reproduction, expected_result, related_task_code, priority = (list(row) + [None] * len(expected_headers))[: len(expected_headers)]
-        values = [title, precondition, reproduction, expected_result, related_task_code, priority]
+        if use_legacy_headers:
+            title, precondition, reproduction, expected_effect, related_task_code, priority = (
+                list(row) + [None] * len(legacy_headers)
+            )[: len(legacy_headers)]
+            current_state = ""
+            values = [title, precondition, reproduction, expected_effect, related_task_code, priority]
+        else:
+            title, precondition, reproduction, current_state, expected_effect, related_task_code, priority = (
+                list(row) + [None] * len(expected_headers)
+            )[: len(expected_headers)]
+            values = [title, precondition, reproduction, current_state, expected_effect, related_task_code, priority]
         if all(value in {None, ""} for value in values):
             continue
         total_rows += 1
@@ -15616,7 +15713,8 @@ async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, An
                 "title": normalized_title,
                 "precondition": (str(precondition).strip() if precondition is not None else ""),
                 "reproduction": (str(reproduction).strip() if reproduction is not None else ""),
-                "expected_result": (str(expected_result).strip() if expected_result is not None else ""),
+                "current_state": (str(current_state).strip() if current_state is not None else ""),
+                "expected_effect": (str(expected_effect).strip() if expected_effect is not None else ""),
                 "related_task_id": normalized_related_task_id,
                 "priority": normalized_priority,
             }
@@ -18970,13 +19068,25 @@ def _prepare_task_new_command_description(
     if normalized_task_type == "defect":
         precondition = extra.get("precondition")
         reproduction = extra.get("reproduction")
-        expected_result = extra.get("expected_result")
-        if precondition is not None or reproduction is not None or expected_result is not None:
+        current_state = extra.get("current_state")
+        expected_effect = extra.get("expected_effect")
+        legacy_expected_result = extra.get("expected_result")
+        if (
+            precondition is not None
+            or reproduction is not None
+            or current_state is not None
+            or expected_effect is not None
+            or legacy_expected_result is not None
+        ):
             return (
                 _build_defect_description(
                     _normalize_command_field(precondition, DEFECT_PRECONDITION_LABEL),
                     _normalize_command_field(reproduction, DEFECT_REPRODUCTION_LABEL),
-                    _normalize_command_field(expected_result, DEFECT_EXPECTED_RESULT_LABEL),
+                    current_state=_normalize_command_field(current_state, DEFECT_CURRENT_STATE_LABEL),
+                    expected_effect=_normalize_command_field(
+                        expected_effect if expected_effect is not None else legacy_expected_result,
+                        DEFECT_EXPECTED_EFFECT_LABEL,
+                    ),
                 ),
                 pending_attachments,
             )
@@ -19522,24 +19632,39 @@ async def on_task_create_reproduction(message: Message, state: FSMContext) -> No
         state,
         field_key="reproduction",
         field_label=DEFECT_REPRODUCTION_LABEL,
-        next_state=TaskCreateStates.waiting_expected_result,
-        next_prompt="请输入预期结果（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
-        reprompt_text="复现步骤可选：可继续输入步骤（可同时发送附件），或发送“跳过”继续录入预期结果：",
+        next_state=TaskCreateStates.waiting_current_state,
+        next_prompt="请输入现状（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
+        reprompt_text="复现步骤可选：可继续输入步骤（可同时发送附件），或发送“跳过”继续录入现状：",
     )
 
 
-@router.message(TaskCreateStates.waiting_expected_result)
-async def on_task_create_expected_result(message: Message, state: FSMContext) -> None:
-    """缺陷创建：录入预期结果并进入确认。"""
+@router.message(TaskCreateStates.waiting_current_state)
+async def on_task_create_current_state(message: Message, state: FSMContext) -> None:
+    """缺陷创建：录入现状。"""
+
+    await _handle_task_create_first_structured_field(
+        message,
+        state,
+        field_key="current_state",
+        field_label=DEFECT_CURRENT_STATE_LABEL,
+        next_state=TaskCreateStates.waiting_defect_expected_effect,
+        next_prompt="请输入预期效果（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
+        reprompt_text="现状可选：可继续输入现状（可同时发送附件），或发送“跳过”继续录入预期效果：",
+    )
+
+
+@router.message(TaskCreateStates.waiting_defect_expected_effect)
+async def on_task_create_defect_expected_effect(message: Message, state: FSMContext) -> None:
+    """缺陷创建：录入预期效果并进入确认。"""
 
     await _handle_task_create_final_structured_field(
         message,
         state,
         task_type="defect",
-        previous_keys=("precondition", "reproduction"),
-        current_key="expected_result",
-        current_label=DEFECT_EXPECTED_RESULT_LABEL,
-        reprompt_text="预期结果可选：可继续输入结果（可同时发送附件），或发送“跳过”进入确认创建：",
+        previous_keys=("precondition", "reproduction", "current_state"),
+        current_key="expected_effect",
+        current_label=DEFECT_EXPECTED_EFFECT_LABEL,
+        reprompt_text="预期效果可选：可继续输入目标效果（可同时发送附件），或发送“跳过”进入确认创建：",
     )
 
 
@@ -19649,9 +19774,8 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
     if extra_attachments or (extra_text and not is_cancel and not is_confirm):
         task_type_code = _normalize_task_type(data.get("task_type"))
         description = data.get("description") or ""
-        structured_labels = _get_structured_task_labels(task_type_code)
-        parsed_structured = _parse_structured_task_description(task_type_code, description)
-        update_label = structured_labels[-1] if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels) else "描述"
+        structured_fields = _get_structured_task_fields(task_type_code, description)
+        update_label = structured_fields[-1][0] if structured_fields else "描述"
         segment_text = extra_text.strip() if extra_text and not is_confirm and not is_cancel else ""
         segment, attachments_for_value = _build_step_content_with_attachments(
             message,
@@ -19662,8 +19786,8 @@ async def on_task_create_confirm(message: Message, state: FSMContext) -> None:
         pending = list(data.get("pending_attachments") or [])
         if attachments_for_value:
             pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
-        if parsed_structured is not None and structured_labels is not None and len(parsed_structured) == len(structured_labels):
-            updated_values = list(parsed_structured)
+        if structured_fields is not None:
+            updated_values = [value for _, value in structured_fields]
             updated_values[-1] = _append_step_content(updated_values[-1], segment)
             description = _build_structured_task_description(task_type_code, *updated_values) or description
         else:
@@ -20395,7 +20519,8 @@ async def on_task_defect_excel_confirm(message: Message, state: FSMContext) -> N
                 description=_build_defect_description(
                     str(row.get("precondition") or "").strip(),
                     str(row.get("reproduction") or "").strip(),
-                    str(row.get("expected_result") or "").strip(),
+                    current_state=str(row.get("current_state") or "").strip(),
+                    expected_effect=str(row.get("expected_effect") or "").strip(),
                 ),
                 related_task_id=row.get("related_task_id"),
                 actor=actor,
@@ -21395,7 +21520,8 @@ async def on_task_bug_report(callback: CallbackQuery, state: FSMContext) -> None
         title="",
         precondition="",
         reproduction="",
-        expected_result="",
+        current_state="",
+        expected_effect="",
         pending_attachments=[],
         processed_media_groups=[],
     )
@@ -21501,7 +21627,7 @@ async def on_task_defect_report_reproduction(message: Message, state: FSMContext
         await state.update_data(processed_media_groups=list(processed_groups))
     raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
     trimmed = raw_text.strip()
-    # 复现步骤非必填：用户可选择“跳过”继续录入预期结果。
+    # 复现步骤非必填：用户可选择“跳过”继续录入现状。
     options = [SKIP_TEXT, "取消"]
     resolved = _resolve_reply_choice(trimmed, options=options)
     if resolved == "取消" or _is_cancel_message(resolved):
@@ -21514,7 +21640,7 @@ async def on_task_defect_report_reproduction(message: Message, state: FSMContext
     if not trimmed and not is_skip and not saved_attachments:
         # 用户既没输入文字也没发送附件时，继续提示可补充复现步骤或跳过。
         await message.answer(
-            "复现步骤可选：可继续输入步骤（可同时发送附件），或发送“跳过”继续录入预期结果：",
+            "复现步骤可选：可继续输入步骤（可同时发送附件），或发送“跳过”继续录入现状：",
             reply_markup=_build_description_keyboard(),
         )
         return
@@ -21529,16 +21655,16 @@ async def on_task_defect_report_reproduction(message: Message, state: FSMContext
         pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
         await state.update_data(pending_attachments=pending)
     await state.update_data(reproduction=reproduction)
-    await state.set_state(TaskDefectReportStates.waiting_expected_result)
+    await state.set_state(TaskDefectReportStates.waiting_current_state)
     await message.answer(
-        "请输入预期结果（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
+        "请输入现状（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
         reply_markup=_build_description_keyboard(),
     )
 
 
-@router.message(TaskDefectReportStates.waiting_expected_result)
-async def on_task_defect_report_expected_result(message: Message, state: FSMContext) -> None:
-    """报告缺陷：处理预期结果输入，并进入确认阶段。"""
+@router.message(TaskDefectReportStates.waiting_current_state)
+async def on_task_defect_report_current_state(message: Message, state: FSMContext) -> None:
+    """报告缺陷：处理现状输入，并暂存附件。"""
 
     data = await state.get_data()
     attachment_dir = _attachment_dir_for_message(message)
@@ -21566,21 +21692,73 @@ async def on_task_defect_report_expected_result(message: Message, state: FSMCont
         trimmed = ""
     if not trimmed and not is_skip and not saved_attachments:
         await message.answer(
-            "预期结果可选：可继续输入结果（可同时发送附件），或发送“跳过”进入确认创建：",
+            "现状可选：可继续输入现状（可同时发送附件），或发送“跳过”继续录入预期效果：",
             reply_markup=_build_description_keyboard(),
         )
         return
-    expected_result, attachments_for_value = _build_step_content_with_attachments(
+    current_state, attachments_for_value = _build_step_content_with_attachments(
         message,
         raw_text=trimmed,
         saved_attachments=saved_attachments,
-        field_label=DEFECT_EXPECTED_RESULT_LABEL,
+        field_label=DEFECT_CURRENT_STATE_LABEL,
     )
     if attachments_for_value:
         pending = list(data.get("pending_attachments") or [])
         pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
         await state.update_data(pending_attachments=pending)
-    await state.update_data(expected_result=expected_result)
+    await state.update_data(current_state=current_state)
+    await state.set_state(TaskDefectReportStates.waiting_expected_effect)
+    await message.answer(
+        "请输入预期效果（可选），可直接发送图片/文件作为附件；若暂无可发送“跳过”继续（仅发送附件也会进入下一步）：",
+        reply_markup=_build_description_keyboard(),
+    )
+
+
+@router.message(TaskDefectReportStates.waiting_expected_effect)
+async def on_task_defect_report_expected_effect(message: Message, state: FSMContext) -> None:
+    """报告缺陷：处理预期效果输入，并进入确认阶段。"""
+
+    data = await state.get_data()
+    attachment_dir = _attachment_dir_for_message(message)
+    processed_groups = set(data.get("processed_media_groups") or [])
+    saved_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    # 媒体组会触发多次 handler，若本次调用已被其他消息消费则直接忽略，避免重复追加附件。
+    if message.media_group_id and not saved_attachments and not text_part:
+        return
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
+    raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
+    trimmed = raw_text.strip()
+    options = [SKIP_TEXT, "取消"]
+    resolved = _resolve_reply_choice(trimmed, options=options)
+    if resolved == "取消" or _is_cancel_message(resolved):
+        await state.clear()
+        await message.answer("已取消创建缺陷任务。", reply_markup=_build_worker_main_keyboard())
+        return
+    is_skip = resolved == SKIP_TEXT or _is_skip_message(resolved)
+    if is_skip:
+        trimmed = ""
+    if not trimmed and not is_skip and not saved_attachments:
+        await message.answer(
+            "预期效果可选：可继续输入目标效果（可同时发送附件），或发送“跳过”进入确认创建：",
+            reply_markup=_build_description_keyboard(),
+        )
+        return
+    expected_effect, attachments_for_value = _build_step_content_with_attachments(
+        message,
+        raw_text=trimmed,
+        saved_attachments=saved_attachments,
+        field_label=DEFECT_EXPECTED_EFFECT_LABEL,
+    )
+    if attachments_for_value:
+        pending = list(data.get("pending_attachments") or [])
+        pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
+        await state.update_data(pending_attachments=pending)
+    await state.update_data(expected_effect=expected_effect)
     await state.set_state(TaskDefectReportStates.waiting_confirm)
     data = await state.get_data()
     origin_task_id = data.get("origin_task_id")
@@ -21591,7 +21769,8 @@ async def on_task_defect_report_expected_result(message: Message, state: FSMCont
         origin_task_id=origin_task_id,
         precondition=data.get("precondition"),
         reproduction=data.get("reproduction"),
-        expected_result=expected_result,
+        current_state=data.get("current_state"),
+        expected_effect=expected_effect,
         pending_attachments=data.get("pending_attachments") or [],
     )
     await message.answer("\n".join(summary_lines), reply_markup=_build_worker_main_keyboard())
@@ -21626,19 +21805,19 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
     is_confirm = resolved == options[0] or lowered in {"确认", "确认创建"}
 
     if extra_attachments or (extra_text and not is_cancel and not is_confirm):
-        expected_result = data.get("expected_result") or ""
+        expected_effect = data.get("expected_effect") or ""
         segment_text = extra_text.strip() if extra_text and not is_confirm and not is_cancel else ""
         segment, attachments_for_value = _build_step_content_with_attachments(
             message,
             raw_text=segment_text,
             saved_attachments=extra_attachments,
-            field_label=f"补充{DEFECT_EXPECTED_RESULT_LABEL}",
+            field_label=f"补充{DEFECT_EXPECTED_EFFECT_LABEL}",
         )
         pending = list(data.get("pending_attachments") or [])
         if attachments_for_value:
             pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
-        expected_result = _append_step_content(expected_result, segment)
-        await state.update_data(pending_attachments=pending, expected_result=expected_result)
+        expected_effect = _append_step_content(expected_effect, segment)
+        await state.update_data(pending_attachments=pending, expected_effect=expected_effect)
         data = await state.get_data()
         origin_task_id = data.get("origin_task_id")
         origin_task = await TASK_SERVICE.get_task(origin_task_id) if origin_task_id else None
@@ -21648,11 +21827,12 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
             origin_task_id=origin_task_id,
             precondition=data.get("precondition"),
             reproduction=data.get("reproduction"),
-            expected_result=expected_result,
+            current_state=data.get("current_state"),
+            expected_effect=expected_effect,
             pending_attachments=pending,
         )
         await message.answer(
-            f"已记录补充的{DEFECT_EXPECTED_RESULT_LABEL}/附件，请继续选择“确认创建”或“取消”。\n" + "\n".join(updated_lines),
+            f"已记录补充的{DEFECT_EXPECTED_EFFECT_LABEL}/附件，请继续选择“确认创建”或“取消”。\n" + "\n".join(updated_lines),
             reply_markup=_build_confirm_keyboard(),
         )
         return
@@ -21675,10 +21855,16 @@ async def on_task_defect_report_confirm(message: Message, state: FSMContext) -> 
     title = (data.get("title") or "").strip()
     precondition = (data.get("precondition") or "").strip()
     reproduction = (data.get("reproduction") or "").strip()
-    expected_result = (data.get("expected_result") or "").strip()
-    description = _build_defect_description(precondition, reproduction, expected_result)
+    current_state = (data.get("current_state") or "").strip()
+    expected_effect = (data.get("expected_effect") or "").strip()
+    description = _build_defect_description(
+        precondition,
+        reproduction,
+        current_state=current_state,
+        expected_effect=expected_effect,
+    )
     reporter = data.get("reporter") or _actor_from_message(message)
-    # 前置条件、复现步骤与预期结果均可为空，仅校验关键上下文与标题。
+    # 前置条件、复现步骤、现状与预期效果均可为空，仅校验关键上下文与标题。
     if not origin_task_id or not title:
         await state.clear()
         await message.answer("会话已失效，请重新操作。", reply_markup=_build_worker_main_keyboard())

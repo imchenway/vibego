@@ -249,19 +249,39 @@ def test_format_task_detail_without_history():
     assert "📊 状态：" not in result
 
 
-def test_format_task_detail_defect_uses_precondition_reproduction_and_expected_result():
-    """缺陷任务详情应优先展示前置条件、复现步骤与预期结果。"""
+def test_format_task_detail_defect_uses_precondition_reproduction_current_state_and_expected_effect():
+    """新缺陷任务详情应优先展示四字段结构。"""
 
     task = _make_task(task_id="TASK_0111", title="缺陷任务", status="research", task_type="defect")
-    task.description = "前置条件：\n已登录测试账号\n\n复现步骤：\n1. 打开页面\n\n预期结果：\n页面应正常显示"
+    task.description = (
+        "前置条件：\n已登录测试账号\n\n"
+        "复现步骤：\n1. 打开页面\n\n"
+        "现状：\n页面无任何提示\n\n"
+        "预期效果：\n页面应正常显示"
+    )
 
     result = bot._format_task_detail(task, notes=())
 
     assert "📌 前置条件：已登录测试账号" in result
     assert "🧪 复现步骤：" in result
     assert "打开页面" in result
-    assert "🎯 预期结果：页面应正常显示" in result
+    assert "🧭 现状：页面无任何提示" in result
+    assert "🎯 预期效果：页面应正常显示" in result
     assert "🖊️ 描述：" not in result
+
+
+def test_format_task_detail_defect_legacy_three_fields_keep_old_style():
+    """历史三字段缺陷应保持旧样式展示，不补现状。"""
+
+    task = _make_task(task_id="TASK_0111_OLD", title="历史缺陷任务", status="research", task_type="defect")
+    task.description = "前置条件：\n已登录测试账号\n\n复现步骤：\n1. 打开页面\n\n预期结果：\n页面应正常显示"
+
+    result = bot._format_task_detail(task, notes=())
+
+    assert "📌 前置条件：已登录测试账号" in result
+    assert "🧪 复现步骤：" in result
+    assert "🎯 预期结果：页面应正常显示" in result
+    assert "现状：" not in result
 
 
 def test_format_task_detail_hides_step_bound_attachments_from_other_attachment_section():
@@ -4881,8 +4901,8 @@ def test_build_model_push_payload_with_supplement():
     assert "测试阶段补充说明：" not in payload
 
 
-def test_build_model_push_payload_defect_uses_precondition_reproduction_and_expected_result():
-    """缺陷任务推送到模型时应展示前置条件、复现步骤与预期结果。"""
+def test_build_model_push_payload_defect_uses_four_fields():
+    """新缺陷任务推送到模型时应展示四字段结构。"""
 
     task = TaskRecord(
         id="TASK_DEFECT_PUSH",
@@ -4893,7 +4913,7 @@ def test_build_model_push_payload_defect_uses_precondition_reproduction_and_expe
         task_type="defect",
         tags=(),
         due_date=None,
-        description="前置条件：\n已登录测试账号\n\n复现步骤：\n1. 点击按钮\n\n预期结果：\n应弹出成功提示",
+        description="前置条件：\n已登录测试账号\n\n复现步骤：\n1. 点击按钮\n\n现状：\n页面没有任何反应\n\n预期效果：\n应弹出成功提示",
         parent_id=None,
         root_id="TASK_DEFECT_PUSH",
         depth=0,
@@ -4907,9 +4927,38 @@ def test_build_model_push_payload_defect_uses_precondition_reproduction_and_expe
 
     assert "前置条件：\n~~~\n已登录测试账号\n~~~" in payload
     assert "复现步骤：\n~~~\n1. 点击按钮\n~~~" in payload
-    assert "预期结果：\n~~~\n应弹出成功提示\n~~~" in payload
+    assert "现状：\n~~~\n页面没有任何反应\n~~~" in payload
+    assert "预期效果：\n~~~\n应弹出成功提示\n~~~" in payload
     assert "补充任务描述：\n~~~\n补充内容\n~~~" in payload
     assert "任务描述：\n~~~\n前置条件：" not in payload
+
+
+def test_build_model_push_payload_defect_legacy_three_fields_keep_old_style():
+    """历史三字段缺陷推送时应保持旧样式，不补现状。"""
+
+    task = TaskRecord(
+        id="TASK_DEFECT_PUSH_OLD",
+        project_slug="demo",
+        title="缺陷推送旧任务",
+        status="research",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="前置条件：\n已登录测试账号\n\n复现步骤：\n1. 点击按钮\n\n预期结果：\n应弹出成功提示",
+        parent_id=None,
+        root_id="TASK_DEFECT_PUSH_OLD",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    payload = bot._build_model_push_payload(task, supplement="补充内容")
+
+    assert "预期结果：\n~~~\n应弹出成功提示\n~~~" in payload
+    assert "现状：" not in payload
 
 
 def test_build_model_push_payload_prefers_step_attachments_and_lists_only_other_attachments():
@@ -4958,8 +5007,8 @@ def test_build_model_push_payload_prefers_step_attachments_and_lists_only_other_
     assert "step.png（image/png）→ ./data/step.png" not in payload
 
 
-def test_build_task_context_block_for_model_defect_uses_precondition_reproduction_and_expected_result():
-    """任务上下文块在缺陷任务下也应输出三字段结构。"""
+def test_build_task_context_block_for_model_defect_uses_four_fields():
+    """任务上下文块在新缺陷任务下也应输出四字段结构。"""
 
     task = TaskRecord(
         id="TASK_DEFECT_CTX",
@@ -4970,7 +5019,7 @@ def test_build_task_context_block_for_model_defect_uses_precondition_reproductio
         task_type="defect",
         tags=(),
         due_date=None,
-        description="前置条件：\n已登录测试账号\n\n复现步骤：\n打开控制台\n\n预期结果：\n不应报错",
+        description="前置条件：\n已登录测试账号\n\n复现步骤：\n打开控制台\n\n现状：\n控制台报错\n\n预期效果：\n不应报错",
         parent_id=None,
         root_id="TASK_DEFECT_CTX",
         depth=0,
@@ -4989,9 +5038,43 @@ def test_build_task_context_block_for_model_defect_uses_precondition_reproductio
 
     assert "前置条件：\n~~~\n已登录测试账号\n~~~" in block
     assert "复现步骤：\n~~~\n打开控制台\n~~~" in block
-    assert "预期结果：\n~~~\n不应报错\n~~~" in block
+    assert "现状：\n~~~\n控制台报错\n~~~" in block
+    assert "预期效果：\n~~~\n不应报错\n~~~" in block
     assert "补充任务描述：\n~~~\n补充说明\n~~~" in block
     assert "任务描述：\n~~~\n前置条件：" not in block
+
+
+def test_build_task_context_block_for_model_defect_legacy_three_fields_keep_old_style():
+    """历史三字段缺陷上下文块应保持旧样式。"""
+
+    task = TaskRecord(
+        id="TASK_DEFECT_CTX_OLD",
+        project_slug="demo",
+        title="缺陷上下文旧任务",
+        status="test",
+        priority=2,
+        task_type="defect",
+        tags=(),
+        due_date=None,
+        description="前置条件：\n已登录测试账号\n\n复现步骤：\n打开控制台\n\n预期结果：\n不应报错",
+        parent_id=None,
+        root_id="TASK_DEFECT_CTX_OLD",
+        depth=0,
+        lineage="0000",
+        created_at="2025-01-01T00:00:00+08:00",
+        updated_at="2025-01-01T00:00:00+08:00",
+        archived=False,
+    )
+
+    block = bot._build_task_context_block_for_model(
+        task,
+        supplement="补充说明",
+        history="",
+        attachments=(),
+    )
+
+    assert "预期结果：\n~~~\n不应报错\n~~~" in block
+    assert "现状：" not in block
 
 
 def test_build_task_context_block_lists_only_other_attachments():

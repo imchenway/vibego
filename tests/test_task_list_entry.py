@@ -756,7 +756,7 @@ def test_format_task_detail_with_special_chars_markdown_v2(monkeypatch):
 
 
 def test_format_task_detail_defect_sections_keep_special_chars_in_markdown_v2(monkeypatch):
-    """缺陷详情的三字段在 MarkdownV2 模式下也应保持原始特殊字符。"""
+    """缺陷详情的四字段在 MarkdownV2 模式下也应保持原始特殊字符。"""
 
     monkeypatch.setattr(bot, "_IS_MARKDOWN_V2", True)
     monkeypatch.setattr(bot, "_IS_MARKDOWN", False)
@@ -770,7 +770,12 @@ def test_format_task_detail_defect_sections_keep_special_chars_in_markdown_v2(mo
         task_type="defect",
         tags=(),
         due_date=None,
-        description="前置条件：\n已登录 [测试环境](入口)\n\n复现步骤：\n点击 [登录](按钮)\n\n预期结果：\n显示 success_message!",
+        description=(
+            "前置条件：\n已登录 [测试环境](入口)\n\n"
+            "复现步骤：\n点击 [登录](按钮)\n\n"
+            "现状：\n页面没有 success_message!\n\n"
+            "预期效果：\n显示 success_message!"
+        ),
         parent_id=None,
         root_id="TASK_DEFECT_SECTIONS",
         depth=0,
@@ -784,7 +789,8 @@ def test_format_task_detail_defect_sections_keep_special_chars_in_markdown_v2(mo
 
     assert "📌 前置条件：已登录 [测试环境](入口)" in detail_text
     assert "🧪 复现步骤：点击 [登录](按钮)" in detail_text
-    assert "🎯 预期结果：显示 success_message!" in detail_text
+    assert "🧭 现状：页面没有 success_message!" in detail_text
+    assert "🎯 预期效果：显示 success_message!" in detail_text
     assert "\\[" not in detail_text
     assert "\\(" not in detail_text
     assert "\\!" not in detail_text

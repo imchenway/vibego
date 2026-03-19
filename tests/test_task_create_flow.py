@@ -910,7 +910,7 @@ def test_task_create_precondition_accepts_text_and_moves_to_reproduction():
     assert message.calls and "请输入复现步骤" in message.calls[-1]["text"]
 
 
-def test_task_create_reproduction_accepts_text_and_moves_to_expected_result():
+def test_task_create_reproduction_accepts_text_and_moves_to_current_state():
     state = DummyState(
         data={
             "title": "缺陷任务",
@@ -925,12 +925,12 @@ def test_task_create_reproduction_accepts_text_and_moves_to_expected_result():
 
     asyncio.run(bot.on_task_create_reproduction(message, state))
 
-    assert state.state == TaskCreateStates.waiting_expected_result
+    assert state.state == TaskCreateStates.waiting_current_state
     assert state.data["reproduction"] == "1. 打开页面"
-    assert message.calls and "请输入预期结果" in message.calls[-1]["text"]
+    assert message.calls and "请输入现状" in message.calls[-1]["text"]
 
 
-def test_task_create_expected_result_skip_builds_defect_summary():
+def test_task_create_current_state_skip_moves_to_expected_effect():
     state = DummyState(
         data={
             "title": "缺陷任务",
@@ -940,18 +940,44 @@ def test_task_create_expected_result_skip_builds_defect_summary():
             "precondition": "已登录测试账号",
             "reproduction": "1. 打开页面",
         },
-        state=TaskCreateStates.waiting_expected_result,
+        state=TaskCreateStates.waiting_current_state,
     )
     message = DummyMessage(bot.SKIP_TEXT)
 
-    asyncio.run(bot.on_task_create_expected_result(message, state))
+    asyncio.run(bot.on_task_create_current_state(message, state))
+
+    assert state.state == TaskCreateStates.waiting_defect_expected_effect
+    assert state.data["current_state"] == ""
+    assert message.calls and "请输入预期效果" in message.calls[-1]["text"]
+
+
+def test_task_create_defect_expected_effect_skip_builds_defect_summary():
+    state = DummyState(
+        data={
+            "title": "缺陷任务",
+            "priority": bot.DEFAULT_PRIORITY,
+            "task_type": "defect",
+            "related_task_id": None,
+            "precondition": "已登录测试账号",
+            "reproduction": "1. 打开页面",
+            "current_state": "",
+        },
+        state=TaskCreateStates.waiting_defect_expected_effect,
+    )
+    message = DummyMessage(bot.SKIP_TEXT)
+
+    asyncio.run(bot.on_task_create_defect_expected_effect(message, state))
 
     assert state.state == TaskCreateStates.waiting_confirm
-    assert state.data["description"] == "前置条件：\n已登录测试账号\n\n复现步骤：\n1. 打开页面\n\n预期结果：\n-"
+    assert (
+        state.data["description"]
+        == "前置条件：\n已登录测试账号\n\n复现步骤：\n1. 打开页面\n\n现状：\n-\n\n预期效果：\n-"
+    )
     summary = message.calls[-2]["text"]
     assert "前置条件：" in summary
     assert "复现步骤：" in summary
-    assert "预期结果：-" in summary
+    assert "现状：-" in summary
+    assert "预期效果：-" in summary
 
 
 def test_task_create_current_effect_accepts_text_and_moves_to_expected_effect():
@@ -999,6 +1025,34 @@ def test_task_create_expected_effect_accepts_text_and_builds_task_summary():
 def test_task_new_command_defect_accepts_structured_fields(monkeypatch):
     state = DummyState()
     message = DummyMessage(
+        "/task_new 登录按钮无响应 | type=缺陷 | precondition=已登录测试账号 | reproduction=点击登录按钮 | current_state=页面无任何响应 | expected_effect=页面应成功进入首页"
+    )
+
+    created_calls = []
+
+    async def fake_create_root_task(**kwargs):
+        created_calls.append(kwargs)
+        return SimpleNamespace(id="TASK_9001")
+
+    async def fake_render(task_id: str):
+        return "detail", None
+
+    monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
+    monkeypatch.setattr(bot, "_render_task_detail", fake_render)
+
+    asyncio.run(bot.on_task_new(message, state))
+
+    assert created_calls
+    assert created_calls[0]["task_type"] == "defect"
+    assert (
+        created_calls[0]["description"]
+        == "前置条件：\n已登录测试账号\n\n复现步骤：\n点击登录按钮\n\n现状：\n页面无任何响应\n\n预期效果：\n页面应成功进入首页"
+    )
+
+
+def test_task_new_command_defect_legacy_expected_result_still_builds_new_four_fields(monkeypatch):
+    state = DummyState()
+    message = DummyMessage(
         "/task_new 登录按钮无响应 | type=缺陷 | precondition=已登录测试账号 | reproduction=点击登录按钮 | expected_result=页面应成功进入首页"
     )
 
@@ -1018,7 +1072,10 @@ def test_task_new_command_defect_accepts_structured_fields(monkeypatch):
 
     assert created_calls
     assert created_calls[0]["task_type"] == "defect"
-    assert created_calls[0]["description"] == "前置条件：\n已登录测试账号\n\n复现步骤：\n点击登录按钮\n\n预期结果：\n页面应成功进入首页"
+    assert (
+        created_calls[0]["description"]
+        == "前置条件：\n已登录测试账号\n\n复现步骤：\n点击登录按钮\n\n现状：\n-\n\n预期效果：\n页面应成功进入首页"
+    )
 
 
 def test_task_new_command_task_accepts_structured_fields(monkeypatch):
