@@ -253,6 +253,93 @@ def test_gen_preview_prefers_python3_over_python(tmp_path: Path) -> None:
     assert port_capture_file.read_text(encoding="utf-8") == "45927"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-preview 脚本依赖 bash/Posix 环境")
+def test_gen_preview_normalizes_symlink_output_dir(tmp_path: Path) -> None:
+    """输出目录若为符号链接，应先规范化为真实路径再传给微信 CLI。
+
+    回归点：macOS 上 `/tmp -> /private/tmp`，微信开发者工具 CLI 会把符号链接目录判定为
+    “二维码输出路径无效或不存在”，导致预览失败。
+    """
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_preview.sh"
+    assert script_path.is_file()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    fake_cli = bin_dir / "fake-wx-cli"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+
+            output=""
+            while [[ $# -gt 0 ]]; do
+              if [[ "$1" == "--qr-output" ]]; then
+                output="$2"
+                shift 2
+                continue
+              fi
+              shift
+            done
+
+            if [[ -z "$output" ]]; then
+              echo "missing --qr-output" >&2
+              exit 2
+            fi
+
+            mkdir -p "$(dirname "$output")"
+            printf 'fake-jpg' > "$output"
+
+            if [[ -n "${FAKE_WX_CLI_OUTPUT_FILE:-}" ]]; then
+              printf '%s' "$output" > "$FAKE_WX_CLI_OUTPUT_FILE"
+            fi
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+
+    real_output_dir = tmp_path / "real-output"
+    real_output_dir.mkdir()
+    symlink_output_dir = tmp_path / "link-output"
+    symlink_output_dir.symlink_to(real_output_dir, target_is_directory=True)
+    output_qr = symlink_output_dir / "qr.jpg"
+    output_capture_file = tmp_path / "output.txt"
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["OUTPUT_QR"] = str(output_qr)
+    env["PORT"] = "45459"
+    env["FAKE_WX_CLI_OUTPUT_FILE"] = str(output_capture_file)
+
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    assert proc.returncode == 0, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert output_capture_file.is_file()
+    assert output_capture_file.read_text(encoding="utf-8") == str((real_output_dir / "qr.jpg").resolve())
+
+
 @pytest.mark.skipif(os.name != "posix", reason="wx-dev-upload 脚本依赖 bash/Posix 环境")
 def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Path) -> None:
     """确保上传脚本在 python 不可用时仍能用 python3 解析端口，并携带指定版本号。"""

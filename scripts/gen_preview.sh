@@ -367,8 +367,12 @@ fi
 DEFAULT_DOWNLOAD_DIR="$(_default_download_dir)"
 OUTPUT_QR="${OUTPUT_QR:-${DEFAULT_DOWNLOAD_DIR}/wx-preview-${VERSION}.jpg}"
 
-# 确保输出目录存在
-mkdir -p "$(dirname "$OUTPUT_QR")"
+# 规范化输出目录的物理路径，避免 macOS `/tmp -> /private/tmp` 这类符号链接目录
+# 被微信开发者工具 CLI 误判为“二维码输出路径无效或不存在”。
+OUTPUT_DIR="$(dirname "$OUTPUT_QR")"
+mkdir -p "$OUTPUT_DIR"
+PHYSICAL_OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd -P)"
+OUTPUT_QR="${PHYSICAL_OUTPUT_DIR}/$(basename "$OUTPUT_QR")"
 
 # 清理代理，避免请求走代理失败
 export http_proxy= https_proxy= all_proxy=
