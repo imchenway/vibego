@@ -1039,7 +1039,16 @@ def test_request_input_submit_falls_back_to_long_text_attachment_without_truncat
     async def fake_reply(*_args, **_kwargs):
         raise TelegramBadRequest(method="sendMessage", message="Bad Request: message is too long")
 
-    async def fake_reply_large_text(chat_id: int, text: str, *, parse_mode=None, preformatted=False, reply_markup=None, attachment_reply_markup=None):
+    async def fake_reply_large_text(
+        chat_id: int,
+        text: str,
+        *,
+        parse_mode=None,
+        preformatted=False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
+    ):
         fallback_calls.append((text, reply_markup, attachment_reply_markup))
         return text
 

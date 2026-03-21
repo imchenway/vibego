@@ -22,15 +22,22 @@ import bot
 
 class DummyBot:
     def __init__(self):
-        self.sent_messages: list[tuple[int, str, Optional[str], bool]] = []
+        self.sent_messages: list[tuple[int, str, Optional[str], bool, object]] = []
         self.edited_messages: list[tuple[int, int, str, Optional[str]]] = []
         self.deleted_messages: list[tuple[int, int]] = []
         self.delete_error: Optional[Exception] = None
 
-    async def send_message(self, chat_id: int, text: str, parse_mode=None, disable_notification: bool = False):
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        parse_mode=None,
+        disable_notification: bool = False,
+        reply_markup=None,
+    ):
         message_id = len(self.sent_messages) + 1
         mode_value = parse_mode if parse_mode is None else str(parse_mode)
-        self.sent_messages.append((chat_id, text, mode_value, disable_notification))
+        self.sent_messages.append((chat_id, text, mode_value, disable_notification, reply_markup))
         return SimpleNamespace(message_id=message_id)
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, parse_mode=None):
@@ -77,6 +84,7 @@ def plan_test_env(monkeypatch, tmp_path):
         preformatted: bool = False,
         reply_markup=None,
         attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
     ):
         replies.append((chat_id, text))
         return text
@@ -545,6 +553,106 @@ def test_reply_large_text_short_message(reply_bot_env):
     assert reply_bot_env.sent_messages[0][0] == chat_id
     assert delivered == reply_bot_env.sent_messages[0][1]
     assert not reply_bot_env.sent_documents
+
+
+def test_reply_large_text_split_mode_sends_multiple_messages_and_only_last_chunk_has_markup(reply_bot_env):
+    chat_id = 1903
+    long_text = f"{bot.MODEL_COMPLETION_PREFIX}\n\n" + ("分片正文内容\n" * 900)
+    sentinel_markup = object()
+
+    delivered = asyncio.run(
+        bot.reply_large_text(
+            chat_id,
+            long_text,
+            reply_markup=sentinel_markup,
+            overflow_mode="split",
+        )
+    )
+
+    assert delivered == long_text
+    assert not reply_bot_env.sent_documents, "split 模式不应发送附件"
+    assert len(reply_bot_env.sent_messages) > 1, "超长模型回复应拆成多条消息"
+    assert all(
+        len(bot._prepare_model_payload(text)) <= bot.TELEGRAM_MESSAGE_LIMIT
+        for _chat_id, text, _mode, _silent, _markup in reply_bot_env.sent_messages
+    )
+    assert all(markup is None for *_prefix, markup in reply_bot_env.sent_messages[:-1])
+    assert reply_bot_env.sent_messages[-1][4] is sentinel_markup
+
+
+def test_reply_large_text_split_mode_preserves_fenced_code_blocks(reply_bot_env):
+    chat_id = 1904
+    code_body = "".join(f"print({index})\n" for index in range(1600))
+    long_text = f"```python\n{code_body}```"
+
+    asyncio.run(bot.reply_large_text(chat_id, long_text, overflow_mode="split"))
+
+    assert len(reply_bot_env.sent_messages) > 1
+    assert not reply_bot_env.sent_documents
+    assert all(
+        message_text.count("```") >= 2
+        for _chat_id, message_text, _mode, _silent, _markup in reply_bot_env.sent_messages
+    )
+
+
+def test_deliver_pending_messages_uses_split_mode_for_model_output(monkeypatch, tmp_path: Path):
+    original_bot = bot._bot
+    original_plan_progress = bot.ENABLE_PLAN_PROGRESS
+    original_model = bot.ACTIVE_MODEL
+    original_canonical_model = bot.MODEL_CANONICAL_NAME
+    bot._bot = DummyBot()
+    bot.ENABLE_PLAN_PROGRESS = False
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_SESSION_MAP.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(
+        json.dumps(_final_event("模型长回复" * 1200), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    bot.SESSION_OFFSETS[str(session_file)] = 0
+
+    calls: list[dict] = []
+
+    async def fake_reply(
+        chat_id: int,
+        text: str,
+        *,
+        parse_mode=None,
+        preformatted: bool = False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
+    ):
+        calls.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "reply_markup": reply_markup,
+                "attachment_reply_markup": attachment_reply_markup,
+                "overflow_mode": overflow_mode,
+            }
+        )
+        return text
+
+    monkeypatch.setattr(bot, "reply_large_text", fake_reply)
+
+    try:
+        delivered = asyncio.run(bot._deliver_pending_messages(1905, session_file))
+    finally:
+        bot._bot = original_bot
+        bot.ENABLE_PLAN_PROGRESS = original_plan_progress
+        bot.ACTIVE_MODEL = original_model
+        bot.MODEL_CANONICAL_NAME = original_canonical_model
+
+    assert delivered is True
+    assert calls
+    assert calls[-1]["overflow_mode"] == "split"
 
 
 def test_session_ack_message_silent(monkeypatch, tmp_path):

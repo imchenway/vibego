@@ -63,6 +63,7 @@ def auto_compact_env(monkeypatch, tmp_path):
         preformatted: bool = False,
         reply_markup=None,
         attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
     ) -> str:
         responses.append((chat_id, text))
         return text

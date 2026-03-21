@@ -1014,6 +1014,7 @@ def test_push_model_preview_fallback_on_too_long(monkeypatch, tmp_path: Path):
         preformatted=False,
         reply_markup=None,
         attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
     ):
         fallback_calls.append((chat_id, text, parse_mode, preformatted))
         return text
@@ -2006,6 +2007,7 @@ def test_bug_report_auto_push_preview_fallback_on_too_long(monkeypatch, tmp_path
         preformatted=False,
         reply_markup=None,
         attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
     ):
         fallback_calls.append((chat_id, text, parse_mode, preformatted))
         return text
@@ -3087,6 +3089,7 @@ def test_model_task_to_test_callback_updates_distinct_tasks_for_batch_bound_mess
         preformatted: bool = False,
         reply_markup=None,
         attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
     ):
         assert isinstance(reply_markup, InlineKeyboardMarkup)
         delivered_markups.append(reply_markup)

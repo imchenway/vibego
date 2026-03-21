@@ -163,6 +163,7 @@ def test_deliver_pending_messages_for_bound_native_session_includes_commit_butto
         preformatted: bool = False,
         reply_markup=None,
         attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
     ):
         captured_markups.append(reply_markup)
         return "ok"
@@ -221,6 +222,7 @@ def test_deliver_pending_messages_for_batch_bound_native_session_uses_per_messag
         preformatted: bool = False,
         reply_markup=None,
         attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
     ):
         captured_markups.append(reply_markup)
         return text

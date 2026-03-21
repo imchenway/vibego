@@ -1327,6 +1327,238 @@ def _prepend_completion_header(text: str) -> str:
         return f"{MODEL_COMPLETION_PREFIX}\n\n{text}"
     return MODEL_COMPLETION_PREFIX
 
+
+_TELEGRAM_FENCE_LINE_RE = re.compile(r"^\s*```")
+
+
+def _measure_telegram_text_length(text: str, *, preformatted: bool) -> int:
+    """计算文本在 Telegram 当前发送策略下的实际长度。"""
+
+    if preformatted:
+        return len(text)
+    return len(_prepare_model_payload(text))
+
+
+def _max_telegram_prefix_index(
+    text: str,
+    *,
+    limit: int,
+    preformatted: bool,
+    prefix: str = "",
+    suffix: str = "",
+) -> int:
+    """二分查找当前包装条件下可放入 Telegram 的最大原文前缀长度。"""
+
+    low = 0
+    high = len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        candidate = f"{prefix}{text[:mid]}{suffix}"
+        if _measure_telegram_text_length(candidate, preformatted=preformatted) <= limit:
+            low = mid
+        else:
+            high = mid - 1
+    return low
+
+
+def _choose_telegram_split_index(
+    text: str,
+    *,
+    limit: int,
+    preformatted: bool,
+    prefix: str = "",
+    suffix: str = "",
+) -> int:
+    """在可容纳范围内优先挑选可读性更好的切分点。"""
+
+    max_index = _max_telegram_prefix_index(
+        text,
+        limit=limit,
+        preformatted=preformatted,
+        prefix=prefix,
+        suffix=suffix,
+    )
+    if max_index <= 0:
+        return 1
+    if max_index >= len(text):
+        return len(text)
+
+    window = text[:max_index]
+    preferred_delimiters = ("\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", "；", ";", "，", ",", "、", " ")
+    for delimiter in preferred_delimiters:
+        position = window.rfind(delimiter)
+        if position > 0:
+            return position + len(delimiter)
+    return max_index
+
+
+def _split_plain_text_for_telegram(
+    text: str,
+    *,
+    limit: int,
+    preformatted: bool,
+) -> list[str]:
+    """按 Telegram 上限切分普通文本，优先保持段落/换行边界。"""
+
+    if not text:
+        return [text]
+
+    remaining = text
+    chunks: list[str] = []
+    while remaining:
+        if _measure_telegram_text_length(remaining, preformatted=preformatted) <= limit:
+            chunks.append(remaining)
+            break
+        split_index = _choose_telegram_split_index(
+            remaining,
+            limit=limit,
+            preformatted=preformatted,
+        )
+        chunks.append(remaining[:split_index])
+        remaining = remaining[split_index:]
+    return [chunk for chunk in chunks if chunk]
+
+
+def _normalize_fence_opening(line: str) -> str:
+    """规范化代码块起始 fence，确保可独立作为新分片的开头。"""
+
+    stripped = line.rstrip("\n")
+    if not stripped:
+        return "```\n"
+    if stripped.endswith("\r"):
+        stripped = stripped.rstrip("\r")
+    return f"{stripped}\n"
+
+
+def _split_code_block_for_telegram(
+    block_text: str,
+    *,
+    limit: int,
+    preformatted: bool,
+) -> list[str]:
+    """切分超长 fenced code block，并在每段补齐 fence 边界。"""
+
+    lines = normalize_newlines(block_text).splitlines(keepends=True)
+    if not lines:
+        return ["```\n```"]
+
+    opening = _normalize_fence_opening(lines[0])
+    closing = "\n```"
+    inner = "".join(lines[1:])
+    if inner.endswith("```"):
+        inner = inner[:-3]
+    elif inner.endswith("```\n"):
+        inner = inner[:-4]
+
+    if not inner:
+        return [f"{opening}```"]
+
+    chunks: list[str] = []
+    remaining = inner
+    while remaining:
+        candidate_body = remaining if remaining.endswith("\n") else f"{remaining}\n"
+        candidate = f"{opening}{candidate_body}{closing}"
+        if _measure_telegram_text_length(candidate, preformatted=preformatted) <= limit:
+            chunks.append(candidate)
+            break
+
+        split_index = _choose_telegram_split_index(
+            remaining,
+            limit=limit,
+            preformatted=preformatted,
+            prefix=opening,
+            suffix=closing,
+        )
+        body = remaining[:split_index]
+        if not body.endswith("\n"):
+            body = f"{body}\n"
+        chunks.append(f"{opening}{body}{closing}")
+        remaining = remaining[split_index:]
+
+    return [chunk for chunk in chunks if chunk]
+
+
+def _split_text_into_telegram_blocks(text: str) -> list[tuple[str, str]]:
+    """把文本拆成普通块 / fenced code block，便于分片时优先保留 Markdown 结构。"""
+
+    lines = normalize_newlines(text).splitlines(keepends=True)
+    if not lines:
+        return [("plain", text)]
+
+    blocks: list[tuple[str, str]] = []
+    buffer: list[str] = []
+    in_code_block = False
+
+    for line in lines:
+        is_fence_line = bool(_TELEGRAM_FENCE_LINE_RE.match(line.strip("\n")))
+        if not in_code_block and is_fence_line:
+            if buffer:
+                blocks.append(("plain", "".join(buffer)))
+                buffer.clear()
+            in_code_block = True
+            buffer.append(_normalize_fence_opening(line))
+            continue
+        buffer.append(line)
+        if in_code_block and is_fence_line:
+            blocks.append(("code", "".join(buffer)))
+            buffer.clear()
+            in_code_block = False
+
+    if buffer:
+        block_kind = "plain" if in_code_block else "plain"
+        blocks.append((block_kind, "".join(buffer)))
+    return blocks
+
+
+def _split_text_for_telegram_messages(
+    text: str,
+    *,
+    preformatted: bool,
+) -> list[str]:
+    """把超长文本拆成多条 Telegram 消息，尽量保留 Markdown 可读性。"""
+
+    normalized = normalize_newlines(text)
+    if not normalized:
+        return [normalized]
+
+    if _measure_telegram_text_length(normalized, preformatted=preformatted) <= TELEGRAM_MESSAGE_LIMIT:
+        return [normalized]
+
+    blocks = [("plain", normalized)] if preformatted else _split_text_into_telegram_blocks(normalized)
+    chunks: list[str] = []
+    current = ""
+
+    for kind, block_text in blocks:
+        if _measure_telegram_text_length(block_text, preformatted=preformatted) <= TELEGRAM_MESSAGE_LIMIT:
+            pieces = [block_text]
+        elif kind == "code":
+            pieces = _split_code_block_for_telegram(
+                block_text,
+                limit=TELEGRAM_MESSAGE_LIMIT,
+                preformatted=preformatted,
+            )
+        else:
+            pieces = _split_plain_text_for_telegram(
+                block_text,
+                limit=TELEGRAM_MESSAGE_LIMIT,
+                preformatted=preformatted,
+            )
+
+        for piece in pieces:
+            if not current:
+                current = piece
+                continue
+            candidate = f"{current}{piece}"
+            if _measure_telegram_text_length(candidate, preformatted=preformatted) <= TELEGRAM_MESSAGE_LIMIT:
+                current = candidate
+                continue
+            chunks.append(current.rstrip("\n"))
+            current = piece
+
+    if current:
+        chunks.append(current.rstrip("\n"))
+    return [chunk for chunk in chunks if chunk]
+
 # pylint: disable=too-many-locals
 async def reply_large_text(
     chat_id: int,
@@ -1336,6 +1568,7 @@ async def reply_large_text(
     preformatted: bool = False,
     reply_markup: Optional[Any] = None,
     attachment_reply_markup: Optional[Any] = None,
+    overflow_mode: Literal["attachment", "split"] = "attachment",
 ) -> str:
     """向指定会话发送可能较长的文本，必要时退化为附件。
 
@@ -1345,6 +1578,7 @@ async def reply_large_text(
     :param preformatted: 标记文本已按 parse_mode 处理，跳过内部转义。
     :param reply_markup: 短消息模式下，附带的键盘（如 InlineKeyboard）。
     :param attachment_reply_markup: 长消息降级为文件时，附带在“文件消息”上的键盘（摘要消息不挂键盘）。
+    :param overflow_mode: 超长消息处理策略；attachment=发送附件，split=拆成多条正文消息。
     """
     bot = current_bot()
     parse_mode_value = parse_mode if parse_mode is not None else _parse_mode_value()
@@ -1389,6 +1623,47 @@ async def reply_large_text(
             },
         )
         return delivered
+
+    if overflow_mode == "split":
+        chunks = _split_text_for_telegram_messages(text, preformatted=preformatted)
+        total_chunks = len(chunks)
+        for index, raw_chunk in enumerate(chunks):
+            chunk_markup = reply_markup if index == total_chunks - 1 else None
+            if preformatted:
+                chunk_prepared = raw_chunk
+                chunk_fallback = None
+            else:
+                chunk_prepared, chunk_fallback = _prepare_model_payload_variants(raw_chunk)
+
+            async def _send_chunk_formatted(payload: str, *, markup: Optional[Any] = chunk_markup) -> None:
+                kwargs: dict[str, Any] = {}
+                if markup is not None:
+                    kwargs["reply_markup"] = markup
+                await bot.send_message(chat_id=chat_id, text=payload, parse_mode=parse_mode_value, **kwargs)
+
+            async def _send_chunk_raw(payload: str, *, markup: Optional[Any] = chunk_markup) -> None:
+                kwargs: dict[str, Any] = {}
+                if markup is not None:
+                    kwargs["reply_markup"] = markup
+                await bot.send_message(chat_id=chat_id, text=payload, parse_mode=None, **kwargs)
+
+            await _send_with_markdown_guard(
+                chunk_prepared,
+                _send_chunk_formatted,
+                raw_sender=_send_chunk_raw,
+                fallback_payload=chunk_fallback,
+            )
+
+        worker_log.info(
+            "长文本已拆分为多条消息发送",
+            extra={
+                "chat": chat_id,
+                "mode": "split",
+                "length": str(len(prepared)),
+                "chunks": str(total_chunks),
+            },
+        )
+        return text
 
     attachment_name = f"model-response-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
     summary_text = f"{MODEL_COMPLETION_PREFIX}\n\n内容较长，已生成附件 {attachment_name}，请下载查看全文。"
@@ -13333,6 +13608,7 @@ async def _deliver_pending_messages(
                 formatted_text,
                 reply_markup=quick_reply_markup,
                 attachment_reply_markup=quick_reply_markup,
+                overflow_mode="split",
             )
         except TelegramBadRequest as exc:
             SESSION_OFFSETS[session_key] = previous_offset
