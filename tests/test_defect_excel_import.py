@@ -22,6 +22,36 @@ os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
 import bot  # noqa: E402
 
+LATEST_TEMPLATE_HEADERS = [
+    "缺陷标题",
+    "前置条件",
+    "复现步骤",
+    "现状",
+    "预期效果",
+    "关联任务编码",
+    "优先级",
+    "附件",
+]
+
+PREVIOUS_TEMPLATE_HEADERS = [
+    "缺陷标题",
+    "前置条件",
+    "复现步骤",
+    "现状",
+    "预期效果",
+    "关联任务编码",
+    "优先级",
+]
+
+LEGACY_TEMPLATE_HEADERS = [
+    "缺陷标题",
+    "前置条件",
+    "复现步骤",
+    "预期结果",
+    "关联任务编码",
+    "优先级",
+]
+
 
 class DummyMessage:
     def __init__(self, *, chat_id: int = 1, user_id: int = 1, text: str | None = None):
@@ -73,7 +103,7 @@ def _build_workbook(path: Path, rows: list[list[object]]) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = "缺陷导入模板"
-    ws.append(list(bot.DEFECT_EXCEL_TEMPLATE_HEADERS))
+    ws.append(LATEST_TEMPLATE_HEADERS)
     for row in rows:
         ws.append(row)
     wb.save(path)
@@ -129,7 +159,7 @@ def test_task_defect_excel_template_callback_sends_xlsx_document():
         workbook = load_workbook(filename=BytesIO(document.data))
         sheet = workbook.active
         headers = [cell.value for cell in sheet[1]]
-        assert headers[: len(bot.DEFECT_EXCEL_TEMPLATE_HEADERS)] == list(bot.DEFECT_EXCEL_TEMPLATE_HEADERS)
+        assert headers[: len(LATEST_TEMPLATE_HEADERS)] == LATEST_TEMPLATE_HEADERS
         assert "请按模板填写后再上传" in (caption or "")
 
     asyncio.run(_scenario())
@@ -138,7 +168,16 @@ def test_task_defect_excel_template_callback_sends_xlsx_document():
 def test_task_defect_excel_upload_valid_file_enters_confirm(monkeypatch, tmp_path: Path):
     workbook_path = _build_workbook(
         tmp_path / "defects.xlsx",
-        [["登录按钮无响应", "已登录测试账号", "1. 打开页面", "页面无跳转", "页面应进入首页", "", 3]],
+        [[
+            "登录按钮无响应",
+            "已登录测试账号",
+            "1. 打开页面",
+            "页面无跳转",
+            "页面应进入首页",
+            "",
+            3,
+            "https://cdn.example.com/errors/login.png\nartifacts/error.log\nhttps://cdn.example.com/errors/login.png",
+        ]],
     )
     message = DummyMessage()
     message.document = SimpleNamespace(file_name="defects.xlsx")
@@ -174,8 +213,70 @@ def test_task_defect_excel_upload_valid_file_enters_confirm(monkeypatch, tmp_pat
         assert len(data["validated_rows"]) == 1
         assert data["validated_rows"][0]["precondition"] == "已登录测试账号"
         assert data["validated_rows"][0]["current_state"] == "页面无跳转"
+        assert data["validated_rows"][0]["pending_attachments"] == [
+            {
+                "kind": "document",
+                "display_name": "login.png",
+                "mime_type": "image/png",
+                "path": "https://cdn.example.com/errors/login.png",
+            },
+            {
+                "kind": "document",
+                "display_name": "error.log",
+                "mime_type": "text/plain",
+                "path": "artifacts/error.log",
+            },
+        ]
         assert message.calls
         assert "Excel 预检通过" in message.calls[-1][0]
+
+    asyncio.run(_scenario())
+
+
+def test_task_defect_excel_upload_previous_headers_without_attachment_still_enter_confirm(monkeypatch, tmp_path: Path):
+    workbook_path = tmp_path / "previous_defects.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "缺陷导入模板"
+    ws.append(PREVIOUS_TEMPLATE_HEADERS)
+    ws.append(["登录按钮无响应", "已登录测试账号", "1. 打开页面", "页面无跳转", "页面应进入首页", "", 3])
+    wb.save(workbook_path)
+
+    message = DummyMessage()
+    message.document = SimpleNamespace(file_name="previous_defects.xlsx")
+    state, _storage = make_state(message)
+    asyncio.run(
+        state.update_data(
+            origin_message=message,
+            origin_status=None,
+            origin_page=1,
+            origin_limit=10,
+            actor="Tester#1",
+        )
+    )
+    asyncio.run(state.set_state(bot.TaskDefectExcelImportStates.waiting_upload))
+
+    async def fake_collect(_message, _target_dir):
+        return [
+            bot.TelegramSavedAttachment(
+                kind="document",
+                display_name="previous_defects.xlsx",
+                mime_type=bot.DEFECT_EXCEL_MIME,
+                absolute_path=workbook_path,
+                relative_path="./data/previous_defects.xlsx",
+            )
+        ]
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+
+    async def _scenario() -> None:
+        await bot.on_task_defect_excel_upload(message, state)
+        assert await state.get_state() == bot.TaskDefectExcelImportStates.waiting_confirm.state
+        data = await state.get_data()
+        assert len(data["validated_rows"]) == 1
+        assert data["validated_rows"][0]["current_state"] == "页面无跳转"
+        assert data["validated_rows"][0]["expected_effect"] == "页面应进入首页"
+        assert data["validated_rows"][0]["pending_attachments"] == []
 
     asyncio.run(_scenario())
 
@@ -185,7 +286,7 @@ def test_task_defect_excel_upload_legacy_headers_still_enter_confirm(monkeypatch
     wb = Workbook()
     ws = wb.active
     ws.title = "缺陷导入模板"
-    ws.append(list(bot.DEFECT_EXCEL_TEMPLATE_LEGACY_HEADERS))
+    ws.append(LEGACY_TEMPLATE_HEADERS)
     ws.append(["登录按钮无响应", "已登录测试账号", "1. 打开页面", "页面应进入首页", "", 3])
     wb.save(workbook_path)
 
@@ -223,6 +324,7 @@ def test_task_defect_excel_upload_legacy_headers_still_enter_confirm(monkeypatch
         assert len(data["validated_rows"]) == 1
         assert data["validated_rows"][0]["current_state"] == ""
         assert data["validated_rows"][0]["expected_effect"] == "页面应进入首页"
+        assert data["validated_rows"][0]["pending_attachments"] == []
 
     asyncio.run(_scenario())
 
@@ -270,6 +372,57 @@ def test_task_defect_excel_upload_invalid_file_keeps_upload_state(monkeypatch, t
     asyncio.run(_scenario())
 
 
+def test_task_defect_excel_upload_invalid_attachment_ref_keeps_upload_state(monkeypatch, tmp_path: Path):
+    workbook_path = _build_workbook(
+        tmp_path / "invalid_attachment.xlsx",
+        [[
+            "登录按钮无响应",
+            "已登录测试账号",
+            "1. 打开页面",
+            "页面无跳转",
+            "页面应进入首页",
+            "",
+            3,
+            "ftp://example.com/login.png",
+        ]],
+    )
+
+    message = DummyMessage()
+    message.document = SimpleNamespace(file_name="invalid_attachment.xlsx")
+    state, _storage = make_state(message)
+    asyncio.run(
+        state.update_data(
+            origin_message=message,
+            origin_status=None,
+            origin_page=1,
+            origin_limit=10,
+            actor="Tester#1",
+        )
+    )
+    asyncio.run(state.set_state(bot.TaskDefectExcelImportStates.waiting_upload))
+
+    async def fake_collect(_message, _target_dir):
+        return [
+            bot.TelegramSavedAttachment(
+                kind="document",
+                display_name="invalid_attachment.xlsx",
+                mime_type=bot.DEFECT_EXCEL_MIME,
+                absolute_path=workbook_path,
+                relative_path="./data/invalid_attachment.xlsx",
+            )
+        ]
+
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+
+    async def _scenario() -> None:
+        await bot.on_task_defect_excel_upload(message, state)
+        assert await state.get_state() == bot.TaskDefectExcelImportStates.waiting_upload.state
+        assert message.calls
+        assert "第 2 行：附件引用不合法" in message.calls[-1][0]
+
+    asyncio.run(_scenario())
+
+
 def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch):
     message = DummyMessage(text="✅ 确认创建")
     origin_message = DummyMessage()
@@ -292,6 +445,20 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
                     "expected_effect": "结果1",
                     "related_task_id": None,
                     "priority": 3,
+                    "pending_attachments": [
+                        {
+                            "kind": "document",
+                            "display_name": "login.png",
+                            "mime_type": "image/png",
+                            "path": "https://cdn.example.com/errors/login.png",
+                        },
+                        {
+                            "kind": "document",
+                            "display_name": "error.log",
+                            "mime_type": "text/plain",
+                            "path": "artifacts/error.log",
+                        },
+                    ],
                 },
                 {
                     "title": "缺陷二",
@@ -301,6 +468,7 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
                     "expected_effect": "",
                     "related_task_id": None,
                     "priority": 2,
+                    "pending_attachments": [],
                 },
             ],
         )
@@ -316,8 +484,15 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
     async def fake_build_task_list_view(*, status, page, limit):
         return "*任务列表*", InlineKeyboardMarkup(inline_keyboard=[])
 
+    bound: list[tuple[str, list[dict[str, str]], str]] = []
+
+    async def fake_bind_serialized_attachments(task, attachments, *, actor):
+        bound.append((task.id, list(attachments), actor))
+        return []
+
     monkeypatch.setattr(bot.TASK_SERVICE, "create_root_task", fake_create_root_task)
     monkeypatch.setattr(bot, "_build_task_list_view", fake_build_task_list_view)
+    monkeypatch.setattr(bot, "_bind_serialized_attachments", fake_bind_serialized_attachments)
 
     async def _scenario() -> None:
         await bot.on_task_defect_excel_confirm(message, state)
@@ -331,6 +506,26 @@ def test_task_defect_excel_confirm_creates_defects_and_restores_list(monkeypatch
         assert created[1]["title"] == "缺陷二"
         assert created[1]["priority"] == 2
         assert created[1]["description"] == "前置条件：\n-\n\n复现步骤：\n-\n\n现状：\n-\n\n预期效果：\n-"
+        assert bound == [
+            (
+                "TASK_0001",
+                [
+                    {
+                        "kind": "document",
+                        "display_name": "login.png",
+                        "mime_type": "image/png",
+                        "path": "https://cdn.example.com/errors/login.png",
+                    },
+                    {
+                        "kind": "document",
+                        "display_name": "error.log",
+                        "mime_type": "text/plain",
+                        "path": "artifacts/error.log",
+                    },
+                ],
+                "Tester#1",
+            )
+        ]
         assert origin_message.edits, "创建完成后应恢复原任务列表"
         assert message.calls
         assert "Excel 导入结果" in message.calls[-1][0]

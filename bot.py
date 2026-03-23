@@ -6733,6 +6733,16 @@ DEFECT_EXCEL_TEMPLATE_HEADERS: tuple[str, ...] = (
     "预期效果",
     "关联任务编码",
     "优先级",
+    "附件",
+)
+DEFECT_EXCEL_TEMPLATE_HEADERS_WITHOUT_ATTACHMENT: tuple[str, ...] = (
+    "缺陷标题",
+    "前置条件",
+    "复现步骤",
+    "现状",
+    "预期效果",
+    "关联任务编码",
+    "优先级",
 )
 DEFECT_EXCEL_TEMPLATE_LEGACY_HEADERS: tuple[str, ...] = (
     "缺陷标题",
@@ -15856,7 +15866,18 @@ def _build_defect_excel_template_bytes() -> bytes:
     ws = wb.active
     ws.title = "缺陷导入模板"
     ws.append(list(DEFECT_EXCEL_TEMPLATE_HEADERS))
-    ws.append(["示例：登录按钮无响应", "已登录测试账号", "1. 打开登录页", "点击后应进入首页", "/TASK_0001", DEFAULT_PRIORITY])
+    ws.append(
+        [
+            "示例：登录按钮无响应",
+            "已登录测试账号",
+            "1. 打开登录页",
+            "点击后页面无响应",
+            "点击后应进入首页",
+            "/TASK_0001",
+            DEFAULT_PRIORITY,
+            "https://cdn.example.com/errors/login.png\nartifacts/error.log",
+        ]
+    )
     buffer = BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
@@ -15872,8 +15893,9 @@ def _build_defect_excel_import_view(*, status: Optional[str], page: int, limit: 
         "使用步骤：",
         "1. 先下载 Excel 模板",
         "2. 按模板填写缺陷数据",
-        "3. 上传 .xlsx 文件进行预检",
-        "4. 预检通过后确认创建",
+        "3. 附件列按一行一个引用填写，可填链接、路径或文件名",
+        "4. 上传 .xlsx 文件进行预检",
+        "5. 预检通过后确认创建",
     ]
     rows = [
         [InlineKeyboardButton(text="⬇️ 下载模板", callback_data=TASK_DEFECT_EXCEL_TEMPLATE_CALLBACK)],
@@ -15929,6 +15951,56 @@ def _build_defect_excel_error_summary(
     return "\n".join(lines)
 
 
+def _split_defect_excel_attachment_refs(raw_value: Any) -> list[str]:
+    """拆分 Excel 单元格中的附件引用，按行去重并保持原顺序。"""
+
+    normalized = normalize_newlines("" if raw_value is None else str(raw_value))
+    refs: list[str] = []
+    seen: set[str] = set()
+    for line in normalized.splitlines():
+        ref = line.strip()
+        if not ref or ref == "-":
+            continue
+        if ref in seen:
+            continue
+        seen.add(ref)
+        refs.append(ref)
+    return refs
+
+
+def _build_defect_excel_pending_attachment(ref: str) -> dict[str, str]:
+    """将 Excel 中的附件引用转换为任务附件记录所需的最小结构。"""
+
+    normalized_ref = ref.strip()
+    if not normalized_ref:
+        raise ValueError("附件引用不能为空")
+
+    lowered_ref = normalized_ref.lower()
+    is_http_url = lowered_ref.startswith("http://") or lowered_ref.startswith("https://")
+    if not is_http_url and "://" in normalized_ref:
+        raise ValueError(f"附件引用不合法：{normalized_ref}")
+
+    if is_http_url:
+        parsed = urlparse(normalized_ref)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"附件引用不合法：{normalized_ref}")
+        decoded_path = unquote(parsed.path or "")
+        display_name = Path(decoded_path).name or normalized_ref
+        guessed_mime, _encoding = mimetypes.guess_type(parsed.path or "", strict=False)
+        mime_type = guessed_mime or "text/uri-list"
+    else:
+        display_name = Path(normalized_ref).name or normalized_ref
+        guessed_mime, _encoding = mimetypes.guess_type(normalized_ref, strict=False)
+        mime_type = guessed_mime or "application/octet-stream"
+
+    return {
+        "kind": "document",
+        "display_name": display_name,
+        "mime_type": mime_type,
+        "path": normalized_ref,
+    }
+
+
 async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, Any]], list[str], int]:
     """解析并预检上传的缺陷 Excel。"""
 
@@ -15937,9 +16009,12 @@ async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, An
     worksheet = workbook.active
     headers = [str(cell.value).strip() if cell.value is not None else "" for cell in worksheet[1]]
     expected_headers = list(DEFECT_EXCEL_TEMPLATE_HEADERS)
+    previous_headers = list(DEFECT_EXCEL_TEMPLATE_HEADERS_WITHOUT_ATTACHMENT)
     legacy_headers = list(DEFECT_EXCEL_TEMPLATE_LEGACY_HEADERS)
-    use_legacy_headers = headers[: len(legacy_headers)] == legacy_headers
-    if headers[: len(expected_headers)] != expected_headers and not use_legacy_headers:
+    use_expected_headers = headers[: len(expected_headers)] == expected_headers
+    use_previous_headers = (not use_expected_headers) and headers[: len(previous_headers)] == previous_headers
+    use_legacy_headers = (not use_expected_headers) and (not use_previous_headers) and headers[: len(legacy_headers)] == legacy_headers
+    if not use_expected_headers and not use_previous_headers and not use_legacy_headers:
         return [], [f"模板表头不匹配，期望：{' / '.join(expected_headers)}"], 0
 
     valid_rows: list[dict[str, Any]] = []
@@ -15951,12 +16026,19 @@ async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, An
                 list(row) + [None] * len(legacy_headers)
             )[: len(legacy_headers)]
             current_state = ""
-            values = [title, precondition, reproduction, expected_effect, related_task_code, priority]
-        else:
+            attachment_refs_value = None
+            values = [title, precondition, reproduction, expected_effect, related_task_code, priority, attachment_refs_value]
+        elif use_previous_headers:
             title, precondition, reproduction, current_state, expected_effect, related_task_code, priority = (
+                list(row) + [None] * len(previous_headers)
+            )[: len(previous_headers)]
+            attachment_refs_value = None
+            values = [title, precondition, reproduction, current_state, expected_effect, related_task_code, priority, attachment_refs_value]
+        else:
+            title, precondition, reproduction, current_state, expected_effect, related_task_code, priority, attachment_refs_value = (
                 list(row) + [None] * len(expected_headers)
             )[: len(expected_headers)]
-            values = [title, precondition, reproduction, current_state, expected_effect, related_task_code, priority]
+            values = [title, precondition, reproduction, current_state, expected_effect, related_task_code, priority, attachment_refs_value]
         if all(value in {None, ""} for value in values):
             continue
         total_rows += 1
@@ -15984,6 +16066,17 @@ async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, An
             if normalized_priority < 1 or normalized_priority > 5:
                 errors.append(f"第 {row_index} 行：优先级仅支持 1-5")
                 continue
+        pending_attachments: list[dict[str, str]] = []
+        attachment_refs = _split_defect_excel_attachment_refs(attachment_refs_value)
+        attachment_invalid = False
+        for attachment_ref in attachment_refs:
+            try:
+                pending_attachments.append(_build_defect_excel_pending_attachment(attachment_ref))
+            except ValueError as exc:
+                errors.append(f"第 {row_index} 行：{exc}")
+                attachment_invalid = True
+        if attachment_invalid:
+            continue
         valid_rows.append(
             {
                 "title": normalized_title,
@@ -15993,6 +16086,7 @@ async def _parse_defect_excel_import_file(path: Path) -> tuple[list[dict[str, An
                 "expected_effect": (str(expected_effect).strip() if expected_effect is not None else ""),
                 "related_task_id": normalized_related_task_id,
                 "priority": normalized_priority,
+                "pending_attachments": pending_attachments,
             }
         )
     if total_rows == 0:
@@ -20801,6 +20895,9 @@ async def on_task_defect_excel_confirm(message: Message, state: FSMContext) -> N
                 related_task_id=row.get("related_task_id"),
                 actor=actor,
             )
+            pending_attachments = row.get("pending_attachments") or []
+            if pending_attachments:
+                await _bind_serialized_attachments(defect_task, pending_attachments, actor=actor)
         except Exception as exc:  # noqa: BLE001
             failed_rows.append((index, str(exc)))
             continue
