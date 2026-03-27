@@ -8906,7 +8906,7 @@ async def _prompt_task_description_input(
     except TelegramBadRequest:
         await target.answer(preview_segment)
     await target.answer(
-        "请直接发送新的任务描述，或通过菜单按钮执行快捷操作。",
+        "请直接发送新的任务描述，支持直接发送图片/文件作为附件，或通过菜单按钮执行快捷操作。",
     )
 
 
@@ -8926,6 +8926,8 @@ async def _begin_task_desc_edit_flow(
         task_id=task.id,
         actor=actor,
         current_description=task.description or "",
+        pending_attachments=[],
+        processed_media_groups=[],
     )
     await state.set_state(TaskDescriptionStates.waiting_content)
     await _prompt_task_description_input(
@@ -20291,15 +20293,32 @@ async def on_task_desc_input(message: Message, state: FSMContext) -> None:
         await message.answer("会话已失效，请重新操作。", reply_markup=_build_worker_main_keyboard())
         return
 
-    token = _normalize_choice_token(message.text or "")
-    if _is_cancel_message(token):
+    attachment_dir = _attachment_dir_for_message(message)
+    processed_groups = set(data.get("processed_media_groups") or [])
+    # 统一描述编辑与任务创建/补充链路的图文混合口径：caption/相册/附件都按同一规则采集。
+    saved_attachments, text_part, processed_groups = await _collect_generic_media_group(
+        message,
+        attachment_dir,
+        processed=processed_groups,
+    )
+    # 媒体组会多次触发 handler；若当前消息已被同组其他消息消费，则直接忽略。
+    if message.media_group_id and not saved_attachments and not text_part:
+        return
+    if message.media_group_id:
+        await state.update_data(processed_media_groups=list(processed_groups))
+
+    raw_text = (text_part or "").strip() or (message.text or "").strip() or (message.caption or "").strip()
+    token = _normalize_choice_token(raw_text)
+    if not saved_attachments and _is_cancel_message(token):
         await state.clear()
         await message.answer("已取消编辑任务描述。", reply_markup=_build_worker_main_keyboard())
         return
 
-    if token == _normalize_choice_token(TASK_DESC_CLEAR_TEXT):
+    if not saved_attachments and token == _normalize_choice_token(TASK_DESC_CLEAR_TEXT):
         await state.update_data(
             new_description="",
+            pending_attachments=[],
+            processed_media_groups=[],
             actor=_actor_from_message(message),
         )
         await state.set_state(TaskDescriptionStates.waiting_confirm)
@@ -20310,34 +20329,53 @@ async def on_task_desc_input(message: Message, state: FSMContext) -> None:
         )
         return
 
-    if token == _normalize_choice_token(TASK_DESC_REPROMPT_TEXT):
+    if not saved_attachments and token == _normalize_choice_token(TASK_DESC_REPROMPT_TEXT):
         await _prompt_task_description_input(
             message,
             current_description=data.get("current_description", ""),
         )
         return
 
-    trimmed = (message.text or "").strip()
-    pending = list(data.get("pending_attachments") or [])
+    trimmed = raw_text.strip()
+    pending: list[Mapping[str, str]] = []
     actor = _actor_from_message(message)
-    if len(trimmed) > DESCRIPTION_MAX_LENGTH:
-        # 任务描述超长：自动转为附件，并在 DB 中写入占位文本。
-        attachment = _persist_text_paste_as_attachment(message, trimmed)
-        pending.append(_serialize_saved_attachment(attachment))
-        placeholder = _build_overlong_text_placeholder("任务描述")
-        preview_segment = "\n".join([placeholder, "（原文已保存为附件，无需重复发送）"])
+    if saved_attachments:
+        new_description, attachments_for_value = _build_step_content_with_attachments(
+            message,
+            raw_text=trimmed,
+            saved_attachments=saved_attachments,
+            field_label="任务描述",
+        )
+        if attachments_for_value:
+            pending.extend(_serialize_saved_attachment(item) for item in attachments_for_value)
+        preview_segment = new_description or "（新描述为空，将清空任务描述）"
         await state.update_data(
-            new_description=placeholder,
+            new_description=new_description,
             pending_attachments=pending,
+            processed_media_groups=list(processed_groups),
             actor=actor,
         )
     else:
-        preview_segment = trimmed if trimmed else "（新描述为空，将清空任务描述）"
-        await state.update_data(
-            new_description=trimmed,
-            pending_attachments=pending,
-            actor=actor,
-        )
+        if len(trimmed) > DESCRIPTION_MAX_LENGTH:
+            # 任务描述超长：自动转为附件，并在 DB 中写入占位文本。
+            attachment = _persist_text_paste_as_attachment(message, trimmed)
+            pending.append(_serialize_saved_attachment(attachment))
+            placeholder = _build_overlong_text_placeholder("任务描述")
+            preview_segment = "\n".join([placeholder, "（原文已保存为附件，无需重复发送）"])
+            await state.update_data(
+                new_description=placeholder,
+                pending_attachments=pending,
+                processed_media_groups=list(processed_groups),
+                actor=actor,
+            )
+        else:
+            preview_segment = trimmed if trimmed else "（新描述为空，将清空任务描述）"
+            await state.update_data(
+                new_description=trimmed,
+                pending_attachments=pending,
+                processed_media_groups=list(processed_groups),
+                actor=actor,
+            )
     await state.set_state(TaskDescriptionStates.waiting_confirm)
     await _answer_with_markdown(
         message,
@@ -20378,6 +20416,8 @@ async def on_task_desc_confirm_stage_text(message: Message, state: FSMContext) -
         await state.update_data(
             new_description=None,
             current_description=task.description or "",
+            pending_attachments=[],
+            processed_media_groups=[],
         )
         await state.set_state(TaskDescriptionStates.waiting_content)
         await message.answer("已回到描述输入阶段，请重新输入新的任务描述。", reply_markup=_build_task_desc_input_keyboard())

@@ -5977,6 +5977,91 @@ def test_task_desc_input_moves_to_confirm():
     assert isinstance(confirm_markup, ReplyKeyboardMarkup)
 
 
+def test_task_desc_input_mixed_media_keeps_caption_and_attachment(monkeypatch):
+    message = DummyMessage()
+    message.caption = "图文说明\n图片地址：https://example.com/demo.png"
+    message.photo = [SimpleNamespace(file_id="photo-1", file_unique_id="unique-photo-1")]
+    state, _storage = make_state(message)
+
+    saved_attachment = bot.TelegramSavedAttachment(
+        kind="photo",
+        display_name="demo.png",
+        mime_type="image/png",
+        absolute_path=Path("/tmp/demo.png"),
+        relative_path="./data/demo.png",
+    )
+
+    async def fake_collect(message_arg, attachment_dir, *, processed):
+        return [saved_attachment], message_arg.caption, processed
+
+    monkeypatch.setattr(bot, "_collect_generic_media_group", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: Path("/tmp"))
+
+    async def scenario() -> tuple[str | None, dict]:
+        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="旧描述")
+        await state.set_state(bot.TaskDescriptionStates.waiting_content)
+        await bot.on_task_desc_input(message, state)
+        return await state.get_state(), await state.get_data()
+
+    state_value, data = asyncio.run(scenario())
+
+    assert state_value == bot.TaskDescriptionStates.waiting_confirm.state
+    assert data.get("new_description") == "图文说明\n图片地址：https://example.com/demo.png\n[附件:./data/demo.png]"
+    assert data.get("pending_attachments") == [
+        {
+            "kind": "photo",
+            "display_name": "demo.png",
+            "mime_type": "image/png",
+            "path": "./data/demo.png",
+        }
+    ]
+    assert message.calls, "应发送确认提示"
+    confirm_text, _, _, _ = message.calls[-1]
+    assert "图文说明" in confirm_text
+    assert "[附件:./data/demo.png]" in confirm_text
+
+
+def test_task_desc_input_attachment_only_keeps_attachment_reference(monkeypatch):
+    message = DummyMessage()
+    message.photo = [SimpleNamespace(file_id="photo-2", file_unique_id="unique-photo-2")]
+    state, _storage = make_state(message)
+
+    saved_attachment = bot.TelegramSavedAttachment(
+        kind="photo",
+        display_name="only-photo.png",
+        mime_type="image/png",
+        absolute_path=Path("/tmp/only-photo.png"),
+        relative_path="./data/only-photo.png",
+    )
+
+    async def fake_collect(_message_arg, _attachment_dir, *, processed):
+        return [saved_attachment], "", processed
+
+    monkeypatch.setattr(bot, "_collect_generic_media_group", fake_collect)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: Path("/tmp"))
+
+    async def scenario() -> tuple[str | None, dict]:
+        await state.update_data(task_id="TASK_EDIT", actor="Tester#1", current_description="旧描述")
+        await state.set_state(bot.TaskDescriptionStates.waiting_content)
+        await bot.on_task_desc_input(message, state)
+        return await state.get_state(), await state.get_data()
+
+    state_value, data = asyncio.run(scenario())
+
+    assert state_value == bot.TaskDescriptionStates.waiting_confirm.state
+    assert data.get("new_description") == "[附件:./data/only-photo.png]"
+    assert data.get("pending_attachments") == [
+        {
+            "kind": "photo",
+            "display_name": "only-photo.png",
+            "mime_type": "image/png",
+            "path": "./data/only-photo.png",
+        }
+    ]
+    confirm_text, _, _, _ = message.calls[-1]
+    assert "[附件:./data/only-photo.png]" in confirm_text
+
+
 def test_task_desc_input_cancel_text():
     message = DummyMessage()
     message.text = "取消"
@@ -6109,6 +6194,8 @@ def test_task_desc_retry_returns_to_input(monkeypatch):
             new_description="草稿描述",
             actor="Tester#1",
             current_description="旧描述",
+            pending_attachments=[{"path": "./data/demo.png"}],
+            processed_media_groups=["album-1"],
         )
         await state.set_state(bot.TaskDescriptionStates.waiting_confirm)
         await bot.on_task_desc_confirm_stage_text(message, state)
@@ -6118,6 +6205,8 @@ def test_task_desc_retry_returns_to_input(monkeypatch):
 
     assert state_value == bot.TaskDescriptionStates.waiting_content.state
     assert data.get("new_description") is None
+    assert data.get("pending_attachments") == []
+    assert data.get("processed_media_groups") == []
     assert len(message.calls) >= 4
     first_text, _, first_markup, _ = message.calls[0]
     assert "已回到描述输入阶段" in first_text
