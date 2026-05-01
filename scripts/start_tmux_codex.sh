@@ -22,6 +22,17 @@ if [[ "$MODEL_KEY" == "codex" ]]; then
   printf -v CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED '%q' "$CODEX_MODEL_INSTRUCTIONS_FILE"
   MODEL_CMD="${CODEX_BASE_CMD} -c model_instructions_file=${CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED} -c project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}"
 fi
+MODEL_RESUME_SESSION_ID="${MODEL_RESUME_SESSION_ID:-}"
+if [[ -n "$MODEL_RESUME_SESSION_ID" ]]; then
+  if [[ "$MODEL_KEY" != "codex" ]]; then
+    echo "[start-tmux] 当前仅 Codex 支持按 sessionId 恢复会话。" >&2
+    exit 1
+  fi
+  MODEL_RESUME_SESSION_ID_ESCAPED=""
+  printf -v MODEL_RESUME_SESSION_ID_ESCAPED '%q' "$MODEL_RESUME_SESSION_ID"
+  # 恢复历史主会话时必须启动 Codex resume，避免只改 pointer 造成“监听旧会话、终端仍在新会话”的假绑定。
+  MODEL_CMD="${MODEL_CMD} resume ${MODEL_RESUME_SESSION_ID_ESCAPED}"
+fi
 MODEL_WORKDIR="${MODEL_WORKDIR:-$ROOT_DIR}"
 MODEL_SESSION_ROOT="${MODEL_SESSION_ROOT:-${CODEX_SESSION_ROOT:-$HOME/.codex/sessions}}"
 MODEL_SESSION_GLOB="${MODEL_SESSION_GLOB:-rollout-*.jsonl}"

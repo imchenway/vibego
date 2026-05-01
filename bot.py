@@ -4441,6 +4441,7 @@ COMMAND_KEYWORDS.update(
         "task_list",
         "tasks",
         "commands",
+        "bind_session",
         "task_note",
         "task_update",
         "attach",
@@ -10959,6 +10960,15 @@ class ParallelDispatchContext:
 
 
 @dataclass
+class MainSessionBindingTarget:
+    """描述可绑定为主会话的历史会话文件与恢复参数。"""
+
+    session_path: Path
+    resume_session_id: str
+    display_session_id: str
+
+
+@dataclass
 class ParallelCallbackBinding:
     """描述并行消息底部按钮到并行上下文的精确路由绑定。"""
 
@@ -14598,6 +14608,230 @@ def _read_session_meta_cwd(path: Path) -> Optional[str]:
     return _extract_session_cwd_from_event(data)
 
 
+def _read_codex_session_meta_id(path: Path) -> Optional[str]:
+    """读取 Codex JSONL 首行中的原生 session id。"""
+
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline()
+    except OSError:
+        return None
+    if not first_line:
+        return None
+    try:
+        data = json.loads(first_line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    session_id = payload.get("id")
+    return session_id.strip() if isinstance(session_id, str) and session_id.strip() else None
+
+
+def _normalize_bind_session_id(raw: str) -> str:
+    """规范化用户输入的 sessionId，兼容复制整行提示的场景。"""
+
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if value.startswith("/bind_session"):
+        value = value[len("/bind_session") :].strip()
+    if ":" in value and value.lower().replace(" ", "").startswith("sessionid:"):
+        value = value.split(":", 1)[1].strip()
+    return value.strip("`'\" \n\t")
+
+
+def _iter_main_session_search_roots(pointer_path: Optional[Path] = None) -> list[Path]:
+    """汇总主会话可搜索目录，保持顺序且去重。"""
+
+    roots: list[Path] = []
+    for raw in (MODEL_SESSION_ROOT, CODEX_SESSIONS_ROOT):
+        if raw:
+            roots.append(resolve_path(raw))
+    if pointer_path is None and CODEX_SESSION_FILE_PATH:
+        pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
+    if pointer_path is not None:
+        roots.append(pointer_path.parent)
+        roots.append(pointer_path.parent / "sessions")
+        pointer_target = _read_pointer_path(pointer_path)
+        if pointer_target is not None:
+            roots.append(pointer_target.parent)
+            for parent in pointer_target.parents:
+                if parent.name == "sessions":
+                    roots.append(parent)
+                    break
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            resolved = root
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(resolved)
+    return deduped
+
+
+def _session_file_matches_bind_id(path: Path, requested_session_id: str) -> Optional[str]:
+    """判断会话文件是否匹配用户提供的 sessionId，并返回用于 resume 的原生 id。"""
+
+    requested = _normalize_bind_session_id(requested_session_id)
+    if not requested:
+        return None
+    if path.stem == requested:
+        # 用户从 Telegram 复制的是文件 stem 时，优先转换为 Codex 原生 UUID。
+        return _read_codex_session_meta_id(path) or requested
+    meta_id = _read_codex_session_meta_id(path)
+    if meta_id and meta_id == requested:
+        return meta_id
+    return None
+
+
+def _resolve_main_session_binding_target(
+    requested_session_id: str,
+    target_cwd: Optional[str],
+) -> tuple[Optional[MainSessionBindingTarget], Optional[str]]:
+    """按 sessionId 定位并校验可绑定为主会话的 Codex 会话文件。"""
+
+    normalized_session_id = _normalize_bind_session_id(requested_session_id)
+    if not normalized_session_id:
+        return None, "请提供 sessionId，例如：/bind_session rollout-xxxx 或 /bind_session <UUID>"
+
+    pattern = MODEL_SESSION_GLOB or "rollout-*.jsonl"
+    matched_wrong_cwd: Optional[Path] = None
+    missing_cwd: Optional[Path] = None
+    target_path = resolve_path(target_cwd) if target_cwd else None
+    for root in _iter_main_session_search_roots():
+        if not root.exists():
+            continue
+        try:
+            candidates = root.glob(f"**/{pattern}")
+        except OSError:
+            continue
+        for candidate in candidates:
+            if not candidate.is_file() or candidate.suffix.lower() != ".jsonl":
+                continue
+            resume_id = _session_file_matches_bind_id(candidate, normalized_session_id)
+            if not resume_id:
+                continue
+            session_cwd = _read_session_meta_cwd(candidate)
+            if target_path is not None:
+                if not session_cwd:
+                    missing_cwd = candidate
+                    continue
+                if not _paths_equal(resolve_path(session_cwd), target_path):
+                    matched_wrong_cwd = candidate
+                    continue
+            return (
+                MainSessionBindingTarget(
+                    session_path=candidate,
+                    resume_session_id=resume_id,
+                    display_session_id=candidate.stem,
+                ),
+                None,
+            )
+
+    if matched_wrong_cwd is not None:
+        return None, "该 sessionId 不属于当前项目，已拒绝绑定以避免串会话。"
+    if missing_cwd is not None:
+        return None, "该 sessionId 无法确认工作目录，已拒绝绑定以避免串会话。"
+    return None, "未找到匹配的 sessionId，请确认复制的是当前机器上的 Codex 会话。"
+
+
+def _session_end_offset(session_path: Path) -> int:
+    """绑定历史会话时从文件末尾监听，避免重复回推旧输出。"""
+
+    try:
+        return session_path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+async def _restart_main_tmux_with_resume_session(resume_session_id: str) -> tuple[bool, str]:
+    """重启主 tmux，并用 Codex resume 恢复指定历史会话。"""
+
+    script = ROOT_DIR_PATH / "scripts" / "start_tmux_codex.sh"
+    env = os.environ.copy()
+    env.update(
+        {
+            "MODEL_NAME": env.get("MODEL_NAME") or ACTIVE_MODEL or "codex",
+            "TMUX_SESSION": TMUX_SESSION,
+            "MODEL_RESUME_SESSION_ID": resume_session_id,
+            "VIBEGO_AGENTS_SYNCED": env.get("VIBEGO_AGENTS_SYNCED", "1"),
+        }
+    )
+    if CODEX_SESSION_FILE_PATH:
+        env["SESSION_POINTER_FILE"] = CODEX_SESSION_FILE_PATH
+    target_cwd = (env.get("MODEL_WORKDIR") or CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
+    if target_cwd:
+        env["MODEL_WORKDIR"] = target_cwd
+    process = await asyncio.create_subprocess_exec(
+        str(script),
+        "--kill",
+        cwd=str(ROOT_DIR_PATH),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await process.communicate()
+    output = (stdout_bytes or b"").decode("utf-8", errors="ignore") + (stderr_bytes or b"").decode("utf-8", errors="ignore")
+    return process.returncode == 0, output.strip()
+
+
+async def _bind_main_session_to_chat(
+    chat_id: int,
+    target: MainSessionBindingTarget,
+) -> None:
+    """把目标会话绑定为当前 chat 的主会话并启动监听。"""
+
+    session_path = target.session_path
+    session_key = str(session_path)
+    pointer_path = resolve_path(CODEX_SESSION_FILE_PATH) if CODEX_SESSION_FILE_PATH else None
+
+    prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
+    if prev_watcher is not None and not prev_watcher.done():
+        prev_watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await prev_watcher
+
+    await _interrupt_long_poll(chat_id)
+    if pointer_path is not None:
+        _update_pointer(pointer_path, session_path)
+    if SESSION_ACTIVE_ID_FILE:
+        try:
+            active_id_file = resolve_path(SESSION_ACTIVE_ID_FILE)
+            active_id_file.parent.mkdir(parents=True, exist_ok=True)
+            active_id_file.write_text(target.resume_session_id, encoding="utf-8")
+        except OSError as exc:
+            worker_log.warning("写入 active session id 失败：%s", exc, extra=_session_extra(path=session_path))
+
+    CHAT_SESSION_MAP[chat_id] = session_key
+    SESSION_OFFSETS[session_key] = _session_end_offset(session_path)
+    _clear_last_message(chat_id)
+    _reset_compact_tracking(chat_id)
+    CHAT_FAILURE_NOTICES.pop(chat_id, None)
+    try:
+        await _deliver_pending_messages(chat_id, session_path)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning("绑定历史会话后即时检查输出失败：%s", exc, extra={"chat": chat_id, **_session_extra(path=session_path)})
+    CHAT_WATCHERS[chat_id] = asyncio.create_task(
+        _watch_and_notify(
+            chat_id,
+            session_path,
+            max_wait=WATCH_MAX_WAIT,
+            interval=WATCH_INTERVAL,
+            start_in_long_poll=False,
+        )
+    )
+
+
 def _find_latest_claudecode_rollout(pointer: Path) -> Optional[Path]:
     """ClaudeCode 专用：在缺少 cwd 元数据时按更新时间选择最新会话文件。
 
@@ -15384,6 +15618,7 @@ async def on_help_command(message: Message) -> None:
         "- /task_update — 快速更新任务字段\n"
         "- /task_note — 添加任务备注\n"
         "- /attach TASK_0001 — 为任务上传附件\n"
+        "- /bind_session sessionId — 绑定 Codex 历史会话为主会话\n"
         "- /commands — 管理自定义命令（新增/执行/编辑）\n"
         "- /task_delete — 归档或恢复任务\n"
         "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
@@ -15405,11 +15640,45 @@ async def on_tasks_help(message: Message) -> None:
         "- /task_update TASK_0001 status=test | priority=2 | type=缺陷 — 更新字段\n"
         "- /task_note TASK_0001 备注内容 | type=research — 添加备注\n"
         "- /attach TASK_0001 — 上传附件并绑定\n"
+        "- /bind_session sessionId — 将 Codex 历史会话恢复为当前主会话\n"
         "- /task_delete TASK_0001 — 归档任务（再次执行可恢复）\n"
         "- 子任务功能已下线，请使用 /task_new 创建新的任务\n\n"
         "建议：使用 `/task_new`、`/task_show` 等命令触发后按按钮完成后续步骤。"
     )
     await _answer_with_markdown(message, text)
+
+
+@router.message(Command("bind_session"))
+async def on_bind_session_command(message: Message) -> None:
+    """通过 sessionId 将历史 Codex 会话恢复为当前主会话。"""
+
+    current_model = _canonical_model_name(ACTIVE_MODEL or os.environ.get("MODEL_NAME") or MODEL_CANONICAL_NAME)
+    if current_model != "codex":
+        await message.answer("暂仅支持 Codex 会话绑定；当前模型缺少可证恢复契约。")
+        return
+    session_id = _normalize_bind_session_id(_extract_command_args(message.text or ""))
+    if not session_id:
+        await message.answer("请提供 sessionId，例如：/bind_session rollout-xxxx 或 /bind_session <UUID>")
+        return
+    target_cwd = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
+    target, error = _resolve_main_session_binding_target(session_id, target_cwd)
+    if target is None:
+        await message.answer(error or "未找到匹配的 sessionId，请确认后重试。")
+        return
+
+    ok, output = await _restart_main_tmux_with_resume_session(target.resume_session_id)
+    if not ok:
+        await message.answer(f"恢复主会话失败，请稍后重试。\n{output}".strip())
+        return
+
+    await _bind_main_session_to_chat(message.chat.id, target)
+    await message.answer(
+        (
+            "已绑定为主会话，后续消息将继续进入该会话。\n"
+            f"sessionId : {target.display_session_id}"
+        ),
+        reply_markup=_build_worker_main_keyboard(),
+    )
 
 
 def _normalize_status(value: Optional[str]) -> Optional[str]:
