@@ -114,6 +114,12 @@ class TaskBatchStatusStates(StatesGroup):
     waiting_status = State()
 
 
+class SessionResumeStates(StatesGroup):
+    """会话实况中 Codex resume 输入流程状态。"""
+
+    waiting_session_id = State()
+
+
 class ProjectDeleteStates(StatesGroup):
     """Master 项目删除确认流程的状态定义。"""
 

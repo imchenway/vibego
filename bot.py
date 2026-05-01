@@ -88,6 +88,7 @@ from tasks.fsm import (
     TaskListSearchStates,
     TaskNoteStates,
     TaskPushStates,
+    SessionResumeStates,
     ModelQuickReplyStates,
 )
 from command_center import (
@@ -5075,6 +5076,13 @@ def _build_command_edit_cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
+def _build_session_resume_input_keyboard() -> ReplyKeyboardMarkup:
+    """Resume 会话输入阶段的取消按钮键盘。"""
+
+    rows = [[KeyboardButton(text="取消")]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def _is_global_command(command: CommandDefinition) -> bool:
     """判断命令是否来源于 master 通用配置。"""
 
@@ -6696,6 +6704,7 @@ SESSION_LIVE_MAIN_CALLBACK = "session:view:main"
 SESSION_LIVE_PARALLEL_PREFIX = "session:view:parallel:"
 SESSION_LIVE_REFRESH_MAIN_CALLBACK = "session:view:refresh:main"
 SESSION_LIVE_REFRESH_PARALLEL_PREFIX = "session:view:refresh:parallel:"
+SESSION_LIVE_RESUME_CALLBACK = "session:resume"
 PUSH_EXISTING_SESSION_MAIN_CALLBACK = "task:push_existing_session:main"
 PUSH_EXISTING_SESSION_PARALLEL_PREFIX = "task:push_existing_session:parallel:"
 PUSH_EXISTING_SESSION_REFRESH_CALLBACK = "task:push_existing_session:refresh"
@@ -8251,6 +8260,7 @@ def _build_session_live_list_markup(entries: Sequence[SessionLiveEntry]) -> Inli
             callback_data = f"{SESSION_LIVE_PARALLEL_PREFIX}{entry.task_id}"
         rows.append([InlineKeyboardButton(text=entry.label, callback_data=callback_data)])
     rows.append([InlineKeyboardButton(text="🔄 刷新列表", callback_data=SESSION_LIVE_LIST_CALLBACK)])
+    rows.append([InlineKeyboardButton(text="↩️ Resume 会话", callback_data=SESSION_LIVE_RESUME_CALLBACK)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -15652,33 +15662,55 @@ async def on_tasks_help(message: Message) -> None:
 async def on_bind_session_command(message: Message) -> None:
     """通过 sessionId 将历史 Codex 会话恢复为当前主会话。"""
 
+    session_id = _normalize_bind_session_id(_extract_command_args(message.text or ""))
+    await _resume_main_session_from_user_input(
+        message,
+        session_id,
+        empty_prompt="请提供 sessionId，例如：/bind_session rollout-xxxx 或 /bind_session <UUID>",
+        success_intro="已绑定为主会话，后续消息将继续进入该会话。",
+    )
+
+
+async def _resume_main_session_from_user_input(
+    message: Message,
+    session_id: str,
+    *,
+    empty_prompt: str,
+    success_intro: str,
+) -> bool:
+    """按用户输入的 sessionId 恢复 Codex 主会话。
+
+    该函数是 `/bind_session` 与“会话实况 -> Resume 会话”共用的唯一执行路径，
+    避免两个入口出现不同的校验、重启或 watcher 绑定行为。
+    """
+
     current_model = _canonical_model_name(ACTIVE_MODEL or os.environ.get("MODEL_NAME") or MODEL_CANONICAL_NAME)
     if current_model != "codex":
         await message.answer("暂仅支持 Codex 会话绑定；当前模型缺少可证恢复契约。")
-        return
-    session_id = _normalize_bind_session_id(_extract_command_args(message.text or ""))
+        return False
     if not session_id:
-        await message.answer("请提供 sessionId，例如：/bind_session rollout-xxxx 或 /bind_session <UUID>")
-        return
+        await message.answer(empty_prompt)
+        return False
     target_cwd = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
     target, error = _resolve_main_session_binding_target(session_id, target_cwd)
     if target is None:
         await message.answer(error or "未找到匹配的 sessionId，请确认后重试。")
-        return
+        return False
 
     ok, output = await _restart_main_tmux_with_resume_session(target.resume_session_id)
     if not ok:
         await message.answer(f"恢复主会话失败，请稍后重试。\n{output}".strip())
-        return
+        return False
 
     await _bind_main_session_to_chat(message.chat.id, target)
     await message.answer(
         (
-            "已绑定为主会话，后续消息将继续进入该会话。\n"
+            f"{success_intro}\n"
             f"sessionId : {target.display_session_id}"
         ),
         reply_markup=_build_worker_main_keyboard(),
     )
+    return True
 
 
 def _normalize_status(value: Optional[str]) -> Optional[str]:
@@ -17196,6 +17228,54 @@ async def on_session_live_list_callback(callback: CallbackQuery) -> None:
         return
     success = await _show_session_live_list(message)
     await callback.answer("已刷新会话列表" if success else "会话列表发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data == SESSION_LIVE_RESUME_CALLBACK)
+async def on_session_live_resume_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """从“会话实况”进入 Codex resume 输入流程。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    current_model = _canonical_model_name(ACTIVE_MODEL or os.environ.get("MODEL_NAME") or MODEL_CANONICAL_NAME)
+    if current_model != "codex":
+        await state.clear()
+        await callback.answer("暂仅支持 Codex 会话 resume。", show_alert=True)
+        return
+
+    await state.clear()
+    await state.set_state(SessionResumeStates.waiting_session_id)
+    await message.answer(
+        (
+            "请输入要 resume 的 sessionId。\n"
+            "支持 rollout-xxx、Codex UUID，或直接粘贴 `sessionId : xxx` 那一行。\n"
+            "发送“取消”可退出。"
+        ),
+        reply_markup=_build_session_resume_input_keyboard(),
+    )
+    await callback.answer("请输入 sessionId")
+
+
+@router.message(SessionResumeStates.waiting_session_id)
+async def on_session_resume_session_id_input(message: Message, state: FSMContext) -> None:
+    """处理“会话实况 -> Resume 会话”输入的 sessionId。"""
+
+    raw_text = (message.text or "").strip()
+    if _is_cancel_message(raw_text):
+        await state.clear()
+        await message.answer("已取消 resume 会话。", reply_markup=_build_worker_main_keyboard())
+        return
+
+    session_id = _normalize_bind_session_id(raw_text)
+    # 用户输入一次后即结束输入态；失败时给出原因，避免流程残留影响后续普通消息。
+    await state.clear()
+    await _resume_main_session_from_user_input(
+        message,
+        session_id,
+        empty_prompt="sessionId 不能为空，请重新从“会话实况”点击 Resume 会话。",
+        success_intro="已恢复并绑定为主会话，后续消息将继续进入该会话。",
+    )
 
 
 @router.callback_query(F.data == SESSION_LIVE_MAIN_CALLBACK)

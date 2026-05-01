@@ -49,6 +49,7 @@ def test_build_session_live_list_view_includes_main_and_parallel(monkeypatch):
     ]
     assert bot.SESSION_LIVE_MAIN_CALLBACK in callback_data
     assert f"{bot.SESSION_LIVE_PARALLEL_PREFIX}TASK_0115" in callback_data
+    assert bot.SESSION_LIVE_RESUME_CALLBACK in callback_data
 
 
 def test_build_session_live_snapshot_view_uses_parallel_tmux_session(monkeypatch):
