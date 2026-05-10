@@ -8,8 +8,20 @@ model_configure() {
   local codex_model_instructions_file_escaped=""
   local codex_project_doc_max_bytes="${CODEX_PROJECT_DOC_MAX_BYTES:-131072}"
   local codex_base_cmd="${MODEL_CMD:-${CODEX_CMD:-codex --dangerously-bypass-approvals-and-sandbox -c trusted_workspace=true}}"
+  local codex_goals_enabled="${CODEX_GOALS_ENABLED:-1}"
+  local codex_goals_enabled_normalized=""
   printf -v codex_model_instructions_file_escaped '%q' "$codex_model_instructions_file"
   MODEL_CMD="${codex_base_cmd} -c model_instructions_file=${codex_model_instructions_file_escaped} -c project_doc_max_bytes=${codex_project_doc_max_bytes}"
+  codex_goals_enabled_normalized="$(printf '%s' "$codex_goals_enabled" | tr '[:upper:]' '[:lower:]')"
+  case "$codex_goals_enabled_normalized" in
+    0|false|no|off)
+      ;;
+    *)
+      if [[ "$MODEL_CMD" != *"features.goals"* ]]; then
+        MODEL_CMD="${MODEL_CMD} -c features.goals=true"
+      fi
+      ;;
+  esac
   MODEL_SESSION_ROOT="${CODEX_SESSION_ROOT:-$HOME/.codex/sessions}"
   MODEL_SESSION_GLOB="${CODEX_SESSION_GLOB:-rollout-*.jsonl}"
   MODEL_POINTER_BASENAME="${MODEL_POINTER_BASENAME:-current_session.txt}"

@@ -39,6 +39,17 @@ def _build_codex_message_event(text: str, *, phase: Optional[str]) -> dict:
     }
 
 
+def _build_codex_goal_developer_message_event(text: str) -> dict:
+    return {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "output_text", "text": text}],
+        },
+    }
+
+
 def _build_codex_event_msg_agent_message_event(text: str, *, phase: Optional[str]) -> dict:
     payload = {
         "type": "agent_message",
@@ -94,4 +105,28 @@ def test_extract_codex_event_msg_commentary_phase_ignored():
 
 def test_extract_codex_event_msg_final_answer_phase_ignored():
     event = _build_codex_event_msg_agent_message_event("最终答案", phase="final_answer")
+    assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
+
+
+@pytest.mark.parametrize("function_name", ["get_goal", "update_goal"])
+def test_extract_codex_goal_tool_call_ignored(function_name: str):
+    """Codex goal 内部工具调用不应作为 Telegram 消息刷屏。"""
+
+    event = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "name": function_name,
+            "arguments": "{}",
+        },
+    }
+    assert bot._extract_deliverable_payload(event, event_timestamp=None) is None
+
+
+def test_extract_codex_goal_developer_message_ignored():
+    """Codex goal 运行时的 developer 上下文消息不应转发到 Telegram。"""
+
+    event = _build_codex_goal_developer_message_event(
+        "Continue working toward the active thread goal until complete."
+    )
     assert bot._extract_deliverable_payload(event, event_timestamp=None) is None

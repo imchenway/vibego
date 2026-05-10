@@ -6449,6 +6449,173 @@ def test_on_text_ignores_regular_commands(monkeypatch):
     asyncio.run(bot.on_text(message, state))
 
 
+def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path):
+    """Telegram /goal objective 应原样透传到 Codex，而不是被普通 slash 兜底吞掉。"""
+
+    message = DummyMessage()
+    message.text = "/goal Finish migration and keep tests green"
+    state, _storage = make_state(message)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    captured: list[tuple[int, str, DummyMessage, bool]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
+        captured.append((chat_id, prompt, reply_to, ack_immediately))
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_goal_command(message, state))
+
+    assert captured == [(message.chat.id, "/goal Finish migration and keep tests green", message, True)]
+
+
+def test_goal_command_without_args_queries_current_goal(monkeypatch, tmp_path: Path):
+    """Telegram /goal 无参数时，应发送 /goal 查询当前 Codex goal。"""
+
+    message = DummyMessage()
+    message.text = "/goal"
+    state, _storage = make_state(message)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    captured: list[str] = []
+
+    async def fake_dispatch(_chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
+        captured.append(prompt)
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_goal_command(message, state))
+
+    assert captured == ["/goal"]
+
+
+def test_goal_command_respects_parallel_reply_target(monkeypatch, tmp_path: Path):
+    """处于并行回复模式时，/goal 应投递到对应并行 tmux 会话。"""
+
+    message = DummyMessage()
+    message.text = "/goal pause"
+    state, _storage = make_state(message)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    dispatch_context = bot.ParallelDispatchContext(
+        task_id="TASK_0001",
+        tmux_session="vibe-TASK_0001",
+        pointer_file=tmp_path / "parallel_pointer.txt",
+        workspace_root=tmp_path,
+    )
+    bot.CHAT_PARALLEL_REPLY_TARGETS[message.chat.id] = {
+        "task_id": "TASK_0001",
+        "dispatch_context": dispatch_context,
+        "token": None,
+        "expires_at": time.time() + 600,
+    }
+
+    captured: list[tuple[str, bot.ParallelDispatchContext | None]] = []
+
+    async def fake_dispatch(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        dispatch_context=None,
+        **_kwargs,
+    ):
+        captured.append((prompt, dispatch_context))
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_goal_command(message, state))
+
+    assert captured == [("/goal pause", dispatch_context)]
+    assert message.chat.id not in bot.CHAT_PARALLEL_REPLY_TARGETS
+
+
+def test_goal_command_fails_closed_for_non_codex(monkeypatch):
+    """非 Codex 模型下 /goal 必须 fail-closed，不调用 tmux 分发。"""
+
+    message = DummyMessage()
+    message.text = "/goal pause"
+    state, _storage = make_state(message)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "gemini")
+
+    async def fail_dispatch(*_args, **_kwargs):  # pragma: no cover - 被调用即失败
+        raise AssertionError("非 Codex 不应发送 goal 命令到模型")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fail_dispatch)
+
+    asyncio.run(bot.on_goal_command(message, state))
+
+    assert message.calls
+    assert "暂仅支持 Codex" in message.calls[0][0]
+    assert isinstance(message.calls[0][2], ReplyKeyboardMarkup)
+
+
+def test_goal_set_callback_enters_objective_state(monkeypatch):
+    """GOAL 面板点击“设置目标”后，应进入目标输入 FSM。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(bot.GOAL_SET_CALLBACK, message)
+    state, _storage = make_state(message)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    asyncio.run(bot.on_goal_callback(callback, state))
+
+    assert asyncio.run(state.get_state()) == bot.GoalStates.waiting_objective.state
+    assert message.calls
+    assert "请输入 Codex goal 目标" in message.calls[0][0]
+
+
+def test_goal_objective_input_dispatches_goal_and_restores_menu(monkeypatch, tmp_path: Path):
+    """GOAL 目标输入完成后，应发送 /goal <objective> 并恢复主菜单。"""
+
+    message = DummyMessage()
+    message.text = "完成 /goal 支持并保持测试通过"
+    state, _storage = make_state(message)
+    asyncio.run(state.set_state(bot.GoalStates.waiting_objective))
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    captured: list[str] = []
+
+    async def fake_dispatch(_chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
+        captured.append(prompt)
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_goal_objective_input(message, state))
+
+    assert captured == ["/goal 完成 /goal 支持并保持测试通过"]
+    assert asyncio.run(state.get_state()) is None
+    assert message.calls
+    assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup)
+
+
+def test_goal_clear_callback_requires_confirmation(monkeypatch):
+    """GOAL 清除动作必须先出现二次确认，避免误清当前线程目标。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(bot.GOAL_CLEAR_CALLBACK, message)
+    state, _storage = make_state(message)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    asyncio.run(bot.on_goal_callback(callback, state))
+
+    assert message.calls
+    text, _parse_mode, markup, _kwargs = message.calls[0]
+    assert "确认清除当前 Codex goal" in text
+    assert isinstance(markup, InlineKeyboardMarkup)
+    callback_data = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert bot.GOAL_CLEAR_CONFIRM_CALLBACK in callback_data
+
+
 def test_text_paste_aggregation_injects_single_combined_message(monkeypatch):
     """长文本粘贴聚合：应只注入一次合成消息，内容为全部分片拼接结果。"""
 

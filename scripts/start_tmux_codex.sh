@@ -16,11 +16,22 @@ MODEL_LOG_RETENTION_SECONDS="${MODEL_LOG_RETENTION_SECONDS:-86400}"
 CODEX_MODEL_INSTRUCTIONS_FILE="${CODEX_MODEL_INSTRUCTIONS_FILE:-/Users/david/.codex/AGENTS.md}"
 CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED=""
 CODEX_PROJECT_DOC_MAX_BYTES="${CODEX_PROJECT_DOC_MAX_BYTES:-131072}"
+CODEX_GOALS_ENABLED="${CODEX_GOALS_ENABLED:-1}"
 MODEL_KEY="$(printf '%s' "${MODEL_NAME:-codex}" | tr '[:upper:]' '[:lower:]')"
 if [[ "$MODEL_KEY" == "codex" ]]; then
   CODEX_BASE_CMD="${MODEL_CMD:-${CODEX_CMD:-codex --dangerously-bypass-approvals-and-sandbox -c trusted_workspace=true}}"
   printf -v CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED '%q' "$CODEX_MODEL_INSTRUCTIONS_FILE"
   MODEL_CMD="${CODEX_BASE_CMD} -c model_instructions_file=${CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED} -c project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}"
+  CODEX_GOALS_ENABLED_NORMALIZED="$(printf '%s' "$CODEX_GOALS_ENABLED" | tr '[:upper:]' '[:lower:]')"
+  case "$CODEX_GOALS_ENABLED_NORMALIZED" in
+    0|false|no|off)
+      ;;
+    *)
+      if [[ "$MODEL_CMD" != *"features.goals"* ]]; then
+        MODEL_CMD="${MODEL_CMD} -c features.goals=true"
+      fi
+      ;;
+  esac
 fi
 MODEL_RESUME_SESSION_ID="${MODEL_RESUME_SESSION_ID:-}"
 if [[ -n "$MODEL_RESUME_SESSION_ID" ]]; then

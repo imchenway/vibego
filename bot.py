@@ -76,6 +76,7 @@ from tasks.constants import (
     TASK_TYPES,
 )
 from tasks.fsm import (
+    GoalStates,
     TaskBatchStatusStates,
     TaskBugReportStates,
     TaskBatchPushStates,
@@ -4429,6 +4430,7 @@ async def _handle_prompt_dispatch(
 BOT_COMMANDS: list[tuple[str, str]] = [
     ("start", "打开任务概览"),
     ("help", "查看全部命令"),
+    ("goal", "管理 Codex 目标"),
 ]
 
 COMMAND_KEYWORDS: set[str] = {command for command, _ in BOT_COMMANDS}
@@ -4452,6 +4454,7 @@ COMMAND_KEYWORDS.update(
 WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
 WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
 WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT = "💻 会话实况"
+WORKER_GOAL_BUTTON_TEXT = "🎯 GOAL"
 WORKER_PLAN_MODE_BUTTON_PREFIX = "🧭 PLAN MODE:"
 WORKER_PLAN_MODE_BUTTON_TEXT_ON = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ON"
 WORKER_PLAN_MODE_BUTTON_TEXT_OFF = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} OFF"
@@ -4477,6 +4480,15 @@ WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 WORKER_PLAN_MODE_STATE_CACHE: Dict[str, Literal["on", "off", "unknown"]] = {}
 # Worker 主菜单 Copilot 三态缓存（按 tmux session 维度）。
 WORKER_COPILOT_MODE_STATE_CACHE: Dict[str, Literal["interactive", "plan", "autopilot", "unknown"]] = {}
+
+GOAL_CALLBACK_PREFIX = "goal:"
+GOAL_VIEW_CALLBACK = f"{GOAL_CALLBACK_PREFIX}view"
+GOAL_SET_CALLBACK = f"{GOAL_CALLBACK_PREFIX}set"
+GOAL_PAUSE_CALLBACK = f"{GOAL_CALLBACK_PREFIX}pause"
+GOAL_RESUME_CALLBACK = f"{GOAL_CALLBACK_PREFIX}resume"
+GOAL_CLEAR_CALLBACK = f"{GOAL_CALLBACK_PREFIX}clear"
+GOAL_CLEAR_CONFIRM_CALLBACK = f"{GOAL_CALLBACK_PREFIX}clear_confirm"
+GOAL_CANCEL_CALLBACK = f"{GOAL_CALLBACK_PREFIX}cancel"
 
 
 @dataclass
@@ -4837,7 +4849,7 @@ def _build_worker_main_keyboard(
     copilot_mode_state: Optional[Literal["interactive", "plan", "autopilot", "unknown"]] = None,
     refresh_plan_mode_state: bool = True,
 ) -> ReplyKeyboardMarkup:
-    """Worker 端常驻键盘，提供任务列表与 PLAN MODE 切换入口。
+    """Worker 端常驻键盘，提供任务列表、会话入口、GOAL 与 PLAN MODE 切换入口。
 
     默认每次渲染都会强探测 tmux 中的实时状态，尽可能保证按钮状态正确。
     仅当 refresh_plan_mode_state=False 时，才允许使用显式状态或缓存状态。
@@ -4881,9 +4893,57 @@ def _build_worker_main_keyboard(
             [
                 KeyboardButton(text=WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT),
                 KeyboardButton(text=plan_mode_button_text),
-            ]
+            ],
+            [
+                KeyboardButton(text=WORKER_GOAL_BUTTON_TEXT),
+            ],
         ],
         resize_keyboard=True,
+    )
+
+
+def _build_goal_management_keyboard() -> InlineKeyboardMarkup:
+    """构建 Codex /goal 管理面板。
+
+    Goal 的真实状态以 Codex active thread 为准；这里仅提供命令入口，不在
+    vibego 内部模拟 goal 状态，避免双源状态不一致。
+    """
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👁 查看当前目标", callback_data=GOAL_VIEW_CALLBACK)],
+            [
+                InlineKeyboardButton(text="➕ 设置目标", callback_data=GOAL_SET_CALLBACK),
+                InlineKeyboardButton(text="🧹 清除目标", callback_data=GOAL_CLEAR_CALLBACK),
+            ],
+            [
+                InlineKeyboardButton(text="⏸ 暂停", callback_data=GOAL_PAUSE_CALLBACK),
+                InlineKeyboardButton(text="▶️ 恢复", callback_data=GOAL_RESUME_CALLBACK),
+            ],
+        ]
+    )
+
+
+def _build_goal_clear_confirm_keyboard() -> InlineKeyboardMarkup:
+    """构建 /goal clear 二次确认键盘。"""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ 确认清除", callback_data=GOAL_CLEAR_CONFIRM_CALLBACK),
+                InlineKeyboardButton(text="取消", callback_data=GOAL_CANCEL_CALLBACK),
+            ]
+        ]
+    )
+
+
+def _build_goal_objective_input_keyboard() -> ReplyKeyboardMarkup:
+    """构建 Codex goal 目标输入态键盘。"""
+
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=TASK_DESC_CANCEL_TEXT)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 
@@ -15208,6 +15268,11 @@ def _extract_codex_payload(data: dict, *, event_timestamp: Optional[str]) -> Opt
     payload_type = payload.get("type")
 
     if payload_type in {"message", "assistant_message"}:
+        role = str(payload.get("role") or "").strip().lower()
+        if role and role != "assistant":
+            # Codex /goal 会把内部目标上下文写成 role=developer 的 response_item。
+            # 这类内容是线程控制信息，不应作为模型答案刷到 Telegram。
+            return None
         if not _should_deliver_message(payload):
             return None
         metadata: Dict[str, Any] = {"codex_response_item_type": payload_type}
@@ -15622,6 +15687,7 @@ async def on_help_command(message: Message) -> None:
         "*指令总览*\n"
         "- /help — 查看全部命令\n"
         "- /tasks — 任务管理命令清单\n"
+        "- /goal [objective|pause|resume|clear] — 管理 Codex 当前线程目标\n"
         "- /task_new — 创建任务（交互式或附带参数）\n"
         "- /task_list — 查看任务列表，支持 status/limit/offset\n"
         "- /task_show — 查看某个任务详情\n"
@@ -15656,6 +15722,18 @@ async def on_tasks_help(message: Message) -> None:
         "建议：使用 `/task_new`、`/task_show` 等命令触发后按按钮完成后续步骤。"
     )
     await _answer_with_markdown(message, text)
+
+
+@router.message(Command("goal"))
+async def on_goal_command(message: Message, state: FSMContext) -> None:
+    """处理 Telegram /goal 命令并原样透传给 Codex CLI。"""
+
+    await state.clear()
+    args = _extract_command_args(message.text or "")
+    dispatch_context, resolved = await _resolve_goal_dispatch_context_from_reply_target(message)
+    if not resolved:
+        return
+    await _dispatch_goal_command(message, args, dispatch_context=dispatch_context)
 
 
 @router.message(Command("bind_session"))
@@ -15805,12 +15883,6 @@ async def _build_task_list_view(
 
     rows: list[list[InlineKeyboardButton]] = []
     rows.extend(_build_status_filter_row(status, limit))
-    rows.extend(
-        _build_page_size_selector_row(
-            limit,
-            callback_data_builder=lambda option: f"task:list_page:{status_token}:1:{option}",
-        )
-    )
     for task in tasks:
         label = _compose_task_button_label(
             task,
@@ -15824,6 +15896,13 @@ async def _build_task_list_view(
                 )
             ]
         )
+
+    rows.extend(
+        _build_page_size_selector_row(
+            limit,
+            callback_data_builder=lambda option: f"task:list_page:{status_token}:1:{option}",
+        )
+    )
 
     nav_row: list[InlineKeyboardButton] = []
     if page > 1:
@@ -17195,9 +17274,212 @@ async def on_task_batch_push_confirm(callback: CallbackQuery, state: FSMContext)
     await _show_task_batch_push_existing_session_view(message)
 
 
+def _build_goal_slash_command(args: Optional[str]) -> str:
+    """将 Telegram 输入归一为 Codex /goal slash command。"""
+
+    objective_or_action = (args or "").strip()
+    if not objective_or_action:
+        return "/goal"
+    return f"/goal {objective_or_action}"
+
+
+def _infer_goal_action(args: Optional[str]) -> str:
+    """提取 goal 操作类型用于日志；不记录完整 objective 以避免泄漏需求正文。"""
+
+    normalized = (args or "").strip().lower()
+    if not normalized:
+        return "view"
+    if normalized in {"pause", "resume", "clear"}:
+        return normalized
+    return "set"
+
+
+async def _answer_goal_not_supported(message: Message) -> None:
+    """非 Codex 模型下 fail-closed，避免制造 vibego 自建的假 goal 状态。"""
+
+    await message.answer(
+        "🎯 Codex `/goal` 暂仅支持 Codex 模型；当前 worker 不是 Codex，已取消发送。",
+        reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+    )
+
+
+async def _dispatch_goal_command(
+    message: Message,
+    args: Optional[str],
+    *,
+    dispatch_context: Optional[ParallelDispatchContext] = None,
+) -> tuple[bool, Optional[Path]]:
+    """向当前 Codex 会话发送 /goal 命令。
+
+    该入口只负责命令透传，不在 vibego 内部保存 goal 状态；Codex active
+    thread 是唯一事实来源。
+    """
+
+    if not _is_codex_model():
+        await _answer_goal_not_supported(message)
+        return False, None
+
+    command = _build_goal_slash_command(args)
+    action = _infer_goal_action(args)
+    worker_log.info(
+        "发送 Codex /goal 命令",
+        extra={
+            **_session_extra(),
+            "chat": getattr(message.chat, "id", None),
+            "goal_action": action,
+            "goal_arg_chars": str(len((args or "").strip())),
+            "tmux_session": dispatch_context.tmux_session if dispatch_context else TMUX_SESSION,
+        },
+    )
+    return await _dispatch_prompt_to_model(
+        message.chat.id,
+        command,
+        reply_to=message,
+        ack_immediately=True,
+        intended_mode=None,
+        dispatch_context=dispatch_context,
+    )
+
+
+async def _resolve_goal_dispatch_context_from_reply_target(
+    message: Message,
+) -> tuple[Optional[ParallelDispatchContext], bool]:
+    """若当前 chat 处于并行回复模式，则解析 /goal 应投递的并行会话。"""
+
+    reply_target = _consume_parallel_reply_target(message.chat.id)
+    if not reply_target:
+        return None, True
+
+    reply_task_id = _normalize_task_id(reply_target.get("task_id"))
+    dispatch_context = reply_target.get("dispatch_context")
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        return dispatch_context, True
+
+    session = await _get_active_parallel_session_for_task(reply_task_id or "")
+    if session is None:
+        await message.answer(
+            f"/{reply_task_id or '-'} 的并行会话已失效，请重新点击回复按钮。",
+            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+        )
+        return None, False
+    return _parallel_dispatch_context_from_session(session), True
+
+
+async def _show_goal_panel(message: Message) -> None:
+    """展示 Codex /goal 轻量管理面板。"""
+
+    if not _is_codex_model():
+        await _answer_goal_not_supported(message)
+        return
+
+    await message.answer(
+        (
+            "🎯 Codex /goal 管理\n\n"
+            "目标状态以当前 Codex active thread 为准，vibego 不单独保存状态。\n"
+            "可查看、设置、暂停、恢复或清除当前线程目标。"
+        ),
+        reply_markup=_build_goal_management_keyboard(),
+    )
+
+
 @router.message(F.text == WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT)
 async def on_tmux_snapshot_button(message: Message) -> None:
     await _handle_terminal_snapshot_request(message)
+
+
+@router.message(F.text == WORKER_GOAL_BUTTON_TEXT)
+async def on_worker_goal_button(message: Message) -> None:
+    await _show_goal_panel(message)
+
+
+@router.callback_query(F.data.startswith(GOAL_CALLBACK_PREFIX))
+async def on_goal_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """处理 Codex /goal 管理面板回调。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+
+    if not _is_codex_model():
+        await state.clear()
+        await callback.answer("暂仅支持 Codex /goal", show_alert=True)
+        await _answer_goal_not_supported(message)
+        return
+
+    data = (callback.data or "").strip()
+    if data == GOAL_SET_CALLBACK:
+        await state.clear()
+        await state.set_state(GoalStates.waiting_objective)
+        await message.answer(
+            (
+                "请输入 Codex goal 目标。\n"
+                "发送“取消”可退出，不会向 Codex 发送任何命令。"
+            ),
+            reply_markup=_build_goal_objective_input_keyboard(),
+        )
+        await callback.answer("请输入目标")
+        return
+
+    if data == GOAL_CLEAR_CALLBACK:
+        await message.answer(
+            "确认清除当前 Codex goal？该操作会向当前 Codex thread 发送 `/goal clear`。",
+            reply_markup=_build_goal_clear_confirm_keyboard(),
+        )
+        await callback.answer("请确认")
+        return
+
+    if data == GOAL_CANCEL_CALLBACK:
+        await state.clear()
+        await message.answer(
+            "已取消 Codex /goal 操作。",
+            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+        )
+        await callback.answer("已取消")
+        return
+
+    action_args = {
+        GOAL_VIEW_CALLBACK: "",
+        GOAL_PAUSE_CALLBACK: "pause",
+        GOAL_RESUME_CALLBACK: "resume",
+        GOAL_CLEAR_CONFIRM_CALLBACK: "clear",
+    }.get(data)
+    if action_args is None:
+        await callback.answer("回调参数错误", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer("已发送")
+    await _dispatch_goal_command(message, action_args)
+
+
+@router.message(GoalStates.waiting_objective)
+async def on_goal_objective_input(message: Message, state: FSMContext) -> None:
+    """处理 GOAL 面板中的目标正文输入。"""
+
+    raw_text = (message.text or "").strip()
+    if _is_cancel_message(raw_text):
+        await state.clear()
+        await message.answer(
+            "已取消 Codex /goal 设置。",
+            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+        )
+        return
+
+    if not raw_text:
+        await message.answer(
+            "目标不能为空，请输入 Codex goal 目标，或发送“取消”退出。",
+            reply_markup=_build_goal_objective_input_keyboard(),
+        )
+        return
+
+    await state.clear()
+    ok, _session_path = await _dispatch_goal_command(message, raw_text)
+    if ok:
+        await message.answer(
+            "已提交 Codex /goal 目标，主菜单已恢复。",
+            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+        )
 
 
 async def _show_session_live_list(message: Message) -> bool:

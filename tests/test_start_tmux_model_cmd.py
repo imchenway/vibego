@@ -19,6 +19,7 @@ def _run_start_tmux_dry_run(
     model_name: str,
     model_cmd: str,
     resume_session_id: str = "",
+    codex_goals_enabled: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     workdir = tmp_path / "workdir"
     sessions = tmp_path / "sessions"
@@ -50,6 +51,8 @@ def _run_start_tmux_dry_run(
     )
     if resume_session_id:
         env["MODEL_RESUME_SESSION_ID"] = resume_session_id
+    if codex_goals_enabled is not None:
+        env["CODEX_GOALS_ENABLED"] = codex_goals_enabled
     return subprocess.run(
         ["bash", str(SCRIPT), "--dry-run"],
         cwd=ROOT,
@@ -73,6 +76,24 @@ def test_start_tmux_dry_run_keeps_codex_config_flags(tmp_path: Path) -> None:
     combined = result.stdout + result.stderr
     assert "-c model_instructions_file=" in combined
     assert "-c project_doc_max_bytes=131072" in combined
+    assert "-c features.goals=true" in combined
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux 未安装")
+def test_start_tmux_dry_run_can_disable_codex_goal_flag(tmp_path: Path) -> None:
+    """CODEX_GOALS_ENABLED=0 时，Codex dry-run 不应追加实验性 goal flag。"""
+
+    result = _run_start_tmux_dry_run(
+        tmp_path,
+        model_name="codex",
+        model_cmd="codex --dangerously-bypass-approvals-and-sandbox -c trusted_workspace=true",
+        codex_goals_enabled="0",
+    )
+
+    combined = result.stdout + result.stderr
+    assert "-c model_instructions_file=" in combined
+    assert "-c project_doc_max_bytes=131072" in combined
+    assert "features.goals=true" not in combined
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux 未安装")
@@ -89,6 +110,7 @@ def test_start_tmux_dry_run_does_not_append_codex_flags_for_copilot(tmp_path: Pa
     assert "copilot --yolo" in combined
     assert "model_instructions_file=" not in combined
     assert "project_doc_max_bytes=" not in combined
+    assert "features.goals=true" not in combined
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux 未安装")
@@ -107,6 +129,7 @@ def test_start_tmux_dry_run_uses_codex_resume_when_session_id_provided(tmp_path:
     assert f"resume {session_id}" in combined
     assert "-c model_instructions_file=" in combined
     assert "-c project_doc_max_bytes=131072" in combined
+    assert "-c features.goals=true" in combined
 
 
 def test_copilot_model_script_defaults_to_yolo() -> None:

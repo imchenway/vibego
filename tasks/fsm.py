@@ -120,6 +120,12 @@ class SessionResumeStates(StatesGroup):
     waiting_session_id = State()
 
 
+class GoalStates(StatesGroup):
+    """Codex /goal 目标管理流程状态。"""
+
+    waiting_objective = State()
+
+
 class ProjectDeleteStates(StatesGroup):
     """Master 项目删除确认流程的状态定义。"""
 

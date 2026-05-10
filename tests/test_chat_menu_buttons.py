@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import MenuButtonCommands, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, MenuButtonCommands, ReplyKeyboardMarkup, KeyboardButton
 
 import bot
 import master
@@ -36,9 +36,10 @@ def test_worker_keyboard_structure(monkeypatch):
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
     markup = bot._build_worker_main_keyboard()
     assert isinstance(markup, ReplyKeyboardMarkup)
-    assert len(markup.keyboard) == 2
+    assert len(markup.keyboard) == 3
     assert len(markup.keyboard[0]) == 2
     assert len(markup.keyboard[1]) == 2
+    assert len(markup.keyboard[2]) == 1
     for row in markup.keyboard:
         for button in row:
             assert isinstance(button, KeyboardButton)
@@ -51,6 +52,7 @@ def test_worker_keyboard_button_text(monkeypatch):
     assert markup.keyboard[0][1].text == bot.WORKER_COMMANDS_BUTTON_TEXT
     assert markup.keyboard[1][0].text == "💻 会话实况"
     assert markup.keyboard[1][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF
+    assert markup.keyboard[2][0].text == bot.WORKER_GOAL_BUTTON_TEXT
 
 
 def test_worker_session_live_button_opens_session_list(monkeypatch):
@@ -73,6 +75,46 @@ def test_worker_session_live_button_opens_session_list(monkeypatch):
 
     assert mock_answer.await_count == 1
     assert "会话实况" in mock_answer.await_args.args[1]
+
+
+def test_worker_goal_button_opens_goal_panel_for_codex(monkeypatch):
+    """点击 GOAL 主键盘入口时，应展示 Codex goal 管理面板。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    message = _DummyMessage(bot.WORKER_GOAL_BUTTON_TEXT)
+
+    asyncio.run(bot.on_worker_goal_button(message))
+
+    assert len(message._answers) == 1
+    text, kwargs = message._answers[0]
+    assert "Codex /goal 管理" in text
+    markup = kwargs.get("reply_markup")
+    assert isinstance(markup, InlineKeyboardMarkup)
+    callback_data = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert bot.GOAL_VIEW_CALLBACK in callback_data
+    assert bot.GOAL_SET_CALLBACK in callback_data
+    assert bot.GOAL_PAUSE_CALLBACK in callback_data
+    assert bot.GOAL_RESUME_CALLBACK in callback_data
+    assert bot.GOAL_CLEAR_CALLBACK in callback_data
+
+
+def test_worker_goal_button_fails_closed_for_non_codex(monkeypatch):
+    """非 Codex worker 不应暴露伪 goal 状态或向 tmux 发送命令。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "gemini")
+    message = _DummyMessage(bot.WORKER_GOAL_BUTTON_TEXT)
+
+    asyncio.run(bot.on_worker_goal_button(message))
+
+    assert len(message._answers) == 1
+    text, kwargs = message._answers[0]
+    assert "暂仅支持 Codex" in text
+    assert isinstance(kwargs.get("reply_markup"), ReplyKeyboardMarkup)
 
 
 def test_worker_keyboard_resize_enabled():
