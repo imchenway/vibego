@@ -6533,6 +6533,74 @@ def test_goal_command_respects_parallel_reply_target(monkeypatch, tmp_path: Path
     assert message.chat.id not in bot.CHAT_PARALLEL_REPLY_TARGETS
 
 
+def test_goal_dispatch_does_not_fallback_to_global_latest_session(monkeypatch, tmp_path: Path):
+    """主会话 /goal 未绑定当前 worker session 时，不能兜底监听全局最新 Codex App 会话。"""
+
+    pointer = tmp_path / "current_session.txt"
+    pointer.write_text("", encoding="utf-8")
+    codex_app_session = tmp_path / "codex-app-rollout.jsonl"
+    codex_app_session.write_text("", encoding="utf-8")
+
+    message = DummyMessage()
+    message.text = "/goal Finish the active thread work"
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-primary")
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent_lines: list[tuple[str, str]] = []
+
+    def fake_tmux_send_line(session: str, line: str) -> None:
+        sent_lines.append((session, line))
+
+    fallback_calls: list[Path] = []
+
+    def fake_fallback(pointer_path: Path, _target_cwd: str | None):
+        fallback_calls.append(pointer_path)
+        return codex_app_session
+
+    notices: list[str] = []
+
+    async def fake_reply_to_chat(
+        _chat_id: int,
+        text: str,
+        *,
+        reply_to=None,
+        disable_notification: bool = False,
+        parse_mode=None,
+        reply_markup=None,
+    ):
+        notices.append(text)
+        return None
+
+    async def fake_send_session_ack(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_fallback_locate_latest_session", fake_fallback)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply_to_chat)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
+
+    ok, session_path = asyncio.run(bot._dispatch_goal_command(message, "Finish the active thread work"))
+
+    assert ok is False
+    assert session_path is None
+    assert sent_lines == [("vibe-primary", "/goal Finish the active thread work")]
+    assert fallback_calls == []
+    assert notices and "未检测到" in notices[-1]
+    assert bot.CHAT_SESSION_MAP.get(message.chat.id) is None
+
+
 def test_goal_command_fails_closed_for_non_codex(monkeypatch):
     """非 Codex 模型下 /goal 必须 fail-closed，不调用 tmux 分发。"""
 

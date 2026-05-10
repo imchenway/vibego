@@ -533,3 +533,118 @@ python3.11 -m pytest -q
 1. `/goal` 仍是 Codex 实验功能；本实现通过启动参数兜底启用，并提供 `CODEX_GOALS_ENABLED=0` 快速关闭。
 2. vibego 不落库保存 goal 状态，避免和 Codex active thread 形成双源状态；因此 GOAL 面板“查看当前目标”仍是向 Codex 发送 `/goal`，等待 Codex 返回。
 3. 全量 pytest 的 `tests/test_parallel_flow.py` 存在既有 send_mode 参数适配问题，应单独处理，避免把并行会话重构混入本次 `/goal` 需求。
+
+## 14. 2026-05-10 缺陷修复：`/goal` 回传串到 Codex App 会话
+
+### 14.1 现象 -> 影响 -> 根因 -> 修法 -> 验证
+
+- 现象：用户在 Telegram 使用 goal 模式后，tmux 中对应 Codex CLI 会话并未作为回传来源，Telegram 收到了 Codex App 侧另一个对话消息。
+- 影响：Telegram 侧“看似已收到模型响应”，但响应并不属于刚才被注入 `/goal` 的 active thread，容易误导用户继续在错误上下文中操作。
+- 根因：`_dispatch_goal_command(...)` 复用通用 `_dispatch_prompt_to_model(...)`，而通用链路在 pointer 缺失/未及时写入时允许 `_fallback_locate_latest_session(...)` 扫描全局 Codex sessions。普通 prompt 这样兜底可降低“未检测到会话日志”的误报；但 `/goal` 是 Codex active thread 级能力，输入 tmux 与监听 JSONL 必须同源，否则会串到 Codex App 或其它 Codex CLI 会话。
+- 修法：新增 `allow_session_discovery_fallback` 开关，默认保持普通 prompt 兼容；`/goal` 专用分发显式传 `False`，禁止 pointer 缺失时扫描全局 latest rollout，仅允许使用 `CHAT_SESSION_MAP`、当前 worker pointer 或并行 `dispatch_context.pointer_file`。
+- 验证：新增红灯测试 `test_goal_dispatch_does_not_fallback_to_global_latest_session`，先复现“fallback 到 Codex App rollout 后 ok=True”的错误，再实现后转绿。
+
+### 14.2 受影响目录与边界
+
+| 类型 | 路径 | 影响 |
+| --- | --- | --- |
+| 实现 | `bot.py` | `_dispatch_prompt_to_model(...)` 增加会话发现兜底开关；`_await_session_path(...)` 在开关关闭时不扫描全局 session root；`_dispatch_goal_command(...)` 禁止 `/goal` 使用全局 latest fallback。 |
+| 测试 | `tests/test_task_description.py` | 新增 `/goal` 主会话缺失 pointer 时不得绑定 Codex App 最新 session 的回归测试。 |
+| 文档 | `docs/TASK_20260510_001_codex_goal模式支持方案.md` | 记录本次缺陷、根因、契约变化、测试矩阵、风险与回滚。 |
+| 证据 | `AGENTS.md` | 补充 `/goal` 回传同源约束的仓库事实证据。 |
+| 脚本 | `scripts/models/codex.sh`、`scripts/start_tmux_codex.sh` | 本次不改；上一阶段已完成 `features.goals=true` 启动兜底。 |
+| 数据库 | `tasks/` SQLite 表结构 | 本次不改；仍不落库保存 goal 状态，Codex active thread 是唯一事实源。 |
+| 前端/UI | 无 | 本仓库本次只涉及 Telegram bot 后端逻辑与测试；无浏览器/H5/管理后台页面。 |
+
+### 14.3 契约变更
+
+- 内部函数新增可选参数：
+  - `_dispatch_prompt_to_model(..., allow_session_discovery_fallback: bool = True)`
+  - `_await_session_path(..., allow_session_discovery_fallback: bool = True)`
+- 对外 Telegram 契约不变：
+  - `/goal`、`/goal <objective>`、`/goal pause/resume/clear` 命令格式不变。
+  - GOAL 面板按钮文案不变。
+- 行为口径变更：
+  - 普通 prompt：仍可沿用既有全局 session discovery fallback。
+  - `/goal`：pointer 缺失时宁可提示“未检测到会话日志”，也不绑定全局最新 Codex rollout。
+
+### 14.4 TDD 记录
+
+1. Baseline：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py -k 'goal or dispatch_prompt_parallel_first_dispatch_does_not_fallback_to_old_session or dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session' tests/test_session_binding.py tests/test_codex_jsonl_phase.py tests/test_chat_menu_buttons.py tests/test_start_tmux_model_cmd.py
+```
+
+结果：`15 passed, 249 deselected`。
+
+2. 红灯：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py::test_goal_dispatch_does_not_fallback_to_global_latest_session
+```
+
+结果：失败，`ok` 实际为 `True`；日志显示命中 `strict fallback locate latest session ... codex-app-rollout.jsonl`。
+
+3. 绿灯：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py::test_goal_dispatch_does_not_fallback_to_global_latest_session
+```
+
+结果：`1 passed`。
+
+4. 聚焦回归第 1 轮：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py -k 'goal or dispatch_prompt_parallel_first_dispatch_does_not_fallback_to_old_session or dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session' tests/test_session_binding.py tests/test_codex_jsonl_phase.py tests/test_chat_menu_buttons.py tests/test_start_tmux_model_cmd.py
+```
+
+结果：`16 passed, 249 deselected`。
+
+5. 聚焦回归第 2 轮与语法检查：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py -k 'goal or dispatch_prompt_parallel_first_dispatch_does_not_fallback_to_old_session or dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session' tests/test_session_binding.py tests/test_codex_jsonl_phase.py tests/test_chat_menu_buttons.py tests/test_start_tmux_model_cmd.py
+python3.11 -m py_compile bot.py
+```
+
+结果：第二轮 `16 passed, 249 deselected`；`py_compile` 通过。
+
+6. 运行期诊断与依赖脚本：
+
+```bash
+python3.11 -m vibego_cli doctor
+bash scripts/test_deps_check.sh
+```
+
+结果：`doctor` 显示 `python_ok=true` 且关键依赖缺失列表为空；依赖检查脚本通过。
+
+7. 注释收口后的 final sanity：
+
+```bash
+python3.11 -m py_compile bot.py
+python3.11 -m pytest -q tests/test_task_description.py::test_goal_dispatch_does_not_fallback_to_global_latest_session
+```
+
+结果：`py_compile` 通过；单测 `1 passed`。
+
+### 14.5 测试矩阵
+
+| 场景 | 预期 | 覆盖 |
+| --- | --- | --- |
+| `/goal` 主会话 pointer 为空且全局存在 Codex App 最新 session | 不调用 `_fallback_locate_latest_session`，不绑定 App session，返回失败提示 | `test_goal_dispatch_does_not_fallback_to_global_latest_session` |
+| `/goal` 处于并行回复上下文 | 使用 `dispatch_context.tmux_session` 与 `dispatch_context.pointer_file` | `test_goal_command_respects_parallel_reply_target` |
+| `/goal` 有参/无参 | 原样发送 `/goal ...` 或 `/goal`，不追加强制规约前缀 | `test_goal_command_dispatches_objective_to_codex`、`test_goal_command_without_args_queries_current_goal` |
+| 非 Codex 模型 | fail-closed，不调用 tmux 分发 | `test_goal_command_fails_closed_for_non_codex` |
+| goal 内部工具/开发者消息 | 不刷到 Telegram，仅 final answer 投递 | `tests/test_codex_jsonl_phase.py` 相关用例 |
+| 普通并行首次派发 | 仍禁止并行 fresh session 缺失时 fallback 到旧 session | `test_dispatch_prompt_parallel_first_dispatch_does_not_fallback_to_old_session` |
+
+### 14.6 风险与回滚
+
+- 风险 1：如果用户的 worker pointer 长期未写入，`/goal` 会比普通 prompt 更容易提示失败；这是故意 fail-closed，用于避免串会话。
+- 风险 2：普通 prompt 仍保留 fallback，因此若未来发现普通链路也会串 Codex App，需要单独扩大任务范围，不混入本次 `/goal` 修复。
+- 回滚方式：
+  1. 回滚 `bot.py` 中 `allow_session_discovery_fallback` 参数与 `/goal` 调用处的 `False`。
+  2. 回滚 `tests/test_task_description.py::test_goal_dispatch_does_not_fallback_to_global_latest_session`。
+  3. 回滚本节文档与 `AGENTS.md` 对应证据行。

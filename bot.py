@@ -2717,6 +2717,7 @@ async def _dispatch_prompt_to_model(
     force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
     force_exit_plan_ui_max_rounds: Optional[int] = None,
     dispatch_context: Optional[ParallelDispatchContext] = None,
+    allow_session_discovery_fallback: bool = True,
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
 
@@ -2823,7 +2824,7 @@ async def _dispatch_prompt_to_model(
         else (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
     )
     target_cwd = target_cwd_raw or None
-    if pointer_path is not None and not SESSION_BIND_STRICT:
+    if pointer_path is not None and not SESSION_BIND_STRICT and allow_session_discovery_fallback:
         current_cwd = _read_session_meta_cwd(session_path) if session_path else None
         if session_path is None or (target_cwd and current_cwd != target_cwd):
             latest = (
@@ -2928,16 +2929,24 @@ async def _dispatch_prompt_to_model(
             poll=SESSION_BIND_POLL_INTERVAL,
             strict=SESSION_BIND_STRICT,
             max_wait=SESSION_BIND_TIMEOUT_SECONDS,
+            allow_session_discovery_fallback=allow_session_discovery_fallback,
         )
         if (
             session_path is None
             and pointer_path is not None
             and _is_claudecode_model()
             and not SESSION_BIND_STRICT
+            and allow_session_discovery_fallback
         ):
             session_path = _find_latest_claudecode_rollout(pointer_path)
         allow_strict_fallback = not (is_parallel_dispatch and needs_session_wait)
-        if session_path is None and pointer_path is not None and SESSION_BIND_STRICT and allow_strict_fallback:
+        if (
+            session_path is None
+            and pointer_path is not None
+            and SESSION_BIND_STRICT
+            and allow_strict_fallback
+            and allow_session_discovery_fallback
+        ):
             # strict 模式兜底：当 pointer 长时间未写入（binder 异常/已退出）时，
             # 直接扫描会话目录定位最新 session，避免用户侧出现“未检测到会话日志”的误报。
             session_path = _fallback_locate_latest_session(pointer_path, target_cwd)
@@ -15121,8 +15130,9 @@ async def _await_session_path(
     *,
     strict: bool = False,
     max_wait: float = 0.0,
+    allow_session_discovery_fallback: bool = True,
 ) -> Optional[Path]:
-    """等待 pointer 写入新会话；strict=False 时会回退到旧 session。"""
+    """等待 pointer 写入新会话；允许兜底时 strict=False 会回退到旧 session。"""
 
     if pointer is None:
         await asyncio.sleep(poll)
@@ -15138,6 +15148,10 @@ async def _await_session_path(
         candidate = _read_pointer_path(pointer)
         if candidate is not None:
             return candidate
+        if not allow_session_discovery_fallback:
+            # /goal 等 active-thread 命令必须保持“tmux 输入会话”和“JSONL 回传会话”同源，
+            # 禁止在 pointer 缺失时扫描全局 Codex sessions，否则可能串到 Codex App 会话。
+            return None
         if _is_gemini_model():
             return _find_latest_gemini_session(pointer, target_cwd)
         return _find_latest_rollout_for_cwd(pointer, target_cwd)
@@ -17338,6 +17352,9 @@ async def _dispatch_goal_command(
         ack_immediately=True,
         intended_mode=None,
         dispatch_context=dispatch_context,
+        # Codex /goal 绑定 active thread；回传监听必须来自当前 worker/tmux 对应
+        # session，不能用全局 latest rollout 兜底，否则会把 Codex App 输出串到 Telegram。
+        allow_session_discovery_fallback=False,
     )
 
 
