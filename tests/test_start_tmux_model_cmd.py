@@ -132,6 +132,16 @@ def test_start_tmux_dry_run_uses_codex_resume_when_session_id_provided(tmp_path:
     assert "-c features.goals=true" in combined
 
 
+def test_start_tmux_script_wires_codex_session_marker_to_binder() -> None:
+    """启动脚本应把 worker 会话 marker 同时写入 Codex 指令与 binder 参数。"""
+
+    script_text = SCRIPT.read_text(encoding="utf-8")
+
+    assert "SESSION_BINDER_TOKEN_FILE" in script_text
+    assert "prepare_codex_model_instructions_file" in script_text
+    assert "--required-marker" in script_text
+
+
 def test_copilot_model_script_defaults_to_yolo() -> None:
     """Copilot 模型脚本默认应使用 --yolo 启动。"""
 

@@ -13,37 +13,13 @@ LOG_WRITER="${LOG_WRITER:-$ROOT_DIR/scripts/log_writer.py}"
 PYTHON_EXEC="${PYTHON_EXEC:-python3}"
 MODEL_LOG_MAX_BYTES="${MODEL_LOG_MAX_BYTES:-20971520}"
 MODEL_LOG_RETENTION_SECONDS="${MODEL_LOG_RETENTION_SECONDS:-86400}"
-CODEX_MODEL_INSTRUCTIONS_FILE="${CODEX_MODEL_INSTRUCTIONS_FILE:-/Users/david/.codex/AGENTS.md}"
+CODEX_MODEL_INSTRUCTIONS_SOURCE_FILE="${CODEX_MODEL_INSTRUCTIONS_FILE:-/Users/david/.codex/AGENTS.md}"
+CODEX_MODEL_INSTRUCTIONS_FILE="$CODEX_MODEL_INSTRUCTIONS_SOURCE_FILE"
 CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED=""
 CODEX_PROJECT_DOC_MAX_BYTES="${CODEX_PROJECT_DOC_MAX_BYTES:-131072}"
 CODEX_GOALS_ENABLED="${CODEX_GOALS_ENABLED:-1}"
 MODEL_KEY="$(printf '%s' "${MODEL_NAME:-codex}" | tr '[:upper:]' '[:lower:]')"
-if [[ "$MODEL_KEY" == "codex" ]]; then
-  CODEX_BASE_CMD="${MODEL_CMD:-${CODEX_CMD:-codex --dangerously-bypass-approvals-and-sandbox -c trusted_workspace=true}}"
-  printf -v CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED '%q' "$CODEX_MODEL_INSTRUCTIONS_FILE"
-  MODEL_CMD="${CODEX_BASE_CMD} -c model_instructions_file=${CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED} -c project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}"
-  CODEX_GOALS_ENABLED_NORMALIZED="$(printf '%s' "$CODEX_GOALS_ENABLED" | tr '[:upper:]' '[:lower:]')"
-  case "$CODEX_GOALS_ENABLED_NORMALIZED" in
-    0|false|no|off)
-      ;;
-    *)
-      if [[ "$MODEL_CMD" != *"features.goals"* ]]; then
-        MODEL_CMD="${MODEL_CMD} -c features.goals=true"
-      fi
-      ;;
-  esac
-fi
 MODEL_RESUME_SESSION_ID="${MODEL_RESUME_SESSION_ID:-}"
-if [[ -n "$MODEL_RESUME_SESSION_ID" ]]; then
-  if [[ "$MODEL_KEY" != "codex" ]]; then
-    echo "[start-tmux] 当前仅 Codex 支持按 sessionId 恢复会话。" >&2
-    exit 1
-  fi
-  MODEL_RESUME_SESSION_ID_ESCAPED=""
-  printf -v MODEL_RESUME_SESSION_ID_ESCAPED '%q' "$MODEL_RESUME_SESSION_ID"
-  # 恢复历史主会话时必须启动 Codex resume，避免只改 pointer 造成“监听旧会话、终端仍在新会话”的假绑定。
-  MODEL_CMD="${MODEL_CMD} resume ${MODEL_RESUME_SESSION_ID_ESCAPED}"
-fi
 MODEL_WORKDIR="${MODEL_WORKDIR:-$ROOT_DIR}"
 MODEL_SESSION_ROOT="${MODEL_SESSION_ROOT:-${CODEX_SESSION_ROOT:-$HOME/.codex/sessions}}"
 MODEL_SESSION_GLOB="${MODEL_SESSION_GLOB:-rollout-*.jsonl}"
@@ -56,6 +32,8 @@ SESSION_BINDER_LOG="${SESSION_BINDER_LOG:-$(dirname "${SESSION_POINTER_FILE}")/s
 SESSION_BINDER_TIMEOUT="${SESSION_BINDER_TIMEOUT:-0}"
 # 用于管理后台 binder 生命周期，避免 stop/restart 后残留常驻进程。
 SESSION_BINDER_PID_FILE="${SESSION_BINDER_PID_FILE:-$(dirname "${SESSION_POINTER_FILE}")/session_binder.pid}"
+SESSION_BINDER_TOKEN_FILE="${SESSION_BINDER_TOKEN_FILE:-$(dirname "${SESSION_POINTER_FILE}")/session_binder_token.txt}"
+CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE="${CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE:-$(dirname "${SESSION_POINTER_FILE}")/codex_model_instructions.md}"
 SESSION_READY_FILE="${SESSION_READY_FILE:-}"
 SESSION_READY_TIMEOUT_SECONDS="${SESSION_READY_TIMEOUT_SECONDS:-6}"
 SESSION_READY_POLL_INTERVAL_SECONDS="${SESSION_READY_POLL_INTERVAL_SECONDS:-0.2}"
@@ -111,12 +89,17 @@ SESSION_POINTER_FILE=$(expand_path "$SESSION_POINTER_FILE")
 SESSION_ACTIVE_ID_FILE=$(expand_path "$SESSION_ACTIVE_ID_FILE")
 SESSION_BINDER_LOG=$(expand_path "$SESSION_BINDER_LOG")
 SESSION_BINDER_PID_FILE=$(expand_path "$SESSION_BINDER_PID_FILE")
+SESSION_BINDER_TOKEN_FILE=$(expand_path "$SESSION_BINDER_TOKEN_FILE")
+CODEX_MODEL_INSTRUCTIONS_SOURCE_FILE=$(expand_path "$CODEX_MODEL_INSTRUCTIONS_SOURCE_FILE")
+CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE=$(expand_path "$CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE")
 SESSION_READY_FILE=$(expand_path "$SESSION_READY_FILE")
 ensure_dir "$(dirname "$LOG_PATH")"
 ensure_dir "$(dirname "$SESSION_POINTER_FILE")"
 ensure_dir "$(dirname "$SESSION_ACTIVE_ID_FILE")"
 ensure_dir "$(dirname "$SESSION_BINDER_LOG")"
 ensure_dir "$(dirname "$SESSION_BINDER_PID_FILE")"
+ensure_dir "$(dirname "$SESSION_BINDER_TOKEN_FILE")"
+ensure_dir "$(dirname "$CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE")"
 if [[ -n "$SESSION_READY_FILE" ]]; then
   ensure_dir "$(dirname "$SESSION_READY_FILE")"
 fi
@@ -133,6 +116,84 @@ if [[ "${VIBEGO_AGENTS_SYNCED:-0}" != "1" ]]; then
   fi
   export VIBEGO_AGENTS_SYNCED=1
   export VIBEGO_AGENTS_TEMPLATE="$AGENTS_TEMPLATE_FILE"
+fi
+
+generate_session_bind_marker() {
+  "$PYTHON_EXEC" - <<'PY'
+import secrets
+
+print("vibego-session-bind-token:" + secrets.token_hex(16))
+PY
+}
+
+prepare_codex_model_instructions_file() {
+  local source_file="$1" target_file="$2" required_marker="$3"
+  if [[ -z "$required_marker" ]]; then
+    printf '%s' "$source_file"
+    return 0
+  fi
+  if [[ ! -f "$source_file" ]]; then
+    echo "[start-tmux] Codex 指令文件不存在: $source_file" >&2
+    return 1
+  fi
+  ensure_dir "$(dirname "$target_file")"
+  {
+    cat "$source_file"
+    printf '\n\n<!-- %s -->\n' "$required_marker"
+  } >"$target_file"
+  printf '%s' "$target_file"
+}
+
+SESSION_BINDER_REQUIRED_MARKER=""
+if [[ "$MODEL_KEY" == "codex" ]]; then
+  if [[ -n "$MODEL_RESUME_SESSION_ID" ]]; then
+    # resume 历史线程可能没有本次启动 marker；清空 token，避免 bot 误判历史会话。
+    if (( ! DRY_RUN )); then
+      : >"$SESSION_BINDER_TOKEN_FILE"
+    fi
+  else
+    if (( DRY_RUN )); then
+      SESSION_BINDER_REQUIRED_MARKER="vibego-session-bind-token:dry-run"
+    else
+      SESSION_BINDER_REQUIRED_MARKER="$(generate_session_bind_marker)"
+      printf '%s\n' "$SESSION_BINDER_REQUIRED_MARKER" >"$SESSION_BINDER_TOKEN_FILE"
+    fi
+    CODEX_MODEL_INSTRUCTIONS_FILE="$(
+      prepare_codex_model_instructions_file \
+        "$CODEX_MODEL_INSTRUCTIONS_SOURCE_FILE" \
+        "$CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE" \
+        "$SESSION_BINDER_REQUIRED_MARKER"
+    )"
+  fi
+else
+  if (( ! DRY_RUN )); then
+    : >"$SESSION_BINDER_TOKEN_FILE"
+  fi
+fi
+
+if [[ "$MODEL_KEY" == "codex" ]]; then
+  CODEX_BASE_CMD="${MODEL_CMD:-${CODEX_CMD:-codex --dangerously-bypass-approvals-and-sandbox -c trusted_workspace=true}}"
+  printf -v CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED '%q' "$CODEX_MODEL_INSTRUCTIONS_FILE"
+  MODEL_CMD="${CODEX_BASE_CMD} -c model_instructions_file=${CODEX_MODEL_INSTRUCTIONS_FILE_ESCAPED} -c project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}"
+  CODEX_GOALS_ENABLED_NORMALIZED="$(printf '%s' "$CODEX_GOALS_ENABLED" | tr '[:upper:]' '[:lower:]')"
+  case "$CODEX_GOALS_ENABLED_NORMALIZED" in
+    0|false|no|off)
+      ;;
+    *)
+      if [[ "$MODEL_CMD" != *"features.goals"* ]]; then
+        MODEL_CMD="${MODEL_CMD} -c features.goals=true"
+      fi
+      ;;
+  esac
+  if [[ -n "$MODEL_RESUME_SESSION_ID" ]]; then
+    MODEL_RESUME_SESSION_ID_ESCAPED=""
+    printf -v MODEL_RESUME_SESSION_ID_ESCAPED '%q' "$MODEL_RESUME_SESSION_ID"
+    # 恢复历史主会话时必须启动 Codex resume，避免只改 pointer 造成“监听旧会话、终端仍在新会话”的假绑定。
+    MODEL_CMD="${MODEL_CMD} resume ${MODEL_RESUME_SESSION_ID_ESCAPED}"
+  fi
+elif [[ -n "$MODEL_RESUME_SESSION_ID" ]]; then
+  echo "[start-tmux] 当前仅 Codex 支持按 sessionId 恢复会话。" >&2
+  exit 1
 fi
 
 run_tmux() {
@@ -320,6 +381,9 @@ PY
   BINDER_CMD+=(--session-root "$(dirname "$SESSION_POINTER_FILE")/sessions")
   if [[ -n "$MODEL_WORKDIR" ]]; then
     BINDER_CMD+=(--cwd "$MODEL_WORKDIR")
+  fi
+  if [[ -s "$SESSION_BINDER_TOKEN_FILE" ]]; then
+    BINDER_CMD+=(--required-marker "$(cat "$SESSION_BINDER_TOKEN_FILE")")
   fi
   if [[ -n "$SESSION_ACTIVE_ID_FILE" ]]; then
     BINDER_CMD+=(--session-id-file "$SESSION_ACTIVE_ID_FILE")

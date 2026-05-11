@@ -6601,6 +6601,87 @@ def test_goal_dispatch_does_not_fallback_to_global_latest_session(monkeypatch, t
     assert bot.CHAT_SESSION_MAP.get(message.chat.id) is None
 
 
+def test_goal_dispatch_rejects_pointer_without_worker_marker(monkeypatch, tmp_path: Path):
+    """主会话 /goal 应拒绝缺少 worker marker 的 pointer，避免串到 Codex App 会话。"""
+
+    pointer = tmp_path / "current_session.txt"
+    marker_file = tmp_path / "session_binder_token.txt"
+    marker = "vibego-session-bind-token:test-worker"
+    marker_file.write_text(marker, encoding="utf-8")
+    codex_app_session = tmp_path / "codex-app-rollout.jsonl"
+    codex_app_session.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-05-11T00:00:00.000Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": "codex-app",
+                    "cwd": str(tmp_path),
+                    "source": "cli",
+                    "base_instructions": {"text": "base instructions without worker marker"},
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    pointer.write_text(str(codex_app_session), encoding="utf-8")
+
+    message = DummyMessage()
+    message.text = "/goal Ship it"
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "SESSION_BINDER_TOKEN_FILE", str(marker_file))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-primary")
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent_lines: list[tuple[str, str]] = []
+
+    def fake_tmux_send_line(session: str, line: str) -> None:
+        sent_lines.append((session, line))
+
+    notices: list[str] = []
+
+    async def fake_reply_to_chat(
+        _chat_id: int,
+        text: str,
+        *,
+        reply_to=None,
+        disable_notification: bool = False,
+        parse_mode=None,
+        reply_markup=None,
+    ):
+        notices.append(text)
+        return None
+
+    async def fake_send_session_ack(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply_to_chat)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_session_ack)
+
+    ok, session_path = asyncio.run(bot._dispatch_goal_command(message, "Ship it"))
+
+    assert ok is False
+    assert session_path is None
+    assert sent_lines == [("vibe-primary", "/goal Ship it")]
+    assert notices and "未检测到" in notices[-1]
+    assert bot.CHAT_SESSION_MAP.get(message.chat.id) is None
+    assert str(codex_app_session) not in bot.SESSION_OFFSETS
+
+
 def test_goal_command_fails_closed_for_non_codex(monkeypatch):
     """非 Codex 模型下 /goal 必须 fail-closed，不调用 tmux 分发。"""
 

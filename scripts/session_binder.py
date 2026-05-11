@@ -69,6 +69,11 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="可选的日志文件路径，仅用于调试信息",
     )
+    parser.add_argument(
+        "--required-marker",
+        default="",
+        help="候选会话首行 base_instructions 中必须包含的 worker 同源标识，留空则不校验",
+    )
     return parser.parse_args()
 
 
@@ -143,6 +148,43 @@ def _read_session_cwd(path: Path) -> Optional[str]:
             if isinstance(cwd, str) and cwd:
                 return cwd
     return None
+
+
+def _read_first_jsonl_object(path: Path) -> Optional[dict]:
+    """读取 JSONL 首行对象；会话元数据过滤统一复用该入口。"""
+
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline()
+    except OSError:
+        return None
+    if not first_line:
+        return None
+    try:
+        data = json.loads(first_line)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _codex_session_contains_marker(path: Path, required_marker: str) -> bool:
+    """校验 Codex JSONL 会话是否带有当前 worker 注入的同源标识。"""
+
+    marker = (required_marker or "").strip()
+    if not marker:
+        return True
+    data = _read_first_jsonl_object(path)
+    if not data:
+        return False
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    instructions = payload.get("base_instructions")
+    if isinstance(instructions, dict):
+        text = instructions.get("text")
+        if isinstance(text, str) and marker in text:
+            return True
+    return False
 
 
 def _sha256_hex(text: str) -> str:
@@ -225,6 +267,7 @@ def _select_latest_session(
     pattern: str,
     target_cwd: str,
     boot_ts_ms: float,
+    required_marker: str = "",
 ) -> Optional[Path]:
     """从候选目录中挑选满足 CWD + 启动时间过滤的最新文件。"""
 
@@ -254,6 +297,8 @@ def _select_latest_session(
                 cwd = _read_session_cwd(candidate)
                 if cwd != target_cwd:
                     continue
+            if required_marker and not _codex_session_contains_marker(candidate, required_marker):
+                continue
         if mtime > latest_mtime:
             latest_mtime = mtime
             latest_path = candidate
@@ -295,8 +340,15 @@ def main() -> int:
     session_id_path = Path(args.session_id_file).expanduser() if args.session_id_file else None
     target_cwd = args.cwd.strip()
     strict_boot_ts = float(args.boot_ts_ms or 0.0)
+    required_marker = (args.required_marker or "").strip()
 
-    _append_log(args.log, f"[binder] start, pointer={pointer}, roots={roots}, cwd={target_cwd!r}, boot_ts={strict_boot_ts}")
+    _append_log(
+        args.log,
+        (
+            f"[binder] start, pointer={pointer}, roots={roots}, cwd={target_cwd!r}, "
+            f"boot_ts={strict_boot_ts}, required_marker={'yes' if required_marker else 'no'}"
+        ),
+    )
 
     # 若启动前已存在有效指针，直接退出
     try:
@@ -316,7 +368,7 @@ def main() -> int:
     timeout = max(args.timeout, 0.0)
 
     while True:
-        candidate = _select_latest_session(roots, args.glob, target_cwd, strict_boot_ts)
+        candidate = _select_latest_session(roots, args.glob, target_cwd, strict_boot_ts, required_marker)
         if candidate is not None:
             _write_text(pointer, str(candidate))
             if session_id_path is not None:

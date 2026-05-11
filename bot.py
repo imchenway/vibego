@@ -344,6 +344,7 @@ CODEX_WORKDIR = os.environ.get("CODEX_WORKDIR", "").strip()
 CODEX_SESSION_FILE_PATH = os.environ.get("CODEX_SESSION_FILE_PATH", "").strip()
 CODEX_CONFIG_PATH = Path(os.environ.get("CODEX_CONFIG_PATH", str(Path.home() / ".codex" / "config.toml"))).expanduser()
 SESSION_ACTIVE_ID_FILE = os.environ.get("SESSION_ACTIVE_ID_FILE", "").strip()
+SESSION_BINDER_TOKEN_FILE = os.environ.get("SESSION_BINDER_TOKEN_FILE", "").strip()
 CODEX_SESSIONS_ROOT = os.environ.get("CODEX_SESSIONS_ROOT", "").strip()
 MODEL_SESSION_ROOT = os.environ.get("MODEL_SESSION_ROOT", "").strip()
 MODEL_SESSION_GLOB = os.environ.get("MODEL_SESSION_GLOB", "rollout-*.jsonl").strip() or "rollout-*.jsonl"
@@ -2780,7 +2781,42 @@ async def _dispatch_prompt_to_model(
         pointer_path = resolve_path(pointer_override)
     elif CODEX_SESSION_FILE_PATH:
         pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
+    required_session_marker = (
+        _read_required_session_marker(pointer_path)
+        if _is_codex_model() and not allow_session_discovery_fallback
+        else ""
+    )
+
+    def _session_matches_required_marker(candidate: Path) -> bool:
+        return _codex_session_contains_required_marker(candidate, required_session_marker)
+
+    if session_path is not None and required_session_marker and not _session_matches_required_marker(session_path):
+        worker_log.warning(
+            "[session-map] chat=%s reject cached session without worker marker: %s",
+            chat_id,
+            session_path,
+            extra=_session_extra(path=session_path),
+        )
+        if is_parallel_dispatch and parallel_task_id:
+            PARALLEL_TASK_SESSION_MAP.pop(parallel_task_id, None)
+            PARALLEL_SESSION_CONTEXTS.pop(str(session_path), None)
+        else:
+            CHAT_SESSION_MAP.pop(chat_id, None)
+            SESSION_PENDING_TASK_BINDINGS.pop(str(session_path), None)
+        _reset_delivered_hashes(chat_id, str(session_path))
+        _reset_delivered_offsets(chat_id, str(session_path))
+        SESSION_OFFSETS.pop(str(session_path), None)
+        session_path = None
+
     pointer_target = _read_pointer_path(pointer_path) if pointer_path is not None else None
+    if pointer_target is not None and required_session_marker and not _session_matches_required_marker(pointer_target):
+        worker_log.warning(
+            "[session-map] chat=%s reject pointer session without worker marker: %s",
+            chat_id,
+            pointer_target,
+            extra=_session_extra(path=pointer_target),
+        )
+        pointer_target = None
     pointer_switched = False
 
     if pointer_target is not None:
@@ -2930,6 +2966,7 @@ async def _dispatch_prompt_to_model(
             strict=SESSION_BIND_STRICT,
             max_wait=SESSION_BIND_TIMEOUT_SECONDS,
             allow_session_discovery_fallback=allow_session_discovery_fallback,
+            session_validator=_session_matches_required_marker if required_session_marker else None,
         )
         if (
             session_path is None
@@ -14687,6 +14724,58 @@ def _read_session_meta_cwd(path: Path) -> Optional[str]:
     return _extract_session_cwd_from_event(data)
 
 
+def _session_marker_file_for_pointer(pointer: Optional[Path]) -> Optional[Path]:
+    """定位当前 pointer 对应的 worker 同源 marker 文件。"""
+
+    if SESSION_BINDER_TOKEN_FILE:
+        return resolve_path(SESSION_BINDER_TOKEN_FILE)
+    if pointer is not None:
+        return pointer.parent / "session_binder_token.txt"
+    return None
+
+
+def _read_required_session_marker(pointer: Optional[Path]) -> str:
+    """读取 worker 启动时写入的 Codex 会话同源 marker。"""
+
+    marker_file = _session_marker_file_for_pointer(pointer)
+    if marker_file is None:
+        return ""
+    try:
+        marker = marker_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return marker
+
+
+def _codex_session_contains_required_marker(path: Path, marker: str) -> bool:
+    """判断 Codex JSONL 会话是否包含当前 worker 的同源 marker。"""
+
+    required_marker = (marker or "").strip()
+    if not required_marker:
+        return True
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline()
+    except OSError:
+        return False
+    if not first_line:
+        return False
+    try:
+        data = json.loads(first_line)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    instructions = payload.get("base_instructions")
+    if not isinstance(instructions, dict):
+        return False
+    text = instructions.get("text")
+    return isinstance(text, str) and required_marker in text
+
+
 def _read_codex_session_meta_id(path: Path) -> Optional[str]:
     """读取 Codex JSONL 首行中的原生 session id。"""
 
@@ -15131,21 +15220,29 @@ async def _await_session_path(
     strict: bool = False,
     max_wait: float = 0.0,
     allow_session_discovery_fallback: bool = True,
+    session_validator: Optional[Callable[[Path], bool]] = None,
 ) -> Optional[Path]:
     """等待 pointer 写入新会话；允许兜底时 strict=False 会回退到旧 session。"""
+
+    def _accepted(candidate: Optional[Path]) -> Optional[Path]:
+        if candidate is None:
+            return None
+        if session_validator is not None and not session_validator(candidate):
+            return None
+        return candidate
 
     if pointer is None:
         await asyncio.sleep(poll)
         return None
 
-    candidate = _read_pointer_path(pointer)
+    candidate = _accepted(_read_pointer_path(pointer))
     if candidate is not None:
         return candidate
 
     poll_interval = max(poll, 0.1)
     if not strict:
         await asyncio.sleep(poll_interval)
-        candidate = _read_pointer_path(pointer)
+        candidate = _accepted(_read_pointer_path(pointer))
         if candidate is not None:
             return candidate
         if not allow_session_discovery_fallback:
@@ -15153,8 +15250,8 @@ async def _await_session_path(
             # 禁止在 pointer 缺失时扫描全局 Codex sessions，否则可能串到 Codex App 会话。
             return None
         if _is_gemini_model():
-            return _find_latest_gemini_session(pointer, target_cwd)
-        return _find_latest_rollout_for_cwd(pointer, target_cwd)
+            return _accepted(_find_latest_gemini_session(pointer, target_cwd))
+        return _accepted(_find_latest_rollout_for_cwd(pointer, target_cwd))
 
     deadline: Optional[float] = None
     if max_wait and max_wait > 0:
@@ -15162,7 +15259,7 @@ async def _await_session_path(
 
     while True:
         await asyncio.sleep(poll_interval)
-        candidate = _read_pointer_path(pointer)
+        candidate = _accepted(_read_pointer_path(pointer))
         if candidate is not None:
             return candidate
         if deadline is not None and time.monotonic() >= deadline:
