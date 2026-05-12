@@ -1332,6 +1332,52 @@ def _prepend_completion_header(text: str) -> str:
     return MODEL_COMPLETION_PREFIX
 
 
+def _strip_internal_oai_memory_citation_block(text: str) -> str:
+    """移除平台内部记忆引用块，避免把 Codex 元数据泄露到 Telegram。
+
+    只删除独占行形式的完整 `<oai-mem-citation>...</oai-mem-citation>` 块：
+    - 完整块来自 Codex 记忆系统的引用追踪，属于面向平台的元数据；
+    - 不完整块或普通 XML-like 正文保持原样，避免误删用户真实内容。
+    """
+
+    if not text or "<oai-mem-citation>" not in text:
+        return text
+
+    lines = normalize_newlines(text).splitlines(keepends=True)
+    cleaned_lines: list[str] = []
+    changed = False
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() != "<oai-mem-citation>":
+            cleaned_lines.append(line)
+            index += 1
+            continue
+
+        close_index = index + 1
+        while close_index < len(lines) and lines[close_index].strip() != "</oai-mem-citation>":
+            close_index += 1
+
+        if close_index >= len(lines):
+            # 不完整块可能是用户正文或模型截断内容，fail-open 保留原文。
+            cleaned_lines.append(line)
+            index += 1
+            continue
+
+        changed = True
+        # 跳过完整内部引用块，包含结束标签所在行。
+        index = close_index + 1
+
+    if not changed:
+        return text
+
+    cleaned = "".join(cleaned_lines)
+    # 删除块后收口空行，避免在 Telegram 末尾留下大段空白。
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.rstrip("\n")
+
+
 _TELEGRAM_FENCE_LINE_RE = re.compile(r"^\s*```")
 
 
@@ -13688,6 +13734,22 @@ async def _deliver_pending_messages(
             SESSION_OFFSETS[session_key] = event_offset
             continue
         if deliverable.kind != DELIVERABLE_KIND_MESSAGE:
+            delivered_offsets.add(event_offset)
+            last_committed_offset = event_offset
+            SESSION_OFFSETS[session_key] = event_offset
+            continue
+        # Codex memory citation 是平台内部追踪元数据，只在 Telegram 展示层剥离，
+        # 保留 JSONL 原始会话文件以便本地审计与问题回溯。
+        text_to_send = _strip_internal_oai_memory_citation_block(text_to_send)
+        if not text_to_send:
+            worker_log.info(
+                "模型输出仅包含内部引用元数据，已跳过 Telegram 投递",
+                extra={
+                    **_session_extra(path=session_path),
+                    "chat": chat_id,
+                    "offset": str(event_offset),
+                },
+            )
             delivered_offsets.add(event_offset)
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset

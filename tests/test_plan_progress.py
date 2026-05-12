@@ -181,6 +181,81 @@ def _codex_response_item_final_event(message: str) -> dict:
     }
 
 
+def _memory_citation_block() -> str:
+    return "\n".join(
+        [
+            "<oai-mem-citation>",
+            "<citation_entries>",
+            "MEMORY.md:55-56|note=[used workflow gate]",
+            "</citation_entries>",
+            "<rollout_ids>",
+            "019e1468-a3c0-7f72-890b-18c0197b706c",
+            "</rollout_ids>",
+            "</oai-mem-citation>",
+        ]
+    )
+
+
+def test_strip_internal_oai_memory_citation_block_removes_complete_block():
+    text = f"结论 A\n\n{_memory_citation_block()}\n\n结论 B\n"
+
+    cleaned = bot._strip_internal_oai_memory_citation_block(text)
+
+    assert cleaned == "结论 A\n\n结论 B"
+    assert "<oai-mem-citation>" not in cleaned
+    assert "MEMORY.md" not in cleaned
+
+
+def test_strip_internal_oai_memory_citation_block_keeps_incomplete_block():
+    text = "业务正文\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2"
+
+    cleaned = bot._strip_internal_oai_memory_citation_block(text)
+
+    assert cleaned == text
+
+
+def test_strip_internal_oai_memory_citation_block_keeps_regular_xml_like_text():
+    text = "请保留 <section>业务 XML 示例</section>，这不是内部引用块。"
+
+    cleaned = bot._strip_internal_oai_memory_citation_block(text)
+
+    assert cleaned == text
+
+
+def test_deliver_pending_messages_strips_memory_citation_block(plan_test_env):
+    env = plan_test_env
+    chat_id = 1507
+    final_text = f"任务完成\n\n{_memory_citation_block()}"
+    env["append_events"]([_codex_response_item_final_event(final_text)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert len(env["replies"]) == 1
+    delivered_text = env["replies"][0][1]
+    assert delivered_text.endswith("任务完成")
+    assert "<oai-mem-citation>" not in delivered_text
+    assert "MEMORY.md" not in delivered_text
+
+
+def test_deliver_pending_messages_skips_empty_after_memory_citation_strip(plan_test_env):
+    env = plan_test_env
+    chat_id = 1508
+    env["append_events"]([_codex_response_item_final_event(_memory_citation_block())])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is False
+    assert env["replies"] == []
+    assert bot.SESSION_OFFSETS[str(env["session"])] > 0
+
+
 def test_plan_incomplete_keeps_watcher(plan_test_env):
     env = plan_test_env
     chat_id = 101
