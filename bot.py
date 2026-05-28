@@ -406,6 +406,12 @@ TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
 ENABLE_TEXT_PASTE_AGGREGATION = _env_bool("ENABLE_TEXT_PASTE_AGGREGATION", True)
 TEXT_PASTE_NEAR_LIMIT_THRESHOLD = max(_env_int("TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 3500), 0)
 TEXT_PASTE_AGGREGATION_DELAY = max(_env_float("TEXT_PASTE_AGGREGATION_DELAY", 0.8), 0.1)
+# 接近 Telegram 单条上限的分片通常来自一次大段粘贴，客户端/网络可能让后续分片慢到达；
+# 单独给这类分片更长窗口，避免首段过早进入 tmux，后续分片被拆成多次请求。
+TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY = max(
+    _env_float("TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY", 8.0),
+    TEXT_PASTE_AGGREGATION_DELAY,
+)
 # “短前缀 + 长日志”合并：短前缀（通常很短且以冒号结尾）先进入等待窗口，若窗口内出现长日志分片则合并为一次推送。
 TEXT_PASTE_PREFIX_MAX_CHARS = max(_env_int("TEXT_PASTE_PREFIX_MAX_CHARS", 120), 0)
 TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS = max(_env_int("TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200), 0)
@@ -3510,6 +3516,8 @@ class PendingTextPasteState:
     prefix_text: Optional[str] = None
     # 记录每一段分片，按 message_id 排序后拼接，降低乱序到达导致的“看似缺失/顺序错乱”风险。
     parts: list[tuple[int, str]] = field(default_factory=list)
+    # 是否已经看到接近 Telegram 单条上限的分片；命中后使用更长等待窗口收集后续分片。
+    long_chunk_seen: bool = False
     finalize_task: Optional[asyncio.Task] = None
 
 
@@ -4217,11 +4225,19 @@ async def _feed_synthetic_text_update(origin_message: Message, *, text: str) -> 
     await dp.feed_update(bot, update)
 
 
-async def _finalize_text_paste_after_delay(chat_id: int) -> None:
+def _text_paste_finalize_delay_seconds(state: PendingTextPasteState) -> float:
+    """根据聚合类型选择等待窗口：长分片用长窗口，短前缀仍用短窗口。"""
+
+    if state.long_chunk_seen:
+        return max(float(TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY), 0.0)
+    return max(float(TEXT_PASTE_AGGREGATION_DELAY), 0.0)
+
+
+async def _finalize_text_paste_after_delay(chat_id: int, *, delay_seconds: Optional[float] = None) -> None:
     """在短暂延迟后合并“长文本粘贴”并注入合成消息。"""
 
     try:
-        await asyncio.sleep(TEXT_PASTE_AGGREGATION_DELAY)
+        await asyncio.sleep(max(float(delay_seconds if delay_seconds is not None else TEXT_PASTE_AGGREGATION_DELAY), 0.0))
     except asyncio.CancelledError:
         return
 
@@ -4328,6 +4344,7 @@ async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) ->
             stripped = (text_part or "").strip()
             if len(text_part) >= TEXT_PASTE_NEAR_LIMIT_THRESHOLD:
                 state.parts.append((message_id, text_part))
+                state.long_chunk_seen = True
                 TEXT_PASTE_STATE[chat_id] = state
             elif _is_text_paste_prefix_candidate(stripped):
                 # 短前缀先缓存，等待窗口内出现的长日志分片；窗口结束仍未出现则回退为普通推送。
@@ -4357,6 +4374,8 @@ async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) ->
 
             if state is not None:
                 state.parts.append((message_id, text_part))
+                if len(text_part) >= TEXT_PASTE_NEAR_LIMIT_THRESHOLD:
+                    state.long_chunk_seen = True
 
         if state is not None:
             # 使用最早的一条消息作为回复对象，避免引用后续分片导致上下文不连贯。
@@ -4365,7 +4384,12 @@ async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) ->
 
             if state.finalize_task and not state.finalize_task.done():
                 state.finalize_task.cancel()
-            state.finalize_task = asyncio.create_task(_finalize_text_paste_after_delay(chat_id))
+            state.finalize_task = asyncio.create_task(
+                _finalize_text_paste_after_delay(
+                    chat_id,
+                    delay_seconds=_text_paste_finalize_delay_seconds(state),
+                )
+            )
 
     if prefix_to_flush and prefix_message is not None:
         await _feed_synthetic_text_update(prefix_message, text=prefix_to_flush)

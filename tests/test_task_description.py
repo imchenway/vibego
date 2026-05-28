@@ -6772,6 +6772,7 @@ def test_text_paste_aggregation_injects_single_combined_message(monkeypatch):
     monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
     monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
     monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY", 0.01, raising=False)
 
     recorded: list[str] = []
 
@@ -6800,6 +6801,43 @@ def test_text_paste_aggregation_injects_single_combined_message(monkeypatch):
     assert recorded == ["A" * 10 + "B" + "C"]
 
 
+def test_text_paste_near_limit_chunks_wait_longer_than_prefix_window(monkeypatch):
+    """接近 Telegram 上限的分片可能慢到达：应使用长窗口等待后续分片再一次性注入。"""
+
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY", 0.08, raising=False)
+
+    recorded: list[str] = []
+
+    async def fake_feed(_message: DummyMessage, *, text: str) -> None:
+        recorded.append(text)
+
+    monkeypatch.setattr(bot, "_feed_synthetic_text_update", fake_feed)
+
+    message1 = DummyMessage()
+    message1.text = "A" * 10
+    message2 = DummyMessage()
+    message2.message_id = message1.message_id + 1
+    message2.text = "B"
+
+    async def _scenario() -> None:
+        assert await bot._maybe_enqueue_text_paste_message(message1, message1.text) is True
+        # 等待时间超过普通短前缀窗口；旧实现会在这里提前注入第一段。
+        await asyncio.sleep(0.03)
+        assert recorded == []
+        assert await bot._maybe_enqueue_text_paste_message(message2, message2.text) is True
+        await asyncio.sleep(0.03)
+        assert recorded == []
+        await asyncio.sleep(0.08)
+
+    asyncio.run(_scenario())
+
+    assert recorded == ["A" * 10 + "B"]
+
+
 def test_text_paste_aggregation_merges_prefix_and_log_parts(monkeypatch):
     """短前缀 + 长日志：应合并为一次合成消息，且保留前缀 + 换行 + 日志内容。"""
 
@@ -6807,6 +6845,7 @@ def test_text_paste_aggregation_merges_prefix_and_log_parts(monkeypatch):
     monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
     monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 10)
     monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY", 0.01, raising=False)
     monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_MAX_CHARS", 50)
     monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200)
 
@@ -6908,6 +6947,7 @@ def test_text_paste_prefix_captures_short_log_fragment_before_near_limit_chunk(m
     monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 20)
     # 留出足够的时间窗口，避免“短前缀 finalize”在后续分片到达前提前触发。
     monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.2)
+    monkeypatch.setattr(bot, "TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY", 0.2, raising=False)
     monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_MAX_CHARS", 50)
     monkeypatch.setattr(bot, "TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200)
 
