@@ -459,8 +459,15 @@ ENABLE_REQUEST_USER_INPUT_UI = _env_bool("ENABLE_REQUEST_USER_INPUT_UI", True)
 # Plan 结束确认：透传为 Telegram 按钮（最小改造）
 PLAN_CONFIRM_CALLBACK_PREFIX = "pcf:"
 PLAN_CONFIRM_ACTION_YES = "yes"
+PLAN_CONFIRM_ACTION_FRESH = "fresh"
 PLAN_CONFIRM_ACTION_NO = "no"
 PLAN_IMPLEMENT_PROMPT = "Implement the plan."
+# Codex 原生 fresh context 菜单会把上一轮计划作为新线程输入；Telegram 侧必须显式携带计划正文。
+PLAN_IMPLEMENT_FRESH_CONTEXT_PROMPT_PREFIX = (
+    "A previous agent produced the plan below to accomplish the user's task. "
+    "Implement the plan in a fresh context. Treat the plan as the source of user intent, "
+    "re-read files as needed, and carry the work through implementation and verification."
+)
 # 兼容历史提示词：保留旧常量，避免外部引用报错。
 PLAN_IMPLEMENT_EXEC_PROMPT = "develop\nImplement the plan."
 PLAN_RECOVERY_DEVELOP_PROMPT = "进入开发阶段\ndevelop"
@@ -648,6 +655,8 @@ class PlanConfirmSession:
     session_key: str
     user_id: Optional[int]
     created_at: float
+    # 保存模型刚刚输出的计划正文，fresh context 需要把它作为新线程唯一可信输入。
+    plan_text: Optional[str] = None
     parallel_task_id: Optional[str] = None
     parallel_dispatch_context: Optional["ParallelDispatchContext"] = None
 
@@ -13537,6 +13546,15 @@ def _contains_proposed_plan_block(text: str) -> bool:
     return "<proposed_plan>" in payload and "</proposed_plan>" in payload
 
 
+def _build_plan_fresh_context_prompt(plan_text: Optional[str]) -> Optional[str]:
+    """构造 Codex fresh context 的完整提示词；缺正文时返回 None 触发 fail-closed。"""
+
+    cleaned_plan_text = (plan_text or "").strip()
+    if not cleaned_plan_text:
+        return None
+    return f"{PLAN_IMPLEMENT_FRESH_CONTEXT_PROMPT_PREFIX}\n\n{cleaned_plan_text}"
+
+
 def _build_plan_confirm_keyboard(token: str) -> InlineKeyboardMarkup:
     """构造 Plan 结束确认按钮。"""
 
@@ -13547,20 +13565,40 @@ def _build_plan_confirm_keyboard(token: str) -> InlineKeyboardMarkup:
                 callback_data=_build_plan_confirm_callback_data(token, PLAN_CONFIRM_ACTION_YES),
             )
         ],
+    ]
+    if _is_codex_model():
+        # 仅 Codex 已确认有 native fresh context 语义；其他模型保持原先两项，避免伪造能力。
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🧹 Yes, clear context and implement",
+                    callback_data=_build_plan_confirm_callback_data(token, PLAN_CONFIRM_ACTION_FRESH),
+                )
+            ]
+        )
+    rows.append(
         [
             InlineKeyboardButton(
                 text="📝 No, stay in Plan mode",
                 callback_data=_build_plan_confirm_callback_data(token, PLAN_CONFIRM_ACTION_NO),
             )
-        ],
-    ]
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _maybe_send_plan_confirm_prompt(chat_id: int, session_key: str) -> bool:
+async def _maybe_send_plan_confirm_prompt(chat_id: int, session_key: str, *, plan_text: Optional[str] = None) -> bool:
     """在计划收口后向 Telegram 下发“是否进入开发”确认按钮。"""
 
-    if _find_plan_confirm_tokens(chat_id, session_key=session_key):
+    existing_tokens = _find_plan_confirm_tokens(chat_id, session_key=session_key)
+    if existing_tokens:
+        # 同会话重复投递时保留旧按钮，但补写计划正文，保证 fresh context 不丢上下文。
+        cleaned_plan_text = (plan_text or "").strip()
+        if cleaned_plan_text:
+            for existing_token in existing_tokens:
+                existing_session = PLAN_CONFIRM_SESSIONS.get(existing_token)
+                if existing_session is not None and not (getattr(existing_session, "plan_text", "") or "").strip():
+                    existing_session.plan_text = cleaned_plan_text
         # 同会话已存在确认，不重复发送；但保留同 chat 的其他并存确认。
         return False
 
@@ -13573,17 +13611,26 @@ async def _maybe_send_plan_confirm_prompt(chat_id: int, session_key: str) -> boo
         session_key=session_key,
         user_id=int(owner_user_id) if isinstance(owner_user_id, int) else None,
         created_at=time.monotonic(),
+        plan_text=(plan_text or "").strip() or None,
         parallel_task_id=_normalize_task_id(parallel_task_id),
         parallel_dispatch_context=parallel_dispatch_context,
     )
 
     bot = current_bot()
     markup = _build_plan_confirm_keyboard(token)
-    text = (
-        "Implement this plan?\n"
-        "1. Yes, implement this plan\n"
-        "2. No, stay in Plan mode"
-    )
+    if _is_codex_model():
+        text = (
+            "Implement this plan?\n"
+            "1. Yes, implement this plan — Switch to Default and start coding.\n"
+            "2. Yes, clear context and implement — Fresh thread with this plan.\n"
+            "3. No, stay in Plan mode — Continue planning with the model."
+        )
+    else:
+        text = (
+            "Implement this plan?\n"
+            "1. Yes, implement this plan\n"
+            "2. No, stay in Plan mode"
+        )
     sent_message: Optional[Message] = None
 
     async def _send() -> None:
@@ -13869,7 +13916,7 @@ async def _deliver_pending_messages(
                     content=delivered_payload or formatted_text,
                 )
             if should_prompt_plan_confirm:
-                await _maybe_send_plan_confirm_prompt(chat_id, session_key)
+                await _maybe_send_plan_confirm_prompt(chat_id, session_key, plan_text=text_to_send)
             await _post_delivery_compact_checks(chat_id, session_key)
             if not ENABLE_PLAN_PROGRESS:
                 CHAT_PLAN_TEXT.pop(chat_id, None)
@@ -14977,6 +15024,90 @@ def _session_end_offset(session_path: Path) -> int:
         return session_path.stat().st_size
     except FileNotFoundError:
         return 0
+
+
+async def _reset_main_session_binding_for_fresh_context(chat_id: int) -> None:
+    """清理主会话旧绑定，确保 fresh context 后续不会复用旧 Codex JSONL。"""
+
+    previous_session_key = CHAT_SESSION_MAP.pop(chat_id, None)
+    prev_watcher = CHAT_WATCHERS.pop(chat_id, None)
+    if prev_watcher is not None and not prev_watcher.done():
+        prev_watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await prev_watcher
+
+    await _interrupt_long_poll(chat_id)
+    if previous_session_key:
+        SESSION_PENDING_TASK_BINDINGS.pop(previous_session_key, None)
+        SESSION_OFFSETS.pop(previous_session_key, None)
+        _reset_delivered_hashes(chat_id, previous_session_key)
+        _reset_delivered_offsets(chat_id, previous_session_key)
+    else:
+        _reset_delivered_hashes(chat_id)
+        _reset_delivered_offsets(chat_id)
+    _clear_last_message(chat_id)
+    _reset_compact_tracking(chat_id)
+    CHAT_FAILURE_NOTICES.pop(chat_id, None)
+
+
+async def _restart_main_tmux_fresh_session() -> tuple[bool, str]:
+    """重启主 tmux 并启动一个不带 resume 参数的全新 Codex 会话。"""
+
+    script = ROOT_DIR_PATH / "scripts" / "start_tmux_codex.sh"
+    env = os.environ.copy()
+    env.pop("MODEL_RESUME_SESSION_ID", None)
+    env.update(
+        {
+            "MODEL_NAME": env.get("MODEL_NAME") or ACTIVE_MODEL or "codex",
+            "TMUX_SESSION": TMUX_SESSION,
+            "VIBEGO_AGENTS_SYNCED": env.get("VIBEGO_AGENTS_SYNCED", "1"),
+        }
+    )
+    if CODEX_SESSION_FILE_PATH:
+        env["SESSION_POINTER_FILE"] = CODEX_SESSION_FILE_PATH
+    target_cwd = (env.get("MODEL_WORKDIR") or CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
+    if target_cwd:
+        env["MODEL_WORKDIR"] = target_cwd
+    process = await asyncio.create_subprocess_exec(
+        str(script),
+        "--kill",
+        cwd=str(ROOT_DIR_PATH),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await process.communicate()
+    output = (stdout_bytes or b"").decode("utf-8", errors="ignore") + (stderr_bytes or b"").decode("utf-8", errors="ignore")
+    return process.returncode == 0, output.strip()
+
+
+async def _restart_parallel_tmux_fresh_session(
+    task: TaskRecord,
+    old_context: ParallelDispatchContext,
+) -> tuple[Optional[ParallelDispatchContext], Optional[str]]:
+    """重启指定并行任务的 tmux，并返回新 pointer 对应的 fresh 派发上下文。"""
+
+    task_id = _normalize_task_id(getattr(task, "id", None) or getattr(task, "task_id", None))
+    if not task_id:
+        return None, "并行任务缺少有效 task_id。"
+
+    old_session_key = PARALLEL_TASK_SESSION_MAP.get(task_id)
+    try:
+        tmux_session, pointer_file = await _start_parallel_tmux_session(task, Path(old_context.workspace_root))
+    except Exception as exc:  # noqa: BLE001
+        await _drop_parallel_session_bindings(task_id, session_key=old_session_key)
+        return None, str(exc) or "启动并行 fresh CLI 失败。"
+
+    await _drop_parallel_session_bindings(task_id, session_key=old_session_key)
+    return (
+        ParallelDispatchContext(
+            task_id=task_id,
+            tmux_session=tmux_session,
+            pointer_file=pointer_file,
+            workspace_root=Path(old_context.workspace_root),
+        ),
+        None,
+    )
 
 
 async def _restart_main_tmux_with_resume_session(resume_session_id: str) -> tuple[bool, str]:
@@ -19005,7 +19136,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
                 await callback.message.edit_reply_markup(reply_markup=None)
         return
 
-    if action != PLAN_CONFIRM_ACTION_YES:
+    if action not in {PLAN_CONFIRM_ACTION_YES, PLAN_CONFIRM_ACTION_FRESH}:
         await callback.answer("暂不支持该操作。", show_alert=True)
         return
 
@@ -19016,14 +19147,6 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
     actor_user_id = callback.from_user.id if callback.from_user else session.user_id
     _remember_chat_active_user(chat_id, actor_user_id)
     try:
-        dispatch_kwargs: dict[str, Any] = {
-            "reply_to": callback.message,
-            "ack_immediately": True,
-            "intended_mode": None,
-            "force_exit_plan_ui": True,
-            "force_exit_plan_ui_key_sequence": _build_plan_develop_retry_exit_plan_key_sequence(),
-            "force_exit_plan_ui_max_rounds": PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
-        }
         dispatch_context = getattr(session, "parallel_dispatch_context", None)
         parallel_task_id = _normalize_task_id(getattr(session, "parallel_task_id", None))
         is_parallel_plan_confirm = isinstance(dispatch_context, ParallelDispatchContext) or bool(parallel_task_id)
@@ -19038,20 +19161,94 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
                     reply_markup=_build_worker_main_keyboard(),
                 )
             return
-        if isinstance(dispatch_context, ParallelDispatchContext):
-            dispatch_kwargs["dispatch_context"] = dispatch_context
-        success, _session_path = await _dispatch_prompt_to_model(
-            chat_id,
-            PLAN_IMPLEMENT_PROMPT,
-            **dispatch_kwargs,
-        )
+
+        if action == PLAN_CONFIRM_ACTION_FRESH:
+            if not _is_codex_model():
+                await callback.answer("fresh context 暂仅支持 Codex 模型。", show_alert=True)
+                return
+            fresh_prompt = _build_plan_fresh_context_prompt(getattr(session, "plan_text", None))
+            if fresh_prompt is None:
+                await callback.answer("fresh context 缺少计划正文，已中止。", show_alert=True)
+                if callback.message is not None:
+                    await callback.message.answer(
+                        "缺少可传递给 fresh context 的计划正文，已中止以避免新线程丢失需求。",
+                        reply_markup=_build_worker_main_keyboard(),
+                    )
+                return
+            dispatch_kwargs: dict[str, Any] = {
+                "reply_to": callback.message,
+                "ack_immediately": True,
+                "intended_mode": None,
+                # fresh 线程启动后应直接输入完整计划提示词，不再对旧 Plan UI 发送切换按键。
+                "force_exit_plan_ui": False,
+                "allow_session_discovery_fallback": False,
+            }
+            if isinstance(dispatch_context, ParallelDispatchContext):
+                task_id_for_lookup = _normalize_task_id(parallel_task_id or dispatch_context.task_id)
+                task_record = await TASK_SERVICE.get_task(task_id_for_lookup) if task_id_for_lookup else None
+                if task_record is None:
+                    await callback.answer("并行任务已失效，请重新打开并行任务。", show_alert=True)
+                    if callback.message is not None:
+                        await callback.message.answer(
+                            "并行任务已失效，无法启动 fresh context；请重新打开并行任务后再试。",
+                            reply_markup=_build_worker_main_keyboard(),
+                        )
+                    return
+                fresh_dispatch_context, restart_error = await _restart_parallel_tmux_fresh_session(
+                    task_record,
+                    dispatch_context,
+                )
+                if fresh_dispatch_context is None:
+                    await callback.answer("启动 fresh 并行 CLI 失败，请稍后重试。", show_alert=True)
+                    if callback.message is not None:
+                        await callback.message.answer(
+                            f"启动 fresh 并行 CLI 失败，请稍后重试。\n{restart_error or ''}".strip(),
+                            reply_markup=_build_worker_main_keyboard(),
+                        )
+                    return
+                dispatch_kwargs["dispatch_context"] = fresh_dispatch_context
+            else:
+                ok, output = await _restart_main_tmux_fresh_session()
+                if not ok:
+                    await callback.answer("启动 fresh Codex 线程失败，请稍后重试。", show_alert=True)
+                    if callback.message is not None:
+                        await callback.message.answer(
+                            f"启动 fresh Codex 线程失败，请稍后重试。\n{output}".strip(),
+                            reply_markup=_build_worker_main_keyboard(),
+                        )
+                    return
+                await _reset_main_session_binding_for_fresh_context(chat_id)
+            success, _session_path = await _dispatch_prompt_to_model(
+                chat_id,
+                fresh_prompt,
+                **dispatch_kwargs,
+            )
+        else:
+            dispatch_kwargs = {
+                "reply_to": callback.message,
+                "ack_immediately": True,
+                "intended_mode": None,
+                "force_exit_plan_ui": True,
+                "force_exit_plan_ui_key_sequence": _build_plan_develop_retry_exit_plan_key_sequence(),
+                "force_exit_plan_ui_max_rounds": PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+            }
+            if isinstance(dispatch_context, ParallelDispatchContext):
+                dispatch_kwargs["dispatch_context"] = dispatch_context
+            success, _session_path = await _dispatch_prompt_to_model(
+                chat_id,
+                PLAN_IMPLEMENT_PROMPT,
+                **dispatch_kwargs,
+            )
         if not success:
             await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
             return
 
         _drop_plan_confirm_session(token)
         await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
-        await callback.answer("已确认并推送到模型")
+        if action == PLAN_CONFIRM_ACTION_FRESH:
+            await callback.answer("已清空上下文并推送到 fresh Codex 线程")
+        else:
+            await callback.answer("已确认并推送到模型")
         with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
             if callback.message is not None:
                 await callback.message.edit_reply_markup(reply_markup=None)
