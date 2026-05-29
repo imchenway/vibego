@@ -256,6 +256,95 @@ def test_deliver_pending_messages_skips_empty_after_memory_citation_strip(plan_t
     assert bot.SESSION_OFFSETS[str(env["session"])] > 0
 
 
+def test_render_markdown_tables_for_telegram_converts_pipe_table_to_cards():
+    text = "\n".join(
+        [
+            "| 场景 | WRITE 阶段 | BATCH 阶段 | 是否允许负库存 |",
+            "|---|---|---|---|",
+            "| 非空真实批次，库存充足 | Redis 原子预占 | 正常扣减 | 不产生负数 |",
+            "| Redis 不可用 | fail-closed | 不处理新 WRITE | 不允许降级绕过 |",
+        ]
+    )
+
+    rendered = bot._render_markdown_tables_for_telegram(text)
+
+    assert "|---|---|---|---|" not in rendered
+    assert "📊 表格" in rendered
+    assert "1. 场景：非空真实批次，库存充足" in rendered
+    assert "   - WRITE 阶段：Redis 原子预占" in rendered
+    assert "   - BATCH 阶段：正常扣减" in rendered
+    assert "   - 是否允许负库存：不产生负数" in rendered
+    assert "2. 场景：Redis 不可用" in rendered
+    assert "   - 是否允许负库存：不允许降级绕过" in rendered
+
+
+def test_render_markdown_tables_for_telegram_preserves_surrounding_text_and_code_blocks():
+    text = "\n".join(
+        [
+            "前置说明",
+            "",
+            "| 名称 | 结果 |",
+            "|---|---|",
+            "| 单测 | 通过 |",
+            "",
+            "```text",
+            "| 代码内表格 | 不应转换 |",
+            "|---|---|",
+            "| A | B |",
+            "```",
+            "",
+            "后续说明",
+        ]
+    )
+
+    rendered = bot._render_markdown_tables_for_telegram(text)
+
+    assert rendered.startswith("前置说明")
+    assert "1. 名称：单测" in rendered
+    assert "   - 结果：通过" in rendered
+    assert "```text\n| 代码内表格 | 不应转换 |\n|---|---|\n| A | B |\n```" in rendered
+    assert rendered.rstrip().endswith("后续说明")
+
+
+def test_render_markdown_tables_for_telegram_keeps_non_table_pipe_text():
+    text = "普通说明：A | B 只是正文，不是 Markdown 表格。"
+
+    rendered = bot._render_markdown_tables_for_telegram(text)
+
+    assert rendered == text
+
+
+def test_deliver_pending_messages_renders_markdown_table_before_telegram(plan_test_env):
+    env = plan_test_env
+    chat_id = 1509
+    final_text = "\n".join(
+        [
+            "结论如下：",
+            "",
+            "| 场景 | WRITE 阶段 | BATCH 阶段 |",
+            "|---|---|---|",
+            "| 空批次 | 不预占 | 直接扣减 |",
+            "",
+            _memory_citation_block(),
+        ]
+    )
+    env["append_events"]([_codex_response_item_final_event(final_text)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert len(env["replies"]) == 1
+    delivered_text = env["replies"][0][1]
+    assert "|---|---|---|" not in delivered_text
+    assert "1. 场景：空批次" in delivered_text
+    assert "   - WRITE 阶段：不预占" in delivered_text
+    assert "   - BATCH 阶段：直接扣减" in delivered_text
+    assert "<oai-mem-citation>" not in delivered_text
+
+
 def test_plan_incomplete_keeps_watcher(plan_test_env):
     env = plan_test_env
     chat_id = 101
@@ -534,7 +623,8 @@ def test_codex_mixed_final_answer_prefers_response_item_once(plan_test_env, monk
     final_text = "<proposed_plan>\n完整最终答案\n</proposed_plan>"
     confirm_calls: list[tuple[int, str]] = []
 
-    async def fake_plan_confirm(target_chat_id: int, session_key: str):
+    async def fake_plan_confirm(target_chat_id: int, session_key: str, *, plan_text: str | None = None):
+        assert plan_text == final_text
         confirm_calls.append((target_chat_id, session_key))
         return True
 

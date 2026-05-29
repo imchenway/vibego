@@ -400,6 +400,14 @@ CODEX_MESSAGE_PHASE_COMMENTARY = "commentary"
 CODEX_MESSAGE_PHASE_FINAL_ANSWER = "final_answer"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
+TELEGRAM_TABLE_RENDER_MODE = (os.environ.get("TELEGRAM_TABLE_RENDER_MODE") or "cards").strip().lower()
+if TELEGRAM_TABLE_RENDER_MODE not in {"cards", "pre", "off"}:
+    worker_log.warning(
+        "未识别的 TELEGRAM_TABLE_RENDER_MODE=%s，回退为 cards",
+        TELEGRAM_TABLE_RENDER_MODE,
+    )
+    TELEGRAM_TABLE_RENDER_MODE = "cards"
+TELEGRAM_TABLE_MAX_CARD_COLUMNS = max(_env_int("TELEGRAM_TABLE_MAX_CARD_COLUMNS", 5), 2)
 # 长文本粘贴聚合：当用户粘贴内容接近上限时，Telegram 客户端可能拆成多条消息；
 # 这里在入站最前置聚合为一次逻辑输入（覆盖普通对话 + 任务/缺陷等 FSM 交互），避免流程被分片打断。
 # - 仅当单条文本长度达到阈值或命中“短前缀 + 长日志”模式时触发，降低误合并风险
@@ -1386,6 +1394,201 @@ def _strip_internal_oai_memory_citation_block(text: str) -> str:
     # 删除块后收口空行，避免在 Telegram 末尾留下大段空白。
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.rstrip("\n")
+
+
+_MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^:?-{3,}:?$")
+
+
+def _split_markdown_table_row(line: str) -> Optional[list[str]]:
+    """按未转义管道符拆分 Markdown 表格行，返回清理后的单元格列表。"""
+
+    if "|" not in line:
+        return None
+
+    cells: list[str] = []
+    buffer: list[str] = []
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and index + 1 < len(line):
+            next_char = line[index + 1]
+            # 表格单元格内的 \| 表示普通管道符，不参与分列。
+            if next_char == "|":
+                buffer.append("|")
+                index += 2
+                continue
+            buffer.append(char)
+            buffer.append(next_char)
+            index += 2
+            continue
+        if char == "|":
+            cells.append("".join(buffer).strip())
+            buffer.clear()
+            index += 1
+            continue
+        buffer.append(char)
+        index += 1
+
+    cells.append("".join(buffer).strip())
+
+    # 兼容标准管道表格两侧的外层 `|`，避免产生空列。
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+
+    if len(cells) < 2:
+        return None
+    return cells
+
+
+def _is_markdown_table_separator(cells: Sequence[str]) -> bool:
+    """判断一行是否是 Markdown 表格分隔行。"""
+
+    return bool(cells) and all(_MARKDOWN_TABLE_SEPARATOR_RE.match(cell.replace(" ", "")) for cell in cells)
+
+
+def _normalize_markdown_table_cell(value: str) -> str:
+    """压缩表格单元格空白，避免 Telegram 卡片出现多行错位。"""
+
+    normalized = re.sub(r"\s+", " ", value or "").strip()
+    return normalized or "（空）"
+
+
+def _wrap_markdown_table_as_pre(table_lines: Sequence[str]) -> str:
+    """将不适合卡片化的表格包成代码块，保留原始信息并避免误转换。"""
+
+    return "```text\n" + "\n".join(table_lines) + "\n```"
+
+
+def _render_markdown_table_as_cards(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """把 Markdown 表格渲染为 Telegram 手机端更友好的编号卡片。"""
+
+    normalized_header = [_normalize_markdown_table_cell(cell) for cell in header]
+    result: list[str] = ["📊 表格", ""]
+
+    for row_index, row in enumerate(rows, start=1):
+        normalized_row = [_normalize_markdown_table_cell(cell) for cell in row]
+        title_header = normalized_header[0]
+        title_value = normalized_row[0] if normalized_row else "（空）"
+        result.append(f"{row_index}. {title_header}：{title_value}")
+
+        for column_index, cell in enumerate(normalized_row[1:], start=1):
+            column_header = (
+                normalized_header[column_index]
+                if column_index < len(normalized_header)
+                else f"列 {column_index + 1}"
+            )
+            result.append(f"   - {column_header}：{cell}")
+
+        if row_index < len(rows):
+            result.append("")
+
+    return "\n".join(result)
+
+
+def _render_markdown_table_block_for_telegram(table_lines: Sequence[str]) -> str:
+    """渲染单个 Markdown 表格块，解析不安全时保留原始表格。"""
+
+    if len(table_lines) < 3:
+        return "\n".join(table_lines)
+
+    header = _split_markdown_table_row(table_lines[0])
+    separator = _split_markdown_table_row(table_lines[1])
+    if header is None or separator is None or len(header) != len(separator):
+        return "\n".join(table_lines)
+    if not _is_markdown_table_separator(separator):
+        return "\n".join(table_lines)
+
+    rows: list[list[str]] = []
+    for raw_line in table_lines[2:]:
+        row = _split_markdown_table_row(raw_line)
+        if row is None or len(row) != len(header):
+            # 列数不一致时 fail-safe：保留原始表格，避免字段错位误导用户。
+            return "\n".join(table_lines)
+        rows.append(row)
+
+    if not rows:
+        return "\n".join(table_lines)
+    if TELEGRAM_TABLE_RENDER_MODE == "off":
+        return "\n".join(table_lines)
+    if TELEGRAM_TABLE_RENDER_MODE == "pre" or len(header) > TELEGRAM_TABLE_MAX_CARD_COLUMNS:
+        return _wrap_markdown_table_as_pre(table_lines)
+
+    return _render_markdown_table_as_cards(header, rows)
+
+
+def _collect_markdown_table_block(lines: Sequence[str], start_index: int) -> tuple[list[str], int] | None:
+    """从指定行开始收集一个合法 Markdown 表格块。"""
+
+    if start_index + 2 >= len(lines):
+        return None
+
+    header = _split_markdown_table_row(lines[start_index])
+    separator = _split_markdown_table_row(lines[start_index + 1])
+    if header is None or separator is None:
+        return None
+    if len(header) != len(separator) or not _is_markdown_table_separator(separator):
+        return None
+
+    table_lines = [lines[start_index], lines[start_index + 1]]
+    cursor = start_index + 2
+    while cursor < len(lines):
+        row = _split_markdown_table_row(lines[cursor])
+        if row is None:
+            break
+        table_lines.append(lines[cursor])
+        cursor += 1
+
+    if len(table_lines) < 3:
+        return None
+    return table_lines, cursor
+
+
+def _render_markdown_tables_for_telegram(text: str) -> str:
+    """仅在 Telegram 展示层把 Markdown 表格转成卡片/清单。
+
+    终端、模型原始 JSONL 与用户输入均保持原样；本函数只服务模型回复投递前的
+    Telegram 可读性优化。代码块内的表格不转换，避免破坏示例代码。
+    """
+
+    if not text or "|" not in text or TELEGRAM_TABLE_RENDER_MODE == "off":
+        return text
+
+    lines = normalize_newlines(text).splitlines()
+    rendered_lines: list[str] = []
+    index = 0
+    in_fence = False
+    changed = False
+
+    while index < len(lines):
+        line = lines[index]
+        if _TELEGRAM_FENCE_LINE_RE.match(line):
+            in_fence = not in_fence
+            rendered_lines.append(line)
+            index += 1
+            continue
+
+        if in_fence:
+            rendered_lines.append(line)
+            index += 1
+            continue
+
+        table_block = _collect_markdown_table_block(lines, index)
+        if table_block is None:
+            rendered_lines.append(line)
+            index += 1
+            continue
+
+        table_lines, next_index = table_block
+        rendered_table = _render_markdown_table_block_for_telegram(table_lines)
+        rendered_lines.extend(rendered_table.splitlines())
+        changed = changed or rendered_table != "\n".join(table_lines)
+        index = next_index
+
+    if not changed:
+        return text
+    return "\n".join(rendered_lines)
 
 
 _TELEGRAM_FENCE_LINE_RE = re.compile(r"^\s*```")
@@ -13820,6 +14023,8 @@ async def _deliver_pending_messages(
             last_committed_offset = event_offset
             SESSION_OFFSETS[session_key] = event_offset
             continue
+        # Telegram 不支持 Markdown 表格；只在展示层转为卡片/清单，终端与 JSONL 原文保持不变。
+        text_to_send = _render_markdown_tables_for_telegram(text_to_send)
         message_task_id = parallel_task_id or _peek_pending_session_task_binding(session_key) or bound_task_id
         native_quick_reply_payload = None
         native_commit_callback_payload = None
