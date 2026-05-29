@@ -46,6 +46,14 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
         "timeout": 600,
     },
     {
+        "name": "wx-auto-preview",
+        "title": "触发微信手机自动预览",
+        "command": 'WX_PREVIEW_ACTION=auto-preview PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}" bash "$ROOT_DIR/scripts/gen_preview.sh"',
+        "description": "调用微信开发者工具 CLI 的 auto-preview，在当前工作目录触发已登录手机自动预览；不生成二维码、不回传图片。需本机已登录 IDE 并开启服务端口；端口配置复用 config/wx_devtools_ports.json，或临时设置 PORT。",
+        "aliases": (),
+        "timeout": 600,
+    },
+    {
         "name": "wx-dev-upload",
         "title": "上传微信代码到体验版",
         "command": 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}" bash "$ROOT_DIR/scripts/gen_upload.sh"',

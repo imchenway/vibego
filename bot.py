@@ -5153,6 +5153,7 @@ COMMAND_OUTPUT_MAX_CHARS = _env_int("COMMAND_OUTPUT_MAX_CHARS", 3500)
 COMMAND_STDERR_MAX_CHARS = _env_int("COMMAND_STDERR_MAX_CHARS", 1200)
 COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 5)
 WX_PREVIEW_COMMAND_NAME = "wx-dev-preview"
+WX_AUTO_PREVIEW_COMMAND_NAME = "wx-auto-preview"
 WX_UPLOAD_COMMAND_NAME = "wx-dev-upload"
 WX_PREVIEW_CHOICE_PREFIX = "wxpreview:choose:"
 WX_PREVIEW_CANCEL = "wxpreview:cancel"
@@ -5986,6 +5987,15 @@ def _build_wx_preview_prompt(
             "",
             "候选目录：",
         ]
+    elif command_name == WX_AUTO_PREVIEW_COMMAND_NAME:
+        lines = [
+            "*请选择要手机自动预览的小程序目录*",
+            f"扫描范围：当前目录及一层子目录（基准：`{_escape_markdown_text(str(base))}`）",
+            f"端口配置文件：`{_escape_markdown_text(str(ports_file))}`（未配置将无法执行）",
+            "手机自动预览会调用微信开发者工具 `auto-preview`，直接推送到已登录手机，不生成二维码。",
+            "",
+            "候选目录：",
+        ]
     else:
         output_dir = _default_wx_preview_output_dir()
         sample_file = output_dir / f"wx-preview-{int(time.time())}.jpg"
@@ -6006,6 +6016,8 @@ def _build_wx_preview_prompt(
         )
     if command_name == WX_UPLOAD_COMMAND_NAME:
         lines.append("_请选择其一后执行上传（二维码请在微信后台查看）。_")
+    elif command_name == WX_AUTO_PREVIEW_COMMAND_NAME:
+        lines.append("_请选择其一后触发手机自动预览。_")
     else:
         lines.append("_请选择其一或取消。_")
     return "\n".join(lines)
@@ -6052,7 +6064,7 @@ def _wrap_wx_preview_command(command: CommandDefinition, project_root: Path) -> 
 def _is_wx_devtools_command(command_name: Optional[str]) -> bool:
     """判断是否为微信开发者工具相关命令。"""
 
-    return command_name in {WX_PREVIEW_COMMAND_NAME, WX_UPLOAD_COMMAND_NAME}
+    return command_name in {WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME, WX_UPLOAD_COMMAND_NAME}
 
 
 def _collect_wx_command_env_overrides(command_text: str) -> Dict[str, str]:
@@ -6133,6 +6145,7 @@ _WX_PREVIEW_PORT_MISMATCH_RE = re.compile(
 _WX_PREVIEW_PROJECT_ROOT_PATTERNS = (
     # 从 wx-dev-preview 的输出中提取实际小程序目录
     re.compile(r"\[信息\]\s*生成预览，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
+    re.compile(r"\[信息\]\s*手机自动预览，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
     re.compile(r"\[信息\]\s*执行上传，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
     re.compile(r"小程序目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
     re.compile(r"项目目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
@@ -20504,6 +20517,8 @@ async def on_wx_preview_choice(callback: CallbackQuery, state: FSMContext) -> No
     await state.clear()
     if command_override.name == WX_UPLOAD_COMMAND_NAME:
         await callback.answer("开始执行上传…")
+    elif command_override.name == WX_AUTO_PREVIEW_COMMAND_NAME:
+        await callback.answer("开始自动预览…")
     else:
         await callback.answer("开始生成预览…")
     await _execute_command_definition(
@@ -20631,7 +20646,15 @@ async def _apply_wx_preview_port_and_retry(
             [
                 f"已收到端口：`{port}`",
                 config_note,
-                ("开始重试上传…" if command_retry.name == WX_UPLOAD_COMMAND_NAME else "开始重试生成预览…"),
+                (
+                    "开始重试上传…"
+                    if command_retry.name == WX_UPLOAD_COMMAND_NAME
+                    else (
+                        "开始重试自动预览…"
+                        if command_retry.name == WX_AUTO_PREVIEW_COMMAND_NAME
+                        else "开始重试生成预览…"
+                    )
+                ),
             ]
         ),
     )

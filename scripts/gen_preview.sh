@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# 通用微信小程序预览二维码生成脚本，输出 JPEG 到本地文件，并通过 TG_PHOTO_FILE 标记便于机器人回传
+# 通用微信小程序预览脚本：
+# - 默认 preview：输出 JPEG 到本地文件，并通过 TG_PHOTO_FILE 标记便于机器人回传；
+# - WX_PREVIEW_ACTION=auto-preview：触发微信开发者工具手机自动预览，不生成二维码。
 set -eo pipefail
 
 CLI_BIN="${CLI_BIN:-/Applications/wechatwebdevtools.app/Contents/MacOS/cli}"  # 可通过环境变量覆盖 CLI 路径
 PROJECT_PATH="${PROJECT_PATH:-}"                                              # 允许外部显式指定，未指定时后续自动探测
 VERSION="${VERSION:-$(date +%Y%m%d%H%M%S)}"
+WX_PREVIEW_ACTION="${WX_PREVIEW_ACTION:-preview}"                             # preview / auto-preview
 PORT="${PORT:-}"                                                             # 可临时用环境变量覆盖；未设置则读取项目端口配置
 WX_DEVTOOLS_PORTS_FILE="${WX_DEVTOOLS_PORTS_FILE:-}"                          # 可显式指定端口映射文件路径（默认读取 vibego 配置目录）
 PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-6}"                             # 自动探测目录的最大深度（默认提升为 6，覆盖深层项目）
@@ -361,6 +364,52 @@ fi
 if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
   echo "[错误] 端口号无效：PORT=$PORT（必须为纯数字）" >&2
   exit 2
+fi
+
+case "$WX_PREVIEW_ACTION" in
+  preview|auto-preview)
+    ;;
+  *)
+    echo "[错误] 不支持的微信预览动作：WX_PREVIEW_ACTION=$WX_PREVIEW_ACTION（仅支持 preview / auto-preview）" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$WX_PREVIEW_ACTION" == "auto-preview" ]]; then
+  AUTO_PREVIEW_INFO_OUTPUT="${AUTO_PREVIEW_INFO_OUTPUT:-${TMPDIR:-/tmp}/wx-auto-preview-${VERSION}-info.json}"
+  AUTO_PREVIEW_INFO_DIR="$(dirname "$AUTO_PREVIEW_INFO_OUTPUT")"
+  mkdir -p "$AUTO_PREVIEW_INFO_DIR"
+  PHYSICAL_AUTO_PREVIEW_INFO_DIR="$(cd "$AUTO_PREVIEW_INFO_DIR" && pwd -P)"
+  AUTO_PREVIEW_INFO_OUTPUT="${PHYSICAL_AUTO_PREVIEW_INFO_DIR}/$(basename "$AUTO_PREVIEW_INFO_OUTPUT")"
+
+  # 清理代理，避免请求走代理失败
+  export http_proxy= https_proxy= all_proxy=
+  export no_proxy="servicewechat.com,.weixin.qq.com"
+
+  echo "[信息] 手机自动预览，项目：${RESOLVED_PROJECT_PATH}，端口：${PORT}，信息输出：${AUTO_PREVIEW_INFO_OUTPUT}"
+
+  CLI_LOG="$(mktemp -t wx-auto-preview-cli)"
+  set +e
+  pushd "$RESOLVED_PROJECT_PATH" >/dev/null
+  "$CLI_BIN" auto-preview \
+    --project "$RESOLVED_PROJECT_PATH" \
+    --info-output "$AUTO_PREVIEW_INFO_OUTPUT" \
+    --port "$PORT" >"$CLI_LOG" 2>&1
+  CLI_STATUS=$?
+  popd >/dev/null
+  set -e
+
+  if [[ $CLI_STATUS -ne 0 ]]; then
+    echo "[错误] 微信开发者工具 CLI 退出码：$CLI_STATUS" >&2
+    tail -n 40 "$CLI_LOG" >&2 || true
+    exit "$CLI_STATUS"
+  fi
+
+  if [[ -f "$AUTO_PREVIEW_INFO_OUTPUT" ]]; then
+    echo "INFO_OUTPUT: $AUTO_PREVIEW_INFO_OUTPUT"
+  fi
+  echo "[完成] 手机自动预览已触发：$RESOLVED_PROJECT_PATH"
+  exit 0
 fi
 
 # 设置输出路径，确保目录存在

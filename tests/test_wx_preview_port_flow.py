@@ -340,6 +340,127 @@ def test_gen_preview_normalizes_symlink_output_dir(tmp_path: Path) -> None:
     assert output_capture_file.read_text(encoding="utf-8") == str((real_output_dir / "qr.jpg").resolve())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="wx-auto-preview 脚本依赖 bash/Posix 环境")
+def test_gen_preview_auto_preview_mode_uses_auto_preview_without_qr(tmp_path: Path) -> None:
+    """手机自动预览模式应调用 CLI auto-preview，不生成二维码回传标记。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_preview.sh"
+    assert script_path.is_file()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    fake_cli = bin_dir / "fake-wx-cli-auto-preview"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+
+            command="$1"
+            shift
+            if [[ "$command" != "auto-preview" ]]; then
+              echo "unexpected command: $command" >&2
+              exit 2
+            fi
+
+            port=""
+            project=""
+            info_output=""
+            while [[ $# -gt 0 ]]; do
+              case "$1" in
+                --port)
+                  port="$2"
+                  shift 2
+                  ;;
+                --project)
+                  project="$2"
+                  shift 2
+                  ;;
+                --info-output)
+                  info_output="$2"
+                  shift 2
+                  ;;
+                --qr-output|--qr-format)
+                  echo "auto-preview must not receive $1" >&2
+                  exit 3
+                  ;;
+                *)
+                  shift
+                  ;;
+              esac
+            done
+
+            if [[ -z "$port" || -z "$project" || -z "$info_output" ]]; then
+              echo "missing required args" >&2
+              exit 4
+            fi
+            mkdir -p "$(dirname "$info_output")"
+            printf '{"ok":true}' > "$info_output"
+            if [[ -n "${FAKE_WX_CLI_PORT_FILE:-}" ]]; then
+              printf '%s' "$port" > "$FAKE_WX_CLI_PORT_FILE"
+            fi
+            if [[ -n "${FAKE_WX_CLI_PROJECT_FILE:-}" ]]; then
+              printf '%s' "$project" > "$FAKE_WX_CLI_PROJECT_FILE"
+            fi
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+
+    ports_file = tmp_path / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps(
+            {
+                "projects": {"hyphamall": 45927},
+                "paths": {str(project_root.resolve()): 45927},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    port_capture_file = tmp_path / "port.txt"
+    project_capture_file = tmp_path / "project.txt"
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_NAME"] = "hyphamall"
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["WX_DEVTOOLS_PORTS_FILE"] = str(ports_file)
+    env["WX_PREVIEW_ACTION"] = "auto-preview"
+    env["FAKE_WX_CLI_PORT_FILE"] = str(port_capture_file)
+    env["FAKE_WX_CLI_PROJECT_FILE"] = str(project_capture_file)
+    env.pop("PORT", None)
+
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    assert proc.returncode == 0, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert "手机自动预览已触发" in stdout
+    assert "TG_PHOTO_FILE" not in stdout
+    assert port_capture_file.read_text(encoding="utf-8") == "45927"
+    assert project_capture_file.read_text(encoding="utf-8") == str(project_root)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="wx-dev-upload 脚本依赖 bash/Posix 环境")
 def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Path) -> None:
     """确保上传脚本在 python 不可用时仍能用 python3 解析端口，并携带指定版本号。"""

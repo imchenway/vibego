@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
 
+import bot as bot_module
 from bot import (
     WX_PREVIEW_COMMAND_NAME,
     WX_UPLOAD_COMMAND_NAME,
     _detect_wx_preview_candidates,
+    _is_wx_devtools_command,
     _resolve_miniprogram_app_dir,
     _wrap_wx_preview_command,
 )
@@ -144,3 +146,16 @@ def test_default_global_upload_command_uses_project_base() -> None:
     command_text = str(cmd["command"])
     assert 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}"' in command_text
     assert "gen_upload.sh" in command_text
+
+
+def test_wx_auto_preview_is_default_global_command() -> None:
+    """手机自动预览应作为默认通用命令接入命令管理。"""
+
+    assert getattr(bot_module, "WX_AUTO_PREVIEW_COMMAND_NAME", None) == "wx-auto-preview"
+    assert _is_wx_devtools_command("wx-auto-preview") is True
+    cmd = next((item for item in DEFAULT_GLOBAL_COMMANDS if item["name"] == "wx-auto-preview"), None)
+    assert cmd is not None
+    command_text = str(cmd["command"])
+    assert 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}"' in command_text
+    assert 'WX_PREVIEW_ACTION=auto-preview' in command_text
+    assert "gen_preview.sh" in command_text

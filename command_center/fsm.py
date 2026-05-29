@@ -20,7 +20,7 @@ class CommandEditStates(StatesGroup):
 
 
 class WxPreviewStates(StatesGroup):
-    """wx-dev-preview 交互流程。"""
+    """微信开发者工具命令的目录/端口交互流程。"""
 
     waiting_choice = State()
     waiting_port = State()
