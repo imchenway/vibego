@@ -476,7 +476,7 @@ PLAN_CONFIRM_ACTION_YES = "yes"
 PLAN_CONFIRM_ACTION_FRESH = "fresh"
 PLAN_CONFIRM_ACTION_NO = "no"
 PLAN_IMPLEMENT_PROMPT = "Implement the plan."
-# Codex 原生 fresh context 菜单会把上一轮计划作为新线程输入；Telegram 侧必须显式携带计划正文。
+# Codex 原生 fresh context 菜单会把上一轮计划作为新线程输入；历史重启实现才需要显式携带计划正文。
 PLAN_IMPLEMENT_FRESH_CONTEXT_PROMPT_PREFIX = (
     "A previous agent produced the plan below to accomplish the user's task. "
     "Implement the plan in a fresh context. Treat the plan as the source of user intent, "
@@ -516,6 +516,22 @@ PLAN_DEVELOP_RETRY_EXIT_PLAN_KEYS = tuple(
     if key.strip()
 )
 PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS = max(_env_int("PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS", 1), 1)
+# Telegram fresh context 不再重启 Codex CLI，而是驱动当前 TUI 的原生第二项，保持与终端选择一致。
+PLAN_CONFIRM_NATIVE_FRESH_KEYS = tuple(
+    key.strip()
+    for key in (os.environ.get("PLAN_CONFIRM_NATIVE_FRESH_KEYS") or "Down,C-m").split(",")
+    if key.strip()
+)
+PLAN_CONFIRM_NATIVE_KEY_GAP_SECONDS = max(_env_float("PLAN_CONFIRM_NATIVE_KEY_GAP_SECONDS", 0.08), 0.0)
+PLAN_CONFIRM_NATIVE_MENU_PROBE_LINES = max(_env_int("PLAN_CONFIRM_NATIVE_MENU_PROBE_LINES", 80), 20)
+PLAN_CONFIRM_NATIVE_FRESH_SESSION_TIMEOUT_SECONDS = max(
+    _env_float("PLAN_CONFIRM_NATIVE_FRESH_SESSION_TIMEOUT_SECONDS", 10.0),
+    0.0,
+)
+PLAN_CONFIRM_NATIVE_FRESH_SESSION_POLL_INTERVAL_SECONDS = max(
+    _env_float("PLAN_CONFIRM_NATIVE_FRESH_SESSION_POLL_INTERVAL_SECONDS", 0.3),
+    0.05,
+)
 
 
 def _canonical_model_name(raw_model: Optional[str] = None) -> str:
@@ -669,7 +685,7 @@ class PlanConfirmSession:
     session_key: str
     user_id: Optional[int]
     created_at: float
-    # 保存模型刚刚输出的计划正文，fresh context 需要把它作为新线程唯一可信输入。
+    # 保存模型刚刚输出的计划正文，用于 Telegram 展示与历史兼容；原生 fresh 由 Codex TUI 自行携带计划。
     plan_text: Optional[str] = None
     parallel_task_id: Optional[str] = None
     parallel_dispatch_context: Optional["ParallelDispatchContext"] = None
@@ -15180,6 +15196,322 @@ def _iter_main_session_search_roots(pointer_path: Optional[Path] = None) -> list
     return deduped
 
 
+def _is_codex_plan_confirm_menu(raw_output: str) -> bool:
+    """判断 tmux 最近输出是否仍停留在 Codex 原生 Plan 确认菜单。
+
+    fail-closed 原则：只有同时看到问题标题和 fresh/no/yes 等菜单文案时才允许发送 Down/Enter，
+    避免 Telegram 旧按钮在普通输入框里误触发换行或执行其它命令。
+    """
+
+    text = strip_ansi(normalize_newlines(raw_output or "")).lower()
+    if "implement this plan" not in text:
+        return False
+    menu_markers = (
+        "yes, implement this plan",
+        "clear context and implement",
+        "fresh thread with this plan",
+        "no, stay in plan mode",
+        "continue planning with the model",
+    )
+    return sum(1 for marker in menu_markers if marker in text) >= 2
+
+
+def _native_plan_confirm_tmux_session(dispatch_context: Optional[ParallelDispatchContext]) -> str:
+    """返回 fresh 原生菜单需要驱动的 tmux 会话名。"""
+
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        return (dispatch_context.tmux_session or "").strip()
+    return (TMUX_SESSION or "").strip()
+
+
+def _native_plan_confirm_pointer_path(dispatch_context: Optional[ParallelDispatchContext]) -> Optional[Path]:
+    """返回 fresh 原生菜单对应的 Codex session pointer。"""
+
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        return resolve_path(dispatch_context.pointer_file)
+    if CODEX_SESSION_FILE_PATH:
+        return resolve_path(CODEX_SESSION_FILE_PATH)
+    return None
+
+
+def _native_plan_confirm_target_cwd(dispatch_context: Optional[ParallelDispatchContext]) -> str:
+    """返回 fresh 原生菜单新会话应匹配的工作目录。"""
+
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        return str(resolve_path(dispatch_context.workspace_root))
+    return (CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
+
+
+def _same_session_file(candidate: Path, session_key: str) -> bool:
+    """比较候选文件是否就是旧 session，兼容 session_key 不是文件路径的历史数据。"""
+
+    raw_key = (session_key or "").strip()
+    if not raw_key:
+        return False
+    if str(candidate) == raw_key:
+        return True
+    try:
+        candidate_resolved = candidate.resolve()
+    except OSError:
+        candidate_resolved = candidate
+    try:
+        key_path = resolve_path(raw_key)
+        key_resolved = key_path.resolve()
+    except OSError:
+        key_resolved = resolve_path(raw_key)
+    except RuntimeError:
+        return False
+    return str(candidate_resolved) == str(key_resolved)
+
+
+def _iter_native_plan_confirm_session_roots(
+    pointer_path: Optional[Path],
+    old_session_key: str,
+) -> list[Path]:
+    """汇总原生 fresh 后可搜索的新 Codex 会话目录。"""
+
+    roots: list[Path] = []
+    if pointer_path is not None:
+        roots.extend(_iter_main_session_search_roots(pointer_path))
+
+    raw_old = (old_session_key or "").strip()
+    if raw_old:
+        old_path = resolve_path(raw_old)
+        roots.append(old_path.parent)
+        for parent in old_path.parents:
+            if parent.name == "sessions":
+                roots.append(parent)
+                break
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            resolved = root
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(resolved)
+    return deduped
+
+
+def _native_plan_confirm_session_candidate_ok(
+    candidate: Path,
+    *,
+    target_cwd: Optional[str],
+    old_session_key: str,
+    action_started_at: float,
+    required_marker: str,
+) -> bool:
+    """校验候选 Codex 会话是否属于本次原生 fresh 操作。"""
+
+    if not candidate.is_file():
+        return False
+    if _same_session_file(candidate, old_session_key):
+        return False
+    try:
+        if candidate.stat().st_mtime < max(action_started_at - 2.0, 0.0):
+            return False
+    except OSError:
+        return False
+
+    if target_cwd:
+        session_cwd = _read_session_meta_cwd(candidate)
+        if not session_cwd:
+            return False
+        if not _paths_equal(resolve_path(session_cwd), resolve_path(target_cwd)):
+            return False
+
+    if required_marker and not _codex_session_contains_required_marker(candidate, required_marker):
+        return False
+    return True
+
+
+def _find_native_plan_confirm_fresh_session_once(
+    *,
+    pointer_path: Optional[Path],
+    target_cwd: Optional[str],
+    old_session_key: str,
+    action_started_at: float,
+) -> Optional[Path]:
+    """单次扫描原生 fresh 生成的新 Codex JSONL 会话。"""
+
+    required_marker = _read_required_session_marker(pointer_path)
+    candidates: list[Path] = []
+    if pointer_path is not None:
+        pointer_target = _read_pointer_path(pointer_path)
+        if pointer_target is not None:
+            candidates.append(pointer_target)
+
+    pattern = MODEL_SESSION_GLOB or "rollout-*.jsonl"
+    for root in _iter_native_plan_confirm_session_roots(pointer_path, old_session_key):
+        if not root.exists():
+            continue
+        try:
+            matches = root.glob(f"**/{pattern}")
+        except OSError:
+            continue
+        for candidate in matches:
+            candidates.append(candidate)
+
+    latest_path: Optional[Path] = None
+    latest_mtime = -1.0
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not _native_plan_confirm_session_candidate_ok(
+            resolved,
+            target_cwd=target_cwd,
+            old_session_key=old_session_key,
+            action_started_at=action_started_at,
+            required_marker=required_marker,
+        ):
+            continue
+        try:
+            mtime = resolved.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > latest_mtime:
+            latest_mtime = mtime
+            latest_path = resolved
+    return latest_path
+
+
+async def _await_native_plan_confirm_fresh_session(
+    *,
+    pointer_path: Optional[Path],
+    target_cwd: Optional[str],
+    old_session_key: str,
+    action_started_at: float,
+) -> Optional[Path]:
+    """等待 Codex 原生 fresh 菜单生成新 JSONL 会话文件。"""
+
+    deadline = time.monotonic() + PLAN_CONFIRM_NATIVE_FRESH_SESSION_TIMEOUT_SECONDS
+    while True:
+        found = await asyncio.to_thread(
+            _find_native_plan_confirm_fresh_session_once,
+            pointer_path=pointer_path,
+            target_cwd=target_cwd,
+            old_session_key=old_session_key,
+            action_started_at=action_started_at,
+        )
+        if found is not None:
+            return found
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(PLAN_CONFIRM_NATIVE_FRESH_SESSION_POLL_INTERVAL_SECONDS)
+
+
+async def _send_native_plan_confirm_key_sequence(tmux_session: str, keys: tuple[str, ...]) -> None:
+    """向 Codex TUI 发送原生 PlanConfirm 选项按键序列。"""
+
+    for index, key in enumerate(keys):
+        await asyncio.to_thread(tmux_send_key, tmux_session, key)
+        if PLAN_CONFIRM_NATIVE_KEY_GAP_SECONDS > 0 and index < len(keys) - 1:
+            await asyncio.sleep(PLAN_CONFIRM_NATIVE_KEY_GAP_SECONDS)
+
+
+async def _bind_native_plan_confirm_fresh_session(
+    chat_id: int,
+    session_path: Path,
+    plan_session: PlanConfirmSession,
+    dispatch_context: Optional[ParallelDispatchContext],
+) -> tuple[bool, Optional[str]]:
+    """将 Codex 原生 fresh 后的新会话重新绑定到 Telegram watcher。"""
+
+    resolved_session_path = resolve_path(session_path)
+    session_key = str(resolved_session_path)
+    old_session_key = (getattr(plan_session, "session_key", "") or "").strip()
+    pointer_path = _native_plan_confirm_pointer_path(dispatch_context)
+    if pointer_path is not None:
+        _update_pointer(pointer_path, resolved_session_path)
+
+    # 原生 fresh 的新文件可能已写入早期输出；从 0 开始读可避免漏掉刚产生的首批 assistant 消息。
+    SESSION_OFFSETS[session_key] = 0
+
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        task_id = _normalize_task_id(getattr(plan_session, "parallel_task_id", None) or dispatch_context.task_id)
+        if not task_id:
+            return False, "并行任务缺少有效 task_id，无法绑定 fresh 会话。"
+        await _drop_parallel_session_bindings(task_id, session_key=old_session_key)
+        _bind_parallel_session_task(session_key, task_id)
+        _bind_parallel_dispatch_context(session_key, dispatch_context)
+        _clear_last_message(chat_id, old_session_key)
+        _clear_last_message(chat_id, session_key)
+        _reset_delivered_hashes(chat_id, old_session_key)
+        _reset_delivered_offsets(chat_id, old_session_key)
+        _reset_delivered_hashes(chat_id, session_key)
+        _reset_delivered_offsets(chat_id, session_key)
+        await _start_parallel_task_watcher(
+            task_id,
+            chat_id,
+            resolved_session_path,
+            start_in_long_poll=False,
+        )
+        return True, None
+
+    await _reset_main_session_binding_for_fresh_context(chat_id)
+    CHAT_SESSION_MAP[chat_id] = session_key
+    _clear_last_message(chat_id)
+    _reset_compact_tracking(chat_id)
+    CHAT_FAILURE_NOTICES.pop(chat_id, None)
+    CHAT_WATCHERS[chat_id] = asyncio.create_task(
+        _watch_and_notify(
+            chat_id,
+            resolved_session_path,
+            max_wait=WATCH_MAX_WAIT,
+            interval=WATCH_INTERVAL,
+            start_in_long_poll=False,
+        )
+    )
+    await asyncio.sleep(0)
+    return True, None
+
+
+async def _drive_native_plan_confirm_fresh_context(
+    chat_id: int,
+    plan_session: PlanConfirmSession,
+    dispatch_context: Optional[ParallelDispatchContext],
+) -> tuple[bool, Optional[str]]:
+    """驱动当前 Codex TUI 的原生 fresh 选项，保持与终端手动选择一致。"""
+
+    tmux_session = _native_plan_confirm_tmux_session(dispatch_context)
+    if not tmux_session:
+        return False, "缺少 tmux 会话名，无法驱动终端原生 Plan 确认菜单。"
+
+    raw_output = await asyncio.to_thread(
+        _capture_tmux_recent_lines,
+        PLAN_CONFIRM_NATIVE_MENU_PROBE_LINES,
+        tmux_session=tmux_session,
+    )
+    if not _is_codex_plan_confirm_menu(raw_output):
+        return False, "终端不在 Plan 确认菜单，已中止以避免误操作。"
+
+    pointer_path = _native_plan_confirm_pointer_path(dispatch_context)
+    target_cwd = _native_plan_confirm_target_cwd(dispatch_context)
+    action_started_at = time.time()
+    await _send_native_plan_confirm_key_sequence(tmux_session, PLAN_CONFIRM_NATIVE_FRESH_KEYS)
+    fresh_session = await _await_native_plan_confirm_fresh_session(
+        pointer_path=pointer_path,
+        target_cwd=target_cwd,
+        old_session_key=getattr(plan_session, "session_key", "") or "",
+        action_started_at=action_started_at,
+    )
+    if fresh_session is None:
+        return False, "已发送终端原生 fresh 选择，但未检测到新 Codex 会话，已中止绑定。请查看终端状态。"
+    return await _bind_native_plan_confirm_fresh_session(chat_id, fresh_session, plan_session, dispatch_context)
+
+
 def _session_file_matches_bind_id(path: Path, requested_session_id: str) -> Optional[str]:
     """判断会话文件是否匹配用户提供的 sessionId，并返回用于 resume 的原生 id。"""
 
@@ -19395,63 +19727,19 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
             if not _is_codex_model():
                 await callback.answer("fresh context 暂仅支持 Codex 模型。", show_alert=True)
                 return
-            fresh_prompt = _build_plan_fresh_context_prompt(getattr(session, "plan_text", None))
-            if fresh_prompt is None:
-                await callback.answer("fresh context 缺少计划正文，已中止。", show_alert=True)
+            success, error_message = await _drive_native_plan_confirm_fresh_context(
+                chat_id,
+                session,
+                dispatch_context if isinstance(dispatch_context, ParallelDispatchContext) else None,
+            )
+            if not success:
+                await callback.answer(error_message or "终端原生 fresh 选择失败。", show_alert=True)
                 if callback.message is not None:
                     await callback.message.answer(
-                        "缺少可传递给 fresh context 的计划正文，已中止以避免新线程丢失需求。",
+                        error_message or "终端原生 fresh 选择失败，请查看终端状态后重试。",
                         reply_markup=_build_worker_main_keyboard(),
                     )
                 return
-            dispatch_kwargs: dict[str, Any] = {
-                "reply_to": callback.message,
-                "ack_immediately": True,
-                "intended_mode": None,
-                # fresh 线程启动后应直接输入完整计划提示词，不再对旧 Plan UI 发送切换按键。
-                "force_exit_plan_ui": False,
-                "allow_session_discovery_fallback": False,
-            }
-            if isinstance(dispatch_context, ParallelDispatchContext):
-                task_id_for_lookup = _normalize_task_id(parallel_task_id or dispatch_context.task_id)
-                task_record = await TASK_SERVICE.get_task(task_id_for_lookup) if task_id_for_lookup else None
-                if task_record is None:
-                    await callback.answer("并行任务已失效，请重新打开并行任务。", show_alert=True)
-                    if callback.message is not None:
-                        await callback.message.answer(
-                            "并行任务已失效，无法启动 fresh context；请重新打开并行任务后再试。",
-                            reply_markup=_build_worker_main_keyboard(),
-                        )
-                    return
-                fresh_dispatch_context, restart_error = await _restart_parallel_tmux_fresh_session(
-                    task_record,
-                    dispatch_context,
-                )
-                if fresh_dispatch_context is None:
-                    await callback.answer("启动 fresh 并行 CLI 失败，请稍后重试。", show_alert=True)
-                    if callback.message is not None:
-                        await callback.message.answer(
-                            f"启动 fresh 并行 CLI 失败，请稍后重试。\n{restart_error or ''}".strip(),
-                            reply_markup=_build_worker_main_keyboard(),
-                        )
-                    return
-                dispatch_kwargs["dispatch_context"] = fresh_dispatch_context
-            else:
-                ok, output = await _restart_main_tmux_fresh_session()
-                if not ok:
-                    await callback.answer("启动 fresh Codex 线程失败，请稍后重试。", show_alert=True)
-                    if callback.message is not None:
-                        await callback.message.answer(
-                            f"启动 fresh Codex 线程失败，请稍后重试。\n{output}".strip(),
-                            reply_markup=_build_worker_main_keyboard(),
-                        )
-                    return
-                await _reset_main_session_binding_for_fresh_context(chat_id)
-            success, _session_path = await _dispatch_prompt_to_model(
-                chat_id,
-                fresh_prompt,
-                **dispatch_kwargs,
-            )
         else:
             dispatch_kwargs = {
                 "reply_to": callback.message,
@@ -19475,7 +19763,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
         _drop_plan_confirm_session(token)
         await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
         if action == PLAN_CONFIRM_ACTION_FRESH:
-            await callback.answer("已清空上下文并推送到 fresh Codex 线程")
+            await callback.answer("已按终端原生选项清空上下文并继续实现")
         else:
             await callback.answer("已确认并推送到模型")
         with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):

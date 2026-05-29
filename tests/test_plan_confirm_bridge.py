@@ -367,45 +367,79 @@ def test_maybe_send_plan_confirm_prompt_uses_codex_three_option_keyboard(
     assert bot.PLAN_CONFIRM_SESSIONS[token].plan_text == plan_text
 
 
-def test_plan_confirm_fresh_context_restarts_main_tmux_and_dispatches_plan(
+def test_plan_confirm_fresh_context_drives_native_tui_and_binds_new_main_session(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ):
-    """选择 fresh context 时，必须重启主 Codex 线程并携带计划正文派发。"""
+    """选择 fresh context 时，必须驱动当前 Codex TUI 原生选项，不得重启 CLI。"""
 
     chat_id = 223
     token = "tok-fresh"
     plan_text = "<proposed_plan>\n1. 修复 Telegram 三选项\n</proposed_plan>"
+    old_session = tmp_path / "old-session.jsonl"
+    new_session = tmp_path / "new-session.jsonl"
+    pointer_file = tmp_path / "pointer.txt"
+    old_session.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(tmp_path), "id": "old"}}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    new_session.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(tmp_path), "id": "new"}}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    pointer_file.write_text(str(old_session), encoding="utf-8")
     session = bot.PlanConfirmSession(
         token=token,
         chat_id=chat_id,
-        session_key="session-main-old",
+        session_key=str(old_session),
         user_id=9,
         created_at=time.monotonic(),
         plan_text=plan_text,
     )
     bot.PLAN_CONFIRM_SESSIONS[token] = session
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
-    bot.CHAT_SESSION_MAP[chat_id] = "session-main-old"
+    bot.CHAT_SESSION_MAP[chat_id] = str(old_session)
 
-    restart_calls: list[str] = []
-    reset_calls: list[int] = []
-    dispatched: list[dict] = []
+    sent_keys: list[tuple[str, str]] = []
+    watcher_calls: list[tuple[int, Path, bool]] = []
 
-    async def fake_restart_main_fresh_session() -> tuple[bool, str | None]:
-        restart_calls.append("restart")
-        return True, None
+    async def should_not_restart(*_args, **_kwargs):
+        raise AssertionError("fresh context 应复用当前 TUI，不应重启 Codex CLI")
 
-    async def fake_reset_main_binding(_chat_id: int) -> None:
-        reset_calls.append(_chat_id)
-        bot.CHAT_SESSION_MAP.pop(_chat_id, None)
+    async def should_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("fresh context 应由 Codex 原生菜单自己派发计划，不应额外粘贴 fresh prompt")
 
-    async def fake_dispatch(_chat_id: int, prompt: str, **kwargs):
-        dispatched.append({"chat_id": _chat_id, "prompt": prompt, "kwargs": kwargs})
-        return True, Path("/tmp/fresh-session.jsonl")
+    def fake_capture(line_count: int, tmux_session: str | None = None) -> str:
+        assert tmux_session == "vibe-main-native"
+        return (
+            "Implement this plan?\n"
+            "> Yes, implement this plan\n"
+            "  Yes, clear context and implement — Fresh thread with this plan\n"
+            "  No, stay in Plan mode\n"
+        )
 
-    monkeypatch.setattr(bot, "_restart_main_tmux_fresh_session", fake_restart_main_fresh_session)
-    monkeypatch.setattr(bot, "_reset_main_session_binding_for_fresh_context", fake_reset_main_binding)
-    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    def fake_tmux_send_key(session_name: str, key: str) -> None:
+        sent_keys.append((session_name, key))
+
+    async def fake_await_native_session(*, pointer_path, target_cwd, old_session_key, action_started_at):
+        assert pointer_path == pointer_file
+        assert target_cwd == str(tmp_path)
+        assert old_session_key == str(old_session)
+        assert action_started_at > 0
+        return new_session
+
+    async def fake_watch_and_notify(_chat_id: int, session_path: Path, *args, **kwargs):
+        watcher_calls.append((_chat_id, session_path, kwargs.get("start_in_long_poll", False)))
+
+    monkeypatch.setattr(bot, "_restart_main_tmux_fresh_session", should_not_restart)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", should_not_dispatch)
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
+    monkeypatch.setattr(bot, "tmux_send_key", fake_tmux_send_key)
+    monkeypatch.setattr(bot, "_await_native_plan_confirm_fresh_session", fake_await_native_session)
+    monkeypatch.setattr(bot, "_watch_and_notify", fake_watch_and_notify)
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-main-native")
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer_file))
     monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
@@ -416,25 +450,23 @@ def test_plan_confirm_fresh_context_restarts_main_tmux_and_dispatches_plan(
     )
     asyncio.run(bot.on_plan_confirm_callback(callback))
 
-    assert restart_calls == ["restart"]
-    assert reset_calls == [chat_id]
-    assert len(dispatched) == 1
-    assert dispatched[0]["chat_id"] == chat_id
-    assert "A previous agent produced the plan below" in dispatched[0]["prompt"]
-    assert plan_text in dispatched[0]["prompt"]
-    assert dispatched[0]["kwargs"]["allow_session_discovery_fallback"] is False
-    assert dispatched[0]["kwargs"]["force_exit_plan_ui"] is False
-    assert "dispatch_context" not in dispatched[0]["kwargs"]
+    assert sent_keys == [("vibe-main-native", "Down"), ("vibe-main-native", "C-m")]
+    assert pointer_file.read_text(encoding="utf-8") == str(new_session)
+    assert bot.CHAT_SESSION_MAP[chat_id] == str(new_session)
+    assert bot.SESSION_OFFSETS[str(new_session)] == 0
+    assert watcher_calls == [(chat_id, new_session, False)]
     assert token not in bot.PLAN_CONFIRM_SESSIONS
     assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
-    assert callback.answers[-1] == ("已清空上下文并推送到 fresh Codex 线程", False)
+    assert callback.answers[-1] == ("已按终端原生选项清空上下文并继续实现", False)
 
 
-def test_plan_confirm_fresh_context_missing_plan_fails_closed(monkeypatch: pytest.MonkeyPatch):
-    """缺少计划正文时 fresh context 不能盲派，避免新线程失去需求上下文。"""
+def test_plan_confirm_fresh_context_fails_closed_when_terminal_not_in_native_menu(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """终端不在 PlanConfirm 菜单态时，不能盲发 Down/Enter。"""
 
     chat_id = 224
-    token = "tok-fresh-empty"
+    token = "tok-fresh-not-menu"
     session = bot.PlanConfirmSession(
         token=token,
         chat_id=chat_id,
@@ -447,13 +479,21 @@ def test_plan_confirm_fresh_context_missing_plan_fails_closed(monkeypatch: pytes
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
 
     async def should_not_restart(*_args, **_kwargs):
-        raise AssertionError("缺少计划正文时不应重启 fresh 线程")
+        raise AssertionError("终端不在原生菜单态时不应重启 CLI")
 
     async def should_not_dispatch(*_args, **_kwargs):
-        raise AssertionError("缺少计划正文时不应派发")
+        raise AssertionError("终端不在原生菜单态时不应派发 prompt")
+
+    async def should_not_wait_session(*_args, **_kwargs):
+        raise AssertionError("终端不在原生菜单态时不应等待新 session")
+
+    sent_keys: list[tuple[str, str]] = []
 
     monkeypatch.setattr(bot, "_restart_main_tmux_fresh_session", should_not_restart)
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", should_not_dispatch)
+    monkeypatch.setattr(bot, "_await_native_plan_confirm_fresh_session", should_not_wait_session)
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", lambda *args, **kwargs: "普通 Codex 输入框，没有确认菜单")
+    monkeypatch.setattr(bot, "tmux_send_key", lambda session_name, key: sent_keys.append((session_name, key)))
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
     callback = DummyCallback(
@@ -463,32 +503,45 @@ def test_plan_confirm_fresh_context_missing_plan_fails_closed(monkeypatch: pytes
     )
     asyncio.run(bot.on_plan_confirm_callback(callback))
 
-    assert callback.answers[-1] == ("fresh context 缺少计划正文，已中止。", True)
+    assert sent_keys == []
+    assert callback.answers[-1] == ("终端不在 Plan 确认菜单，已中止以避免误操作。", True)
     assert callback.message.answers
-    assert "缺少可传递给 fresh context 的计划正文" in callback.message.answers[-1][0]
+    assert "终端不在 Plan 确认菜单" in callback.message.answers[-1][0]
     assert token in bot.PLAN_CONFIRM_SESSIONS
 
 
-def test_parallel_plan_confirm_fresh_context_restarts_bound_parallel_tmux(
+def test_parallel_plan_confirm_fresh_context_drives_bound_parallel_native_tui(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
-    """并行 PlanConfirm 的 fresh context 必须重启对应并行 tmux，而不是误发主会话。"""
+    """并行 PlanConfirm 的 fresh context 必须驱动对应并行 tmux 原生菜单。"""
 
     chat_id = 225
     token = "tok-par-fresh"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
+    old_session = tmp_path / "parallel-old.jsonl"
+    new_session = tmp_path / "parallel-new.jsonl"
+    pointer_file = tmp_path / "old-pointer.txt"
+    old_session.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace_root), "id": "old"}}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    new_session.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace_root), "id": "new"}}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    pointer_file.write_text(str(old_session), encoding="utf-8")
     old_context = bot.ParallelDispatchContext(
         task_id="TASK_0119",
         tmux_session="vibe-par-old",
-        pointer_file=tmp_path / "old-pointer.txt",
+        pointer_file=pointer_file,
         workspace_root=workspace_root,
     )
     session = bot.PlanConfirmSession(
         token=token,
         chat_id=chat_id,
-        session_key="parallel-old-session",
+        session_key=str(old_session),
         user_id=9,
         created_at=time.monotonic(),
         parallel_task_id="TASK_0119",
@@ -497,39 +550,48 @@ def test_parallel_plan_confirm_fresh_context_restarts_bound_parallel_tmux(
     )
     bot.PLAN_CONFIRM_SESSIONS[token] = session
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
-    bot.PARALLEL_TASK_SESSION_MAP["TASK_0119"] = "parallel-old-session"
-    bot.PARALLEL_SESSION_CONTEXTS["parallel-old-session"] = old_context
+    bot.PARALLEL_TASK_SESSION_MAP["TASK_0119"] = str(old_session)
+    bot.PARALLEL_SESSION_CONTEXTS[str(old_session)] = old_context
 
-    task_record = SimpleNamespace(task_id="TASK_0119", title="并行任务")
-    fresh_context = bot.ParallelDispatchContext(
-        task_id="TASK_0119",
-        tmux_session="vibe-par-new",
-        pointer_file=tmp_path / "new-pointer.txt",
-        workspace_root=workspace_root,
-    )
-    restart_calls: list[tuple[str, str]] = []
-    dispatched: list[dict] = []
+    sent_keys: list[tuple[str, str]] = []
+    watcher_calls: list[tuple[str, int, Path, bool]] = []
 
     class DummyTaskService:
         async def get_task(self, task_id: str):
-            assert task_id == "TASK_0119"
-            return task_record
+            raise AssertionError("原生 TUI fresh 不应重建并行任务或查询 TaskService")
 
-    async def fake_restart_parallel_fresh_session(_task_record, _old_context):
-        restart_calls.append((_task_record.task_id, _old_context.tmux_session))
-        return fresh_context, None
+    async def should_not_restart(*_args, **_kwargs):
+        raise AssertionError("并行 fresh 不应重启任何 tmux")
 
-    async def should_not_restart_main(*_args, **_kwargs):
-        raise AssertionError("并行 fresh 不应重启主 tmux")
+    async def should_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("并行 fresh 应由 Codex 原生菜单处理，不应额外派发 prompt")
 
-    async def fake_dispatch(_chat_id: int, prompt: str, **kwargs):
-        dispatched.append({"chat_id": _chat_id, "prompt": prompt, "kwargs": kwargs})
-        return True, Path("/tmp/parallel-fresh.jsonl")
+    def fake_capture(line_count: int, tmux_session: str | None = None) -> str:
+        assert tmux_session == "vibe-par-old"
+        return (
+            "Implement this plan?\n"
+            "> Yes, implement this plan\n"
+            "  Yes, clear context and implement — Fresh thread with this plan\n"
+            "  No, stay in Plan mode\n"
+        )
+
+    async def fake_await_native_session(*, pointer_path, target_cwd, old_session_key, action_started_at):
+        assert pointer_path == pointer_file
+        assert target_cwd == str(workspace_root)
+        assert old_session_key == str(old_session)
+        return new_session
+
+    async def fake_start_parallel_watcher(task_id: str, _chat_id: int, session_path: Path, *, start_in_long_poll: bool):
+        watcher_calls.append((task_id, _chat_id, session_path, start_in_long_poll))
 
     monkeypatch.setattr(bot, "TASK_SERVICE", DummyTaskService())
-    monkeypatch.setattr(bot, "_restart_parallel_tmux_fresh_session", fake_restart_parallel_fresh_session)
-    monkeypatch.setattr(bot, "_restart_main_tmux_fresh_session", should_not_restart_main)
-    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_restart_parallel_tmux_fresh_session", should_not_restart)
+    monkeypatch.setattr(bot, "_restart_main_tmux_fresh_session", should_not_restart)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", should_not_dispatch)
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", fake_capture)
+    monkeypatch.setattr(bot, "tmux_send_key", lambda session_name, key: sent_keys.append((session_name, key)))
+    monkeypatch.setattr(bot, "_await_native_plan_confirm_fresh_session", fake_await_native_session)
+    monkeypatch.setattr(bot, "_start_parallel_task_watcher", fake_start_parallel_watcher)
     monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
@@ -540,12 +602,14 @@ def test_parallel_plan_confirm_fresh_context_restarts_bound_parallel_tmux(
     )
     asyncio.run(bot.on_plan_confirm_callback(callback))
 
-    assert restart_calls == [("TASK_0119", "vibe-par-old")]
-    assert len(dispatched) == 1
-    assert dispatched[0]["kwargs"]["dispatch_context"] == fresh_context
-    assert dispatched[0]["kwargs"]["allow_session_discovery_fallback"] is False
-    assert "并行修复" in dispatched[0]["prompt"]
-    assert callback.answers[-1] == ("已清空上下文并推送到 fresh Codex 线程", False)
+    assert sent_keys == [("vibe-par-old", "Down"), ("vibe-par-old", "C-m")]
+    assert pointer_file.read_text(encoding="utf-8") == str(new_session)
+    assert bot.PARALLEL_TASK_SESSION_MAP["TASK_0119"] == str(new_session)
+    assert bot.PARALLEL_SESSION_CONTEXTS[str(new_session)] == old_context
+    assert str(old_session) not in bot.PARALLEL_SESSION_CONTEXTS
+    assert bot.SESSION_OFFSETS[str(new_session)] == 0
+    assert watcher_calls == [("TASK_0119", chat_id, new_session, False)]
+    assert callback.answers[-1] == ("已按终端原生选项清空上下文并继续实现", False)
 
 
 def test_parallel_plan_confirm_yes_fails_closed_when_context_stale(monkeypatch: pytest.MonkeyPatch):
