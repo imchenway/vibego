@@ -18,6 +18,41 @@
   本次修改的影响点：-；
   待用户重启服务或待执行脚本：-；
 
+## Comet 自动调用规则
+
+当当前环境已安装并可用 `comet` skill、`/comet` 命令或同等 Comet 工作流时，所有用户任务默认必须走 Comet 工作流；agent 必须优先启用 `comet` skill 或等效 Comet 工作流，不需要用户额外手动输入 `/comet`。
+
+自动启用要求：
+
+- 所有用户任务默认走 Comet：新需求、功能迭代、Bug 修复、复杂重构、跨文件变更、文档/配置调整、只读调研、解释说明、简单问答、一次性命令建议等均先进入 Comet 的任务识别与阶段判定；
+- 不因为任务看起来简单而跳过 Comet；轻量任务命中 Comet 预设条件时，优先使用 `comet-tweak`，Bug/热修复命中预设条件时，优先使用 `comet-hotfix`；触发升级条件时必须回到完整 Comet 流程；
+- 用户只描述目标但未指定流程时，默认由 Comet 接管 open → design → build → verify → archive 的阶段推进；
+- 前端任务同时命中 Impeccable 时，使用 Comet 管理研发生命周期，并在 UI/UX 设计或实现阶段按 Impeccable 规则执行。
+
+仅允许不启用 Comet 的场景：
+
+- 用户明确要求不要使用 Comet；
+- 当前环境找不到 Comet skill/命令，或当前会话尚未加载 Comet skill 且无法等效执行；此时不得伪装已启用，必须说明降级原因，并回退到本 AGENTS 的 plan/develop 流程。
+
+执行约束：
+
+- 不可因自动启用 Comet 而跳过用户决策点；涉及方案确认、构建方式、验证失败处理、分支处理等阻塞点时必须暂停等待用户确认。
+- 不可把 `/opsx:new` 当成 Comet 新变更入口；创建新变更必须走 `/comet` 或 `comet-open`，确保 OpenSpec artifacts 与 `.comet.yaml` 同步生成。
+- 若 Comet 与本 AGENTS 的 TDD、文档沉淀、最终回复字段发生冲突，以用户明确指令和本 AGENTS 的硬性约束为准。
+
+## Claude Code 风格表达规则
+
+默认采用接近 Claude Code 的工程同事式表达：清楚、克制、先结论、少噪音，让用户能快速判断“发生了什么、为什么、下一步做什么”。
+
+- 先给结论，再给原因、修法和验证方式；不要先铺排大段过程。
+- Bug/故障类回复固定收敛为“现象 -> 影响 -> 根因 -> 修法 -> 验证”，除非用户要求完整排查日志。
+- 少用术语、少贴过程日志、少堆文件清单；必要术语必须用人话解释其影响。
+- 面向用户决策输出：需要用户确认时，明确推荐项、优缺点、风险和回滚方式。
+- 不要为了显得严谨而输出空泛免责声明；只保留与当前决策或验证直接相关的信息。
+- 不要宣称“已完成/已修复/已验证”，除非已经执行对应验证命令并看到成功结果；验证失败或未跑必须直说。
+- 长回复必须结构化，但每段尽量短；Telegram/移动端场景优先使用清单、短段落和明确标题。
+- 保持专业、直接、可执行；避免情绪化、阴阳怪气、机械套话或“像报告一样”的堆砌。
+
 # ExecPlans
 
 When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to

@@ -18496,9 +18496,12 @@ async def _dispatch_goal_command(
         # Codex /goal 绑定 active thread；回传监听必须来自当前 worker/tmux 对应
         # session，不能用全局 latest rollout 兜底，否则会把 Codex App 输出串到 Telegram。
         allow_session_discovery_fallback=False,
-        # /goal 设置/暂停/恢复必须拿到 Codex session 的用户输入回执，
-        # 避免 Telegram 误报“已提交”，但目标其实没有进入 active thread。
-        confirm_delivery=True,
+        # Codex /goal 是 TUI slash command，不稳定写入 role=user/user_message；
+        # 实测更可靠的信号是 thread_goal_updated。这里仍保留 worker marker
+        # 绑定和禁用全局 latest 兜底，避免串到 Codex App 会话；但不再用
+        # “用户消息 JSONL 回执”判断 slash command 是否成功消费，避免
+        # Telegram GOAL 按钮误报“模型未确认收到”而表现为不可用。
+        confirm_delivery=False,
     )
 
 

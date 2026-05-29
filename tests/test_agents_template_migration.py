@@ -68,3 +68,25 @@ def test_readme_links_point_to_agents_template() -> None:
     assert "仓库根目录的 `AGENTS-template.md`" in readme_cn
     assert "[AGENTS-template.md](AGENTS-template.md)" in readme_en
     assert "repository `AGENTS-template.md`" in readme_en
+
+
+def test_agents_template_requires_comet_for_complex_workflows() -> None:
+    """AGENTS 模板应要求所有用户任务默认优先使用 Comet。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "## Comet 自动调用规则" in template_text
+    assert "必须优先启用 `comet` skill" in template_text
+    assert "所有用户任务默认必须走 Comet 工作流" in template_text
+    assert "不因为任务看起来简单而跳过 Comet" in template_text
+    assert "不可因自动启用 Comet 而跳过用户决策点" in template_text
+
+
+def test_agents_template_requires_claudecode_like_communication() -> None:
+    """AGENTS 模板应固化接近 Claude Code 的清晰表达风格。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "## Claude Code 风格表达规则" in template_text
+    assert "先给结论，再给原因、修法和验证方式" in template_text
+    assert "少用术语、少贴过程日志、少堆文件清单" in template_text

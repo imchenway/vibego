@@ -6489,7 +6489,7 @@ def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path)
     state, _storage = make_state(message)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
-    captured: list[tuple[int, str, DummyMessage, bool, bool]] = []
+    captured: list[tuple[int, str, DummyMessage, bool, bool, bool]] = []
 
     async def fake_dispatch(
         chat_id: int,
@@ -6498,16 +6498,26 @@ def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path)
         reply_to,
         ack_immediately: bool = True,
         confirm_delivery: bool = False,
+        allow_session_discovery_fallback: bool = True,
         **_kwargs,
     ):
-        captured.append((chat_id, prompt, reply_to, ack_immediately, confirm_delivery))
+        captured.append(
+            (
+                chat_id,
+                prompt,
+                reply_to,
+                ack_immediately,
+                confirm_delivery,
+                allow_session_discovery_fallback,
+            )
+        )
         return True, tmp_path / "session.jsonl"
 
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
 
     asyncio.run(bot.on_goal_command(message, state))
 
-    assert captured == [(message.chat.id, "/goal Finish migration and keep tests green", message, True, True)]
+    assert captured == [(message.chat.id, "/goal Finish migration and keep tests green", message, True, False, False)]
 
 
 def test_goal_command_without_args_queries_current_goal(monkeypatch, tmp_path: Path):
@@ -6803,6 +6813,55 @@ def test_goal_clear_callback_requires_confirmation(monkeypatch):
         if button.callback_data
     ]
     assert bot.GOAL_CLEAR_CONFIRM_CALLBACK in callback_data
+
+
+@pytest.mark.parametrize(
+    ("callback_data", "expected_prompt"),
+    [
+        (bot.GOAL_VIEW_CALLBACK, "/goal"),
+        (bot.GOAL_PAUSE_CALLBACK, "/goal pause"),
+        (bot.GOAL_RESUME_CALLBACK, "/goal resume"),
+        (bot.GOAL_CLEAR_CONFIRM_CALLBACK, "/goal clear"),
+    ],
+)
+def test_goal_management_callbacks_dispatch_without_jsonl_delivery_confirmation(
+    monkeypatch,
+    tmp_path: Path,
+    callback_data: str,
+    expected_prompt: str,
+):
+    """GOAL 面板按钮发送的是 Codex slash command，不应要求 JSONL 用户消息确认。
+
+    Codex `/goal` 会优先由 TUI 命令层处理，真实成功信号可能表现为
+    thread_goal_updated，而不是普通 role=user/user_message；若强制走用户消息确认，
+    Telegram 会误报“模型未确认收到”并让按钮看起来不可用。
+    """
+
+    message = DummyMessage()
+    callback = DummyCallback(callback_data, message)
+    state, _storage = make_state(message)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    captured: list[tuple[str, bool, bool]] = []
+
+    async def fake_dispatch(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        confirm_delivery: bool = False,
+        allow_session_discovery_fallback: bool = True,
+        **_kwargs,
+    ):
+        captured.append((prompt, confirm_delivery, allow_session_discovery_fallback))
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_goal_callback(callback, state))
+
+    assert captured == [(expected_prompt, False, False)]
+    assert callback.answers == [("已发送", False)]
 
 
 def test_text_paste_aggregation_injects_single_combined_message(monkeypatch):

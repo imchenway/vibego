@@ -491,6 +491,8 @@ python3.11 -m pytest -q tests/test_task_batch_status.py
 python3.11 -m py_compile bot.py tasks/fsm.py
 python3.11 -m vibego_cli doctor
 bash scripts/test_deps_check.sh
+# 追加 AGENTS.md 证据事实更新后，再次执行影响面测试：
+python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
 ```
 
 结果：均通过；`doctor` 输出 `python_ok=true` 且关键依赖缺失列表为空。
@@ -616,6 +618,8 @@ python3.11 -m py_compile bot.py
 ```bash
 python3.11 -m vibego_cli doctor
 bash scripts/test_deps_check.sh
+# 追加 AGENTS.md 证据事实更新后，再次执行影响面测试：
+python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
 ```
 
 结果：`doctor` 显示 `python_ok=true` 且关键依赖缺失列表为空；依赖检查脚本通过。
@@ -832,6 +836,8 @@ python3.11 -m pytest -q \
 python3.11 -m py_compile bot.py scripts/session_binder.py
 python3.11 -m vibego_cli doctor
 bash scripts/test_deps_check.sh
+# 追加 AGENTS.md 证据事实更新后，再次执行影响面测试：
+python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
 ```
 
 全量 `python3.11 -m pytest -q` 可作为探测执行；若仍失败于已知 `tests/test_parallel_flow.py` send_mode 旧夹具问题，应继续按 fail-closed 记录，不混入本次修复。
@@ -999,6 +1005,8 @@ python3.11 -m pytest -q tests/test_start_tmux_model_cmd.py tests/test_codex_json
 bash -n scripts/start_tmux_codex.sh scripts/run_bot.sh
 python3.11 -m vibego_cli doctor
 bash scripts/test_deps_check.sh
+# 追加 AGENTS.md 证据事实更新后，再次执行影响面测试：
+python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
 ```
 
 结果：
@@ -1034,3 +1042,129 @@ python3.11 -m pytest -q
 2. 回滚 `scripts/session_binder.py` 的 `required_marker` 参数与过滤逻辑。
 3. 回滚 `bot.py` 的 marker 校验与 `_await_session_path` validator。
 4. 回滚新增测试和 AGENTS/docs 证据更新。
+
+## 17. 2026-05-29 追补：GOAL 面板按钮不可用与投递确认误报修复
+
+### 17.1 现象
+
+用户在 Telegram GOAL 面板或 `/goal <objective>` 入口发送 Codex 目标时，Telegram 偶发返回：
+
+```text
+⚠️ tmux 已执行发送键，但模型未确认收到这条输入；系统已自动重试一次仍未确认。
+```
+
+同时用户观察到“目标按钮里的功能完全不可用”。
+
+### 17.2 根因
+
+本次问题不是 tmux 没有发送，也不是当前 pointer 串到 Codex App 会话。
+
+证据：
+
+- worker 日志中已有 `发送 Codex /goal 命令`，随后才触发“模型未确认收到 prompt”的重试告警。
+- 当前 hyphaathenabot 的 `current_session.txt` 指向 worker 会话，且对应 JSONL 的 `session_meta.payload.base_instructions.text` 包含 `vibego-session-bind-token:*` marker，说明 marker 绑定链路有效。
+- Codex JSONL 中 `/goal` 成功后会出现 `event_msg.payload.type = thread_goal_updated`；但 `/goal` 是 Codex TUI slash command，并不稳定按普通输入写入 `role=user` / `user_message`。
+
+因此根因是：此前为普通 Telegram 文本投递新增的“JSONL 用户消息确认”被复用于 `/goal` slash command。该确认逻辑只识别 `role=user` / `user_message`，不能稳定识别 `thread_goal_updated`，导致 `/goal` 已被 Codex 命令层处理时，Telegram 仍误判为“模型未确认收到”，按钮体验表现为不可用。
+
+### 17.3 修复方案
+
+保持安全边界不变，只调整 `/goal` 的确认口径：
+
+1. `/goal` 继续禁用全局 latest session fallback：`allow_session_discovery_fallback=False`。
+2. `/goal` 继续依赖 worker marker 校验，避免串到 Codex App 会话。
+3. `/goal` 不再使用普通用户消息 JSONL 投递确认：`confirm_delivery=False`。
+4. 普通 Telegram 文本仍保留 `confirm_delivery=True`，避免回退此前“tmux send 成功但模型没消费”的保护。
+
+### 17.4 受影响目录
+
+| 目录/文件 | 影响 |
+|---|---|
+| `bot.py` | 调整 `_dispatch_goal_command()` 的 `/goal` 派发参数与注释。 |
+| `tests/test_task_description.py` | 补充 GOAL 面板按钮回归测试，并调整 `/goal` 命令确认口径断言。 |
+| `docs/TASK_20260510_001_codex_goal模式支持方案.md` | 记录本次根因、契约、测试矩阵、风险与回滚。 |
+| `AGENTS.md` | 更新投递确认事实表，明确 `/goal` 不复用普通用户消息确认。 |
+
+不影响范围：
+
+- 不修改 `scripts/session_binder.py` 与 `scripts/start_tmux_codex.sh`，因为 marker 绑定链路本次取证正常。
+- 不修改普通文本投递确认链路，避免削弱直接聊天 prompt 的可靠性保护。
+- 不涉及数据库、迁移、外部 API 或新增依赖。
+- `AGENTS.md` 仅更新证据事实，不改变运行逻辑。
+
+### 17.5 契约变更
+
+| 契约 | 修复前 | 修复后 |
+|---|---|---|
+| 普通 Telegram 文本 | tmux 发送后必须在 Codex/Copilot JSONL 中看到用户消息，否则重试并 fail-closed | 不变 |
+| `/goal` 命令与 GOAL 面板按钮 | 也要求 JSONL 用户消息确认，容易对 slash command 误判 | 不再要求用户消息确认；仍要求 session 绑定、marker 校验与 tmux 发送成功 |
+| session 来源 | 禁止 `/goal` fallback 到全局 latest session | 不变 |
+
+### 17.6 测试矩阵
+
+| 场景 | 用例 | 期望 |
+|---|---|---|
+| `/goal <objective>` 命令 | `test_goal_command_dispatches_objective_to_codex` | prompt 原样为 `/goal <objective>`；`confirm_delivery=False`；`allow_session_discovery_fallback=False` |
+| GOAL 查看按钮 | `test_goal_management_callbacks_dispatch_without_jsonl_delivery_confirmation[goal:view-/goal]` | 发送 `/goal`，不启用 JSONL 用户消息确认 |
+| GOAL 暂停按钮 | `... [goal:pause-/goal pause]` | 发送 `/goal pause`，不启用 JSONL 用户消息确认 |
+| GOAL 恢复按钮 | `... [goal:resume-/goal resume]` | 发送 `/goal resume`，不启用 JSONL 用户消息确认 |
+| GOAL 清除确认按钮 | `... [goal:clear_confirm-/goal clear]` | 发送 `/goal clear`，不启用 JSONL 用户消息确认 |
+| 普通文本投递 | `test_on_text_direct_prompt_enables_delivery_confirmation` | 仍启用 `confirm_delivery=True` |
+| marker 安全边界 | `test_goal_dispatch_rejects_pointer_without_worker_marker` | 指向无 worker marker 的 pointer 时仍 fail-closed |
+| 禁用 latest fallback | `test_goal_dispatch_does_not_fallback_to_global_latest_session` | 主会话未绑定时不扫描全局 latest |
+
+### 17.7 实施顺序
+
+1. 先调整测试断言和新增 GOAL 面板按钮用例，确认失败：旧实现仍传 `confirm_delivery=True`。
+2. 修改 `_dispatch_goal_command()`，仅将 `/goal` 的 `confirm_delivery` 改为 `False`，并补中文注释说明 slash command 与普通 prompt 的差异。
+3. 执行聚焦测试，确认新增失败用例转绿。
+4. 执行 goal/投递确认影响面测试与基础门禁。
+
+### 17.8 风险与回滚
+
+风险：
+
+1. `/goal` 不再用普通用户消息 JSONL 做成功判定，因此 Telegram 只能确认“tmux 已发送且会话来源正确”，不能 100% 证明 Codex 内部 goal 状态完成更新。
+2. 该风险低于旧方案误报，因为 Codex slash command 的真实状态更新信号是 `thread_goal_updated`，旧确认口径本身不匹配 slash command。
+3. 如果未来要做到严格 `/goal` 成功判定，应新增专用确认器：识别发送后的 `thread_goal_updated` / goal status 事件，而不是复用普通用户消息确认。
+
+回滚：
+
+1. 将 `bot.py::_dispatch_goal_command()` 中 `confirm_delivery=False` 改回 `True`。
+2. 回滚 `tests/test_task_description.py` 中与 GOAL 面板 `confirm_delivery=False` 相关的测试断言。
+3. 风险：回滚后 GOAL 面板会恢复“模型未确认收到”的误报。
+
+### 17.9 本次验证记录
+
+红灯验证：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py -k 'goal_command_dispatches_objective_to_codex or goal_management_callbacks_dispatch_without_jsonl_delivery_confirmation'
+```
+
+结果：`5 failed, 193 deselected`。失败点均为旧实现仍向 `/goal` 派发传入 `confirm_delivery=True`。
+
+绿灯与回归：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py -k 'goal_command_dispatches_objective_to_codex or goal_management_callbacks_dispatch_without_jsonl_delivery_confirmation'
+python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
+python3.11 -m py_compile bot.py
+python3.11 -m vibego_cli doctor
+python3.11 -m pytest -q tests/test_chat_menu_buttons.py tests/test_task_description.py -k 'goal'
+python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
+bash scripts/test_deps_check.sh
+# 追加 AGENTS.md 证据事实更新后，再次执行影响面测试：
+python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
+```
+
+结果：
+
+- 新增/调整用例：`5 passed, 193 deselected`。
+- 影响面第一轮：`16 passed, 197 deselected`。
+- `py_compile` 通过。
+- `doctor` 通过，`python_ok=true`。
+- GOAL 菜单相关测试：`15 passed, 232 deselected`。
+- 影响面第二轮：`16 passed, 197 deselected`。
+- `scripts/test_deps_check.sh` 通过。
+- AGENTS.md 证据事实更新后影响面复测：`16 passed, 197 deselected`。
