@@ -6449,6 +6449,38 @@ def test_on_text_ignores_regular_commands(monkeypatch):
     asyncio.run(bot.on_text(message, state))
 
 
+def test_on_text_direct_prompt_enables_delivery_confirmation(monkeypatch, tmp_path: Path):
+    """普通 Telegram 文本直聊应启用投递确认，避免 tmux 成功但模型未消费。"""
+
+    message = DummyMessage()
+    message.text = "hello direct dispatch"
+    state, _storage = make_state(message)
+
+    class DummyBot:
+        async def send_chat_action(self, *_args, **_kwargs):
+            return None
+
+    captured: list[tuple[str, bool]] = []
+
+    async def fake_dispatch(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        confirm_delivery: bool = False,
+        **_kwargs,
+    ):
+        captured.append((prompt, confirm_delivery))
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "current_bot", lambda: DummyBot())
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert captured == [("hello direct dispatch", True)]
+
+
 def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path):
     """Telegram /goal objective 应原样透传到 Codex，而不是被普通 slash 兜底吞掉。"""
 
@@ -6457,17 +6489,25 @@ def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path)
     state, _storage = make_state(message)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
-    captured: list[tuple[int, str, DummyMessage, bool]] = []
+    captured: list[tuple[int, str, DummyMessage, bool, bool]] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
-        captured.append((chat_id, prompt, reply_to, ack_immediately))
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        confirm_delivery: bool = False,
+        **_kwargs,
+    ):
+        captured.append((chat_id, prompt, reply_to, ack_immediately, confirm_delivery))
         return True, tmp_path / "session.jsonl"
 
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
 
     asyncio.run(bot.on_goal_command(message, state))
 
-    assert captured == [(message.chat.id, "/goal Finish migration and keep tests green", message, True)]
+    assert captured == [(message.chat.id, "/goal Finish migration and keep tests green", message, True, True)]
 
 
 def test_goal_command_without_args_queries_current_goal(monkeypatch, tmp_path: Path):

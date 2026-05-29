@@ -351,6 +351,12 @@ MODEL_SESSION_GLOB = os.environ.get("MODEL_SESSION_GLOB", "rollout-*.jsonl").str
 SESSION_POLL_TIMEOUT = float(os.environ.get("SESSION_POLL_TIMEOUT", "2"))
 WATCH_MAX_WAIT = float(os.environ.get("WATCH_MAX_WAIT", "0"))
 WATCH_INTERVAL = float(os.environ.get("WATCH_INTERVAL", "2"))
+# tmux send-keys 成功只代表终端接受按键，不代表模型 CLI 已消费输入；
+# 对高风险入口启用 session JSONL 投递确认，并在未确认时自动重试一次。
+PROMPT_DELIVERY_CONFIRM_ENABLED = _env_bool("PROMPT_DELIVERY_CONFIRM_ENABLED", True)
+PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS = max(_env_float("PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS", 1.2), 0.0)
+PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS = max(_env_float("PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS", 0.2), 0.0)
+PROMPT_DELIVERY_CONFIRM_RETRY_ENABLED = _env_bool("PROMPT_DELIVERY_CONFIRM_RETRY_ENABLED", True)
 # Telegram 消息补偿轮询：每条入站消息触发一次，按 1/3/10/30/90 分钟检测是否有遗漏输出。
 MESSAGE_RECOVERY_POLL_DELAYS_SECONDS: tuple[float, ...] = (60.0, 180.0, 600.0, 1800.0, 5400.0)
 SEND_RETRY_ATTEMPTS = int(os.environ.get("SEND_RETRY_ATTEMPTS", "3"))
@@ -2862,6 +2868,259 @@ def _prepend_enforced_agents_notice(raw_prompt: str) -> str:
     return f"{notice}\n\n{raw_prompt}"
 
 
+def _supports_prompt_delivery_confirmation() -> bool:
+    """判断当前模型是否能通过本地 session 文件确认“用户输入已被消费”。
+
+    目前先收口在 Codex/Copilot JSONL 形态，避免把不稳定确认逻辑扩散到
+    Gemini/ClaudeCode 等不同会话格式。
+    """
+
+    return PROMPT_DELIVERY_CONFIRM_ENABLED and (_is_codex_model() or _is_copilot_model())
+
+
+def _session_file_size(path: Path) -> int:
+    """读取 session 文件当前字节长度，失败时回退 0。"""
+
+    try:
+        return max(int(path.stat().st_size), 0)
+    except OSError:
+        return 0
+
+
+def _normalize_delivery_match_text(value: str) -> str:
+    """归一化用于投递确认匹配的文本，忽略换行和多余空白差异。"""
+
+    return " ".join((value or "").split())
+
+
+def _extract_user_prompt_texts_from_event(event: Mapping[str, Any]) -> list[str]:
+    """从 Codex/Copilot JSONL 事件中提取用户输入文本片段。
+
+    只提取 role=user 或 user_message 事件，避免把 assistant/developer/tool
+    内容误判为“已消费用户输入”。
+    """
+
+    texts: list[str] = []
+
+    def _append_text(candidate: Any) -> None:
+        if isinstance(candidate, str) and candidate.strip():
+            texts.append(candidate)
+
+    def _append_payload_texts(payload: Mapping[str, Any]) -> None:
+        content = payload.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, Mapping):
+                    continue
+                if item.get("type") in {"input_text", "text", "markdown"}:
+                    _append_text(item.get("text") or item.get("markdown"))
+        _append_text(payload.get("message"))
+        _append_text(payload.get("text"))
+
+    event_type = event.get("type")
+    payload = event.get("payload")
+    payload_map: Mapping[str, Any] = payload if isinstance(payload, Mapping) else {}
+
+    if event_type == "user_message":
+        _append_text(event.get("message"))
+        _append_text(event.get("text"))
+        _append_payload_texts(event)
+        return texts
+
+    if event_type == "event_msg" and payload_map.get("type") == "user_message":
+        _append_text(payload_map.get("message"))
+        _append_text(payload_map.get("text"))
+        _append_payload_texts(payload_map)
+        return texts
+
+    if event_type == "response_item":
+        payload_type = str(payload_map.get("type") or "").strip().lower()
+        role = str(payload_map.get("role") or "").strip().lower()
+        if payload_type in {"message", "user_message"} and role == "user":
+            _append_payload_texts(payload_map)
+        return texts
+
+    return texts
+
+
+def _delivery_text_matches_prompt(candidate: str, raw_prompt: str, dispatch_text: str) -> bool:
+    """判断 session 中的用户文本是否对应本次 prompt。
+
+    既匹配原始 prompt，也匹配注入 tmux 的完整 dispatch_text，以兼容普通直聊
+    会追加规约前缀，而 `/goal` 等 slash 命令不追加前缀的差异。
+    """
+
+    haystack = _normalize_delivery_match_text(candidate)
+    if not haystack:
+        return False
+
+    for source in (raw_prompt, dispatch_text):
+        needle = _normalize_delivery_match_text(source)
+        if not needle:
+            continue
+        if len(needle) <= 240:
+            if needle in haystack:
+                return True
+            if len(haystack) >= 12 and haystack in needle:
+                return True
+            continue
+        # 长 prompt 不做完整字符串包含，避免超长附件提示造成高成本匹配；
+        # 头尾都命中即可证明是同一条输入。
+        head = needle[:160]
+        tail = needle[-120:]
+        if head in haystack and tail in haystack:
+            return True
+
+    return False
+
+
+def _session_contains_user_prompt_since(
+    session_path: Path,
+    *,
+    start_offset: int,
+    raw_prompt: str,
+    dispatch_text: str,
+) -> bool:
+    """从指定字节偏移后检查 session JSONL 是否出现本次用户输入。"""
+
+    try:
+        with open(session_path, "rb") as fh:
+            fh.seek(max(int(start_offset or 0), 0))
+            raw = fh.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return False
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        for text in _extract_user_prompt_texts_from_event(event):
+            if _delivery_text_matches_prompt(text, raw_prompt, dispatch_text):
+                return True
+
+    return False
+
+
+async def _wait_for_prompt_delivery_confirmation(
+    session_path: Path,
+    *,
+    start_offset: int,
+    raw_prompt: str,
+    dispatch_text: str,
+) -> bool:
+    """在短窗口内等待模型 session 确认出现本次用户输入。"""
+
+    if not _supports_prompt_delivery_confirmation():
+        return True
+
+    timeout = max(float(PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS), 0.0)
+    interval = max(float(PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS), 0.0)
+    deadline = time.monotonic() + timeout
+
+    while True:
+        if _session_contains_user_prompt_since(
+            session_path,
+            start_offset=start_offset,
+            raw_prompt=raw_prompt,
+            dispatch_text=dispatch_text,
+        ):
+            return True
+        if timeout <= 0 or time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
+
+
+async def _confirm_or_retry_prompt_delivery(
+    *,
+    chat_id: int,
+    session_path: Path,
+    start_offset: int,
+    raw_prompt: str,
+    dispatch_text: str,
+    target_session: str,
+    resolved_send_mode: str,
+    reply_to: Optional[Message],
+) -> bool:
+    """确认本次 prompt 被模型消费；未确认时自动重试一次并给出明确失败提示。"""
+
+    if not _supports_prompt_delivery_confirmation():
+        return True
+
+    if await _wait_for_prompt_delivery_confirmation(
+        session_path,
+        start_offset=start_offset,
+        raw_prompt=raw_prompt,
+        dispatch_text=dispatch_text,
+    ):
+        return True
+
+    retry_mode = resolved_send_mode
+    if _supports_queued_send_mode():
+        retry_mode = PUSH_SEND_MODE_QUEUED
+
+    if PROMPT_DELIVERY_CONFIRM_RETRY_ENABLED:
+        worker_log.warning(
+            "模型未确认收到 prompt，开始自动重试一次",
+            extra={
+                "chat": chat_id,
+                "tmux_session": target_session,
+                "send_mode": resolved_send_mode,
+                "retry_mode": retry_mode,
+                **_session_extra(path=session_path),
+            },
+        )
+        try:
+            if retry_mode == PUSH_SEND_MODE_QUEUED:
+                tmux_queue_line(target_session, dispatch_text)
+            else:
+                tmux_send_line(target_session, dispatch_text)
+        except subprocess.CalledProcessError as exc:
+            manual_hint = _queued_send_manual_hint() if retry_mode == PUSH_SEND_MODE_QUEUED else "若终端输入框仍停留未发送，请手动按 Enter 后重试一次推送。"
+            await _reply_to_chat(
+                chat_id,
+                (
+                    f"tmux重试错误：{exc}\n"
+                    f"{manual_hint}"
+                ),
+                reply_to=reply_to,
+            )
+            return False
+
+        if await _wait_for_prompt_delivery_confirmation(
+            session_path,
+            start_offset=start_offset,
+            raw_prompt=raw_prompt,
+            dispatch_text=dispatch_text,
+        ):
+            worker_log.info(
+                "模型已确认收到自动重试后的 prompt",
+                extra={
+                    "chat": chat_id,
+                    "tmux_session": target_session,
+                    "retry_mode": retry_mode,
+                    **_session_extra(path=session_path),
+                },
+            )
+            return True
+
+    await _reply_to_chat(
+        chat_id,
+        (
+            "⚠️ tmux 已执行发送键，但模型未确认收到这条输入；"
+            "系统已自动重试一次仍未确认。\n"
+            "请稍后重发，或检查终端是否停留在菜单、暂停、异常/离线状态。"
+        ),
+        reply_to=reply_to,
+    )
+    return False
+
+
 def _infer_dispatch_mode_from_prompt(prompt: str) -> Optional[str]:
     """根据提示词前缀推断推送模式（用于兼容旧调用方）。"""
 
@@ -2994,6 +3253,7 @@ async def _dispatch_prompt_to_model(
     force_exit_plan_ui_max_rounds: Optional[int] = None,
     dispatch_context: Optional[ParallelDispatchContext] = None,
     allow_session_discovery_fallback: bool = True,
+    confirm_delivery: bool = False,
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
 
@@ -3214,9 +3474,16 @@ async def _dispatch_prompt_to_model(
         )
         resolved_send_mode = PUSH_SEND_MODE_IMMEDIATE
 
+    dispatch_text = _prepend_enforced_agents_notice(prompt)
+    target_session = dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION
+    delivery_confirm_path = session_path
+    delivery_confirm_start_offset = (
+        _session_file_size(delivery_confirm_path)
+        if confirm_delivery and delivery_confirm_path is not None and _supports_prompt_delivery_confirmation()
+        else 0
+    )
+
     try:
-        dispatch_text = _prepend_enforced_agents_notice(prompt)
-        target_session = dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION
         if resolved_send_mode == PUSH_SEND_MODE_QUEUED:
             tmux_queue_line(target_session, dispatch_text)
         else:
@@ -3311,6 +3578,31 @@ async def _dispatch_prompt_to_model(
 
     assert session_path is not None
     session_key = str(session_path)
+    if confirm_delivery and _supports_prompt_delivery_confirmation():
+        if delivery_confirm_path is not None and delivery_confirm_path == session_path:
+            confirm_start_offset = delivery_confirm_start_offset
+        else:
+            # 新 session 在发送后才出现时，从文件头确认本轮用户输入，避免错过快速写入。
+            confirm_start_offset = 0
+        if not await _confirm_or_retry_prompt_delivery(
+            chat_id=chat_id,
+            session_path=session_path,
+            start_offset=confirm_start_offset,
+            raw_prompt=prompt,
+            dispatch_text=dispatch_text,
+            target_session=target_session,
+            resolved_send_mode=resolved_send_mode,
+            reply_to=reply_to,
+        ):
+            return False, None
+        if session_key not in SESSION_OFFSETS:
+            SESSION_OFFSETS[session_key] = confirm_start_offset
+            worker_log.info(
+                "[session-map] init offset for confirmed dispatch %s -> %s",
+                session_key,
+                SESSION_OFFSETS[session_key],
+                extra=_session_extra(key=session_key),
+            )
     if session_key not in SESSION_OFFSETS:
         initial_offset = _initial_session_offset(session_path)
         SESSION_OFFSETS[session_key] = initial_offset
@@ -4757,6 +5049,9 @@ async def _handle_prompt_dispatch(
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": message,
         "intended_mode": None,
+        # 普通 Telegram 直聊必须确认模型 session 真正消费了输入；
+        # 否则 tmux send-keys 成功但 Codex TUI 未接收时会形成静默丢消息。
+        "confirm_delivery": True,
     }
     if dispatch_context is not None:
         dispatch_kwargs["dispatch_context"] = dispatch_context
@@ -18201,6 +18496,9 @@ async def _dispatch_goal_command(
         # Codex /goal 绑定 active thread；回传监听必须来自当前 worker/tmux 对应
         # session，不能用全局 latest rollout 兜底，否则会把 Codex App 输出串到 Telegram。
         allow_session_discovery_fallback=False,
+        # /goal 设置/暂停/恢复必须拿到 Codex session 的用户输入回执，
+        # 避免 Telegram 误报“已提交”，但目标其实没有进入 active thread。
+        confirm_delivery=True,
     )
 
 

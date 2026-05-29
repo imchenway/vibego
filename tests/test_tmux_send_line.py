@@ -407,3 +407,99 @@ def test_dispatch_prompt_tmux_queue_error_suggests_manual_ctrl_q_for_copilot(mon
     assert not ok
     assert session_path is None
     assert replies and "手动按 Ctrl+Q" in replies[-1]
+
+
+def test_dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed(monkeypatch, tmp_path: Path):
+    """tmux 首次注入未被 session JSONL 确认时，应自动排队重试一次。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS", 0.0, raising=False)
+
+    send_calls: list[tuple[str, str]] = []
+    queue_calls: list[tuple[str, str]] = []
+
+    def fake_tmux_send_line(session: str, prompt: str) -> None:
+        send_calls.append((session, prompt))
+
+    def fake_tmux_queue_line(session: str, prompt: str) -> None:
+        queue_calls.append((session, prompt))
+        session_file.write_text(
+            (
+                '{"type":"response_item","payload":{"type":"message","role":"user",'
+                '"content":[{"type":"input_text","text":"hello retry"}]}}\n'
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "tmux_queue_line", fake_tmux_queue_line)
+
+    ok, session_path = asyncio.run(
+        bot._dispatch_prompt_to_model(
+            9530,
+            "hello retry",
+            reply_to=None,
+            ack_immediately=False,
+            confirm_delivery=True,
+        )
+    )
+
+    assert ok is True
+    assert session_path == session_file
+    assert send_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nhello retry")]
+    assert queue_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nhello retry")]
+
+
+def test_dispatch_prompt_reports_unconfirmed_after_retry(monkeypatch, tmp_path: Path):
+    """自动重试后仍未确认消费时，应返回失败并提示用户，不应假装已发送成功。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS", 0.0, raising=False)
+
+    send_calls: list[tuple[str, str]] = []
+    queue_calls: list[tuple[str, str]] = []
+    replies: list[str] = []
+
+    async def fake_reply(chat_id: int, text: str, **kwargs):
+        replies.append(text)
+        return None
+
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+    monkeypatch.setattr(bot, "tmux_send_line", lambda session, prompt: send_calls.append((session, prompt)))
+    monkeypatch.setattr(bot, "tmux_queue_line", lambda session, prompt: queue_calls.append((session, prompt)))
+
+    ok, session_path = asyncio.run(
+        bot._dispatch_prompt_to_model(
+            9531,
+            "missing confirm",
+            reply_to=None,
+            ack_immediately=False,
+            confirm_delivery=True,
+        )
+    )
+
+    assert ok is False
+    assert session_path is None
+    assert send_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nmissing confirm")]
+    assert queue_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nmissing confirm")]
+    assert replies and "模型未确认收到" in replies[-1]
