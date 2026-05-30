@@ -837,6 +837,8 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
 
     session_file = tmp_path / "rollout-2025-10-10T09-50-13-0199cbcf-bfda-7fc3-8a65-630d360d2d06.jsonl"
     session_file.write_text("", encoding="utf-8")
+    session_pointer = tmp_path / "current_session.txt"
+    session_pointer.write_text(str(session_file), encoding="utf-8")
     chat_id = 999
     bot.CHAT_SESSION_MAP[chat_id] = str(session_file)
 
@@ -853,7 +855,21 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
         return None
 
     monkeypatch.setattr(bot, "_watch_and_notify", dummy_watch)
-    monkeypatch.setattr(bot, "tmux_send_line", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(session_pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    def fake_tmux_send_line(*_args, **_kwargs):
+        # 普通直聊现在会等待 Codex session 中出现用户输入确认；
+        # 该用例关注 ack 的静默投递，因此模拟模型已消费本次输入，避免落入未确认失败分支。
+        session_file.write_text(
+            (
+                '{"type":"response_item","payload":{"type":"message","role":"user",'
+                '"content":[{"type":"input_text","text":"测试指令"}]}}\n'
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
     monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
 
     captured_answers: list[tuple[str, dict]] = []

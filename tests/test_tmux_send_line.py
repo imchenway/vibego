@@ -456,8 +456,9 @@ def test_dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed(monke
 
     assert ok is True
     assert session_path == session_file
-    assert send_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nhello retry")]
-    assert queue_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nhello retry")]
+    expected_prompt = f"{bot.ENFORCED_AGENTS_NOTICE}\n\nhello retry"
+    assert send_calls == [(bot.TMUX_SESSION, expected_prompt)]
+    assert queue_calls == [(bot.TMUX_SESSION, expected_prompt)]
 
 
 def test_dispatch_prompt_reports_unconfirmed_after_retry(monkeypatch, tmp_path: Path):
@@ -500,6 +501,7 @@ def test_dispatch_prompt_reports_unconfirmed_after_retry(monkeypatch, tmp_path: 
 
     assert ok is False
     assert session_path is None
-    assert send_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nmissing confirm")]
-    assert queue_calls == [(bot.TMUX_SESSION, "以下是用户需求描述：\n\nmissing confirm")]
+    expected_prompt = f"{bot.ENFORCED_AGENTS_NOTICE}\n\nmissing confirm"
+    assert send_calls == [(bot.TMUX_SESSION, expected_prompt)]
+    assert queue_calls == [(bot.TMUX_SESSION, expected_prompt)]
     assert replies and "模型未确认收到" in replies[-1]
