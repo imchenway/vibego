@@ -1168,3 +1168,123 @@ python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line
 - 影响面第二轮：`16 passed, 197 deselected`。
 - `scripts/test_deps_check.sh` 通过。
 - AGENTS.md 证据事实更新后影响面复测：`16 passed, 197 deselected`。
+
+## 18. 2026-05-30 PLAN：点击 `/goal` 直接进入“思考中”而非展示设置目标面板
+
+### 18.1 现象
+
+用户反馈：在 Telegram 中点击 `/goal` 后，界面直接显示“思考中”，而不是展示“设置目标”等 goal 管理入口。
+
+### 18.2 当前实现证据
+
+- `bot.py`（锚点：`@router.message(Command("goal"))`、`on_goal_command`）：`/goal` 命令会清空 FSM、解析参数，然后直接调用 `_dispatch_goal_command(...)`。
+- `bot.py`（锚点：`_build_goal_slash_command`）：无参数时会归一为 Codex slash command `/goal`。
+- `bot.py`（锚点：`_send_session_ack`）：`_dispatch_prompt_to_model(..., ack_immediately=True)` 成功绑定 session 后会发送“💭 ...思考中”。
+- `bot.py`（锚点：`_show_goal_panel`、`on_worker_goal_button`）：只有主键盘 `🎯 GOAL` 入口会展示包含“查看当前目标 / 设置目标 / 清除目标 / 暂停 / 恢复”的管理面板。
+- `tests/test_task_description.py`（锚点：`test_goal_command_without_args_queries_current_goal`）：现有测试把“裸 `/goal` 查询当前目标”写成了当前契约。
+
+### 18.3 根因判断
+
+这不是 Codex 没响应，也不是 session 绑定问题，而是 Telegram 入口契约设计不符合用户直觉：
+
+1. 当前实现把裸 `/goal` 当成“立即发送 `/goal` 到 Codex 查询当前目标”。
+2. Telegram 命令列表里的 `/goal` 本质上只能发送裸命令，用户点击后没有输入目标参数。
+3. 因此点击 `/goal` 会进入 `_dispatch_goal_command(...)`，再触发 `_send_session_ack(...)` 的“思考中”提示。
+4. “设置目标”等管理按钮目前只挂在主键盘 `🎯 GOAL`，而不是裸 `/goal` 命令。
+
+### 18.4 推荐修复方案
+
+将裸 `/goal` 改为展示 goal 管理面板；保留带参数 `/goal <objective|pause|resume|clear>` 的直接透传能力。
+
+#### 契约变更
+
+| 入口 | 修复前 | 修复后 |
+|---|---|---|
+| 点击或发送裸 `/goal` | 立即发送 `/goal` 到 Codex，Telegram 显示“思考中” | 展示 Codex goal 管理面板 |
+| `/goal <objective>` | 设置目标 | 不变，直接发送到 Codex |
+| `/goal pause/resume/clear` | 直接发送到 Codex | 不变 |
+| GOAL 面板“查看当前目标” | 发送 `/goal` 查询 Codex 当前目标 | 不变，仍作为查询入口 |
+
+### 18.5 受影响范围
+
+| 类型 | 文件 | 影响 |
+|---|---|---|
+| 实现 | `bot.py` | 调整 `on_goal_command`：当参数为空时调用 `_show_goal_panel(message)`，不再 `_dispatch_goal_command(message, "")`。 |
+| 测试 | `tests/test_task_description.py` | 将 `test_goal_command_without_args_queries_current_goal` 改为断言裸 `/goal` 展示管理面板且不触发 tmux 分发。 |
+| 文档 | `README.md`、`README-en.md` | 更新 `/goal` 裸命令打开管理面板、带参数才透传 Codex 的用户说明。 |
+| 证据 | `AGENTS.md` | 更新 Facts Table 中 Codex `/goal` 入口与回传约束。 |
+| 文档 | `docs/TASK_20260510_001_codex_goal模式支持方案.md` | 记录本次现象、根因、契约变更、测试矩阵、实施顺序、风险与回滚。 |
+| DB/API/配置 | 无 | 不涉及数据库、外部接口、启动脚本或配置项。 |
+
+### 18.6 测试矩阵
+
+| 场景 | 测试 | 期望 |
+|---|---|---|
+| 裸 `/goal` | `test_goal_command_without_args_opens_goal_panel` | 展示 goal 管理面板；不调用 `_dispatch_prompt_to_model`。 |
+| `/goal <objective>` | `test_goal_command_dispatches_objective_to_codex` | 继续原样发送 `/goal <objective>`，`confirm_delivery=False`，`allow_session_discovery_fallback=False`。 |
+| `/goal pause` 并行回复上下文 | `test_goal_command_respects_parallel_reply_target` | 仍投递到并行 tmux 会话。 |
+| GOAL 面板设置目标 | `test_goal_set_callback_enters_objective_state`、`test_goal_objective_input_dispatches_goal_and_restores_menu` | 设置目标流程不变。 |
+| 非 Codex | `test_goal_command_fails_closed_for_non_codex` | 仍 fail-closed，不展示伪 goal 状态。 |
+
+### 18.7 实施顺序
+
+1. 先改测试：将裸 `/goal` 的期望从“查询当前目标”改为“打开管理面板”，运行聚焦测试确认红灯。
+2. 再改 `bot.py::on_goal_command`：`args` 为空时先通过 `_show_goal_panel(message)` 展示管理面板并返回。
+3. 跑聚焦测试：`tests/test_task_description.py -k 'goal_command_without_args or goal_command_dispatches_objective_to_codex or goal_set_callback_enters_objective_state or goal_objective_input_dispatches_goal_and_restores_menu or goal_command_respects_parallel_reply_target or goal_command_fails_closed_for_non_codex'`。
+4. 跑基础门禁：`python3.11 -m vibego_cli doctor`。
+
+### 18.8 风险与回滚
+
+风险：极少数已经习惯发送裸 `/goal` 来查询当前目标的用户，需要多点一次“查看当前目标”。该风险可接受，因为裸 `/goal` 在 Telegram 命令列表点击场景下更像“打开功能入口”。
+
+回滚：恢复 `on_goal_command` 中无参数时调用 `_dispatch_goal_command(message, "")`，并把测试期望改回查询当前目标。
+
+### 18.9 2026-05-30 DEVELOP 结果与验证
+
+#### 实现结果
+
+- `bot.py::on_goal_command` 已调整为：裸 `/goal` 打开 Codex goal 管理面板；带参数 `/goal ...` 才继续解析并透传到 Codex。
+- `tests/test_task_description.py` 已将裸 `/goal` 回归用例改为 `test_goal_command_without_args_opens_goal_panel`，断言不触发 `_dispatch_prompt_to_model`，且面板包含“查看当前目标”和“设置目标”入口。
+- `README.md`、`README-en.md` 已同步说明裸 `/goal` 与带参数 `/goal ...` 的行为差异。
+- `AGENTS.md` 已更新 Codex `/goal` 入口与回传约束证据。
+
+#### TDD 红绿记录
+
+红灯验证：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py -k 'goal_command_without_args'
+```
+
+结果：`1 failed, 197 deselected`。失败点为旧实现仍直接发送 `"/goal"`，符合预期红灯。
+
+绿灯与回归验证：
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py -k 'goal_command_without_args or goal_command_dispatches_objective_to_codex or goal_set_callback_enters_objective_state or goal_objective_input_dispatches_goal_and_restores_menu or goal_command_respects_parallel_reply_target or goal_command_fails_closed_for_non_codex'
+```
+
+结果：`6 passed, 192 deselected`。
+
+```bash
+python3.11 -m pytest -q tests/test_task_description.py tests/test_chat_menu_buttons.py tests/test_tmux_send_line.py -k 'goal or on_text_direct_prompt_enables_delivery_confirmation or dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed or dispatch_prompt_reports_unconfirmed_after_retry'
+```
+
+结果：`18 passed, 244 deselected`。
+
+```bash
+python3.11 -m vibego_cli doctor
+```
+
+结果：退出码 0，`python_ok: true`，关键配置存在。
+
+```bash
+bash scripts/test_deps_check.sh
+```
+
+结果：退出码 0，`aiogram`、`aiohttp`、`aiosqlite` 均已安装。
+
+#### 未覆盖与风险
+
+- 未执行全量 pytest；本轮只执行 `/goal`、主键盘、投递确认影响面测试和基础依赖/doctor 门禁。
+- 若用户已经习惯裸 `/goal` 查询当前目标，需要改为点击面板里的“查看当前目标”；该行为变化符合本轮用户反馈的直觉预期。

@@ -6520,8 +6520,8 @@ def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path)
     assert captured == [(message.chat.id, "/goal Finish migration and keep tests green", message, True, False, False)]
 
 
-def test_goal_command_without_args_queries_current_goal(monkeypatch, tmp_path: Path):
-    """Telegram /goal 无参数时，应发送 /goal 查询当前 Codex goal。"""
+def test_goal_command_without_args_opens_goal_panel(monkeypatch, tmp_path: Path):
+    """Telegram 点击裸 /goal 时，应展示管理面板而不是直接进入“思考中”。"""
 
     message = DummyMessage()
     message.text = "/goal"
@@ -6538,7 +6538,19 @@ def test_goal_command_without_args_queries_current_goal(monkeypatch, tmp_path: P
 
     asyncio.run(bot.on_goal_command(message, state))
 
-    assert captured == ["/goal"]
+    assert captured == []
+    assert message.calls
+    text, _parse_mode, markup, _kwargs = message.calls[0]
+    assert "Codex /goal 管理" in text
+    assert isinstance(markup, InlineKeyboardMarkup)
+    callback_data = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert bot.GOAL_VIEW_CALLBACK in callback_data
+    assert bot.GOAL_SET_CALLBACK in callback_data
 
 
 def test_goal_command_respects_parallel_reply_target(monkeypatch, tmp_path: Path):

@@ -5064,6 +5064,8 @@ async def _handle_prompt_dispatch(
 BOT_COMMANDS: list[tuple[str, str]] = [
     ("start", "打开任务概览"),
     ("help", "查看全部命令"),
+    ("session_live", "查看会话实况"),
+    ("plan_mode", "切换终端模式"),
     ("goal", "管理 Codex 目标"),
 ]
 
@@ -5484,53 +5486,17 @@ def _build_worker_main_keyboard(
     copilot_mode_state: Optional[Literal["interactive", "plan", "autopilot", "unknown"]] = None,
     refresh_plan_mode_state: bool = True,
 ) -> ReplyKeyboardMarkup:
-    """Worker 端常驻键盘，提供任务列表、会话入口、GOAL 与 PLAN MODE 切换入口。
+    """Worker 端常驻键盘，仅保留高频任务入口。
 
-    默认每次渲染都会强探测 tmux 中的实时状态，尽可能保证按钮状态正确。
-    仅当 refresh_plan_mode_state=False 时，才允许使用显式状态或缓存状态。
+    会话实况、PLAN/MODE 切换与 GOAL 均通过 Telegram 命令菜单唤起，
+    避免底部键盘堆叠过多低频按钮，也避免渲染主菜单时为隐藏按钮探测 tmux。
     """
-
-    if _is_copilot_model():
-        if refresh_plan_mode_state:
-            resolved_copilot_mode_state = _refresh_worker_copilot_mode_state_cache(force_probe=True)
-        elif copilot_mode_state is not None:
-            resolved_copilot_mode_state = _set_worker_copilot_mode_state_cache(copilot_mode_state)
-        else:
-            resolved_copilot_mode_state = _refresh_worker_copilot_mode_state_cache(force_probe=False)
-        if resolved_copilot_mode_state == "interactive":
-            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_INTERACTIVE
-        elif resolved_copilot_mode_state == "plan":
-            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN
-        elif resolved_copilot_mode_state == "autopilot":
-            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_AUTOPILOT
-        else:
-            plan_mode_button_text = WORKER_COPILOT_MODE_BUTTON_TEXT_UNKNOWN
-    else:
-        if refresh_plan_mode_state:
-            resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=True)
-        elif plan_mode_state is not None:
-            resolved_plan_mode_state = _set_worker_plan_mode_state_cache(plan_mode_state)
-        else:
-            resolved_plan_mode_state = _refresh_worker_plan_mode_state_cache(force_probe=False)
-        if resolved_plan_mode_state == "on":
-            plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_ON
-        elif resolved_plan_mode_state == "off":
-            plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_OFF
-        else:
-            plan_mode_button_text = WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN
 
     return ReplyKeyboardMarkup(
         keyboard=[
             [
                 KeyboardButton(text=WORKER_MENU_BUTTON_TEXT),
                 KeyboardButton(text=WORKER_COMMANDS_BUTTON_TEXT),
-            ],
-            [
-                KeyboardButton(text=WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT),
-                KeyboardButton(text=plan_mode_button_text),
-            ],
-            [
-                KeyboardButton(text=WORKER_GOAL_BUTTON_TEXT),
             ],
         ],
         resize_keyboard=True,
@@ -16855,6 +16821,8 @@ async def on_help_command(message: Message) -> None:
         "*指令总览*\n"
         "- /help — 查看全部命令\n"
         "- /tasks — 任务管理命令清单\n"
+        "- /session_live — 查看主会话与并行会话实况\n"
+        "- /plan_mode — 切换当前终端 PLAN/MODE 状态\n"
         "- /goal [objective|pause|resume|clear] — 管理 Codex 当前线程目标\n"
         "- /task_new — 创建任务（交互式或附带参数）\n"
         "- /task_list — 查看任务列表，支持 status/limit/offset\n"
@@ -16894,10 +16862,18 @@ async def on_tasks_help(message: Message) -> None:
 
 @router.message(Command("goal"))
 async def on_goal_command(message: Message, state: FSMContext) -> None:
-    """处理 Telegram /goal 命令并原样透传给 Codex CLI。"""
+    """处理 Telegram /goal 命令。
+
+    裸 /goal 来自 Telegram 命令菜单点击，用户预期是打开管理入口；
+    只有带参数的 /goal ... 才直接透传给 Codex CLI。
+    """
 
     await state.clear()
     args = _extract_command_args(message.text or "")
+    if not args.strip():
+        await _show_goal_panel(message)
+        return
+
     dispatch_context, resolved = await _resolve_goal_dispatch_context_from_reply_target(message)
     if not resolved:
         return
@@ -17773,6 +17749,13 @@ async def _handle_terminal_snapshot_request(message: Message) -> None:
     finally:
         # 轻量自愈：若 watcher 意外退出，尝试恢复推送通道，避免用户必须再发一条消息。
         await _resume_session_watcher_if_needed(chat_id, reason="session_live")
+
+
+@router.message(Command("session_live"))
+async def on_session_live_command(message: Message) -> None:
+    """通过 Telegram 命令菜单打开会话实况列表。"""
+
+    await _handle_terminal_snapshot_request(message)
 
 
 @router.message(Command("task_list"))
@@ -18883,6 +18866,13 @@ async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
 
 @router.message(F.text.regexp(r"^🧭 (?:PLAN MODE:|MODE:)"))
 async def on_worker_plan_mode_button(message: Message) -> None:
+    await _handle_worker_plan_mode_toggle_request(message)
+
+
+@router.message(Command("plan_mode"))
+async def on_worker_plan_mode_command(message: Message) -> None:
+    """通过 Telegram 命令菜单切换当前终端模式。"""
+
     await _handle_worker_plan_mode_toggle_request(message)
 
 

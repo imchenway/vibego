@@ -97,8 +97,13 @@ Then click on `/start` in the bot created by Telegram ,Enjoy it!
 |----------------------|----------------------------------------------------------------------------------|
 | `CODEX_WORKDIR`      | Codex CLI working directory (defaults to the value in `.env` or repository root) |
 | `CODEX_CMD`          | Launch command, default `codex --dangerously-bypass-...`                         |
+| `CODEX_GOALS_ENABLED` | Whether to append `-c features.goals=true` at startup; defaults to `1`, set `0/false/no/off` to disable experimental `/goal` |
 | `CODEX_SESSION_ROOT` | JSONL root directory (default `~/.codex/sessions`)                               |
 | `CODEX_SESSION_GLOB` | JSONL file pattern (default `rollout-*.jsonl`)                                   |
+
+The Telegram worker supports Codex `/goal [objective|pause|resume|clear]`. Bare `/goal` opens the lightweight
+management panel; `/goal <objective|pause|resume|clear>` is forwarded directly to Codex. Codex active thread remains
+the source of truth for goal state.
 
 ### ClaudeCode
 
@@ -133,7 +138,7 @@ On startup, vibego syncs the repository `AGENTS-template.md` block into `~/.gemi
 ### Copilot
 
 Copilot is powered by GitHub Copilot CLI, with `copilot --yolo` as the default launch command.
-The Telegram main keyboard shows Copilot's `interactive / plan / autopilot` state as `🧭 MODE`; queued send defaults to `Ctrl+Q`, while immediate send still uses `Enter`.
+The Telegram command menu can switch Copilot's `interactive / plan / autopilot` state with `/plan_mode`; queued send defaults to `Ctrl+Q`, while immediate send still uses `Enter`.
 
 | Variable | Description |
 |----------|-------------|
@@ -146,6 +151,9 @@ The Telegram main keyboard shows Copilot's `interactive / plan / autopilot` stat
 ## aiogram Worker Behaviour
 
 - `/start`: returns `chat_id`, `MODE`, and `ACTIVE_MODEL`; logs record `chat_id` and `user_id`.
+- `/session_live`: view the main session and active parallel sessions.
+- `/plan_mode`: switch the current terminal PLAN/MODE state.
+- `/goal [objective|pause|resume|clear]`: Codex workers only. Bare `/goal` opens the management panel; arguments are forwarded to Codex to view, set, pause, resume, or clear the active thread goal.
 - Text messages:
     1. Resolve the session file based on `ACTIVE_MODEL`: Codex / ClaudeCode / Copilot use JSONL, Gemini uses `session-*.json`.
        Read `current_session.txt` first, then search `MODEL_SESSION_ROOT` if needed.
