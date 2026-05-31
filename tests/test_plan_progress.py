@@ -70,6 +70,7 @@ def plan_test_env(monkeypatch, tmp_path):
     bot.CHAT_PLAN_MESSAGES.clear()
     bot.CHAT_PLAN_TEXT.clear()
     bot.CHAT_PLAN_COMPLETION.clear()
+    bot.CHAT_DELIVERY_LOCKS.clear()
     dummy = DummyBot()
     bot._bot = dummy
     bot.ENABLE_PLAN_PROGRESS = True
@@ -614,6 +615,57 @@ def test_duplicate_messages_sent_once(plan_test_env):
     assert result is True
     assert len(env["replies"]) == 1
     assert env["replies"][0][1].endswith(message_text)
+
+
+def test_deliver_pending_messages_concurrent_calls_send_once(plan_test_env, monkeypatch):
+    env = plan_test_env
+    chat_id = 1407
+    message_text = "并发重复投递测试"
+    env["append_events"]([_codex_response_item_final_event(message_text)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    replies: list[tuple[int, str]] = []
+    first_reply_entered = asyncio.Event()
+    release_first_reply = asyncio.Event()
+    reply_enter_count = 0
+
+    async def slow_reply(
+        target_chat_id: int,
+        text: str,
+        *,
+        parse_mode=None,
+        preformatted: bool = False,
+        reply_markup=None,
+        attachment_reply_markup=None,
+        overflow_mode: str = "attachment",
+    ):
+        nonlocal reply_enter_count
+        reply_enter_count += 1
+        replies.append((target_chat_id, text))
+        if reply_enter_count == 1:
+            first_reply_entered.set()
+            # 挂住首次 Telegram 发送结果，让第二个投递协程有机会并发进入同一 offset。
+            await release_first_reply.wait()
+        return text
+
+    async def run_concurrent_delivery():
+        first = asyncio.create_task(bot._deliver_pending_messages(chat_id, env["session"]))
+        await asyncio.wait_for(first_reply_entered.wait(), timeout=1)
+        second = asyncio.create_task(bot._deliver_pending_messages(chat_id, env["session"]))
+        await asyncio.sleep(0)
+        release_first_reply.set()
+        return await asyncio.gather(first, second)
+
+    monkeypatch.setattr(bot, "reply_large_text", slow_reply)
+
+    results = asyncio.run(run_concurrent_delivery())
+
+    assert any(results)
+    assert len(replies) == 1
+    assert replies[0][0] == chat_id
+    assert replies[0][1].endswith(message_text)
 
 
 def test_codex_mixed_final_answer_prefers_response_item_once(plan_test_env, monkeypatch):

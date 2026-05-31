@@ -11743,6 +11743,8 @@ CHAT_PLAN_TEXT: Dict[int, str] = {}
 CHAT_PLAN_COMPLETION: Dict[int, bool] = {}
 CHAT_DELIVERED_HASHES: Dict[int, Dict[str, set[str]]] = {}
 CHAT_DELIVERED_OFFSETS: Dict[int, Dict[str, set[int]]] = {}
+# 同一 chat/session 的模型输出投递必须串行，避免快速轮询、watcher、补偿轮询并发读到同一 offset 后双发。
+CHAT_DELIVERY_LOCKS: Dict[Tuple[int, str], asyncio.Lock] = {}
 CHAT_MESSAGE_RECOVERY_POLL_TASKS: Dict[int, asyncio.Task] = {}
 CHAT_REPLY_COUNT: Dict[int, Dict[str, int]] = {}
 CHAT_COMPACT_STATE: Dict[int, Dict[str, Dict[str, Any]]] = {}
@@ -13410,6 +13412,8 @@ async def _post_delivery_compact_checks(chat_id: int, session_key: str) -> None:
 def _reset_delivered_offsets(chat_id: int, session_key: Optional[str] = None) -> None:
     if session_key is None:
         removed = CHAT_DELIVERED_OFFSETS.pop(chat_id, None)
+        for lock_key in [key for key in CHAT_DELIVERY_LOCKS if key[0] == chat_id]:
+            CHAT_DELIVERY_LOCKS.pop(lock_key, None)
         if removed:
             worker_log.info(
                 "清空聊天的已处理事件偏移",
@@ -13422,6 +13426,7 @@ def _reset_delivered_offsets(chat_id: int, session_key: Optional[str] = None) ->
         return
     if session_key in sessions:
         sessions.pop(session_key, None)
+        CHAT_DELIVERY_LOCKS.pop((chat_id, session_key), None)
         worker_log.info(
             "清空会话的已处理事件偏移",
             extra={
@@ -13436,6 +13441,17 @@ def _reset_delivered_offsets(chat_id: int, session_key: Optional[str] = None) ->
 
 def _get_delivered_offsets(chat_id: int, session_key: str) -> set[int]:
     return CHAT_DELIVERED_OFFSETS.setdefault(chat_id, {}).setdefault(session_key, set())
+
+
+def _get_delivery_lock(chat_id: int, session_key: str) -> asyncio.Lock:
+    """获取指定 chat/session 的投递锁，确保同一会话不会并发双发。"""
+
+    key = (int(chat_id), session_key)
+    lock = CHAT_DELIVERY_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        CHAT_DELIVERY_LOCKS[key] = lock
+    return lock
 
 
 def _remember_chat_active_user(chat_id: int, user_id: Optional[int]) -> None:
@@ -14371,6 +14387,23 @@ async def _maybe_send_plan_confirm_prompt(chat_id: int, session_key: str, *, pla
 
 
 async def _deliver_pending_messages(
+    chat_id: int,
+    session_path: Path,
+    *,
+    add_completion_header: bool = True
+) -> bool:
+    """串行发送待处理模型消息，防止多个轮询入口并发处理同一 session offset。"""
+
+    session_key = str(session_path)
+    async with _get_delivery_lock(chat_id, session_key):
+        return await _deliver_pending_messages_locked(
+            chat_id,
+            session_path,
+            add_completion_header=add_completion_header,
+        )
+
+
+async def _deliver_pending_messages_locked(
     chat_id: int,
     session_path: Path,
     *,
