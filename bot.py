@@ -4939,6 +4939,63 @@ async def _finalize_media_group_after_delay(media_group_id: str) -> None:
         )
 
 
+async def _clear_failed_media_group_state(media_group_id: Optional[str]) -> None:
+    """附件下载失败时清理媒体组聚合状态，避免失败相册长期占用缓存。"""
+
+    if not media_group_id:
+        return
+    async with MEDIA_GROUP_LOCK:
+        state = MEDIA_GROUP_STATE.pop(media_group_id, None)
+    if state is not None and state.finalize_task and not state.finalize_task.done():
+        state.finalize_task.cancel()
+
+
+def _format_attachment_download_failure_notice(error: Exception, *, has_text: bool) -> str:
+    """构造用户可见的附件下载失败提示，避免 Telegram 侧静默无响应。"""
+
+    error_text = str(error).strip() or error.__class__.__name__
+    truncated_error, _ = _limit_text(error_text, 180)
+    if has_text:
+        return (
+            "⚠️ 附件下载失败，文字说明已先发送给模型。\n"
+            f"原因：`{_escape_markdown_text(truncated_error)}`\n"
+            "请稍后重发附件，或检查 Telegram 代理/网络后再试。"
+        )
+    return (
+        "⚠️ 附件下载失败，本条消息没有可单独发送的文字说明。\n"
+        f"原因：`{_escape_markdown_text(truncated_error)}`\n"
+        "请稍后重发附件，或检查 Telegram 代理/网络后再试。"
+    )
+
+
+async def _handle_media_attachment_download_failure(
+    message: Message,
+    text_part: str,
+    error: Exception,
+) -> None:
+    """处理普通聊天附件下载失败：给用户明确回执，且不丢失 caption 文本。"""
+
+    text_fallback = (text_part or "").strip()
+    media_group_id = getattr(message, "media_group_id", None)
+    await _clear_failed_media_group_state(media_group_id)
+    worker_log.warning(
+        "附件下载失败，已回退处理文字说明：%s",
+        error,
+        extra={
+            **_session_extra(),
+            "media_group": media_group_id or "-",
+            "chat": getattr(getattr(message, "chat", None), "id", None),
+            "has_text": bool(text_fallback),
+        },
+    )
+    await _answer_with_markdown(
+        message,
+        _format_attachment_download_failure_notice(error, has_text=bool(text_fallback)),
+    )
+    if text_fallback:
+        await _handle_prompt_dispatch(message, text_fallback)
+
+
 async def _enqueue_media_group_message(message: Message, text_part: Optional[str]) -> None:
     """收集媒体组中的每一条消息，统一延迟推送。"""
 
@@ -5161,6 +5218,7 @@ COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 5)
 WX_PREVIEW_COMMAND_NAME = "wx-dev-preview"
 WX_AUTO_PREVIEW_COMMAND_NAME = "wx-auto-preview"
 WX_UPLOAD_COMMAND_NAME = "wx-dev-upload"
+WX_DEVTOOLS_AUTO_PORT_RETRY_ENV = "WX_DEVTOOLS_AUTO_PORT_RETRY"
 WX_PREVIEW_CHOICE_PREFIX = "wxpreview:choose:"
 WX_PREVIEW_CANCEL = "wxpreview:cancel"
 WX_PREVIEW_PORT_USE_PREFIX = "wxpreview:port_use:"
@@ -6037,6 +6095,12 @@ def _is_wx_devtools_command(command_name: Optional[str]) -> bool:
     return command_name in {WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME, WX_UPLOAD_COMMAND_NAME}
 
 
+def _is_wx_preview_auto_flow_command(command_name: Optional[str]) -> bool:
+    """判断是否为允许自动选择/自动端口重试的预览类命令。"""
+
+    return command_name in {WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME}
+
+
 def _collect_wx_command_env_overrides(command_text: str) -> Dict[str, str]:
     """从命令字符串中提取可透传的环境变量覆盖项。"""
 
@@ -6173,6 +6237,52 @@ def _is_wx_preview_port_mismatch_error(exit_code: Optional[int], stderr_text: st
         return False
     current_port, expected_port = _parse_wx_preview_port_mismatch(stderr_text)
     return current_port is not None and expected_port is not None
+
+
+def _wx_devtools_auto_retry_already_used(command: CommandDefinition) -> bool:
+    """判断微信开发命令是否已执行过一次自动端口重试。"""
+
+    return _extract_shell_env_value(command.command, WX_DEVTOOLS_AUTO_PORT_RETRY_ENV) == "1"
+
+
+def _build_wx_devtools_port_retry_command(command: CommandDefinition, port: int) -> CommandDefinition:
+    """构造只重试一次的微信开发命令，避免端口错误递归重试。"""
+
+    return CommandDefinition(
+        id=command.id,
+        project_slug=command.project_slug,
+        name=command.name,
+        title=command.title,
+        command=f"{WX_DEVTOOLS_AUTO_PORT_RETRY_ENV}=1 PORT={port} {command.command}",
+        scope=command.scope,
+        description=command.description,
+        timeout=command.timeout,
+        enabled=command.enabled,
+        created_at=command.created_at,
+        updated_at=command.updated_at,
+        aliases=command.aliases,
+    )
+
+
+def _select_wx_devtools_auto_retry_port(
+    command: CommandDefinition,
+    exit_code: Optional[int],
+    stderr_text: str,
+) -> tuple[Optional[int], Optional[str]]:
+    """按高置信规则选择自动重试端口；无法安全判断时返回 None。"""
+
+    if not _is_wx_preview_auto_flow_command(command.name):
+        return None, None
+    if _wx_devtools_auto_retry_already_used(command):
+        return None, None
+    mismatch_current_port, _mismatch_expected_port = _parse_wx_preview_port_mismatch(stderr_text)
+    if mismatch_current_port is not None:
+        return mismatch_current_port, "端口不匹配，已自动改用 IDE 当前端口"
+    if _is_wx_preview_missing_port_error(exit_code, stderr_text):
+        suggested_ports, _enabled_flag, _config_path = _suggest_wx_devtools_ports()
+        if len(suggested_ports) == 1:
+            return suggested_ports[0], "端口配置缺失，已自动使用本机唯一候选端口"
+    return None, None
 
 
 def _extract_shell_env_value(command_text: str, key: str) -> Optional[str]:
@@ -6512,6 +6622,32 @@ async def _maybe_handle_wx_preview(
         await _answer_with_markdown(reply_message, text)
         return True
 
+    if _is_wx_preview_auto_flow_command(command.name) and len(candidates) == 1:
+        candidate = candidates[0]
+        command_override = _wrap_wx_preview_command(command, candidate.project_root)
+        command_override = _apply_command_env_overrides(command_override, env_overrides)
+        action_text = "手机自动预览" if command.name == WX_AUTO_PREVIEW_COMMAND_NAME else "生成预览"
+        await _answer_with_markdown(
+            reply_message,
+            "\n".join(
+                [
+                    "仅发现 1 个小程序目录，已自动选择：",
+                    f"`{_escape_markdown_text(str(candidate.project_root))}`",
+                    f"开始{action_text}…",
+                ]
+            ),
+        )
+        await _execute_command_definition(
+            command=command_override,
+            reply_message=reply_message,
+            trigger=trigger,
+            actor_user=actor_user,
+            service=service,
+            history_detail_prefix=history_detail_prefix,
+            fsm_state=fsm_state,
+        )
+        return True
+
     await fsm_state.clear()
     await fsm_state.set_state(WxPreviewStates.waiting_choice)
     await fsm_state.update_data(
@@ -6581,6 +6717,53 @@ async def _execute_command_definition(
     try:
         exit_code, stdout_text, stderr_text, duration = await _run_shell_command(command.command, command.timeout)
         status = "success" if exit_code == 0 else "failed"
+        retry_port, retry_reason = _select_wx_devtools_auto_retry_port(command, exit_code, stderr_text)
+        if status == "failed" and retry_port is not None:
+            project_root = _extract_wx_preview_project_root(stdout_text, stderr_text)
+            if project_root is None:
+                raw_project_root = _extract_shell_env_value(command.command, "PROJECT_PATH") or _extract_shell_env_value(
+                    command.command, "PROJECT_BASE"
+                )
+                project_root = Path(raw_project_root).expanduser() if raw_project_root else None
+            ports_file = CONFIG_DIR_PATH / "wx_devtools_ports.json"
+            config_note = ""
+            try:
+                _upsert_wx_devtools_ports_file(
+                    ports_file=ports_file,
+                    project_slug=PROJECT_NAME or PROJECT_SLUG,
+                    project_root=project_root,
+                    port=retry_port,
+                )
+                config_note = f"已写入端口配置：`{_escape_markdown_text(str(ports_file))}`"
+            except OSError as exc:
+                worker_log.warning(
+                    "自动写入 wx_devtools_ports.json 失败：%s",
+                    exc,
+                    extra=_session_extra(key="wx_preview_auto_port_write_failed"),
+                )
+                config_note = "端口配置写入失败，将仅本次使用该端口自动重试。"
+            if reply_message is not None:
+                await _answer_with_markdown(
+                    reply_message,
+                    "\n".join(
+                        [
+                            f"{retry_reason or '端口失败，已自动重试'}：`{retry_port}`",
+                            config_note,
+                            "自动重试 1 次；若仍失败，将进入人工端口选择/输入流程。",
+                        ]
+                    ),
+                )
+            retry_command = _build_wx_devtools_port_retry_command(command, retry_port)
+            retry_exit_code, retry_stdout_text, retry_stderr_text, retry_duration = await _run_shell_command(
+                retry_command.command,
+                retry_command.timeout,
+            )
+            command = retry_command
+            exit_code = retry_exit_code
+            stdout_text = retry_stdout_text
+            stderr_text = retry_stderr_text
+            duration += retry_duration
+            status = "success" if exit_code == 0 else "failed"
     except CommandExecutionTimeout:
         status = "timeout"
         stderr_text = f"命令在 {command.timeout} 秒内未完成，已强制终止。"
@@ -20397,7 +20580,7 @@ async def on_command_execute_callback(callback: CallbackQuery, state: FSMContext
         history_detail_prefix=COMMAND_HISTORY_DETAIL_PREFIX,
         fsm_state=state,
     ):
-        await callback.answer("请选择小程序目录")
+        await callback.answer("请按消息提示继续")
         return
     await callback.answer("正在执行命令…")
     await _execute_command_definition(
@@ -20434,7 +20617,7 @@ async def on_global_command_execute_callback(callback: CallbackQuery, state: FSM
         history_detail_prefix=COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
         fsm_state=state,
     ):
-        await callback.answer("请选择小程序目录")
+        await callback.answer("请按消息提示继续")
         return
     await callback.answer("正在执行通用命令…")
     await _execute_command_definition(
@@ -24948,12 +25131,17 @@ async def on_media_message(message: Message) -> None:
         return
     text_part = (message.caption or message.text or "").strip()
 
-    if message.media_group_id:
-        await _enqueue_media_group_message(message, text_part)
-        return
+    try:
+        if message.media_group_id:
+            await _enqueue_media_group_message(message, text_part)
+            return
 
-    attachment_dir = _attachment_dir_for_message(message)
-    attachments = await _collect_saved_attachments(message, attachment_dir)
+        attachment_dir = _attachment_dir_for_message(message)
+        attachments = await _collect_saved_attachments(message, attachment_dir)
+    except Exception as exc:  # noqa: BLE001
+        # Telegram 附件下载依赖代理链路；失败时必须给用户可见反馈，不能静默丢消息。
+        await _handle_media_attachment_download_failure(message, text_part, exc)
+        return
     if not attachments and not text_part:
         await message.answer("未检测到可处理的附件或文字内容。")
         return

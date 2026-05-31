@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 import bot as bot_module
 from bot import (
+    WX_AUTO_PREVIEW_COMMAND_NAME,
     WX_PREVIEW_COMMAND_NAME,
     WX_UPLOAD_COMMAND_NAME,
     _detect_wx_preview_candidates,
@@ -159,3 +162,117 @@ def test_wx_auto_preview_is_default_global_command() -> None:
     assert 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}"' in command_text
     assert 'WX_PREVIEW_ACTION=auto-preview' in command_text
     assert "gen_preview.sh" in command_text
+
+
+class _DummyWxPreviewState:
+    """记录微信目录选择 FSM 调用，便于断言是否进入人工选择。"""
+
+    def __init__(self) -> None:
+        self.cleared = 0
+        self.states: list[object] = []
+        self.data: list[dict] = []
+
+    async def clear(self) -> None:
+        self.cleared += 1
+
+    async def set_state(self, state) -> None:
+        self.states.append(state)
+
+    async def update_data(self, **kwargs) -> None:
+        self.data.append(kwargs)
+
+
+def _build_wx_command(name: str) -> CommandDefinition:
+    """构造微信开发命令对象。"""
+
+    return CommandDefinition(
+        id=101,
+        project_slug="__global__",
+        name=name,
+        title=name,
+        command="echo run",
+        scope="global",
+        description="",
+        timeout=60,
+        enabled=True,
+        aliases=(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command_name", [WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME])
+async def test_wx_preview_single_candidate_executes_without_choice(monkeypatch, tmp_path: Path, command_name: str) -> None:
+    """preview/auto-preview 只有一个小程序候选时，应自动选择并直接执行。"""
+
+    mini = tmp_path / "frontend-mini"
+    _write_app_json(mini)
+    state = _DummyWxPreviewState()
+    messages: list[str] = []
+    executed: list[CommandDefinition] = []
+    reply_message = SimpleNamespace()
+
+    async def fake_answer_with_markdown(_message, text: str, *, reply_markup=None):
+        messages.append(text)
+        return SimpleNamespace(message_id=len(messages), chat=SimpleNamespace(id=1))
+
+    async def fake_execute_command_definition(**kwargs):
+        executed.append(kwargs["command"])
+
+    monkeypatch.setattr(bot_module, "_command_workdir", lambda: tmp_path)
+    monkeypatch.setattr(bot_module, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot_module, "_execute_command_definition", fake_execute_command_definition)
+
+    handled = await bot_module._maybe_handle_wx_preview(
+        command=_build_wx_command(command_name),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=SimpleNamespace(),
+        history_detail_prefix="cmd:detail:",
+        fsm_state=state,
+    )
+
+    assert handled is True
+    assert len(executed) == 1
+    assert str(mini) in executed[0].command
+    assert "PROJECT_PATH=" in executed[0].command
+    assert state.states == []
+    assert messages and "仅发现 1 个小程序目录" in messages[0]
+
+
+@pytest.mark.asyncio
+async def test_wx_upload_single_candidate_still_requires_choice(monkeypatch, tmp_path: Path) -> None:
+    """上传命令即使只有一个候选，也保留人工确认，避免误上传。"""
+
+    mini = tmp_path / "frontend-mini"
+    _write_app_json(mini)
+    state = _DummyWxPreviewState()
+    messages: list[tuple[str, object]] = []
+    executed: list[CommandDefinition] = []
+    reply_message = SimpleNamespace()
+
+    async def fake_answer_with_markdown(_message, text: str, *, reply_markup=None):
+        messages.append((text, reply_markup))
+        return SimpleNamespace(message_id=len(messages), chat=SimpleNamespace(id=1))
+
+    async def fake_execute_command_definition(**kwargs):
+        executed.append(kwargs["command"])
+
+    monkeypatch.setattr(bot_module, "_command_workdir", lambda: tmp_path)
+    monkeypatch.setattr(bot_module, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot_module, "_execute_command_definition", fake_execute_command_definition)
+
+    handled = await bot_module._maybe_handle_wx_preview(
+        command=_build_wx_command(WX_UPLOAD_COMMAND_NAME),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=SimpleNamespace(),
+        history_detail_prefix="cmd:detail:",
+        fsm_state=state,
+    )
+
+    assert handled is True
+    assert executed == []
+    assert state.states == [bot_module.WxPreviewStates.waiting_choice]
+    assert messages and "请选择要上传代码的小程序目录" in messages[0][0]

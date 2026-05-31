@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,24 @@ class _DummyReplyMessage:
         self.chat = SimpleNamespace(id=chat_id)
 
 
+class _DummyFsmState:
+    """记录端口人工兜底状态，便于确认自动重试是否短路人工流程。"""
+
+    def __init__(self) -> None:
+        self.states: list[object] = []
+        self.data: list[dict] = []
+        self.cleared = 0
+
+    async def clear(self) -> None:
+        self.cleared += 1
+
+    async def set_state(self, state) -> None:
+        self.states.append(state)
+
+    async def update_data(self, **kwargs) -> None:
+        self.data.append(kwargs)
+
+
 class _DummyBot:
     """记录图片/文件发送顺序，并可按需制造失败。"""
 
@@ -54,6 +73,24 @@ def _build_preview_command() -> CommandDefinition:
         name=bot.WX_PREVIEW_COMMAND_NAME,
         title="生成微信开发预览二维码",
         command='echo "preview"',
+        description="",
+        timeout=600,
+        enabled=True,
+        aliases=(),
+    )
+
+
+def _build_project_preview_command(project_root: Path, *, retry_marker: bool = False) -> CommandDefinition:
+    """构造带小程序目录的预览命令对象。"""
+
+    retry_prefix = "WX_DEVTOOLS_AUTO_PORT_RETRY=1 " if retry_marker else ""
+    return CommandDefinition(
+        id=16,
+        project_slug="hyphamall",
+        scope="global",
+        name=bot.WX_PREVIEW_COMMAND_NAME,
+        title="生成微信开发预览二维码",
+        command=f'{retry_prefix}PROJECT_PATH="{project_root}" echo preview',
         description="",
         timeout=600,
         enabled=True,
@@ -151,3 +188,123 @@ async def test_execute_command_falls_back_to_document_when_photo_send_fails(monk
 
     assert [item[0] for item in events] == ["progress", "summary", "photo", "document"]
     assert "降级为文件" in (events[-1][2] or "")
+
+
+@pytest.mark.asyncio
+async def test_execute_wx_preview_auto_retries_once_with_current_ide_port(monkeypatch, tmp_path: Path):
+    """端口不匹配时，应自动改用 IDE 当前端口重试一次，并避免直接进入人工端口流程。"""
+
+    events: list[tuple] = []
+    calls: list[str] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+    fsm_state = _DummyFsmState()
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+    config_root = tmp_path / "vibego-config"
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        calls.append(command)
+        if len(calls) == 1:
+            return (
+                255,
+                f"[信息] 生成预览，项目：{project_root}，版本：test，端口：64701，输出：/tmp/qr.jpg",
+                "✖ IDE server has started on http://127.0.0.1:34724 and must be restarted on port 64701 first",
+                0.11,
+            )
+        return (0, "[完成] 预览二维码已生成：/tmp/qr.jpg", "", 0.22)
+
+    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
+        kind = "progress" if "命令执行中" in text else "auto-retry" if "自动重试 1 次" in text else "summary"
+        events.append((kind, text, reply_markup))
+        return SimpleNamespace(message_id=len(events), chat=message.chat)
+
+    monkeypatch.setattr(bot, "CONFIG_DIR_PATH", config_root)
+    monkeypatch.setattr(bot, "PROJECT_NAME", "hyphamall")
+    monkeypatch.setattr(bot, "PROJECT_SLUG", "hyphamall")
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+
+    await bot._execute_command_definition(
+        command=_build_project_preview_command(project_root),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=fsm_state,
+    )
+
+    assert len(calls) == 2
+    assert "PORT=34724" in calls[1]
+    assert "WX_DEVTOOLS_AUTO_PORT_RETRY=1" in calls[1]
+    assert [item[0] for item in events] == ["progress", "auto-retry", "summary"]
+    assert fsm_state.states == []
+    ports_file = config_root / "wx_devtools_ports.json"
+    data = json.loads(ports_file.read_text(encoding="utf-8"))
+    assert data["projects"]["hyphamall"] == 34724
+    assert data["paths"][str(project_root.resolve())] == 34724
+
+
+@pytest.mark.asyncio
+async def test_execute_wx_preview_auto_retry_marker_falls_back_to_manual_port(monkeypatch, tmp_path: Path):
+    """已自动重试过的命令再次端口失败时，不应继续递归重试。"""
+
+    events: list[tuple] = []
+    calls: list[str] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+    fsm_state = _DummyFsmState()
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        calls.append(command)
+        return (
+            255,
+            f"[信息] 生成预览，项目：{project_root}，版本：test，端口：64701，输出：/tmp/qr.jpg",
+            "✖ IDE server has started on http://127.0.0.1:34724 and must be restarted on port 64701 first",
+            0.11,
+        )
+
+    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
+        kind = "progress" if "命令执行中" in text else "summary"
+        events.append((kind, text, reply_markup))
+        return SimpleNamespace(message_id=len(events), chat=message.chat)
+
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot, "_suggest_wx_devtools_ports", lambda: ([34724], True, None))
+
+    await bot._execute_command_definition(
+        command=_build_project_preview_command(project_root, retry_marker=True),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=fsm_state,
+    )
+
+    assert len(calls) == 1
+    assert fsm_state.states == [bot.WxPreviewStates.waiting_port]
+    assert events[-1][2] is not None
+    assert "端口配置不匹配" in events[-1][1]
+
+
+def test_select_wx_devtools_auto_retry_port_requires_unique_missing_port_candidate(monkeypatch, tmp_path: Path):
+    """端口缺失时，只有本机候选端口唯一才允许自动重试，避免多端口误判。"""
+
+    command = _build_project_preview_command(tmp_path)
+    stderr = "[错误] 未配置微信开发者工具 IDE 服务端口，无法生成预览二维码。"
+
+    monkeypatch.setattr(bot, "_suggest_wx_devtools_ports", lambda: ([12605], True, None))
+    assert bot._select_wx_devtools_auto_retry_port(command, 2, stderr) == (
+        12605,
+        "端口配置缺失，已自动使用本机唯一候选端口",
+    )
+
+    monkeypatch.setattr(bot, "_suggest_wx_devtools_ports", lambda: ([12605, 64701], True, None))
+    assert bot._select_wx_devtools_auto_retry_port(command, 2, stderr) == (None, None)

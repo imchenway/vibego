@@ -2313,6 +2313,63 @@ def test_on_media_message_album_with_small_gap_dispatches_once(monkeypatch, tmp_
     assert not bot.MEDIA_GROUP_STATE
 
 
+def test_on_media_message_attachment_download_failure_dispatches_caption(monkeypatch, tmp_path: Path):
+    """附件下载失败时不能静默丢消息；有 caption 时应先把文字发给模型。"""
+
+    message = DummyMessage()
+    message.caption = "请先分析这段文字"
+    message.photo = [SimpleNamespace(file_id="photo-file", file_unique_id="photo-unique")]
+
+    async def fake_collect(_message, _target_dir):
+        raise RuntimeError("Proxy connection timed out: 60")
+
+    dispatched_prompts: list[str] = []
+
+    async def fake_handle(_message, prompt: str) -> None:
+        dispatched_prompts.append(prompt)
+
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    asyncio.run(bot.on_media_message(message))
+
+    assert message.calls
+    assert "附件下载失败" in message.calls[0][0]
+    assert "文字说明已先发送给模型" in message.calls[0][0]
+    assert dispatched_prompts == ["请先分析这段文字"]
+
+
+def test_on_media_group_download_failure_clears_state_and_dispatches_caption(monkeypatch, tmp_path: Path):
+    """相册/媒体组附件下载失败时也要可见反馈，并清理聚合状态避免卡住。"""
+
+    bot.MEDIA_GROUP_STATE.clear()
+
+    message = DummyMessage()
+    message.media_group_id = "failed_album"
+    message.caption = "相册说明文字"
+    message.photo = [SimpleNamespace(file_id="photo-file", file_unique_id="photo-unique")]
+
+    async def fake_collect(_message, _target_dir):
+        raise RuntimeError("Proxy connection timed out: 60")
+
+    dispatched_prompts: list[str] = []
+
+    async def fake_handle(_message, prompt: str) -> None:
+        dispatched_prompts.append(prompt)
+
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    asyncio.run(bot.on_media_message(message))
+
+    assert message.calls
+    assert "附件下载失败" in message.calls[0][0]
+    assert dispatched_prompts == ["相册说明文字"]
+    assert "failed_album" not in bot.MEDIA_GROUP_STATE
+
+
 def test_bug_report_auto_push_skipped_when_status_not_supported(monkeypatch, tmp_path: Path):
     message = DummyMessage()
     message.chat = SimpleNamespace(id=654)
