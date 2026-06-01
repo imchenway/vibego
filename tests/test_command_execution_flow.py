@@ -29,6 +29,36 @@ class _DummyReplyMessage:
         self.chat = SimpleNamespace(id=chat_id)
 
 
+class _DummyEditableMessage:
+    """模拟 Telegram 已发送消息，记录后续 edit_text 更新行为。"""
+
+    def __init__(self, chat, events: list[tuple], message_id: int) -> None:
+        self.chat = chat
+        self.events = events
+        self.message_id = message_id
+
+    async def edit_text(self, text: str, *, parse_mode=None, reply_markup=None):
+        kind = "auto-retry-edit" if "自动重试 1 次" in text else "result-edit"
+        self.events.append((kind, text, reply_markup, self.message_id))
+
+
+def _build_command_answer_spy(events: list[tuple]):
+    """构造命令消息发送桩：执行中返回可编辑消息，便于断言同消息更新。"""
+
+    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
+        if "命令执行中" in text:
+            kind = "progress-send"
+        elif "自动重试 1 次" in text:
+            kind = "auto-retry-send"
+        else:
+            kind = "result-send"
+        message_id = len(events) + 1
+        events.append((kind, text, reply_markup, message_id))
+        return _DummyEditableMessage(message.chat, events, message_id)
+
+    return fake_answer_with_markdown
+
+
 class _DummyFsmState:
     """记录端口人工兜底状态，便于确认自动重试是否短路人工流程。"""
 
@@ -120,13 +150,8 @@ async def test_execute_command_success_hides_output_preview_and_detail_buttons(m
             0.42,
         )
 
-    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
-        kind = "progress" if "命令执行中" in text else "summary"
-        events.append((kind, text, reply_markup))
-        return SimpleNamespace(message_id=len(events), chat=message.chat)
-
     monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
 
     await bot._execute_command_definition(
         command=_build_preview_command(),
@@ -138,7 +163,7 @@ async def test_execute_command_success_hides_output_preview_and_detail_buttons(m
         fsm_state=None,
     )
 
-    assert [item[0] for item in events] == ["progress", "summary"]
+    assert [item[0] for item in events] == ["progress-send", "result-edit"]
     summary_text = events[-1][1]
     assert "状态：✅ 成功" in summary_text
     assert "标准输出摘要" not in summary_text
@@ -148,6 +173,7 @@ async def test_execute_command_success_hides_output_preview_and_detail_buttons(m
     assert "退出码" not in summary_text
     assert "如需完整输出" not in summary_text
     assert events[-1][2] is None
+    assert events[-1][3] == events[0][3]
     assert service.calls[-1]["kwargs"]["status"] == "success"
     assert "INFO_OUTPUT" in service.calls[-1]["kwargs"]["output"]
 
@@ -175,13 +201,8 @@ async def test_execute_command_sends_summary_before_qr_photo(monkeypatch, tmp_pa
             1.23,
         )
 
-    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
-        kind = "progress" if "命令执行中" in text else "summary"
-        events.append((kind, text, reply_markup))
-        return SimpleNamespace(message_id=100, chat=message.chat)
-
     monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
     monkeypatch.setattr(bot, "current_bot", lambda: _DummyBot(events))
 
     await bot._execute_command_definition(
@@ -194,11 +215,12 @@ async def test_execute_command_sends_summary_before_qr_photo(monkeypatch, tmp_pa
         fsm_state=None,
     )
 
-    assert [item[0] for item in events] == ["progress", "summary", "photo"]
+    assert [item[0] for item in events] == ["progress-send", "result-edit", "photo"]
     assert "二维码图片已发送" not in events[1][1]
     assert "标准输出摘要" not in events[1][1]
     assert "TG_PHOTO_FILE" not in events[1][1]
     assert events[1][2] is None
+    assert events[1][3] == events[0][3]
 
 
 @pytest.mark.asyncio
@@ -224,13 +246,8 @@ async def test_execute_command_falls_back_to_document_when_photo_send_fails(monk
             1.23,
         )
 
-    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
-        kind = "progress" if "命令执行中" in text else "summary"
-        events.append((kind, text, reply_markup))
-        return SimpleNamespace(message_id=101, chat=message.chat)
-
     monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
     monkeypatch.setattr(bot, "current_bot", lambda: _DummyBot(events, fail_photo=True))
 
     await bot._execute_command_definition(
@@ -243,7 +260,7 @@ async def test_execute_command_falls_back_to_document_when_photo_send_fails(monk
         fsm_state=None,
     )
 
-    assert [item[0] for item in events] == ["progress", "summary", "photo", "document"]
+    assert [item[0] for item in events] == ["progress-send", "result-edit", "photo", "document"]
     assert "降级为文件" in (events[-1][2] or "")
 
 
@@ -258,13 +275,8 @@ async def test_execute_command_failure_keeps_output_preview_and_detail_buttons(m
     async def fake_run_shell_command(command: str, timeout: int):
         return (7, "stdout diagnostics", "stderr diagnostics", 0.31)
 
-    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
-        kind = "progress" if "命令执行中" in text else "summary"
-        events.append((kind, text, reply_markup))
-        return SimpleNamespace(message_id=len(events), chat=message.chat)
-
     monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
 
     await bot._execute_command_definition(
         command=_build_preview_command(),
@@ -278,6 +290,7 @@ async def test_execute_command_failure_keeps_output_preview_and_detail_buttons(m
 
     summary_text = events[-1][1]
     summary_markup = events[-1][2]
+    assert [item[0] for item in events] == ["progress-send", "result-edit"]
     assert "状态：⚠️ 失败" in summary_text
     assert "退出码：7" in summary_text
     assert "标准输出摘要" in summary_text
@@ -289,6 +302,40 @@ async def test_execute_command_failure_keeps_output_preview_and_detail_buttons(m
     button_texts = [button.text for row in summary_markup.inline_keyboard for button in row]
     assert "🔎 查询详情" in button_texts
     assert "🧾 最近执行" in button_texts
+    assert events[-1][3] == events[0][3]
+
+
+@pytest.mark.asyncio
+async def test_execute_command_result_falls_back_to_new_message_when_edit_fails(monkeypatch):
+    """执行中消息无法编辑时，应降级发送新的结果消息，避免用户看不到结果。"""
+
+    events: list[tuple] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        return (0, "ok", "", 0.11)
+
+    async def fake_try_edit_message(message, text: str, *, reply_markup=None):
+        events.append(("result-edit-attempt", text, reply_markup, getattr(message, "message_id", None)))
+        return False
+
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
+    monkeypatch.setattr(bot, "_try_edit_message", fake_try_edit_message)
+
+    await bot._execute_command_definition(
+        command=_build_preview_command(),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=None,
+    )
+
+    assert [item[0] for item in events] == ["progress-send", "result-edit-attempt", "result-send"]
+    assert "状态：✅ 成功" in events[-1][1]
 
 
 @pytest.mark.asyncio
@@ -316,16 +363,11 @@ async def test_execute_wx_preview_auto_retries_once_with_current_ide_port(monkey
             )
         return (0, "[完成] 预览二维码已生成：/tmp/qr.jpg", "", 0.22)
 
-    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
-        kind = "progress" if "命令执行中" in text else "auto-retry" if "自动重试 1 次" in text else "summary"
-        events.append((kind, text, reply_markup))
-        return SimpleNamespace(message_id=len(events), chat=message.chat)
-
     monkeypatch.setattr(bot, "CONFIG_DIR_PATH", config_root)
     monkeypatch.setattr(bot, "PROJECT_NAME", "hyphamall")
     monkeypatch.setattr(bot, "PROJECT_SLUG", "hyphamall")
     monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
 
     await bot._execute_command_definition(
         command=_build_project_preview_command(project_root),
@@ -340,7 +382,9 @@ async def test_execute_wx_preview_auto_retries_once_with_current_ide_port(monkey
     assert len(calls) == 2
     assert "PORT=34724" in calls[1]
     assert "WX_DEVTOOLS_AUTO_PORT_RETRY=1" in calls[1]
-    assert [item[0] for item in events] == ["progress", "auto-retry", "summary"]
+    assert [item[0] for item in events] == ["progress-send", "auto-retry-edit", "result-edit"]
+    assert events[1][3] == events[0][3]
+    assert events[2][3] == events[0][3]
     assert fsm_state.states == []
     ports_file = config_root / "wx_devtools_ports.json"
     data = json.loads(ports_file.read_text(encoding="utf-8"))
@@ -370,13 +414,8 @@ async def test_execute_wx_preview_auto_retry_marker_falls_back_to_manual_port(mo
             0.11,
         )
 
-    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
-        kind = "progress" if "命令执行中" in text else "summary"
-        events.append((kind, text, reply_markup))
-        return SimpleNamespace(message_id=len(events), chat=message.chat)
-
     monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
-    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
     monkeypatch.setattr(bot, "_suggest_wx_devtools_ports", lambda: ([34724], True, None))
 
     await bot._execute_command_definition(
@@ -391,8 +430,10 @@ async def test_execute_wx_preview_auto_retry_marker_falls_back_to_manual_port(mo
 
     assert len(calls) == 1
     assert fsm_state.states == [bot.WxPreviewStates.waiting_port]
+    assert [item[0] for item in events] == ["progress-send", "result-edit"]
     assert events[-1][2] is not None
     assert "端口配置不匹配" in events[-1][1]
+    assert events[-1][3] == events[0][3]
 
 
 def test_select_wx_devtools_auto_retry_port_requires_unique_missing_port_candidate(monkeypatch, tmp_path: Path):

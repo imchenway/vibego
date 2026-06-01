@@ -431,10 +431,6 @@ TEXT_PASTE_PREFIX_MAX_CHARS = max(_env_int("TEXT_PASTE_PREFIX_MAX_CHARS", 120), 
 TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS = max(_env_int("TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200), 0)
 # 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
 ENFORCED_AGENTS_NOTICE = (
-    "【强制规约】你必须先读取 $HOME/.config/vibego/AGENTS.md、当前根目录 AGENTS.md、"
-    "以及所有受影响子项目目录下最近的 AGENTS.md 与 AGENTS.evidence.json；如冲突以更近目录为准。\n"
-    "本次任务继续走 vibe -> design -> develop；无论 PLAN 还是 YOLO，都必须严格执行 TDD 门禁。\n"
-    "如未特殊指定模式，则默认进入 PLAN 模式。\n"
     "以下是用户需求描述："
 )
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
@@ -6681,6 +6677,24 @@ async def _maybe_handle_wx_preview(
     return True
 
 
+async def _update_command_status_message(
+    *,
+    origin_message: Optional[Message],
+    status_message: Optional[Message],
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+) -> Optional[Message]:
+    """命令状态优先复用同一条 Telegram 消息；编辑失败时降级发送新消息。"""
+
+    # Telegram 可能因消息过旧、被删除、格式限制或网络波动导致编辑失败；此时必须发送新消息兜底。
+    if status_message is not None and await _try_edit_message(status_message, text, reply_markup=reply_markup):
+        return status_message
+    if origin_message is None:
+        return status_message
+    sent_message = await _answer_with_markdown(origin_message, text, reply_markup=reply_markup)
+    return sent_message or status_message
+
+
 async def _execute_command_definition(
     *,
     command: CommandDefinition,
@@ -6701,14 +6715,15 @@ async def _execute_command_definition(
     actor_id, actor_username, actor_name = _command_actor_meta(actor_user)
     started_at = shanghai_now_iso()
     display_name = command.title or command.name
+    command_status_message: Optional[Message] = None
     if reply_message is not None:
         progress_lines = [
             "*命令执行中*",
             f"标题：`{_escape_markdown_text(display_name)}`",
             f"开始时间：{started_at}",
-            "_执行完成后将自动推送摘要与详情入口_",
+            "_执行完成后将更新本消息_",
         ]
-        await _answer_with_markdown(reply_message, "\n".join(progress_lines))
+        command_status_message = await _answer_with_markdown(reply_message, "\n".join(progress_lines))
     stdout_text = ""
     stderr_text = ""
     exit_code: Optional[int] = None
@@ -6743,9 +6758,10 @@ async def _execute_command_definition(
                 )
                 config_note = "端口配置写入失败，将仅本次使用该端口自动重试。"
             if reply_message is not None:
-                await _answer_with_markdown(
-                    reply_message,
-                    "\n".join(
+                command_status_message = await _update_command_status_message(
+                    origin_message=reply_message,
+                    status_message=command_status_message,
+                    text="\n".join(
                         [
                             f"{retry_reason or '端口失败，已自动重试'}：`{retry_port}`",
                             config_note,
@@ -6929,11 +6945,13 @@ async def _execute_command_definition(
                 [InlineKeyboardButton(text="🧾 最近执行", callback_data=COMMAND_HISTORY_CALLBACK)],
             ]
         )
-    await _answer_with_markdown(
-        reply_message,
-        "\n".join(lines),
-        reply_markup=summary_markup,
-    )
+    if reply_message is not None:
+        command_status_message = await _update_command_status_message(
+            origin_message=reply_message,
+            status_message=command_status_message,
+            text="\n".join(lines),
+            reply_markup=summary_markup,
+        )
     # 按用户体验要求，二维码图片放在摘要之后发送；若图片发送失败则降级为文件发送。
     if reply_message is not None and photo_path is not None:
         bot = current_bot()
