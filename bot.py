@@ -3995,6 +3995,53 @@ class PendingMediaGroupState:
 
 MEDIA_GROUP_STATE: dict[str, PendingMediaGroupState] = {}
 MEDIA_GROUP_LOCK = asyncio.Lock()
+# 记录“普通聊天媒体组已经成功推送到模型”的短期状态。
+# Telegram 相册的后续图片下载可能在代理超时后才失败；如果整组内容已经先成功进入终端，
+# 后续迟到失败只应写日志，不应再向用户误报“附件下载失败”。
+MEDIA_GROUP_DISPATCHED_AT: dict[tuple[int, str], float] = {}
+MEDIA_GROUP_DISPATCH_RETENTION_SECONDS = max(
+    _env_float("TELEGRAM_MEDIA_GROUP_DISPATCH_RETENTION_SECONDS", 600.0),
+    MEDIA_GROUP_AGGREGATION_DELAY,
+)
+
+
+def _media_group_key_for_message(message: Message) -> Optional[tuple[int, str]]:
+    """生成普通聊天媒体组去重键，缺少 chat 或 group 时返回 None。"""
+
+    media_group_id = getattr(message, "media_group_id", None)
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    if not media_group_id or chat_id is None:
+        return None
+    return int(chat_id), str(media_group_id)
+
+
+def _prune_dispatched_media_groups(now: Optional[float] = None) -> None:
+    """清理过期媒体组完成标记，避免长时间运行后内存无限增长。"""
+
+    current = time.monotonic() if now is None else now
+    expired = [
+        key
+        for key, dispatched_at in MEDIA_GROUP_DISPATCHED_AT.items()
+        if current - dispatched_at > MEDIA_GROUP_DISPATCH_RETENTION_SECONDS
+    ]
+    for key in expired:
+        MEDIA_GROUP_DISPATCHED_AT.pop(key, None)
+
+
+def _mark_media_group_dispatched(chat_id: int, media_group_id: str) -> None:
+    """标记媒体组已经成功推送模型，用于抑制后续迟到下载失败的误报。"""
+
+    _prune_dispatched_media_groups()
+    MEDIA_GROUP_DISPATCHED_AT[(int(chat_id), str(media_group_id))] = time.monotonic()
+
+
+def _was_media_group_dispatched(message: Message) -> bool:
+    """判断当前媒体组是否已成功推送模型。"""
+
+    _prune_dispatched_media_groups()
+    key = _media_group_key_for_message(message)
+    return bool(key and key in MEDIA_GROUP_DISPATCHED_AT)
 
 
 @dataclass
@@ -4927,6 +4974,7 @@ async def _finalize_media_group_after_delay(media_group_id: str) -> None:
     prompt = _build_prompt_with_attachments(text_block, state.attachments)
     try:
         await _handle_prompt_dispatch(state.origin_message, prompt)
+        _mark_media_group_dispatched(state.chat_id, media_group_id)
     except Exception as exc:  # noqa: BLE001
         worker_log.exception(
             "媒体组消息推送模型失败：%s",
@@ -4973,7 +5021,19 @@ async def _handle_media_attachment_download_failure(
 
     text_fallback = (text_part or "").strip()
     media_group_id = getattr(message, "media_group_id", None)
+    was_group_dispatched = _was_media_group_dispatched(message)
     await _clear_failed_media_group_state(media_group_id)
+    if was_group_dispatched:
+        worker_log.warning(
+            "媒体组后续附件下载失败，但整组已推送模型，跳过用户错误回执：%s",
+            error,
+            extra={
+                **_session_extra(),
+                "media_group": media_group_id or "-",
+                "chat": getattr(getattr(message, "chat", None), "id", None),
+            },
+        )
+        return
     worker_log.warning(
         "附件下载失败，已回退处理文字说明：%s",
         error,

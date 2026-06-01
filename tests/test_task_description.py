@@ -2340,6 +2340,60 @@ def test_on_media_message_attachment_download_failure_dispatches_caption(monkeyp
     assert dispatched_prompts == ["请先分析这段文字"]
 
 
+def test_on_media_group_late_download_failure_after_dispatch_skips_false_error(monkeypatch, tmp_path: Path):
+    """媒体组已推送到模型后，后续迟到下载失败不应再向用户误报整条消息失败。"""
+
+    bot.MEDIA_GROUP_STATE.clear()
+
+    message1 = DummyMessage()
+    message1.media_group_id = "late_failed_album"
+    message1.caption = "请看已成功下载的第一张图"
+    message1.message_id = 310
+    message1.bot = SimpleNamespace(username="tester_bot")
+    message1.date = datetime.now(bot.UTC)
+
+    message2 = DummyMessage()
+    message2.media_group_id = "late_failed_album"
+    message2.message_id = 311
+    message2.bot = message1.bot
+    message2.date = message1.date
+
+    async def fake_collect(msg, _target_dir):
+        if msg is message1:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="already-sent.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "already-sent.jpg",
+                    relative_path="./data/already-sent.jpg",
+                )
+            ]
+        raise RuntimeError("Proxy connection timed out: 60")
+
+    dispatched_prompts: list[str] = []
+
+    async def fake_handle(_message, prompt: str) -> None:
+        dispatched_prompts.append(prompt)
+
+    monkeypatch.setattr(bot, "MEDIA_GROUP_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    async def scenario() -> None:
+        await bot.on_media_message(message1)
+        await asyncio.sleep(0.05)
+        await bot.on_media_message(message2)
+
+    asyncio.run(scenario())
+
+    assert len(dispatched_prompts) == 1
+    assert "already-sent.jpg" in dispatched_prompts[0]
+    assert not message2.calls
+    assert "late_failed_album" not in bot.MEDIA_GROUP_STATE
+
+
 def test_on_media_group_download_failure_clears_state_and_dispatches_caption(monkeypatch, tmp_path: Path):
     """相册/媒体组附件下载失败时也要可见反馈，并清理聚合状态避免卡住。"""
 
