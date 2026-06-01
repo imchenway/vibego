@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,7 @@ def _run_start_tmux_dry_run(
     model_cmd: str,
     resume_session_id: str = "",
     codex_goals_enabled: str | None = None,
+    recent_sessions: list[dict[str, str]] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     workdir = tmp_path / "workdir"
     sessions = tmp_path / "sessions"
@@ -27,6 +29,11 @@ def _run_start_tmux_dry_run(
     workdir.mkdir()
     sessions.mkdir()
     logs.mkdir()
+    if recent_sessions is not None:
+        (logs / "recent_sessions.json").write_text(
+            json.dumps(recent_sessions, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     env = os.environ.copy()
     env.update(
@@ -140,6 +147,37 @@ def test_start_tmux_script_wires_codex_session_marker_to_binder() -> None:
     assert "SESSION_BINDER_TOKEN_FILE" in script_text
     assert "prepare_codex_model_instructions_file" in script_text
     assert "--required-marker" in script_text
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux 未安装")
+def test_start_tmux_dry_run_injects_recent_session_index_without_copying_jsonl(tmp_path: Path) -> None:
+    """Codex 新会话提示词只注入最近 JSONL 路径索引，不复制原始 JSONL 内容。"""
+
+    session_file = tmp_path / "recent-jsonl" / "rollout-recent.jsonl"
+    session_file.parent.mkdir()
+    session_file.write_text("SECRET_SHOULD_NOT_BE_IN_PROMPT\n", encoding="utf-8")
+
+    _run_start_tmux_dry_run(
+        tmp_path,
+        model_name="codex",
+        model_cmd="codex --dangerously-bypass-approvals-and-sandbox -c trusted_workspace=true",
+        recent_sessions=[
+            {
+                "session_id": "rollout-recent",
+                "jsonl_path": str(session_file),
+                "cwd": str(tmp_path / "workdir"),
+                "project_slug": "demo",
+                "bound_at": "2026-06-01T00:00:00Z",
+            }
+        ],
+    )
+
+    instructions = (tmp_path / "logs" / "codex_model_instructions.md").read_text(
+        encoding="utf-8",
+    )
+    assert "近期会话 JSONL 路径索引" in instructions
+    assert str(session_file) in instructions
+    assert "SECRET_SHOULD_NOT_BE_IN_PROMPT" not in instructions
 
 
 def test_copilot_model_script_defaults_to_yolo() -> None:

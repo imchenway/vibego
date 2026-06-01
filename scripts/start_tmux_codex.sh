@@ -33,6 +33,8 @@ SESSION_BINDER_TIMEOUT="${SESSION_BINDER_TIMEOUT:-0}"
 # 用于管理后台 binder 生命周期，避免 stop/restart 后残留常驻进程。
 SESSION_BINDER_PID_FILE="${SESSION_BINDER_PID_FILE:-$(dirname "${SESSION_POINTER_FILE}")/session_binder.pid}"
 SESSION_BINDER_TOKEN_FILE="${SESSION_BINDER_TOKEN_FILE:-$(dirname "${SESSION_POINTER_FILE}")/session_binder_token.txt}"
+RECENT_SESSIONS_FILE="${RECENT_SESSIONS_FILE:-$(dirname "${SESSION_POINTER_FILE}")/recent_sessions.json}"
+RECENT_SESSIONS_LIMIT="${RECENT_SESSIONS_LIMIT:-3}"
 CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE="${CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE:-$(dirname "${SESSION_POINTER_FILE}")/codex_model_instructions.md}"
 SESSION_READY_FILE="${SESSION_READY_FILE:-}"
 SESSION_READY_TIMEOUT_SECONDS="${SESSION_READY_TIMEOUT_SECONDS:-6}"
@@ -126,8 +128,71 @@ print("vibego-session-bind-token:" + secrets.token_hex(16))
 PY
 }
 
+render_recent_sessions_context() {
+  local recent_file="$1"
+  if [[ -z "$recent_file" || ! -s "$recent_file" ]]; then
+    return 0
+  fi
+  "$PYTHON_EXEC" - "$recent_file" "${RECENT_SESSIONS_LIMIT:-3}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]).expanduser()
+try:
+    limit = max(int(sys.argv[2]), 1)
+except (IndexError, ValueError):
+    limit = 3
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    data = []
+if not isinstance(data, list):
+    data = []
+
+entries = []
+for raw in data:
+    if not isinstance(raw, dict):
+        continue
+    session_id = str(raw.get("session_id") or "").strip()
+    jsonl_path = str(raw.get("jsonl_path") or "").strip()
+    if not session_id or not jsonl_path:
+        continue
+    entries.append(
+        {
+            "session_id": session_id,
+            "jsonl_path": jsonl_path,
+            "cwd": str(raw.get("cwd") or "").strip(),
+            "bound_at": str(raw.get("bound_at") or "").strip(),
+        }
+    )
+    if len(entries) >= limit:
+        break
+
+if not entries:
+    raise SystemExit(0)
+
+def inline(value: str) -> str:
+    return value.replace("`", "\\`")
+
+print("\n\n## 近期会话 JSONL 路径索引")
+print("")
+print("当前项目最近绑定的会话路径如下，仅作近期上下文线索；不得替代 /docs 主任务文档。")
+print("只有当用户明确提到“刚才、继续、上次、没反应、你刚修的”等依赖近期上下文的表达时，才按需读取对应 JSONL 的尾部或关键 turn。")
+print("不要复制或默认展开完整 JSONL 内容；若从 JSONL 得到有效结论，进入设计/实现阶段后必须同步沉淀到 docs。")
+print("")
+for index, item in enumerate(entries, 1):
+    print(f"{index}. session_id: `{inline(item['session_id'])}`")
+    print(f"   - jsonl_path: `{inline(item['jsonl_path'])}`")
+    if item["cwd"]:
+        print(f"   - cwd: `{inline(item['cwd'])}`")
+    if item["bound_at"]:
+        print(f"   - bound_at: `{inline(item['bound_at'])}`")
+PY
+}
+
 prepare_codex_model_instructions_file() {
-  local source_file="$1" target_file="$2" required_marker="$3"
+  local source_file="$1" target_file="$2" required_marker="$3" recent_file="${4:-}"
   if [[ -z "$required_marker" ]]; then
     printf '%s' "$source_file"
     return 0
@@ -139,6 +204,7 @@ prepare_codex_model_instructions_file() {
   ensure_dir "$(dirname "$target_file")"
   {
     cat "$source_file"
+    render_recent_sessions_context "$recent_file"
     printf '\n\n<!-- %s -->\n' "$required_marker"
   } >"$target_file"
   printf '%s' "$target_file"
@@ -162,7 +228,8 @@ if [[ "$MODEL_KEY" == "codex" ]]; then
       prepare_codex_model_instructions_file \
         "$CODEX_MODEL_INSTRUCTIONS_SOURCE_FILE" \
         "$CODEX_MODEL_INSTRUCTIONS_GENERATED_FILE" \
-        "$SESSION_BINDER_REQUIRED_MARKER"
+        "$SESSION_BINDER_REQUIRED_MARKER" \
+        "$RECENT_SESSIONS_FILE"
     )"
   fi
 else
@@ -384,6 +451,13 @@ PY
   fi
   if [[ -s "$SESSION_BINDER_TOKEN_FILE" ]]; then
     BINDER_CMD+=(--required-marker "$(cat "$SESSION_BINDER_TOKEN_FILE")")
+  fi
+  if [[ -n "$RECENT_SESSIONS_FILE" ]]; then
+    BINDER_CMD+=(
+      --recent-sessions-file "$RECENT_SESSIONS_FILE"
+      --recent-limit "$RECENT_SESSIONS_LIMIT"
+      --project-slug "${PROJECT_NAME:-}"
+    )
   fi
   if [[ -n "$SESSION_ACTIVE_ID_FILE" ]]; then
     BINDER_CMD+=(--session-id-file "$SESSION_ACTIVE_ID_FILE")

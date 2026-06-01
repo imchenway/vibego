@@ -74,6 +74,22 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="候选会话首行 base_instructions 中必须包含的 worker 同源标识，留空则不校验",
     )
+    parser.add_argument(
+        "--recent-sessions-file",
+        default="",
+        help="可选：写入当前项目最近会话路径索引的 JSON 文件",
+    )
+    parser.add_argument(
+        "--recent-limit",
+        type=int,
+        default=3,
+        help="最近会话路径索引保留条数，默认 3",
+    )
+    parser.add_argument(
+        "--project-slug",
+        default="",
+        help="可选：写入最近会话路径索引的项目标识",
+    )
     return parser.parse_args()
 
 
@@ -312,6 +328,73 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _utc_now_iso() -> str:
+    """返回 UTC ISO 时间，避免最近会话索引受本机时区变化影响。"""
+
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _session_id_for_path(path: Path) -> str:
+    """读取会话 id；Gemini 优先取文件元数据，其它模型使用文件 stem。"""
+
+    if path.suffix.lower() == ".json":
+        meta = _read_gemini_session_meta(path) or {}
+        session_id = meta.get("sessionId")
+        if isinstance(session_id, str) and session_id:
+            return session_id
+    return path.stem
+
+
+def _build_recent_session_entry(path: Path, target_cwd: str, project_slug: str) -> dict:
+    """构建最近会话路径索引项；只写元数据，不复制 JSONL 正文。"""
+
+    cwd = target_cwd.strip()
+    if not cwd and path.suffix.lower() != ".json":
+        cwd = _read_session_cwd(path) or ""
+    return {
+        "session_id": _session_id_for_path(path),
+        "jsonl_path": str(path),
+        "cwd": cwd,
+        "project_slug": project_slug.strip(),
+        "bound_at": _utc_now_iso(),
+    }
+
+
+def _read_recent_sessions_index(path: Path) -> list[dict]:
+    """读取最近会话索引；损坏或非列表时按空索引处理。"""
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _update_recent_sessions_index(path: Path, entry: dict, limit: int = 3) -> None:
+    """更新最近会话路径索引，按 session_id/jsonl_path 去重并限制条数。"""
+
+    normalized_limit = max(int(limit or 3), 1)
+    session_id = str(entry.get("session_id") or "").strip()
+    jsonl_path = str(entry.get("jsonl_path") or "").strip()
+    existing = _read_recent_sessions_index(path)
+    deduped: list[dict] = []
+    for item in existing:
+        item_session_id = str(item.get("session_id") or "").strip()
+        item_jsonl_path = str(item.get("jsonl_path") or "").strip()
+        if session_id and item_session_id == session_id:
+            continue
+        if jsonl_path and item_jsonl_path == jsonl_path:
+            continue
+        deduped.append(item)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps([entry, *deduped][:normalized_limit], ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _append_log(log_file: str, message: str) -> None:
     """将调试信息附加写入日志文件。"""
 
@@ -341,6 +424,11 @@ def main() -> int:
     target_cwd = args.cwd.strip()
     strict_boot_ts = float(args.boot_ts_ms or 0.0)
     required_marker = (args.required_marker or "").strip()
+    recent_sessions_path = (
+        Path(args.recent_sessions_file).expanduser() if args.recent_sessions_file else None
+    )
+    recent_limit = int(args.recent_limit or 3)
+    project_slug = (args.project_slug or "").strip()
 
     _append_log(
         args.log,
@@ -360,6 +448,15 @@ def main() -> int:
         if bound.exists():
             if session_id_path is not None:
                 _write_text(session_id_path, bound.stem)
+            if recent_sessions_path is not None:
+                try:
+                    _update_recent_sessions_index(
+                        recent_sessions_path,
+                        _build_recent_session_entry(bound, target_cwd, project_slug),
+                        limit=recent_limit,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _append_log(args.log, f"[binder] recent session index update failed: {exc}")
             _append_log(args.log, "[binder] pointer already bound, exit early")
             return 0
 
@@ -381,6 +478,15 @@ def main() -> int:
                         _write_text(session_id_path, candidate.stem)
                 else:
                     _write_text(session_id_path, candidate.stem)
+            if recent_sessions_path is not None:
+                try:
+                    _update_recent_sessions_index(
+                        recent_sessions_path,
+                        _build_recent_session_entry(candidate, target_cwd, project_slug),
+                        limit=recent_limit,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _append_log(args.log, f"[binder] recent session index update failed: {exc}")
             _append_log(args.log, f"[binder] bind session -> {candidate}")
             return 0
 
