@@ -229,3 +229,52 @@ python3.11 -m pytest -q tests/test_tmux_send_line.py tests/test_task_description
   - 结果：Python/依赖/配置根/master DB 正常。
 - ✅ `bash scripts/test_deps_check.sh`
   - 结果：runtime venv 与关键依赖正常。
+
+## 13. 追加故障：Telegram typing 超时阻断 tmux 投递（2026-06-01 21:30 CST）
+
+### 13.1 现象
+
+用户在 HyphaFawnStudioBot 发送一条包含 Client 信息与集成文档链接的普通文本后，Telegram 侧显示已发送，但终端无输入、模型无回复。
+
+### 13.2 影响
+
+该消息没有进入 tmux/Codex TUI，属于入站消息已被 worker 收到但在投递前被 Telegram API 辅助动作异常打断。已经失败的这条 Telegram update 不会自动补投，需要用户在 worker 加载修复后重新发送。
+
+### 13.3 根因证据
+
+- `tmux capture-pane -p -t vibe-hyphafawnstudiobot:0.0 -S -220` 显示 Codex TUI 仍停在初始提示 `› Improve documentation in @filename`，未出现用户文本，证明 tmux 未收到。
+- `~/.config/vibego/logs/codex/hyphafawnstudiobot/run_bot.log` 显示 update 处理过程中在 `bot.py::_handle_prompt_dispatch` 的 `await bot.send_chat_action(message.chat.id, "typing")` 抛出 `aiohttp_socks._errors.ProxyTimeoutError: Proxy connection timed out: 60`。
+- 该 `typing` 动作发生在 `_dispatch_prompt_to_model` 之前，因此异常直接中断处理链路，导致没有执行 tmux 投递。
+
+### 13.4 修法
+
+- 将 `_handle_prompt_dispatch` 中的 Telegram `send_chat_action(..., "typing")` 改为 best-effort：
+  - 成功：保留原 typing 提示体验；
+  - 失败：仅记录 warning，并继续执行 `_dispatch_prompt_to_model`；
+  - 不再让 Telegram 代理/API 抖动影响核心 tmux 投递。
+- 新增回归测试 `test_handle_prompt_dispatch_ignores_chat_action_failure`，强制覆盖 typing 抛异常时 prompt 仍进入 `_dispatch_prompt_to_model`。
+- 更新 `AGENTS.md` Facts：新增 “Telegram typing 动作非阻断约束”。
+
+### 13.5 验证记录
+
+- ✅ 红灯复现：新增测试后、修复前，`test_handle_prompt_dispatch_ignores_chat_action_failure` 因 `RuntimeError("Proxy connection timed out: 60")` 在 `send_chat_action` 处失败。
+- ✅ 绿灯聚焦：`python3.11 -m pytest -q tests/test_task_description.py::test_handle_prompt_dispatch_ignores_chat_action_failure tests/test_task_description.py::test_handle_prompt_dispatch_uses_manual_mode_control`
+  - 结果：`2 passed, 2 warnings in 0.11s`
+- ✅ 受影响集合：`python3.11 -m pytest -q tests/test_task_description.py tests/test_tmux_send_line.py`
+  - 结果：`219 passed in 14.87s`
+- ✅ 运行诊断：`python3.11 -m vibego_cli doctor`
+  - 结果：Python/依赖/配置根/master DB 正常。
+
+### 13.6 风险与回滚
+
+- 风险：`typing` 失败后用户不会看到 Telegram “正在输入”状态，但核心消息会继续入模；这是正确取舍。
+- 回滚：恢复 `await bot.send_chat_action(...)` 直接抛错的旧逻辑会重新引入“Telegram API 抖动导致 tmux 完全收不到”的故障，不建议回滚。
+
+### 13.7 运行环境落地记录
+
+- ✅ 已将当前仓库源码重新安装到 pipx 运行环境：`/Users/david/.local/pipx/venvs/vibego`，版本仍为 `1.5.157`。
+- ✅ 已重启 `hyphafawnstudiobot` worker，当前 `bot.pid=8108`。
+- ✅ 运行环境变量已校验：`PROJECT_NAME=hyphafawnstudiobot`，`MODEL_WORKDIR=/Users/david/hypha/fawnStudio`，`CODEX_WORKDIR=/Users/david/hypha/fawnStudio`。
+- ✅ tmux 会话已重新拉起：`vibe-hyphafawnstudiobot`，pane 命令为 `codex-aarch64-a`。
+- ✅ `run_bot.log` 已出现 `Telegram 连接正常，Bot=HyphaFawnStudioBot`。
+- ⚠️ 原 21:26 那条用户文本已经在旧 worker 中断于 `send_chat_action`，没有进入 tmux；修复后不会自动回放该 update，需要用户重新发送。

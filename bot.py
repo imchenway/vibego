@@ -5254,7 +5254,16 @@ async def _handle_prompt_dispatch(
             )
 
     bot = current_bot()
-    await bot.send_chat_action(message.chat.id, "typing")
+    # typing 只是 Telegram 侧的体验提示，不能影响核心 prompt 投递；
+    # 代理或 Telegram API 抖动时应继续把用户输入送进 tmux。
+    try:
+        await bot.send_chat_action(message.chat.id, "typing")
+    except Exception as exc:  # noqa: BLE001
+        worker_log.warning(
+            "发送 Telegram typing 动作失败，继续推送模型：%s",
+            exc,
+            extra={**_session_extra(), "chat": getattr(message.chat, "id", None)},
+        )
 
     if MODE == "A":
         if not AGENT_CMD:

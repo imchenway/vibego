@@ -4786,6 +4786,31 @@ def test_handle_prompt_dispatch_uses_manual_mode_control(monkeypatch):
     assert captured == [None]
 
 
+def test_handle_prompt_dispatch_ignores_chat_action_failure(monkeypatch):
+    """Telegram typing 动作失败不能阻断 prompt 进入 tmux。"""
+
+    message = DummyMessage()
+    message.text = "hello after proxy timeout"
+    monkeypatch.setattr(bot, "ENV_ISSUES", [])
+    monkeypatch.setattr(bot, "MODE", "B")
+
+    class DummyAiogram:
+        async def send_chat_action(self, chat_id: int, action: str):
+            raise RuntimeError("Proxy connection timed out: 60")
+
+    bot._bot = DummyAiogram()
+    captured: list[str] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, **_kwargs):
+        captured.append(prompt)
+        return True, Path("/tmp/fake-session.jsonl")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    asyncio.run(bot._handle_prompt_dispatch(message, "hello after proxy timeout"))
+
+    assert captured == ["hello after proxy timeout"]
+
+
 @pytest.mark.parametrize(
     "raw_prompt,expected",
     [
