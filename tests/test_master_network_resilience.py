@@ -134,6 +134,41 @@ def test_run_action_ack_before_run_worker(repo: ProjectRepository, tmp_path: Pat
     assert ack_observed["before_run"], "应先 callback.answer 再执行 run_worker"
 
 
+def test_run_action_refreshes_overview_when_worker_left_starting_after_failure(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """
+    TDD 场景：启动流程报健康检查超时时，只要 worker 仍处于启动中，
+    原项目列表消息也要刷新，避免用户继续看到“启动”按钮并重复点击。
+    """
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    master.PROJECT_REPOSITORY = repo
+
+    async def run_worker_override(cfg: master.ProjectConfig, model: str | None = None) -> str:
+        manager.state_store.update(cfg.project_slug, status="starting")
+        raise RuntimeError("握手超时")
+
+    monkeypatch.setattr(manager, "run_worker", AsyncMock(side_effect=run_worker_override))
+
+    callback = DummyCallback("project:run:sample")
+    _, fsm_state = _build_fsm_state()
+
+    async def _invoke():
+        await master.on_project_action(callback, fsm_state)
+
+    asyncio.run(_invoke())
+
+    assert callback.message._answers[-1][0] == "操作失败: 握手超时"
+    assert callback.message._edits, "失败后仍应刷新项目列表，展示最新运行态"
+    _, kwargs = callback.message._edits[-1]
+    labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    assert any(label.startswith("⏳ 启动中") for label in labels)
+
+
 @pytest.mark.asyncio
 async def test_send_projects_overview_retries_on_transient_network_error(
     repo: ProjectRepository,

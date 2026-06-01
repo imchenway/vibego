@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -49,6 +50,88 @@ def _build_manager(tmp_path: Path) -> master.MasterManager:
     state_path = tmp_path / "state.json"
     store = master.StateStore(state_path, {cfg.project_slug: cfg for cfg in configs})
     return master.MasterManager(configs, state_store=store)
+
+
+@pytest.mark.asyncio
+async def test_run_worker_keeps_starting_when_health_timeout_but_pid_alive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """健康检查超时时若 worker 进程仍存活，项目列表不能回落成“未启动”。"""
+
+    manager = _build_manager(tmp_path)
+    cfg = manager.require_project("test")
+    log_root = tmp_path / "logs"
+    pid_dir = log_root / "codex" / cfg.project_slug
+    pid_dir.mkdir(parents=True)
+
+    class DummyProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        # 模拟 run_bot.sh 返回后后台 worker 已写出 pid，但握手日志尚未出现。
+        (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
+        return DummyProcess()
+
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "ensure_codex_project_trust", lambda *args, **kwargs: None)
+    monkeypatch.setattr(master.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(manager, "_health_check_worker", AsyncMock(return_value="握手超时"))
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
+
+    with pytest.raises(RuntimeError, match="握手超时"):
+        await manager.run_worker(cfg)
+
+    state = manager.state_store.data[cfg.project_slug]
+    assert state.status == "starting"
+    assert state.model == "codex"
+
+
+def test_projects_overview_treats_starting_worker_as_non_startable(tmp_path: Path) -> None:
+    """启动中项目应展示停止入口，避免用户重复点击启动造成会话冲突。"""
+
+    manager = _build_manager(tmp_path)
+    manager.state_store.update("test", status="starting")
+
+    text, markup = master._projects_overview(manager)
+
+    assert text == "请选择操作："
+    assert markup is not None
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert any(label.startswith("⏳ 启动中") for label in labels)
+    assert not any(label.startswith("▶️ 启动 (codex)") for label in labels)
+
+
+def test_reconcile_worker_state_marks_healthy_alive_worker_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """项目列表刷新前应以存活 pid + 握手日志纠正 stale stopped 状态。"""
+
+    manager = _build_manager(tmp_path)
+    cfg = manager.require_project("test")
+    manager.state_store.update("test", status="stopped")
+    log_root = tmp_path / "logs"
+    pid_dir = log_root / "codex" / cfg.project_slug
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
+    (pid_dir / "run_bot.log").write_text("xxx\nTelegram 连接正常\n", encoding="utf-8")
+
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
+
+    manager.reconcile_worker_states()
+
+    assert manager.state_store.data[cfg.project_slug].status == "running"
+
+
+def test_worker_health_timeout_default_covers_worker_connectivity_timeout() -> None:
+    """master 健康检查默认等待时间不能短于 worker 自身 Telegram 握手超时。"""
+
+    assert master.WORKER_HEALTH_TIMEOUT >= 35.0
 
 
 def test_log_contains_handshake_without_boot_id(tmp_path: Path) -> None:
@@ -107,4 +190,3 @@ def test_log_contains_handshake_ignores_previous_boot_id(tmp_path: Path) -> None
         encoding="utf-8",
     )
     assert manager._log_contains_handshake(log_path, boot_id="new") is True
-

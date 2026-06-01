@@ -259,7 +259,9 @@ JUMP_BUTTON_TEXT_WIDTH = 40
 _DEFAULT_LOG_ROOT = LOG_DIR
 LOG_ROOT_PATH = Path(os.environ.get("LOG_ROOT", str(_DEFAULT_LOG_ROOT))).expanduser()
 
-WORKER_HEALTH_TIMEOUT = float(os.environ.get("WORKER_HEALTH_TIMEOUT", "20"))
+# worker 自身 Telegram 连通性检查默认等待 30 秒；master 必须等得更久，
+# 否则会出现 worker 仍在启动但项目列表已被回写为 stopped 的状态错判。
+WORKER_HEALTH_TIMEOUT = float(os.environ.get("WORKER_HEALTH_TIMEOUT", "45"))
 WORKER_HEALTH_INTERVAL = float(os.environ.get("WORKER_HEALTH_INTERVAL", "0.5"))
 WORKER_HEALTH_LOG_TAIL = int(os.environ.get("WORKER_HEALTH_LOG_TAIL", "80"))
 HANDSHAKE_MARKERS = (
@@ -977,6 +979,7 @@ def _project_jump_url(cfg: "ProjectConfig", state: Optional[ProjectState]) -> st
 def _projects_overview(manager: MasterManager) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
     """根据当前项目状态生成概览文本与操作按钮。"""
 
+    manager.reconcile_worker_states()
     builder = InlineKeyboardBuilder()
     button_count = 0
     model_name_map = dict(SWITCHABLE_MODELS)
@@ -994,6 +997,17 @@ def _projects_overview(manager: MasterManager) -> Tuple[str, Optional[InlineKeyb
                 ),
                 InlineKeyboardButton(
                     text=f"⛔️ 停止 ({current_model_label})",
+                    callback_data=f"project:stop:{cfg.project_slug}",
+                ),
+            )
+        elif status == "starting":
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"{cfg.display_name}",
+                    url=jump_url,
+                ),
+                InlineKeyboardButton(
+                    text=f"⏳ 启动中/停止 ({current_model_label})",
                     callback_data=f"project:stop:{cfg.project_slug}",
                 ),
             )
@@ -1627,6 +1641,7 @@ class ProjectState:
     chat_id: Optional[int] = None
     actual_username: Optional[str] = None
     telegram_user_id: Optional[int] = None
+    boot_id: Optional[str] = None
 
 
 class StateStore:
@@ -1704,12 +1719,18 @@ class StateStore:
                 telegram_user_id = int(telegram_user_id)
             elif not isinstance(telegram_user_id, int):
                 telegram_user_id = None
+            boot_id = item.get("boot_id")
+            if isinstance(boot_id, str):
+                boot_id = boot_id.strip() or None
+            else:
+                boot_id = None
             self.data[slug] = ProjectState(
                 model=model,
                 status=status,
                 chat_id=chat_id_value,
                 actual_username=username,
                 telegram_user_id=telegram_user_id,
+                boot_id=boot_id,
             )
             if self._sync_bot_identity(slug):
                 dirty = True
@@ -1735,6 +1756,11 @@ class StateStore:
                     if state.telegram_user_id is not None
                     else {}
                 ),
+                **(
+                    {"boot_id": state.boot_id}
+                    if state.boot_id
+                    else {}
+                ),
             }
             for slug, state in self.data.items()
         }
@@ -1749,6 +1775,7 @@ class StateStore:
         chat_id: Optional[int] = None,
         actual_username: Optional[str] = None,
         telegram_user_id: Optional[int] = None,
+        boot_id: Optional[str] = None,
     ) -> None:
         """更新指定项目的状态并立即持久化。"""
 
@@ -1764,6 +1791,9 @@ class StateStore:
             state.actual_username = cleaned or None
         if telegram_user_id is not None:
             state.telegram_user_id = telegram_user_id
+        if boot_id is not None:
+            cleaned_boot_id = boot_id.strip() if isinstance(boot_id, str) else boot_id
+            state.boot_id = cleaned_boot_id or None
         self.save()
 
     def _sync_bot_identity(self, slug: str) -> bool:
@@ -2005,6 +2035,70 @@ class MasterManager:
         else:
             return True
 
+    @staticmethod
+    def _worker_runtime_paths(cfg: ProjectConfig, model: str) -> Tuple[Path, Path]:
+        """返回指定 worker 的 pid 文件与启动日志路径。"""
+
+        log_dir = LOG_ROOT_PATH / model / cfg.project_slug
+        return log_dir / "bot.pid", log_dir / "run_bot.log"
+
+    def _read_worker_pid(self, cfg: ProjectConfig, model: str) -> Optional[int]:
+        """读取 worker pid 文件，内容缺失或非法时返回 None。"""
+
+        pid_path, _ = self._worker_runtime_paths(cfg, model)
+        if not pid_path.exists():
+            return None
+        try:
+            pid_text = pid_path.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception as exc:
+            log.warning(
+                "读取 pid 文件失败: %s",
+                exc,
+                extra={"pid_path": str(pid_path), "project": cfg.project_slug},
+            )
+            return None
+        if not pid_text:
+            return None
+        try:
+            return int(pid_text)
+        except ValueError:
+            log.warning(
+                "pid 文件 %s 内容异常",
+                str(pid_path),
+                extra={"content": pid_text, "project": cfg.project_slug},
+            )
+            return None
+
+    def _worker_process_alive(self, cfg: ProjectConfig, model: str) -> bool:
+        """判断 worker pid 是否仍存活。"""
+
+        pid = self._read_worker_pid(cfg, model)
+        return bool(pid is not None and self._pid_alive(pid))
+
+    def reconcile_worker_states(self) -> None:
+        """用实际 pid 与握手日志纠正项目列表中的 stale stopped/starting 状态。"""
+
+        for cfg in self.configs:
+            state = self.state_store.data.get(cfg.project_slug)
+            if not state:
+                continue
+            model = state.model or cfg.default_model
+            if not self._worker_process_alive(cfg, model):
+                continue
+            _, run_log = self._worker_runtime_paths(cfg, model)
+            # 新版本启动会持久化 boot_id，优先按 boot_id 判断本次握手；
+            # 兼容旧状态没有 boot_id 的场景，则退回到“pid 存活 + 任意握手日志”。
+            if state.boot_id:
+                if self._log_contains_handshake(run_log, boot_id=state.boot_id):
+                    self.state_store.update(cfg.project_slug, status="running", boot_id="")
+                elif state.status == "stopped":
+                    self.state_store.update(cfg.project_slug, status="starting")
+            elif self._log_contains_handshake(run_log):
+                if state.status != "running":
+                    self.state_store.update(cfg.project_slug, status="running")
+            elif state.status == "stopped":
+                self.state_store.update(cfg.project_slug, status="starting")
+
     def _log_tail(self, path: Path, *, lines: int = WORKER_HEALTH_LOG_TAIL) -> str:
         """读取日志文件尾部，协助诊断启动失败原因。"""
 
@@ -2058,9 +2152,7 @@ class MasterManager:
     ) -> Optional[str]:
         """验证 worker 启动后的健康状态，返回失败描述。"""
 
-        log_dir = LOG_ROOT_PATH / model / cfg.project_slug
-        pid_path = log_dir / "bot.pid"
-        run_log = log_dir / "run_bot.log"
+        pid_path, run_log = self._worker_runtime_paths(cfg, model)
 
         deadline = time.monotonic() + WORKER_HEALTH_TIMEOUT
         last_seen_pid: Optional[int] = None
@@ -2121,8 +2213,15 @@ class MasterManager:
         """启动指定项目的 worker，并返回运行模型名称。"""
 
         self.refresh_state()
+        self.reconcile_worker_states()
         state = self.state_store.data[cfg.project_slug]
         target_model = model or state.model or cfg.default_model
+        if (
+            model is None
+            and state.status in {"running", "starting"}
+            and self._worker_process_alive(cfg, target_model)
+        ):
+            return target_model
         issues = self._collect_prerequisite_issues(cfg, target_model)
         if issues:
             message = self._format_issue_message(
@@ -2201,9 +2300,23 @@ class MasterManager:
                 extra={"project": cfg.project_slug, "model": target_model},
             )
             raise RuntimeError(message)
+        self.state_store.update(
+            cfg.project_slug,
+            model=target_model,
+            status="starting",
+            boot_id=boot_id,
+        )
         health_issue = await self._health_check_worker(cfg, target_model, boot_id=boot_id)
         if health_issue:
-            self.state_store.update(cfg.project_slug, status="stopped")
+            if self._worker_process_alive(cfg, target_model):
+                self.state_store.update(
+                    cfg.project_slug,
+                    model=target_model,
+                    status="starting",
+                    boot_id=boot_id,
+                )
+            else:
+                self.state_store.update(cfg.project_slug, status="stopped", boot_id="")
             log.error(
                 "worker 健康检查失败: %s",
                 health_issue,
@@ -2211,7 +2324,7 @@ class MasterManager:
             )
             raise RuntimeError(health_issue)
 
-        self.state_store.update(cfg.project_slug, model=target_model, status="running")
+        self.state_store.update(cfg.project_slug, model=target_model, status="running", boot_id="")
         return target_model
 
     async def stop_worker(self, cfg: ProjectConfig, *, update_state: bool = True) -> None:
@@ -2225,7 +2338,7 @@ class MasterManager:
         await proc.wait()
         _clear_related_tmux_sessions(cfg.project_slug)
         if update_state:
-            self.state_store.update(cfg.project_slug, status="stopped")
+            self.state_store.update(cfg.project_slug, status="stopped", boot_id="")
         log.info("已停止 worker: %s", cfg.display_name, extra={"project": cfg.project_slug})
 
     async def stop_all(self, *, update_state: bool = False) -> None:
@@ -2249,7 +2362,7 @@ class MasterManager:
         errors: List[str] = []
         for cfg in self.configs:
             state = self.state_store.data.get(cfg.project_slug)
-            if state and state.status == "running":
+            if state and state.status in {"running", "starting"}:
                 continue
             try:
                 await self.run_worker(cfg)
@@ -2285,7 +2398,7 @@ class MasterManager:
                         exc,
                         extra={"project": cfg.project_slug, "model": state.model},
                     )
-                    self.state_store.update(slug, status="stopped")
+                    self.state_store.update(slug, status="stopped", boot_id="")
 
     def update_chat_id(self, slug: str, chat_id: int) -> None:
         """记录或更新项目的 chat_id 绑定信息。"""
@@ -3844,7 +3957,7 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
                 except Exception as exc:
                     errors.append((project_cfg.display_name, str(exc)))
                     continue
-                manager.state_store.update(project_cfg.project_slug, model=target_model, status="stopped")
+                manager.state_store.update(project_cfg.project_slug, model=target_model, status="stopped", boot_id="")
                 updated.append(project_cfg.display_name)
             manager.state_store.save()
             label = model_map[target_model]
@@ -3938,6 +4051,8 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.message:
             await callback.message.answer(f"操作失败: {exc}")
         await _answer_callback_safely("操作失败", show_alert=True)
+        if callback.message:
+            await _refresh_project_overview(callback.message, manager)
         return
 
     await _refresh_project_overview(callback.message, manager)
