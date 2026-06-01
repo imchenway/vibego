@@ -3060,6 +3060,18 @@ async def _confirm_or_retry_prompt_delivery(
     ):
         return True
 
+    if _is_codex_model():
+        worker_log.warning(
+            "Codex session JSONL 未确认消费 prompt，但 tmux send 已成功；跳过自动重试以避免重复排队",
+            extra={
+                "chat": chat_id,
+                "tmux_session": target_session,
+                "send_mode": resolved_send_mode,
+                **_session_extra(path=session_path),
+            },
+        )
+        return True
+
     retry_mode = resolved_send_mode
     if _supports_queued_send_mode():
         retry_mode = PUSH_SEND_MODE_QUEUED
@@ -3968,6 +3980,9 @@ ATTACHMENT_TOTAL_LIMIT_BYTES = _ATTACHMENT_TOTAL_MB * 1024 * 1024
 # 普通 Telegram 图文混合/相册偶发会出现后续图片稍晚到达的情况；
 # 默认将 quiet window 提升到 1.5 秒，优先保证同一组输入只触发一次推送。
 MEDIA_GROUP_AGGREGATION_DELAY = max(_env_float("TELEGRAM_MEDIA_GROUP_DELAY", 1.5), 0.1)
+# Telegram 客户端把“多张图 + 一段文字”发送为多条普通消息且不带 media_group_id 时，
+# 也需要按同一用户意图聚合；窗口略长于相册窗口，优先避免同一输入被拆成多次入模。
+DIRECT_PROMPT_BATCH_DELAY = max(_env_float("TELEGRAM_DIRECT_PROMPT_BATCH_DELAY", 8.0), 0.1)
 
 
 @dataclass
@@ -3993,8 +4008,21 @@ class PendingMediaGroupState:
     finalize_task: Optional[asyncio.Task] = None
 
 
+@dataclass
+class PendingDirectPromptBatchState:
+    """聚合普通直聊中没有 media_group_id 的连续附件/文字消息。"""
+
+    chat_id: int
+    origin_message: Message
+    attachments: list[TelegramSavedAttachment]
+    text_parts: list[str]
+    finalize_task: Optional[asyncio.Task] = None
+
+
 MEDIA_GROUP_STATE: dict[str, PendingMediaGroupState] = {}
 MEDIA_GROUP_LOCK = asyncio.Lock()
+DIRECT_PROMPT_BATCH_STATE: dict[int, PendingDirectPromptBatchState] = {}
+DIRECT_PROMPT_BATCH_LOCK = asyncio.Lock()
 # 记录“普通聊天媒体组已经成功推送到模型”的短期状态。
 # Telegram 相册的后续图片下载可能在代理超时后才失败；如果整组内容已经先成功进入终端，
 # 后续迟到失败只应写日志，不应再向用户误报“附件下载失败”。
@@ -4952,6 +4980,85 @@ async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) ->
     if prefix_to_flush and prefix_message is not None:
         await _feed_synthetic_text_update(prefix_message, text=prefix_to_flush)
         return False
+
+    return True
+
+
+def _has_pending_direct_prompt_batch(chat_id: int) -> bool:
+    """判断当前 chat 是否存在待聚合的普通直聊附件输入。"""
+
+    return int(chat_id) in DIRECT_PROMPT_BATCH_STATE
+
+
+async def _finalize_direct_prompt_batch_after_delay(chat_id: int) -> None:
+    """在 quiet window 后把普通直聊附件/文字合并为一次模型输入。"""
+
+    try:
+        await asyncio.sleep(DIRECT_PROMPT_BATCH_DELAY)
+    except asyncio.CancelledError:
+        return
+
+    async with DIRECT_PROMPT_BATCH_LOCK:
+        state = DIRECT_PROMPT_BATCH_STATE.pop(int(chat_id), None)
+
+    if state is None:
+        return
+
+    text_block = "\n".join(part for part in state.text_parts if part).strip()
+    prompt = _build_prompt_with_attachments(text_block, state.attachments)
+    try:
+        await _handle_prompt_dispatch(state.origin_message, prompt)
+    except Exception as exc:  # noqa: BLE001
+        worker_log.exception(
+            "普通直聊附件/文字聚合推送模型失败：%s",
+            exc,
+            extra={**_session_extra(), "chat": chat_id},
+        )
+
+
+async def _enqueue_direct_prompt_batch_message(
+    message: Message,
+    *,
+    text_part: Optional[str] = None,
+    attachments: Sequence[TelegramSavedAttachment] = (),
+) -> bool:
+    """聚合同一 chat 内连续到达的普通附件与文字，避免一次用户意图被拆成多次入模。
+
+    触发规则：
+    - 附件消息总是开启/续约聚合窗口；
+    - 纯文本只有在已有附件聚合窗口时才加入，普通文本仍保持即时发送。
+    """
+
+    cleaned_text = (text_part or "").strip()
+    attachment_list = list(attachments or ())
+    if not cleaned_text and not attachment_list:
+        return False
+
+    chat_id = int(message.chat.id)
+    message_id = int(getattr(message, "message_id", 0) or 0)
+
+    async with DIRECT_PROMPT_BATCH_LOCK:
+        state = DIRECT_PROMPT_BATCH_STATE.get(chat_id)
+        if state is None:
+            if not attachment_list:
+                return False
+            state = PendingDirectPromptBatchState(
+                chat_id=chat_id,
+                origin_message=message,
+                attachments=[],
+                text_parts=[],
+            )
+            DIRECT_PROMPT_BATCH_STATE[chat_id] = state
+
+        state.attachments.extend(attachment_list)
+        if cleaned_text:
+            state.text_parts.append(cleaned_text)
+        # 以最早消息作为回复引用，避免 Telegram 回复锚点跳到后续分片。
+        if int(getattr(state.origin_message, "message_id", 0) or 0) > message_id:
+            state.origin_message = message
+        if state.finalize_task and not state.finalize_task.done():
+            state.finalize_task.cancel()
+        state.finalize_task = asyncio.create_task(_finalize_direct_prompt_batch_after_delay(chat_id))
 
     return True
 
@@ -25261,6 +25368,8 @@ async def on_media_message(message: Message) -> None:
     if not attachments and not text_part:
         await message.answer("未检测到可处理的附件或文字内容。")
         return
+    if await _enqueue_direct_prompt_batch_message(message, text_part=text_part, attachments=attachments):
+        return
     prompt = _build_prompt_with_attachments(text_part, attachments)
     await _handle_prompt_dispatch(message, prompt)
 
@@ -25295,6 +25404,9 @@ async def on_text(m: Message, state: FSMContext):
     prompt = raw_text.strip()
     if not prompt:
         return await m.answer("请输入非空提示词")
+    if _has_pending_direct_prompt_batch(m.chat.id):
+        if await _enqueue_direct_prompt_batch_message(m, text_part=prompt):
+            return
     prefix_token = CHAT_PARALLEL_BRANCH_PREFIX_INPUTS.get(m.chat.id)
     if prefix_token:
         session = PARALLEL_LAUNCH_SESSIONS.get(prefix_token)

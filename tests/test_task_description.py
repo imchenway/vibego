@@ -2313,6 +2313,78 @@ def test_on_media_message_album_with_small_gap_dispatches_once(monkeypatch, tmp_
     assert not bot.MEDIA_GROUP_STATE
 
 
+def test_direct_photo_photo_text_burst_dispatches_once(monkeypatch, tmp_path: Path):
+    """普通直聊中两张图加一条文字应视为一次用户意图，只推送一次模型。"""
+
+    if hasattr(bot, "DIRECT_PROMPT_BATCH_STATE"):
+        bot.DIRECT_PROMPT_BATCH_STATE.clear()
+    monkeypatch.setattr(bot, "DIRECT_PROMPT_BATCH_DELAY", 0.01, raising=False)
+
+    photo1 = DummyMessage()
+    photo1.message_id = 410
+    photo1.photo = [SimpleNamespace(file_id="photo-1", file_unique_id="photo-1")]
+    photo1.bot = SimpleNamespace(username="tester_bot")
+    photo1.date = datetime.now(bot.UTC)
+
+    photo2 = DummyMessage()
+    photo2.message_id = 411
+    photo2.photo = [SimpleNamespace(file_id="photo-2", file_unique_id="photo-2")]
+    photo2.bot = photo1.bot
+    photo2.date = photo1.date
+
+    text = DummyMessage()
+    text.message_id = 412
+    text.text = "这是同一条消息的文字说明"
+    text.bot = photo1.bot
+    text.date = photo1.date
+    state, _storage = make_state(text)
+
+    async def fake_collect(msg, _target_dir):
+        if msg is photo1:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="first.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "first.jpg",
+                    relative_path="./data/first.jpg",
+                )
+            ]
+        if msg is photo2:
+            return [
+                bot.TelegramSavedAttachment(
+                    kind="photo",
+                    display_name="second.jpg",
+                    mime_type="image/jpeg",
+                    absolute_path=tmp_path / "second.jpg",
+                    relative_path="./data/second.jpg",
+                )
+            ]
+        return []
+
+    dispatched_prompts: list[str] = []
+
+    async def fake_handle(_message, prompt: str) -> None:
+        dispatched_prompts.append(prompt)
+
+    monkeypatch.setattr(bot, "_attachment_dir_for_message", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(bot, "_collect_saved_attachments", fake_collect)
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle)
+
+    async def scenario() -> None:
+        await bot.on_media_message(photo1)
+        await bot.on_media_message(photo2)
+        await bot.on_text(text, state)
+        await asyncio.sleep(float(getattr(bot, "DIRECT_PROMPT_BATCH_DELAY", 0.01)) + 0.1)
+
+    asyncio.run(scenario())
+
+    assert len(dispatched_prompts) == 1
+    assert "这是同一条消息的文字说明" in dispatched_prompts[0]
+    assert "first.jpg" in dispatched_prompts[0]
+    assert "second.jpg" in dispatched_prompts[0]
+
+
 def test_on_media_message_attachment_download_failure_dispatches_caption(monkeypatch, tmp_path: Path):
     """附件下载失败时不能静默丢消息；有 caption 时应先把文字发给模型。"""
 

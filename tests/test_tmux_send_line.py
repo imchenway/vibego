@@ -409,8 +409,8 @@ def test_dispatch_prompt_tmux_queue_error_suggests_manual_ctrl_q_for_copilot(mon
     assert replies and "手动按 Ctrl+Q" in replies[-1]
 
 
-def test_dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed(monkeypatch, tmp_path: Path):
-    """tmux 首次注入未被 session JSONL 确认时，应自动排队重试一次。"""
+def test_dispatch_prompt_retries_with_queue_for_copilot_when_user_prompt_not_confirmed(monkeypatch, tmp_path: Path):
+    """Copilot 仍保留 JSONL 未确认后的自动排队重试契约。"""
 
     pointer = tmp_path / "pointer.txt"
     session_file = tmp_path / "rollout.jsonl"
@@ -421,7 +421,7 @@ def test_dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed(monke
     monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
     monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
-    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
     monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS", 0.01, raising=False)
     monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS", 0.0, raising=False)
 
@@ -461,8 +461,8 @@ def test_dispatch_prompt_retries_with_queue_when_user_prompt_not_confirmed(monke
     assert queue_calls == [(bot.TMUX_SESSION, expected_prompt)]
 
 
-def test_dispatch_prompt_reports_unconfirmed_after_retry(monkeypatch, tmp_path: Path):
-    """自动重试后仍未确认消费时，应返回失败并提示用户，不应假装已发送成功。"""
+def test_dispatch_prompt_does_not_retry_codex_when_jsonl_not_confirmed(monkeypatch, tmp_path: Path):
+    """Codex JSONL 未确认不等于 tmux 投递失败，不能因此自动补发同一 prompt。"""
 
     pointer = tmp_path / "pointer.txt"
     session_file = tmp_path / "rollout.jsonl"
@@ -474,6 +474,52 @@ def test_dispatch_prompt_reports_unconfirmed_after_retry(monkeypatch, tmp_path: 
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
     monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS", 0.0, raising=False)
+
+    send_calls: list[tuple[str, str]] = []
+    queue_calls: list[tuple[str, str]] = []
+    replies: list[str] = []
+
+    async def fake_reply(_chat_id: int, text: str, **_kwargs):
+        replies.append(text)
+        return None
+
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+    monkeypatch.setattr(bot, "tmux_send_line", lambda session, prompt: send_calls.append((session, prompt)))
+    monkeypatch.setattr(bot, "tmux_queue_line", lambda session, prompt: queue_calls.append((session, prompt)))
+
+    ok, session_path = asyncio.run(
+        bot._dispatch_prompt_to_model(
+            9532,
+            "busy prompt",
+            reply_to=None,
+            ack_immediately=False,
+            confirm_delivery=True,
+        )
+    )
+
+    assert ok is True
+    assert session_path == session_file
+    expected_prompt = f"{bot.ENFORCED_AGENTS_NOTICE}\n\nbusy prompt"
+    assert send_calls == [(bot.TMUX_SESSION, expected_prompt)]
+    assert queue_calls == []
+    assert replies == []
+
+
+def test_dispatch_prompt_reports_unconfirmed_after_retry_for_copilot(monkeypatch, tmp_path: Path):
+    """Copilot 自动重试后仍未确认消费时，应返回失败并提示用户。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
     monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS", 0.01, raising=False)
     monkeypatch.setattr(bot, "PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS", 0.0, raising=False)
 
