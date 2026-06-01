@@ -6805,6 +6805,8 @@ async def _execute_command_definition(
         "timeout": "⏰ 超时",
         "error": "❌ 异常",
     }.get(status, status)
+    # 成功态面向用户只确认结果；stdout/stderr 仍写入历史记录，失败态才展示诊断摘要。
+    show_diagnostics = status != "success"
     lines = [
         "*命令执行结果*",
         f"标题：`{_escape_markdown_text(display_name)}`",
@@ -6814,9 +6816,9 @@ async def _execute_command_definition(
         f"耗时：{duration:.2f}s / 超时：{command.timeout}s",
         f"状态：{status_label}",
     ]
-    if exit_code is not None:
+    if show_diagnostics and exit_code is not None:
         lines.append(f"退出码：{exit_code}")
-    if stdout_text:
+    if show_diagnostics and stdout_text:
         stdout_preview = _tail_lines(stdout_text.strip(), COMMAND_OUTPUT_PREVIEW_LINES)
         truncated_stdout, stdout_truncated = _limit_text(stdout_preview, COMMAND_OUTPUT_MAX_CHARS)
         stdout_block, _ = _wrap_text_in_code_block(truncated_stdout or "-")
@@ -6824,7 +6826,7 @@ async def _execute_command_definition(
         lines.append(stdout_block)
         if stdout_truncated:
             lines.append("_输出已截断_")
-    if stderr_text:
+    if show_diagnostics and stderr_text:
         stderr_preview = _tail_lines(stderr_text.strip(), COMMAND_OUTPUT_PREVIEW_LINES)
         truncated_stderr, stderr_truncated = _limit_text(stderr_preview, COMMAND_STDERR_MAX_CHARS)
         stderr_block, _ = _wrap_text_in_code_block(truncated_stderr or "-")
@@ -6835,7 +6837,8 @@ async def _execute_command_definition(
 
     wx_port_keyboard_rows: list[list[InlineKeyboardButton]] = []
     if (
-        _is_wx_devtools_command(command.name)
+        show_diagnostics
+        and _is_wx_devtools_command(command.name)
         and (
             _is_wx_preview_missing_port_error(exit_code, stderr_text)
             or _is_wx_preview_port_mismatch_error(exit_code, stderr_text)
@@ -6911,19 +6914,21 @@ async def _execute_command_definition(
         wx_port_keyboard_rows.append(
             [InlineKeyboardButton(text="❌ 取消", callback_data=WX_PREVIEW_PORT_CANCEL)]
         )
-    lines.append("_如需完整输出，请点击下方“查询详情”下载 txt 文件。_")
-    summary_markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            *wx_port_keyboard_rows,
-            [
-                InlineKeyboardButton(
-                    text="🔎 查询详情",
-                    callback_data=f"{history_detail_prefix}{history_record.id}",
-                )
-            ],
-            [InlineKeyboardButton(text="🧾 最近执行", callback_data=COMMAND_HISTORY_CALLBACK)],
-        ]
-    )
+    summary_markup: Optional[InlineKeyboardMarkup] = None
+    if show_diagnostics:
+        lines.append("_如需完整输出，请点击下方“查询详情”下载 txt 文件。_")
+        summary_markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                *wx_port_keyboard_rows,
+                [
+                    InlineKeyboardButton(
+                        text="🔎 查询详情",
+                        callback_data=f"{history_detail_prefix}{history_record.id}",
+                    )
+                ],
+                [InlineKeyboardButton(text="🧾 最近执行", callback_data=COMMAND_HISTORY_CALLBACK)],
+            ]
+        )
     await _answer_with_markdown(
         reply_message,
         "\n".join(lines),

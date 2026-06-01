@@ -99,6 +99,60 @@ def _build_project_preview_command(project_root: Path, *, retry_marker: bool = F
 
 
 @pytest.mark.asyncio
+async def test_execute_command_success_hides_output_preview_and_detail_buttons(monkeypatch):
+    """成功态只反馈结果，不把 stdout 诊断噪音推给 Telegram 用户。"""
+
+    events: list[tuple] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        return (
+            0,
+            "\n".join(
+                [
+                    "[信息] 手机自动预览，项目：/tmp/mini，端口：64701",
+                    "INFO_OUTPUT: {\"previewInfo\": \"ok\"}",
+                    "[完成] 手机自动预览已触发，请在微信开发者工具中确认。",
+                ]
+            ),
+            "",
+            0.42,
+        )
+
+    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
+        kind = "progress" if "命令执行中" in text else "summary"
+        events.append((kind, text, reply_markup))
+        return SimpleNamespace(message_id=len(events), chat=message.chat)
+
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+
+    await bot._execute_command_definition(
+        command=_build_preview_command(),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=None,
+    )
+
+    assert [item[0] for item in events] == ["progress", "summary"]
+    summary_text = events[-1][1]
+    assert "状态：✅ 成功" in summary_text
+    assert "标准输出摘要" not in summary_text
+    assert "标准错误摘要" not in summary_text
+    assert "INFO_OUTPUT" not in summary_text
+    assert "手机自动预览已触发" not in summary_text
+    assert "退出码" not in summary_text
+    assert "如需完整输出" not in summary_text
+    assert events[-1][2] is None
+    assert service.calls[-1]["kwargs"]["status"] == "success"
+    assert "INFO_OUTPUT" in service.calls[-1]["kwargs"]["output"]
+
+
+@pytest.mark.asyncio
 async def test_execute_command_sends_summary_before_qr_photo(monkeypatch, tmp_path: Path):
     """摘要消息应先发送，二维码图片应作为最后一条 Telegram 消息发送。"""
 
@@ -142,6 +196,9 @@ async def test_execute_command_sends_summary_before_qr_photo(monkeypatch, tmp_pa
 
     assert [item[0] for item in events] == ["progress", "summary", "photo"]
     assert "二维码图片已发送" not in events[1][1]
+    assert "标准输出摘要" not in events[1][1]
+    assert "TG_PHOTO_FILE" not in events[1][1]
+    assert events[1][2] is None
 
 
 @pytest.mark.asyncio
@@ -188,6 +245,50 @@ async def test_execute_command_falls_back_to_document_when_photo_send_fails(monk
 
     assert [item[0] for item in events] == ["progress", "summary", "photo", "document"]
     assert "降级为文件" in (events[-1][2] or "")
+
+
+@pytest.mark.asyncio
+async def test_execute_command_failure_keeps_output_preview_and_detail_buttons(monkeypatch):
+    """失败态仍保留 stdout/stderr 摘要和详情入口，避免削弱排障能力。"""
+
+    events: list[tuple] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        return (7, "stdout diagnostics", "stderr diagnostics", 0.31)
+
+    async def fake_answer_with_markdown(message, text: str, *, reply_markup=None):
+        kind = "progress" if "命令执行中" in text else "summary"
+        events.append((kind, text, reply_markup))
+        return SimpleNamespace(message_id=len(events), chat=message.chat)
+
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", fake_answer_with_markdown)
+
+    await bot._execute_command_definition(
+        command=_build_preview_command(),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=None,
+    )
+
+    summary_text = events[-1][1]
+    summary_markup = events[-1][2]
+    assert "状态：⚠️ 失败" in summary_text
+    assert "退出码：7" in summary_text
+    assert "标准输出摘要" in summary_text
+    assert "stdout diagnostics" in summary_text
+    assert "标准错误摘要" in summary_text
+    assert "stderr diagnostics" in summary_text
+    assert "如需完整输出" in summary_text
+    assert summary_markup is not None
+    button_texts = [button.text for row in summary_markup.inline_keyboard for button in row]
+    assert "🔎 查询详情" in button_texts
+    assert "🧾 最近执行" in button_texts
 
 
 @pytest.mark.asyncio
