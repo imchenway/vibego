@@ -429,6 +429,9 @@ TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY = max(
 # “短前缀 + 长日志”合并：短前缀（通常很短且以冒号结尾）先进入等待窗口，若窗口内出现长日志分片则合并为一次推送。
 TEXT_PASTE_PREFIX_MAX_CHARS = max(_env_int("TEXT_PASTE_PREFIX_MAX_CHARS", 120), 0)
 TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS = max(_env_int("TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS", 200), 0)
+# 低于 near-limit 但明显属于“中长多行粘贴首段”的内容，也先进入长窗口等待；
+# 否则会出现首段原文先入模、后续超长分片再转附件入模的双 prompt。
+TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS = max(_env_int("TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS", 1200), 0)
 # 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
 ENFORCED_AGENTS_NOTICE = (
     "以下是用户需求描述："
@@ -4102,7 +4105,7 @@ class PendingTextPasteState:
     prefix_text: Optional[str] = None
     # 记录每一段分片，按 message_id 排序后拼接，降低乱序到达导致的“看似缺失/顺序错乱”风险。
     parts: list[tuple[int, str]] = field(default_factory=list)
-    # 是否已经看到接近 Telegram 单条上限的分片；命中后使用更长等待窗口收集后续分片。
+    # 是否已经看到接近 Telegram 单条上限或中长多行粘贴首段；命中后使用更长等待窗口收集后续分片。
     long_chunk_seen: bool = False
     finalize_task: Optional[asyncio.Task] = None
 
@@ -4898,6 +4901,20 @@ def _looks_like_text_paste_log_fragment(text: str) -> bool:
     return any(token in lowered for token in ("traceid", "error", "exception", "[info]", "[warn]", "[warning]"))
 
 
+def _is_text_paste_leading_fragment_candidate(text: str) -> bool:
+    """判断是否为低于 near-limit、但仍应等待后续分片的中长粘贴首段。"""
+
+    candidate = text or ""
+    if TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS <= 0:
+        return False
+    if len(candidate) < TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS:
+        return False
+    # 中长单行更可能是独立问题描述；多行文本才按“可能被拆分的粘贴首段”处理。
+    if "\n" not in candidate and "\r" not in candidate:
+        return False
+    return True
+
+
 async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) -> bool:
     """尝试将当前文本加入“长文本粘贴聚合”队列。
 
@@ -4929,6 +4946,12 @@ async def _maybe_enqueue_text_paste_message(message: Message, text_part: str) ->
             )
             stripped = (text_part or "").strip()
             if len(text_part) >= TEXT_PASTE_NEAR_LIMIT_THRESHOLD:
+                state.parts.append((message_id, text_part))
+                state.long_chunk_seen = True
+                TEXT_PASTE_STATE[chat_id] = state
+            elif _is_text_paste_leading_fragment_candidate(text_part):
+                # 真实 Telegram 粘贴中，首段可能只有 2K 左右，低于 near-limit；
+                # 先吞入长窗口，避免首段原文先投递、后续超长分片再转附件投递。
                 state.parts.append((message_id, text_part))
                 state.long_chunk_seen = True
                 TEXT_PASTE_STATE[chat_id] = state

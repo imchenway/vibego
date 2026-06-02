@@ -7157,6 +7157,48 @@ def test_text_paste_near_limit_chunks_wait_longer_than_prefix_window(monkeypatch
     assert recorded == ["A" * 10 + "B"]
 
 
+def test_text_paste_log_leading_fragment_waits_for_overlong_followup(monkeypatch):
+    """日志首段可能低于 near-limit：也应等待后续超长分片，避免先原文再附件重复入模。"""
+
+    bot.TEXT_PASTE_STATE.clear()
+    monkeypatch.setattr(bot, "ENABLE_TEXT_PASTE_AGGREGATION", True)
+    monkeypatch.setattr(bot, "TEXT_PASTE_NEAR_LIMIT_THRESHOLD", 300)
+    monkeypatch.setattr(bot, "TEXT_PASTE_AGGREGATION_DELAY", 0.01)
+    monkeypatch.setattr(bot, "TEXT_PASTE_LONG_CHUNK_AGGREGATION_DELAY", 0.08, raising=False)
+    monkeypatch.setattr(bot, "TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS", 40, raising=False)
+
+    recorded: list[str] = []
+
+    async def fake_feed(_message: DummyMessage, *, text: str) -> None:
+        recorded.append(text)
+
+    monkeypatch.setattr(bot, "_feed_synthetic_text_update", fake_feed)
+
+    first = DummyMessage()
+    first.text = (
+        "Picked up JAVA_TOOL_OPTIONS: -javaagent:/home/admin/.opt/ArmsAgent/arms-bootstrap.jar\n"
+        "OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes\n"
+        ":: Spring Boot :: (v3.3.6)"
+    )
+    followup = DummyMessage()
+    followup.message_id = first.message_id + 1
+    followup.text = "2026-06-02 17:22:24.254 [SVC-fawn-api] [INFO] " + ("X" * 300)
+
+    async def _scenario() -> None:
+        # 旧实现会返回 False，导致首段日志立即进入 tmux，随后超长分片又转附件入模。
+        assert await bot._maybe_enqueue_text_paste_message(first, first.text) is True
+        await asyncio.sleep(0.03)
+        assert recorded == []
+        assert await bot._maybe_enqueue_text_paste_message(followup, followup.text) is True
+        await asyncio.sleep(0.03)
+        assert recorded == []
+        await asyncio.sleep(0.08)
+
+    asyncio.run(_scenario())
+
+    assert recorded == [first.text + followup.text]
+
+
 def test_text_paste_aggregation_merges_prefix_and_log_parts(monkeypatch):
     """短前缀 + 长日志：应合并为一次合成消息，且保留前缀 + 换行 + 日志内容。"""
 
