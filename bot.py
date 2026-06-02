@@ -3647,7 +3647,16 @@ async def _dispatch_prompt_to_model(
     )
 
     if ack_immediately or pointer_switched:
-        await _send_session_ack(chat_id, session_path, reply_to=reply_to)
+        try:
+            await _send_session_ack(chat_id, session_path, reply_to=reply_to)
+        except Exception as exc:  # noqa: BLE001
+            # session ack 只是 Telegram 侧“模型思考中”提示；tmux 已发送成功后，网络抖动不能中断 watcher 绑定。
+            worker_log.warning(
+                "[session-map] chat=%s session ack 发送失败，继续监听模型响应：%s",
+                chat_id,
+                exc,
+                extra=_session_extra(path=session_path),
+            )
 
     quick_poll_delivered = False
     if SESSION_POLL_TIMEOUT > 0:
@@ -20451,6 +20460,14 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
         await callback.answer("正在处理中，请勿重复点击。")
         return
 
+    # 先确认 Telegram callback，避免后续 tmux/网络耗时导致按钮一直转圈或 query 过期。
+    processing_notice = (
+        "已收到，正在清空上下文并继续实现…"
+        if action == PLAN_CONFIRM_ACTION_FRESH
+        else "已收到，正在推送到模型…"
+    )
+    await _answer_callback_safely(callback, processing_notice)
+
     actor_user_id = callback.from_user.id if callback.from_user else session.user_id
     _remember_chat_active_user(chat_id, actor_user_id)
     try:
@@ -20461,7 +20478,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
             _resolved_task_id, dispatch_context = await _resolve_parallel_dispatch_context(parallel_task_id, None)
             parallel_task_id = _normalize_task_id(_resolved_task_id) or parallel_task_id
         if is_parallel_plan_confirm and not isinstance(dispatch_context, ParallelDispatchContext):
-            await callback.answer("并行会话已失效，请在最新并行消息中重试。", show_alert=True)
+            await _answer_callback_safely(callback, "并行会话已失效，请在最新并行消息中重试。", show_alert=True)
             if callback.message is not None:
                 await callback.message.answer(
                     "并行会话已失效，请回到最新并行消息重新操作。",
@@ -20471,7 +20488,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
 
         if action == PLAN_CONFIRM_ACTION_FRESH:
             if not _is_codex_model():
-                await callback.answer("fresh context 暂仅支持 Codex 模型。", show_alert=True)
+                await _answer_callback_safely(callback, "fresh context 暂仅支持 Codex 模型。", show_alert=True)
                 return
             success, error_message = await _drive_native_plan_confirm_fresh_context(
                 chat_id,
@@ -20479,7 +20496,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
                 dispatch_context if isinstance(dispatch_context, ParallelDispatchContext) else None,
             )
             if not success:
-                await callback.answer(error_message or "终端原生 fresh 选择失败。", show_alert=True)
+                await _answer_callback_safely(callback, error_message or "终端原生 fresh 选择失败。", show_alert=True)
                 if callback.message is not None:
                     await callback.message.answer(
                         error_message or "终端原生 fresh 选择失败，请查看终端状态后重试。",
@@ -20503,15 +20520,20 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
                 **dispatch_kwargs,
             )
         if not success:
-            await callback.answer("推送失败：模型未就绪，请稍后重试。", show_alert=True)
+            await _answer_callback_safely(callback, "推送失败：模型未就绪，请稍后重试。", show_alert=True)
+            if callback.message is not None:
+                await callback.message.answer(
+                    "推送失败：模型未就绪，请稍后重试。",
+                    reply_markup=_build_worker_main_keyboard(),
+                )
             return
 
         _drop_plan_confirm_session(token)
         await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
         if action == PLAN_CONFIRM_ACTION_FRESH:
-            await callback.answer("已按终端原生选项清空上下文并继续实现")
+            await _answer_callback_safely(callback, "已按终端原生选项清空上下文并继续实现")
         else:
-            await callback.answer("已确认并推送到模型")
+            await _answer_callback_safely(callback, "已确认并推送到模型")
         with suppress(TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter):
             if callback.message is not None:
                 await callback.message.edit_reply_markup(reply_markup=None)

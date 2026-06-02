@@ -229,6 +229,114 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     assert callback.message.answers == []
 
 
+def test_plan_confirm_yes_acknowledges_callback_before_dispatch(monkeypatch: pytest.MonkeyPatch):
+    """Plan Yes 必须先确认 Telegram 回调，再执行可能耗时的 tmux 派发。"""
+
+    chat_id = 1230
+    token = "tok-early-ack"
+    session = bot.PlanConfirmSession(
+        token=token,
+        chat_id=chat_id,
+        session_key="session-key",
+        user_id=90,
+        created_at=time.monotonic(),
+    )
+    bot.PLAN_CONFIRM_SESSIONS[token] = session
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
+
+    callback = DummyCallback(
+        bot._build_plan_confirm_callback_data(token, bot.PLAN_CONFIRM_ACTION_YES),
+        message=DummyMessage(chat_id=chat_id),
+        user_id=90,
+    )
+
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        intended_mode=None,
+        force_exit_plan_ui: bool = False,
+        force_exit_plan_ui_key_sequence=None,
+        force_exit_plan_ui_max_rounds=None,
+    ):
+        assert callback.answers, "进入 tmux 派发前应先答复 Telegram callback，避免按钮一直转圈"
+        assert callback.answers[0] == ("已收到，正在推送到模型…", False)
+        return True, None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache", lambda *, force_probe=True: "off")
+
+    asyncio.run(bot.on_plan_confirm_callback(callback))
+
+    assert token not in bot.PLAN_CONFIRM_SESSIONS
+    assert chat_id not in bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS
+
+
+def test_dispatch_prompt_to_model_continues_when_session_ack_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """tmux 已发送后，Telegram session ack 失败不应中断 watcher 启动。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    sent_lines: list[str] = []
+
+    def fake_tmux_send_line(_session: str, line: str) -> None:
+        sent_lines.append(line)
+
+    async def failing_session_ack(*_args, **_kwargs) -> None:
+        raise RuntimeError("telegram proxy timeout")
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_send_session_ack", failing_session_ack)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self) -> None:
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(3210, "pwd", reply_to=None, ack_immediately=True)
+        assert ok is True
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+    assert 3210 in bot.CHAT_WATCHERS
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def test_parallel_plan_confirm_yes_dispatches_bound_parallel_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """并行 CLI 发出的 Implement the plan，点 Yes 后必须继续发回对应并行会话。"""
 
