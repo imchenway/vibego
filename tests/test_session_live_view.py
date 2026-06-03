@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -13,6 +14,15 @@ if str(ROOT) not in sys.path:
 
 import bot  # noqa: E402
 from parallel_runtime import ParallelSessionRecord  # noqa: E402
+
+
+def _write_jsonl(path: Path, *events: dict) -> None:
+    """写入测试用 Codex JSONL 事件，保持一行一个 JSON 对象。"""
+
+    path.write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_build_session_live_list_view_includes_main_and_parallel(monkeypatch):
@@ -117,3 +127,158 @@ def test_list_active_parallel_sessions_skips_stale_records(monkeypatch):
     assert result == []
     assert updates == [("TASK_0115", "closed", "tmux 会话不存在")]
     assert drops == ["TASK_0115"]
+
+
+def test_build_codex_session_status_view_reads_model_context_and_limits(monkeypatch, tmp_path):
+    """主会话 JSONL 有 turn_context 与 token_count 时，应展示模型、推理等级、窗口和限额。"""
+
+    session_file = tmp_path / "rollout-status.jsonl"
+    pointer_file = tmp_path / "codex-session.pointer"
+    pointer_file.write_text(str(session_file), encoding="utf-8")
+    _write_jsonl(
+        session_file,
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "model_context_window": 128000,
+            },
+        },
+        {
+            "type": "turn_context",
+            "payload": {
+                "model": "fallback-model",
+                "collaboration_mode": {
+                    "settings": {
+                        "model": "gpt-5.5",
+                        "reasoning_effort": "xhigh",
+                    }
+                },
+            },
+        },
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "model_context_window": 243200,
+                },
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": 6.0,
+                        "window_minutes": 300,
+                        "resets_at": 1780490580,
+                    },
+                    "secondary": {
+                        "used_percent": 65.0,
+                        "window_minutes": 10080,
+                        "resets_at": 1780875660,
+                    },
+                },
+            },
+        },
+    )
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer_file))
+
+    text = bot._build_codex_session_status_view()
+
+    assert "*会话状态*" in text
+    assert "模型：gpt-5.5" in text
+    assert "推理等级：xhigh" in text
+    assert "Context Window：243,200 tokens" in text
+    assert "限额：5h 6%（20:43 重置） · 周 65%（06-08 07:41 重置）" in text
+
+
+def test_build_codex_session_status_view_uses_latest_token_count(monkeypatch, tmp_path):
+    """存在多条 token_count 时，应以最新一条限额数据为准。"""
+
+    session_file = tmp_path / "rollout-status-latest.jsonl"
+    pointer_file = tmp_path / "codex-session.pointer"
+    pointer_file.write_text(str(session_file), encoding="utf-8")
+    _write_jsonl(
+        session_file,
+        {
+            "type": "event_msg",
+            "payload": {"type": "task_started", "model_context_window": 128000},
+        },
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {"model_context_window": 128000},
+                "rate_limits": {
+                    "primary": {"used_percent": 10.0, "window_minutes": 300, "resets_at": 1780484580},
+                    "secondary": {"used_percent": 11.0, "window_minutes": 10080, "resets_at": 1780875660},
+                },
+            },
+        },
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {"model_context_window": 243200},
+                "rate_limits": {
+                    "primary": {"used_percent": 42.0, "window_minutes": 300, "resets_at": 1780490580},
+                    "secondary": {"used_percent": 64.0, "window_minutes": 10080, "resets_at": 1780875660},
+                },
+            },
+        },
+    )
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer_file))
+    monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex-fallback")
+
+    text = bot._build_codex_session_status_view()
+
+    assert "模型：codex-fallback" in text
+    assert "Context Window：243,200 tokens" in text
+    assert "限额：5h 42%（20:43 重置） · 周 64%（06-08 07:41 重置）" in text
+    assert "5h 10%" not in text
+
+
+def test_build_codex_session_status_view_reports_missing_token_count(monkeypatch, tmp_path):
+    """缺少 token_count 时不报错，展示等待模型事件的可见提示。"""
+
+    session_file = tmp_path / "rollout-no-token-count.jsonl"
+    pointer_file = tmp_path / "codex-session.pointer"
+    pointer_file.write_text(str(session_file), encoding="utf-8")
+    _write_jsonl(
+        session_file,
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "model_context_window": 128000,
+            },
+        },
+        {
+            "type": "turn_context",
+            "payload": {
+                "collaboration_mode": {
+                    "settings": {
+                        "model": "gpt-5.5",
+                    }
+                },
+            },
+        },
+    )
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer_file))
+
+    text = bot._build_codex_session_status_view()
+
+    assert "模型：gpt-5.5" in text
+    assert "Context Window：128,000 tokens" in text
+    assert "暂无限额数据，等待下一次模型事件" in text
+
+
+def test_build_codex_session_status_view_reports_unbound_session(monkeypatch, tmp_path):
+    """pointer 缺失或指向不存在文件时，应 fail-soft 显示未绑定当前会话。"""
+
+    pointer_file = tmp_path / "missing.pointer"
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer_file))
+
+    text = bot._build_codex_session_status_view()
+
+    assert "未绑定当前会话" in text

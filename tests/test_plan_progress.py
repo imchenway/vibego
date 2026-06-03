@@ -912,11 +912,11 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
     def fake_tmux_send_line(*_args, **_kwargs):
         # 普通直聊现在会等待 Codex session 中出现用户输入确认；
-        # 该用例关注 ack 的静默投递，因此模拟模型已消费本次输入，避免落入未确认失败分支。
+        # 投递确认测试哨兵：模拟模型已消费本次输入，避免使用真实自然语言 prompt。
         session_file.write_text(
             (
                 '{"type":"response_item","payload":{"type":"message","role":"user",'
-                '"content":[{"type":"input_text","text":"测试指令"}]}}\n'
+                '"content":[{"type":"input_text","text":"__VIBEGO_DELIVERY_CONFIRMATION_TEST_PROMPT__"}]}}\n'
             ),
             encoding="utf-8",
         )
@@ -936,7 +936,7 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
             captured_answers.append((text, kwargs))
             return SimpleNamespace(message_id=len(captured_answers))
 
-    msg = DummyMessage("测试指令")
+    msg = DummyMessage("__VIBEGO_DELIVERY_CONFIRMATION_TEST_PROMPT__")
     try:
         # 直接调用内部派发函数，避免依赖 router 注入的 FSMContext 参数。
         asyncio.run(bot._handle_prompt_dispatch(msg, msg.text))

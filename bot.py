@@ -5360,6 +5360,7 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("start", "打开任务概览"),
     ("help", "查看全部命令"),
     ("session_live", "查看会话实况"),
+    ("status", "查看模型与限额状态"),
     ("plan_mode", "切换终端模式"),
     ("goal", "管理 Codex 目标"),
 ]
@@ -5434,6 +5435,18 @@ class SessionLiveEntry:
     tmux_session: str
     kind: Literal["main", "parallel"]
     task_id: Optional[str] = None
+
+
+@dataclass
+class CodexSessionStatusSnapshot:
+    """描述从 Codex JSONL 中只读解析出的会话状态。"""
+
+    session_path: Optional[Path] = None
+    model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    context_window: Optional[int] = None
+    token_count_seen: bool = False
+    rate_limits: Optional[dict[str, Any]] = None
 
 COMMAND_EXEC_PREFIX = "cmd:run:"
 COMMAND_EXEC_GLOBAL_PREFIX = "cmd_global:run:"
@@ -15859,6 +15872,205 @@ def _read_pointer_path(pointer: Path) -> Optional[Path]:
     return rollout if rollout.exists() else None
 
 
+def _resolve_current_codex_session_path() -> Optional[Path]:
+    """解析当前 worker 绑定的 Codex 主会话 JSONL 路径。"""
+
+    if not CODEX_SESSION_FILE_PATH:
+        return None
+    pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
+    return _read_pointer_path(pointer_path)
+
+
+def _iter_codex_jsonl_payloads(path: Path) -> list[dict[str, Any]]:
+    """只读解析 Codex JSONL 行，坏行降级跳过，避免状态页阻断主流程。"""
+
+    payloads: list[dict[str, Any]] = []
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    payloads.append(event)
+    except OSError:
+        return []
+    return payloads
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    """把 Codex JSONL 中可能是数字/字符串的 token 数安全转为整数。"""
+
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_codex_session_status_snapshot(path: Path) -> CodexSessionStatusSnapshot:
+    """从本地 Codex JSONL 结构化事件中提取最新状态，不调用外部 API。"""
+
+    snapshot = CodexSessionStatusSnapshot(session_path=path)
+    for event in _iter_codex_jsonl_payloads(path):
+        event_type = event.get("type")
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+
+        if event_type == "turn_context":
+            # turn_context 是模型与协作模式的最新权威来源，优先取 settings 内值。
+            collaboration_mode = payload.get("collaboration_mode")
+            settings = collaboration_mode.get("settings") if isinstance(collaboration_mode, dict) else None
+            turn_model: Optional[str] = None
+            if isinstance(settings, dict):
+                model = settings.get("model")
+                reasoning_effort = settings.get("reasoning_effort")
+                if isinstance(model, str) and model.strip():
+                    turn_model = model.strip()
+                if isinstance(reasoning_effort, str) and reasoning_effort.strip():
+                    snapshot.reasoning_effort = reasoning_effort.strip()
+            fallback_model = payload.get("model")
+            if turn_model is None and isinstance(fallback_model, str) and fallback_model.strip():
+                turn_model = fallback_model.strip()
+            if turn_model is not None:
+                snapshot.model = turn_model
+            continue
+
+        payload_type = payload.get("type")
+        if payload_type == "task_started":
+            started_context_window = _coerce_int(payload.get("model_context_window"))
+            if started_context_window is not None:
+                snapshot.context_window = started_context_window
+            continue
+
+        if payload_type == "token_count":
+            # 多条 token_count 按 JSONL 顺序覆盖，最终保留最新一条。
+            snapshot.token_count_seen = True
+            info = payload.get("info")
+            if isinstance(info, dict):
+                token_context_window = _coerce_int(info.get("model_context_window"))
+                if token_context_window is not None:
+                    snapshot.context_window = token_context_window
+            rate_limits = payload.get("rate_limits")
+            if isinstance(rate_limits, dict):
+                snapshot.rate_limits = rate_limits
+
+    return snapshot
+
+
+def _codex_status_display_timezone() -> timezone:
+    """状态页时间展示沿用本地日志时区，默认 Asia/Shanghai。"""
+
+    tz_name = os.environ.get("LOG_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        if SHANGHAI_TZ is not None:
+            return SHANGHAI_TZ
+        return timezone.utc
+
+
+def _format_codex_reset_time(value: Any, *, weekly: bool) -> str:
+    """格式化限额重置时间；5h 只展示时分，周限额展示月日时分。"""
+
+    try:
+        resets_at = float(value)
+    except (TypeError, ValueError):
+        return "未知"
+    dt = datetime.fromtimestamp(resets_at, tz=_codex_status_display_timezone())
+    return dt.strftime("%m-%d %H:%M" if weekly else "%H:%M")
+
+
+def _format_codex_used_percent(value: Any) -> str:
+    """格式化 Codex 限额百分比，整数百分比不保留小数。"""
+
+    try:
+        used_percent = float(value)
+    except (TypeError, ValueError):
+        return "未知"
+    if used_percent.is_integer():
+        return str(int(used_percent))
+    return f"{used_percent:.1f}".rstrip("0").rstrip(".")
+
+
+def _select_codex_rate_limit(rate_limits: Optional[dict[str, Any]], window_minutes: int) -> Optional[dict[str, Any]]:
+    """按 Codex rate_limits.window_minutes 选择 5h 或周限额条目。"""
+
+    if not isinstance(rate_limits, dict):
+        return None
+    for value in rate_limits.values():
+        if not isinstance(value, dict):
+            continue
+        if _coerce_int(value.get("window_minutes")) == window_minutes:
+            return value
+    return None
+
+
+def _format_codex_rate_limit(label: str, entry: Optional[dict[str, Any]], *, weekly: bool) -> Optional[str]:
+    """将单个限额条目格式化为 Telegram 状态页片段。"""
+
+    if not isinstance(entry, dict):
+        return None
+    used = _format_codex_used_percent(entry.get("used_percent"))
+    reset = _format_codex_reset_time(entry.get("resets_at"), weekly=weekly)
+    return f"{label} {used}%（{reset} 重置）"
+
+
+def _format_codex_rate_limits(snapshot: CodexSessionStatusSnapshot) -> str:
+    """汇总 Codex 5h 与周限额；缺数据时给用户可见等待提示。"""
+
+    if not snapshot.token_count_seen:
+        return "暂无限额数据，等待下一次模型事件"
+
+    five_hour = _format_codex_rate_limit(
+        "5h",
+        _select_codex_rate_limit(snapshot.rate_limits, 300),
+        weekly=False,
+    )
+    weekly = _format_codex_rate_limit(
+        "周",
+        _select_codex_rate_limit(snapshot.rate_limits, 10080),
+        weekly=True,
+    )
+    parts = [part for part in (five_hour, weekly) if part]
+    if not parts:
+        return "暂无限额数据，等待下一次模型事件"
+    return " · ".join(parts)
+
+
+def _build_codex_session_status_view() -> str:
+    """构造 `/status` 的只读模型与限额状态文本。"""
+
+    session_path = _resolve_current_codex_session_path()
+    if session_path is None:
+        return "*会话状态*\n未绑定当前会话"
+
+    snapshot = _parse_codex_session_status_snapshot(session_path)
+    model = snapshot.model or ACTIVE_MODEL or "未知"
+    reasoning_effort = snapshot.reasoning_effort or "未知"
+    context_window = (
+        f"{snapshot.context_window:,} tokens"
+        if snapshot.context_window is not None
+        else "未知"
+    )
+    rate_limits = _format_codex_rate_limits(snapshot)
+    return "\n".join(
+        [
+            "*会话状态*",
+            f"模型：{model}",
+            f"推理等级：{reasoning_effort}",
+            f"Context Window：{context_window}",
+            f"限额：{rate_limits}",
+        ]
+    )
+
+
 def _read_session_meta_cwd(path: Path) -> Optional[str]:
     try:
         with path.open(encoding="utf-8", errors="ignore") as fh:
@@ -17349,6 +17561,7 @@ async def on_help_command(message: Message) -> None:
         "- /help — 查看全部命令\n"
         "- /tasks — 任务管理命令清单\n"
         "- /session_live — 查看主会话与并行会话实况\n"
+        "- /status — 查看模型与限额状态\n"
         "- /plan_mode — 切换当前终端 PLAN/MODE 状态\n"
         "- /goal [objective|pause|resume|clear] — 管理 Codex 当前线程目标\n"
         "- /task_new — 创建任务（交互式或附带参数）\n"
@@ -17364,6 +17577,13 @@ async def on_help_command(message: Message) -> None:
         "提示：大部分操作都提供按钮和多轮对话引导，无需记忆复杂参数。"
     )
     await _answer_with_markdown(message, text)
+
+
+@router.message(Command("status"))
+async def on_status_command(message: Message) -> None:
+    """只读展示当前 Codex 主会话模型与限额状态。"""
+
+    await _answer_with_markdown(message, _build_codex_session_status_view())
 
 
 @router.message(Command("tasks"))

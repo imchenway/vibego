@@ -124,12 +124,48 @@ def test_worker_direct_send_mode_button_removed_refreshes_keyboard(monkeypatch, 
     ]
 
 
-def test_worker_commands_menu_exposes_session_plan_and_goal_commands():
+def test_worker_commands_menu_exposes_session_plan_goal_and_status_commands():
     command_names = [name for name, _description in bot.BOT_COMMANDS]
 
     assert "session_live" in command_names
     assert "plan_mode" in command_names
     assert "goal" in command_names
+    assert "status" in command_names
+
+
+def test_worker_help_includes_status_command(monkeypatch):
+    """`/help` 应展示 `/status`，让用户能从命令总览发现只读状态页。"""
+
+    mock_answer = AsyncMock(return_value="sent")
+    monkeypatch.setattr(bot, "_answer_with_markdown", mock_answer)
+
+    message = _DummyMessage("/help")
+    asyncio.run(bot.on_help_command(message))
+
+    assert mock_answer.await_count == 1
+    assert "/status" in mock_answer.await_args.args[1]
+
+
+def test_worker_status_command_returns_status_view(monkeypatch):
+    """`/status` 只读取本地会话状态并回 Telegram，不应触发 tmux/模型输入。"""
+
+    mock_answer = AsyncMock(return_value="sent")
+
+    def fake_build_status_view():
+        return "*会话状态*\n模型：gpt-5.5"
+
+    def should_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("/status 是只读命令，不应向模型发送输入")
+
+    monkeypatch.setattr(bot, "_build_codex_session_status_view", fake_build_status_view, raising=False)
+    monkeypatch.setattr(bot, "_answer_with_markdown", mock_answer)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", should_not_dispatch)
+
+    message = _DummyMessage("/status")
+    asyncio.run(bot.on_status_command(message))
+
+    assert mock_answer.await_count == 1
+    assert "会话状态" in mock_answer.await_args.args[1]
 
 
 def test_worker_session_live_command_opens_session_list(monkeypatch):
