@@ -3174,12 +3174,18 @@ def _push_send_mode_label(send_mode: Optional[str]) -> str:
     return PUSH_SEND_MODE_IMMEDIATE_LABEL
 
 
-def _should_send_plan_switch_command(*, intended_mode: Optional[str], prompt: str, send_mode: Optional[str] = None) -> bool:
+def _should_send_plan_switch_command(
+    *,
+    intended_mode: Optional[str],
+    prompt: str,
+    send_mode: Optional[str] = None,
+    force_plan_switch_for_queued: bool = False,
+) -> bool:
     """判断本次推送前是否需要先发送 /plan。"""
 
     if not _is_codex_model():
         return False
-    if _normalize_push_send_mode(send_mode) == PUSH_SEND_MODE_QUEUED:
+    if _normalize_push_send_mode(send_mode) == PUSH_SEND_MODE_QUEUED and not force_plan_switch_for_queued:
         return False
     resolved_mode = _resolve_dispatch_mode(intended_mode=intended_mode, prompt=prompt)
     if resolved_mode != PUSH_MODE_PLAN:
@@ -3197,11 +3203,27 @@ async def _maybe_send_plan_switch_command(
     prompt: str,
     send_mode: Optional[str] = None,
     tmux_session: Optional[str] = None,
+    force_plan_switch_for_queued: bool = False,
+    probe_plan_mode_before_switch: bool = False,
 ) -> bool:
     """按条件先向 tmux 发送 /plan，再短暂等待模式切换稳定。"""
 
-    if not _should_send_plan_switch_command(intended_mode=intended_mode, prompt=prompt, send_mode=send_mode):
+    if not _should_send_plan_switch_command(
+        intended_mode=intended_mode,
+        prompt=prompt,
+        send_mode=send_mode,
+        force_plan_switch_for_queued=force_plan_switch_for_queued,
+    ):
         return False
+    target_session = tmux_session or TMUX_SESSION
+    if probe_plan_mode_before_switch and target_session == TMUX_SESSION:
+        current_state = await _refresh_worker_plan_mode_state_cache_async(force_probe=True)
+        if current_state == "on":
+            worker_log.info(
+                "当前已处于 PLAN，跳过 PLAN 预命令",
+                extra={"chat": chat_id, "mode": PUSH_MODE_PLAN, "state": current_state},
+            )
+            return False
     if tmux_session and tmux_session != TMUX_SESSION:
         ready = await _wait_tmux_session_ready_for_plan_switch(tmux_session)
         if not ready:
@@ -3210,7 +3232,7 @@ async def _maybe_send_plan_switch_command(
                 extra={"chat": chat_id, "tmux_session": tmux_session},
             )
     try:
-        tmux_send_line(tmux_session or TMUX_SESSION, PLAN_MODE_SWITCH_COMMAND)
+        tmux_send_line(target_session, PLAN_MODE_SWITCH_COMMAND)
     except subprocess.CalledProcessError as exc:
         worker_log.warning(
             "发送 PLAN 预命令失败，继续发送正文：%s",
@@ -3263,6 +3285,8 @@ async def _dispatch_prompt_to_model(
     ack_immediately: bool = True,
     intended_mode: Optional[str] = None,
     send_mode: Optional[str] = None,
+    force_plan_switch_for_queued: bool = False,
+    probe_plan_mode_before_switch: bool = False,
     force_exit_plan_ui: bool = False,
     force_exit_plan_ui_key_sequence: Optional[Sequence[str]] = None,
     force_exit_plan_ui_max_rounds: Optional[int] = None,
@@ -3471,6 +3495,8 @@ async def _dispatch_prompt_to_model(
         prompt=prompt,
         send_mode=send_mode,
         tmux_session=dispatch_context.tmux_session if dispatch_context is not None else None,
+        force_plan_switch_for_queued=force_plan_switch_for_queued,
+        probe_plan_mode_before_switch=probe_plan_mode_before_switch,
     )
     await _maybe_force_exit_plan_ui(
         chat_id=chat_id,
@@ -5309,12 +5335,14 @@ async def _handle_prompt_dispatch(
 
     active_user_id = getattr(message.from_user, "id", None) if message.from_user else None
     _remember_chat_active_user(message.chat.id, active_user_id)
-    # 需求约定：普通 Telegram 文本消息不再自动注入 /plan。
-    # PLAN/YOLO 由用户在交互流程中显式选择，避免“默认强制切到 PLAN”。
+    # 需求约定：普通 Telegram 消息发送前先确保 Codex 处于 PLAN；
+    # 即使用户选择“排队发送”，也要先完成 PLAN 预命令，再把正文排队。
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": message,
-        "intended_mode": None,
-        # 底部发送方式按钮只影响普通 Telegram 直聊；任务推送仍使用各自流程中的显式选择。
+        "intended_mode": PUSH_MODE_PLAN,
+        "force_plan_switch_for_queued": True,
+        "probe_plan_mode_before_switch": True,
+        # 普通 Telegram 直聊默认排队；任务推送仍使用各自流程中的显式发送方式选择。
         "send_mode": _get_worker_direct_send_mode(),
         # 普通 Telegram 直聊必须确认模型 session 真正消费了输入；
         # 否则 tmux send-keys 成功但 Codex TUI 未接收时会形成静默丢消息。
@@ -5358,10 +5386,11 @@ WORKER_MENU_BUTTON_TEXT = "📋 任务列表"
 WORKER_COMMANDS_BUTTON_TEXT = "📟 命令管理"
 WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT = "💻 会话实况"
 WORKER_GOAL_BUTTON_TEXT = "🎯 GOAL"
-WORKER_PLAN_MODE_BUTTON_PREFIX = "🧭 PLAN MODE:"
+WORKER_PLAN_MODE_BUTTON_PREFIX = "🧭 PLAN:"
 WORKER_PLAN_MODE_BUTTON_TEXT_ON = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ON"
 WORKER_PLAN_MODE_BUTTON_TEXT_OFF = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} OFF"
 WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ?"
+# 仅用于识别重启前 Telegram 客户端残留的旧键盘按钮；新主键盘不再展示发送方式按钮。
 WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_IMMEDIATE = "✉️ 立即"
 WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_QUEUED = "✉️ 排队"
 WORKER_COPILOT_MODE_BUTTON_PREFIX = "🧭 MODE:"
@@ -5385,8 +5414,6 @@ WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 WORKER_PLAN_MODE_STATE_CACHE: Dict[str, Literal["on", "off", "unknown"]] = {}
 # Worker 主菜单 Copilot 三态缓存（按 tmux session 维度）。
 WORKER_COPILOT_MODE_STATE_CACHE: Dict[str, Literal["interactive", "plan", "autopilot", "unknown"]] = {}
-# Worker 普通直聊发送方式缓存；None 表示尚未从运行期状态文件加载。
-WORKER_DIRECT_SEND_MODE_CACHE: Optional[str] = None
 
 GOAL_CALLBACK_PREFIX = "goal:"
 GOAL_VIEW_CALLBACK = f"{GOAL_CALLBACK_PREFIX}view"
@@ -5677,87 +5704,16 @@ async def _refresh_worker_copilot_mode_state_cache_async(
     return await asyncio.to_thread(_refresh_worker_copilot_mode_state_cache, force_probe=force_probe)
 
 
-def _worker_direct_send_mode_state_file() -> Path:
-    """返回普通直聊发送方式的运行期状态文件路径。"""
-
-    override = (os.environ.get("WORKER_DIRECT_SEND_MODE_STATE_FILE") or "").strip()
-    if override:
-        return Path(override).expanduser()
-    raw_slug = PROJECT_SLUG or PROJECT_NAME or MODEL_CANONICAL_NAME or "worker"
-    safe_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_slug).strip("._-") or "worker"
-    return STATE_DIR_PATH / f"{safe_slug}_direct_send_mode.json"
-
-
-def _direct_send_mode_supported(send_mode: Optional[str]) -> str:
-    """把普通直聊发送方式收敛到当前模型支持的安全值。"""
-
-    normalized = _normalize_push_send_mode(send_mode)
-    if normalized == PUSH_SEND_MODE_QUEUED and not _supports_queued_send_mode():
-        return PUSH_SEND_MODE_IMMEDIATE
-    return normalized
-
-
-def _load_worker_direct_send_mode_from_file() -> str:
-    """从运行期状态文件读取普通直聊发送方式，异常时回退立即发送。"""
-
-    path = _worker_direct_send_mode_state_file()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return PUSH_SEND_MODE_IMMEDIATE
-    except json.JSONDecodeError as exc:
-        worker_log.warning(
-            "普通消息发送方式状态文件解析失败，回退立即发送：%s",
-            exc,
-            extra={**_session_extra(), "path": str(path)},
-        )
-        return PUSH_SEND_MODE_IMMEDIATE
-    if not isinstance(raw, dict):
-        return PUSH_SEND_MODE_IMMEDIATE
-    return _direct_send_mode_supported(raw.get("send_mode"))
-
-
 def _get_worker_direct_send_mode() -> str:
-    """获取 Worker 普通直聊发送方式；默认立即发送。"""
+    """获取普通 Telegram 直聊的默认发送方式。
 
-    global WORKER_DIRECT_SEND_MODE_CACHE
-    if WORKER_DIRECT_SEND_MODE_CACHE is None:
-        WORKER_DIRECT_SEND_MODE_CACHE = _load_worker_direct_send_mode_from_file()
-    return _direct_send_mode_supported(WORKER_DIRECT_SEND_MODE_CACHE)
+    新契约不再读取或写入运行期发送方式状态文件：Codex/Copilot 默认排队，
+    其他不支持排队的模型自动回退立即发送，避免暴露不可用的 queued 状态。
+    """
 
-
-def _set_worker_direct_send_mode(send_mode: Optional[str]) -> str:
-    """设置并持久化 Worker 普通直聊发送方式。"""
-
-    global WORKER_DIRECT_SEND_MODE_CACHE
-    resolved = _direct_send_mode_supported(send_mode)
-    WORKER_DIRECT_SEND_MODE_CACHE = resolved
-    path = _worker_direct_send_mode_state_file()
-    payload = {
-        "send_mode": resolved,
-        "model": MODEL_CANONICAL_NAME,
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as exc:  # noqa: BLE001
-        # 发送方式是用户体验状态，持久化失败不能阻断按钮切换和消息投递。
-        worker_log.warning(
-            "普通消息发送方式状态写入失败：%s",
-            exc,
-            extra={**_session_extra(), "path": str(path)},
-        )
-    return resolved
-
-
-def _worker_direct_send_mode_button_text(send_mode: Optional[str] = None) -> str:
-    """返回底部键盘中的普通消息发送方式按钮文案。"""
-
-    resolved = _direct_send_mode_supported(send_mode or _get_worker_direct_send_mode())
-    if resolved == PUSH_SEND_MODE_QUEUED:
-        return WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_QUEUED
-    return WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_IMMEDIATE
+    if _supports_queued_send_mode():
+        return PUSH_SEND_MODE_QUEUED
+    return PUSH_SEND_MODE_IMMEDIATE
 
 
 def _resolve_worker_plan_mode_button_text(
@@ -5890,7 +5846,7 @@ def _build_worker_main_keyboard(
     """Worker 端常驻键盘，仅保留高频命令入口与终端模式切换。
 
     任务列表、会话实况与 GOAL 仍通过 Telegram 命令菜单唤起；
-    右侧 PLAN/MODE 保留为常驻按钮，方便高频切换终端协作模式。
+    PLAN/MODE 保留为常驻按钮，普通直聊发送方式改为运行时默认推导。
     """
 
     mode_button_text = (
@@ -5909,7 +5865,6 @@ def _build_worker_main_keyboard(
             [
                 KeyboardButton(text=WORKER_COMMANDS_BUTTON_TEXT),
                 KeyboardButton(text=mode_button_text),
-                KeyboardButton(text=_worker_direct_send_mode_button_text()),
             ],
         ],
         resize_keyboard=True,
@@ -7785,62 +7740,36 @@ def _record_worker_identity(username: Optional[str], user_id: Optional[int]) -> 
 
 
 async def _broadcast_worker_keyboard(bot: Bot) -> None:
-    """启动时主动推送菜单，确保 Telegram 键盘同步。"""
+    """启动时主动触发一次 /start 等价欢迎消息，确保 Telegram 主键盘同步。"""
+
     targets = _resolve_worker_target_chat_ids()
     if not targets:
-        worker_log.info("无可推送的聊天，跳过菜单广播", extra=_session_extra())
+        worker_log.info("无可推送的聊天，跳过自动 /start 广播", extra=_session_extra())
         return
     for chat_id in targets:
         try:
-            text, inline_markup = await _build_task_list_view(status=None, page=1, limit=DEFAULT_PAGE_SIZE)
-        except Exception as exc:
-            worker_log.error(
-                "构建任务列表失败：%s",
-                exc,
-                extra={**_session_extra(), "chat": chat_id},
-            )
-            continue
-
-        parse_mode = _parse_mode_value()
-        prepared, fallback_payload = _prepare_model_payload_variants(text)
-
-        async def _send_formatted(payload: str) -> None:
             await bot.send_message(
                 chat_id=chat_id,
-                text=payload,
-                parse_mode=parse_mode,
-                reply_markup=inline_markup,
+                text=_build_worker_start_message_text(),
+                reply_markup=_build_worker_main_keyboard(),
             )
-
-        async def _send_raw(payload: str) -> None:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=payload,
-                parse_mode=None,
-                reply_markup=inline_markup,
-            )
-
-        try:
-            delivered = await _send_with_markdown_guard(
-                prepared,
-                _send_formatted,
-                raw_sender=_send_raw,
-                fallback_payload=fallback_payload,
-            )
+            if ENV_ISSUES:
+                # 自动 /start 与手动 /start 保持一致：主菜单后补充环境问题提示。
+                await bot.send_message(chat_id=chat_id, text=_format_env_issue_message())
         except TelegramForbiddenError as exc:
-            worker_log.warning("推送任务列表被拒绝：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.warning("自动 /start 被拒绝：%s", exc, extra={**_session_extra(), "chat": chat_id})
         except TelegramBadRequest as exc:
-            worker_log.warning("推送任务列表失败：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.warning("自动 /start 失败：%s", exc, extra={**_session_extra(), "chat": chat_id})
         except (TelegramRetryAfter, TelegramNetworkError) as exc:
-            worker_log.error("推送任务列表网络异常：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.error("自动 /start 网络异常：%s", exc, extra={**_session_extra(), "chat": chat_id})
             await _notify_send_failure_message(chat_id)
         except Exception as exc:
-            worker_log.error("推送任务列表异常：%s", exc, extra={**_session_extra(), "chat": chat_id})
+            worker_log.error("自动 /start 异常：%s", exc, extra={**_session_extra(), "chat": chat_id})
         else:
             worker_log.info(
-                "已推送任务列表至 chat_id=%s",
+                "已自动触发 /start 至 chat_id=%s",
                 chat_id,
-                extra={**_session_extra(), "length": str(len(delivered))},
+                extra=_session_extra(),
             )
 
 STATUS_LABELS = {
@@ -19048,7 +18977,7 @@ async def _answer_goal_not_supported(message: Message) -> None:
 
     await message.answer(
         "🎯 Codex `/goal` 暂仅支持 Codex 模型；当前 worker 不是 Codex，已取消发送。",
-        reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+        reply_markup=_build_worker_main_keyboard(),
     )
 
 
@@ -19117,7 +19046,7 @@ async def _resolve_goal_dispatch_context_from_reply_target(
     if session is None:
         await message.answer(
             f"/{reply_task_id or '-'} 的并行会话已失效，请重新点击回复按钮。",
-            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+            reply_markup=_build_worker_main_keyboard(),
         )
         return None, False
     return _parallel_dispatch_context_from_session(session), True
@@ -19191,7 +19120,7 @@ async def on_goal_callback(callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
             "已取消 Codex /goal 操作。",
-            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+            reply_markup=_build_worker_main_keyboard(),
         )
         await callback.answer("已取消")
         return
@@ -19220,7 +19149,7 @@ async def on_goal_objective_input(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
             "已取消 Codex /goal 设置。",
-            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+            reply_markup=_build_worker_main_keyboard(),
         )
         return
 
@@ -19236,7 +19165,7 @@ async def on_goal_objective_input(message: Message, state: FSMContext) -> None:
     if ok:
         await message.answer(
             "已提交 Codex /goal 目标，主菜单已恢复。",
-            reply_markup=_build_worker_main_keyboard(refresh_plan_mode_state=False),
+            reply_markup=_build_worker_main_keyboard(),
         )
 
 
@@ -19425,7 +19354,7 @@ async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
                 refresh_plan_mode_state=False,
             )
         await message.answer(
-            f"无法切换{'模式' if is_copilot else 'PLAN MODE'}，请确认 tmux 会话 {TMUX_SESSION} 已启动。",
+            f"无法切换{'模式' if is_copilot else 'PLAN'}，请确认 tmux 会话 {TMUX_SESSION} 已启动。",
             reply_markup=reply_markup,
         )
         return
@@ -19450,7 +19379,7 @@ async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
             "off": "OFF",
             "unknown": "?",
         }.get(after_state, "?")
-        summary = f"主菜单已刷新，当前 PLAN MODE：{state_label}"
+        summary = f"主菜单已刷新，当前 PLAN：{state_label}"
         reply_markup = _build_worker_main_keyboard(
             plan_mode_state=after_state,
             refresh_plan_mode_state=False,
@@ -19462,30 +19391,18 @@ async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
     )
 
 
-@router.message(F.text.regexp(r"^🧭 (?:PLAN MODE:|MODE:)"))
+@router.message(F.text.regexp(r"^🧭 (?:PLAN:|PLAN MODE:|MODE:)"))
 async def on_worker_plan_mode_button(message: Message) -> None:
     await _handle_worker_plan_mode_toggle_request(message)
 
 
 async def _handle_worker_direct_send_mode_toggle_request(message: Message) -> None:
-    """切换普通 Telegram 直聊消息的发送方式。"""
+    """兼容旧 Telegram 键盘残留的普通消息发送方式按钮。"""
 
-    current_mode = _get_worker_direct_send_mode()
-    target_mode = PUSH_SEND_MODE_IMMEDIATE
-    if current_mode != PUSH_SEND_MODE_QUEUED:
-        target_mode = PUSH_SEND_MODE_QUEUED
-
-    if target_mode == PUSH_SEND_MODE_QUEUED and not _supports_queued_send_mode():
-        _set_worker_direct_send_mode(PUSH_SEND_MODE_IMMEDIATE)
-        await message.answer(
-            "当前模型不支持排队发送，已保持立即发送。",
-            reply_markup=_build_worker_main_keyboard(),
-        )
-        return
-
-    resolved_mode = _set_worker_direct_send_mode(target_mode)
+    default_mode = _get_worker_direct_send_mode()
+    default_label = _push_send_mode_label(default_mode)
     await message.answer(
-        f"普通消息发送方式已切换为：{_push_send_mode_label(resolved_mode)}",
+        f"发送方式按钮已移除；普通消息默认{default_label}。如需立即/排队选择，请使用任务推送流程中的发送方式选择。",
         reply_markup=_build_worker_main_keyboard(),
     )
 
@@ -25603,18 +25520,27 @@ async def on_media_message(message: Message) -> None:
     await _handle_prompt_dispatch(message, prompt)
 
 
+def _build_worker_start_message_text(full_name: Optional[str] = None) -> str:
+    """构造 /start 欢迎语，供手动 /start 与启动自动广播复用。"""
+
+    normalized_name = (full_name or "").strip()
+    greeting = f"Hello, {normalized_name}！" if normalized_name else "Hello！"
+    return (
+        f"{greeting}\n"
+        "直接发送问题就能与模型对话，\n"
+        "或使用任务功能来组织需求与执行记录。\n\n"
+        "主菜单已准备好，祝你使用愉快！"
+    )
+
+
 @router.message(CommandStart())
 async def on_start(m: Message):
     # 首次收到消息时自动记录 chat_id 到 state 文件
     _auto_record_chat_id(m.chat.id)
 
+    full_name = getattr(getattr(m, "from_user", None), "full_name", None)
     await m.answer(
-        (
-            f"Hello, {m.from_user.full_name}！\n"
-            "直接发送问题就能与模型对话，\n"
-            "或使用任务功能来组织需求与执行记录。\n\n"
-            "主菜单已准备好，祝你使用愉快！"
-        ),
+        _build_worker_start_message_text(full_name),
         reply_markup=_build_worker_main_keyboard(),
     )
     worker_log.info("收到 /start，chat_id=%s", m.chat.id, extra=_session_extra())

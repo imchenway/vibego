@@ -7,7 +7,7 @@
 结论：Worker 底部常驻键盘从一行两列扩展为一行三列：
 
 1. `📟 命令管理`
-2. `🧭 PLAN MODE: ...`（Copilot 为 `🧭 MODE: ...`）
+2. `🧭 PLAN: ...`（Copilot 为 `🧭 MODE: ...`）
 3. `✉️ 立即` / `✉️ 排队`
 
 第三个按钮只影响普通 Telegram 直聊入口；任务推送、批量推送仍沿用其已有的发送方式选择流程。
@@ -55,7 +55,7 @@
 
 ## 5. 契约变更
 
-1. Worker 底部常驻键盘必须是一行三列：`命令管理`、`PLAN/MODE`、`发送方式`。
+1. Worker 底部常驻键盘必须是一行三列：`命令管理`、`PLAN/MODE`、`发送方式`；其中 Codex/非 Copilot 的可见文案使用 `PLAN`，不再显示 `PLAN MODE`。
 2. 发送方式按钮文案：
    - `✉️ 立即`：普通直聊使用 `send_mode=immediate`。
    - `✉️ 排队`：普通直聊使用 `send_mode=queued`。
@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | `test_worker_keyboard_structure` | 底部键盘一行三列 | 通过 |
 | `test_worker_keyboard_button_text` | 第三列默认 `✉️ 立即` | 通过 |
-| `test_worker_main_keyboard_probes_visible_plan_mode_button` | PLAN MODE 状态刷新与三列顺序 | 通过 |
+| `test_worker_main_keyboard_probes_visible_plan_mode_button` | PLAN 状态刷新与三列顺序，且按钮不再显示 `MODE` | 通过 |
 | `test_worker_direct_send_mode_button_toggles_to_queued` | Codex 下立即切排队并刷新按钮 | 通过 |
 | `test_worker_direct_send_mode_button_rejects_queued_when_model_unsupported` | Gemini 等不支持模型拒绝排队 | 通过 |
 | `test_on_text_direct_prompt_uses_worker_queued_send_mode` | 普通直聊透传 `send_mode=queued` | 通过 |
@@ -115,3 +115,55 @@
 - 语法检查：`python3.11 -m py_compile bot.py` -> 通过。
 - 运行诊断：`python3.11 -m vibego_cli doctor` -> 通过，`python_ok=true`，依赖缺失列表为空。
 - 全量 pytest：`python3.11 -m pytest -q` -> `956 passed, 3 failed, 6 warnings`。失败项为 `tests/test_agents_template_migration.py` 中 AGENTS 模板/强制规约文案既有不一致：`test_enforced_notice_points_to_agents_md`、`test_enforced_notice_adds_user_requirement_header_before_prompt`、`test_agents_template_requires_comet_for_complex_workflows`；与本次底部键盘/普通直聊发送方式改动无直接交集。
+
+## 10. 2026-06-03 PLAN 按钮文案收敛
+
+用户追加确认：`PLAN MODE` 的 `MODE` 文案去掉。
+
+本次收敛：
+
+1. Codex/非 Copilot 的底部模式按钮从 `🧭 PLAN MODE: ON/OFF/?` 改为 `🧭 PLAN: ON/OFF/?`。
+2. 切换后的 Telegram 回执从 `当前 PLAN MODE：...` 改为 `当前 PLAN：...`。
+3. Copilot 的 `🧭 MODE: ...` 不变，因为 Copilot 不是 PLAN 二态按钮，而是 `INTERACTIVE/PLAN/AUTOPILOT` 三态模式按钮。
+4. handler 临时兼容旧按钮文本 `🧭 PLAN MODE:`，避免重启前 Telegram 客户端保留旧键盘时点击无响应；新渲染键盘只展示 `🧭 PLAN:`。
+
+### 10.1 验证记录
+
+- Red：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py -k 'worker_keyboard or worker_main_keyboard or plan_mode_button or direct_send_mode'` -> `6 failed, 5 passed, 42 deselected`，失败点均为旧文案 `PLAN MODE` 仍存在。
+- Green：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py -k 'worker_keyboard or worker_main_keyboard or plan_mode_button or direct_send_mode'` -> `11 passed, 42 deselected`。
+- 聚焦完整按钮测试：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py` -> `53 passed`。
+- 聚焦三文件回归：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py tests/test_task_description.py tests/test_tmux_send_line.py` -> `274 passed`。
+- 语法检查：`python3.11 -m py_compile bot.py` -> 通过。
+- 运行诊断：`python3.11 -m vibego_cli doctor` -> 通过，`python_ok=true`，依赖缺失列表为空。
+- 全量 pytest：`python3.11 -m pytest -q` -> `956 passed, 3 failed, 6 warnings`。失败项仍为既有 `tests/test_agents_template_migration.py` 中 AGENTS 模板/强制规约文案不一致：`test_enforced_notice_points_to_agents_md`、`test_enforced_notice_adds_user_requirement_header_before_prompt`、`test_agents_template_requires_comet_for_complex_workflows`；与本次 PLAN 按钮文案收敛无直接交集。
+
+
+## 11. 2026-06-03 Telegram 回复时刷新 PLAN 状态
+
+用户追加确认：每次向 Telegram 回复消息时，都更新底部键盘里 PLAN 的 `ON/OFF/?` 值。
+
+本次收敛：
+
+1. 所有“恢复/展示 Worker 主键盘”的回复默认调用 `_build_worker_main_keyboard()`，重新探测当前终端 PLAN 状态。
+2. 不再在普通回复场景使用 `refresh_plan_mode_state=False` 读取旧缓存，避免用户看到过期的 `🧭 PLAN: ON/OFF/?`。
+3. 仅保留 PLAN/Copilot MODE 切换流程中的显式状态复用：切换流程已经拿到 `after_state` 或错误态 `unknown`，此时不重复探测，直接用已知状态渲染。
+4. InlineKeyboard 场景不强行替换为 Worker 主键盘，避免破坏任务列表、Goal 面板、命令详情等交互按钮；这些交互结束并恢复主键盘时会刷新 PLAN 状态。
+
+### 11.1 验证记录
+
+- Red：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py -k 'goal_not_supported_reply_refreshes_plan_state or worker_goal_button_fails_closed'` -> `1 failed, 1 passed, 52 deselected`，失败点为 `_answer_goal_not_supported` 使用旧缓存且未探测 PLAN 状态。
+- Green：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py -k 'goal_not_supported_reply_refreshes_plan_state or worker_goal_button_fails_closed'` -> `2 passed, 52 deselected`。
+- 聚焦完整按钮测试：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py` -> `54 passed`。
+- 聚焦三文件回归：`python3.11 -m pytest -q tests/test_chat_menu_buttons.py tests/test_task_description.py tests/test_tmux_send_line.py` -> `275 passed`。
+- 语法检查：`python3.11 -m py_compile bot.py` -> 通过。
+- 运行诊断：`python3.11 -m vibego_cli doctor` -> 通过，`python_ok=true`，依赖缺失列表为空。
+- 全量 pytest：`python3.11 -m pytest -q` -> `957 passed, 3 failed, 6 warnings`。失败项仍为既有 `tests/test_agents_template_migration.py` 中 AGENTS 模板/强制规约文案不一致：`test_enforced_notice_points_to_agents_md`、`test_enforced_notice_adds_user_requirement_header_before_prompt`、`test_agents_template_requires_comet_for_complex_workflows`；与本次主键盘回复刷新 PLAN 状态无直接交集。
+
+## 12. 2026-06-03 后续变更提示：普通直聊默认排队并移除发送方式按钮
+
+后续 `TASK_20260603_005_普通消息默认排队并移除发送方式按钮.md` 已按用户确认覆盖本文件的第三列按钮历史契约：
+
+1. Worker 底部主键盘从一行三列回到一行两列：`📟 命令管理` + `🧭 PLAN: ...` / `🧭 MODE: ...`。
+2. `✉️ 立即/排队` 不再展示；旧 Telegram 客户端残留按钮只提示按钮已移除并刷新主键盘。
+3. 普通直聊发送方式不再读写 `*_direct_send_mode.json`，Codex/Copilot 默认 `queued`，不支持 queued 的模型自动回退 `immediate`。
+4. 本文件中任务推送“立即发送/排队发送”的显式选择仍有效；后续实现和排障以 `TASK_20260603_005` 与 `AGENTS.md` 最新 Facts Table 为准。

@@ -34,11 +34,10 @@ def test_worker_menu_button_handles_bad_request(caplog):
 
 def test_worker_keyboard_structure(monkeypatch):
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
-    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
     markup = bot._build_worker_main_keyboard()
     assert isinstance(markup, ReplyKeyboardMarkup)
     assert len(markup.keyboard) == 1
-    assert len(markup.keyboard[0]) == 3
+    assert len(markup.keyboard[0]) == 2
     for row in markup.keyboard:
         for button in row:
             assert isinstance(button, KeyboardButton)
@@ -46,16 +45,17 @@ def test_worker_keyboard_structure(monkeypatch):
 
 def test_worker_keyboard_button_text(monkeypatch):
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
-    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
     markup = bot._build_worker_main_keyboard()
     assert markup.keyboard[0][0].text == bot.WORKER_COMMANDS_BUTTON_TEXT
-    assert markup.keyboard[0][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF
-    assert markup.keyboard[0][2].text == "✉️ 立即"
+    assert markup.keyboard[0][1].text == "🧭 PLAN: OFF"
     all_button_texts = [button.text for row in markup.keyboard for button in row]
     assert bot.WORKER_MENU_BUTTON_TEXT not in all_button_texts
     assert bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT not in all_button_texts
     assert bot.WORKER_GOAL_BUTTON_TEXT not in all_button_texts
-    assert any(text.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX) for text in all_button_texts)
+    assert bot.WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_IMMEDIATE not in all_button_texts
+    assert bot.WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_QUEUED not in all_button_texts
+    assert any(text.startswith("🧭 PLAN:") for text in all_button_texts)
+    assert all("PLAN MODE" not in text for text in all_button_texts)
 
 
 def test_worker_main_keyboard_probes_visible_plan_mode_button(monkeypatch):
@@ -72,59 +72,55 @@ def test_worker_main_keyboard_probes_visible_plan_mode_button(monkeypatch):
 
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", fake_plan_probe)
     monkeypatch.setattr(bot, "_probe_worker_copilot_mode_state", fail_copilot_probe)
-    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
 
     markup = bot._build_worker_main_keyboard()
 
     assert [[button.text for button in row] for row in markup.keyboard] == [
-        [bot.WORKER_COMMANDS_BUTTON_TEXT, bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON, "✉️ 立即"]
+        [bot.WORKER_COMMANDS_BUTTON_TEXT, "🧭 PLAN: ON"]
     ]
     assert probed["count"] == 1
 
 
-def test_worker_direct_send_mode_button_toggles_to_queued(monkeypatch, tmp_path):
-    """点击发送方式按钮后，普通消息发送方式应从立即切换为排队并刷新同一行按钮。"""
+def test_worker_direct_send_mode_defaults_to_queued_for_codex_and_ignores_old_state(monkeypatch, tmp_path):
+    """Codex 普通消息默认排队；旧状态文件即使写着立即也不再参与决策。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    state_file = tmp_path / "send-mode.json"
+    state_file.write_text(json.dumps({"send_mode": bot.PUSH_SEND_MODE_IMMEDIATE}), encoding="utf-8")
+    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(state_file))
+
+    assert bot._get_worker_direct_send_mode() == bot.PUSH_SEND_MODE_QUEUED
+
+
+def test_worker_direct_send_mode_falls_back_to_immediate_when_model_unsupported(monkeypatch):
+    """非 Codex/Copilot worker 不支持排队时，普通消息自动回退立即发送。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "gemini")
+
+    assert bot._get_worker_direct_send_mode() == bot.PUSH_SEND_MODE_IMMEDIATE
+
+
+def test_worker_direct_send_mode_button_removed_refreshes_keyboard(monkeypatch, tmp_path):
+    """旧 Telegram 键盘残留的发送方式按钮只提示已移除，不再切换或写状态。"""
 
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
-    monkeypatch.setattr(bot, "WORKER_DIRECT_SEND_MODE_CACHE", bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
-    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(tmp_path / "send-mode.json"))
+    state_file = tmp_path / "send-mode.json"
+    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(state_file))
 
     message = _DummyMessage("✉️ 立即")
     asyncio.run(bot.on_worker_direct_send_mode_button(message))
 
     assert message._answers
     text, kwargs = message._answers[-1]
-    assert "排队发送" in text
+    assert "按钮已移除" in text
+    assert "普通消息默认排队发送" in text
+    assert not state_file.exists()
     markup = kwargs.get("reply_markup")
     assert isinstance(markup, ReplyKeyboardMarkup)
     assert [button.text for button in markup.keyboard[0]] == [
         bot.WORKER_COMMANDS_BUTTON_TEXT,
-        bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF,
-        "✉️ 排队",
-    ]
-
-
-def test_worker_direct_send_mode_button_rejects_queued_when_model_unsupported(monkeypatch, tmp_path):
-    """非 Codex/Copilot worker 不应把普通消息切到排队发送。"""
-
-    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "gemini")
-    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
-    monkeypatch.setattr(bot, "WORKER_DIRECT_SEND_MODE_CACHE", bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
-    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(tmp_path / "send-mode.json"))
-
-    message = _DummyMessage("✉️ 立即")
-    asyncio.run(bot.on_worker_direct_send_mode_button(message))
-
-    assert message._answers
-    text, kwargs = message._answers[-1]
-    assert "当前模型不支持排队发送" in text
-    markup = kwargs.get("reply_markup")
-    assert isinstance(markup, ReplyKeyboardMarkup)
-    assert [button.text for button in markup.keyboard[0]] == [
-        bot.WORKER_COMMANDS_BUTTON_TEXT,
-        bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF,
-        "✉️ 立即",
+        "🧭 PLAN: OFF",
     ]
 
 
@@ -196,6 +192,34 @@ def test_worker_goal_button_fails_closed_for_non_codex(monkeypatch):
     text, kwargs = message._answers[0]
     assert "暂仅支持 Codex" in text
     assert isinstance(kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+
+
+def test_worker_goal_not_supported_reply_refreshes_plan_state(monkeypatch):
+    """回复主键盘时应重新探测 PLAN 状态，避免沿用旧缓存。"""
+
+    bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
+    bot._set_worker_plan_mode_state_cache("on")
+    probes = {"count": 0}
+
+    def fake_probe():
+        probes["count"] += 1
+        return "off"
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "gemini")
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", fake_probe)
+
+    message = _DummyMessage(bot.WORKER_GOAL_BUTTON_TEXT)
+    asyncio.run(bot._answer_goal_not_supported(message))
+
+    assert probes["count"] == 1
+    text, kwargs = message._answers[-1]
+    assert "暂仅支持 Codex" in text
+    markup = kwargs.get("reply_markup")
+    assert isinstance(markup, ReplyKeyboardMarkup)
+    assert [button.text for button in markup.keyboard[0]] == [
+        bot.WORKER_COMMANDS_BUTTON_TEXT,
+        "🧭 PLAN: OFF",
+    ]
 
 
 def test_worker_keyboard_resize_enabled():
@@ -605,11 +629,12 @@ def test_worker_plan_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
     assert sent_keys == [(bot.TMUX_SESSION, bot.WORKER_PLAN_MODE_TOGGLE_KEY)]
     assert len(message._answers) == 1
     text, kwargs = message._answers[0]
-    assert "当前 PLAN MODE：ON" in text
+    assert "当前 PLAN：ON" in text
     reply_markup = kwargs.get("reply_markup")
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
     all_button_texts = [button.text for row in reply_markup.keyboard for button in row]
-    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON in all_button_texts
+    assert "🧭 PLAN: ON" in all_button_texts
+    assert all("PLAN MODE" not in button_text for button_text in all_button_texts)
 
 
 def test_worker_plan_mode_button_unknown_still_attempts_toggle(monkeypatch):
@@ -632,11 +657,12 @@ def test_worker_plan_mode_button_unknown_still_attempts_toggle(monkeypatch):
     assert sent_keys == [(bot.TMUX_SESSION, bot.WORKER_PLAN_MODE_TOGGLE_KEY)]
     assert len(message._answers) == 1
     text, kwargs = message._answers[0]
-    assert "当前 PLAN MODE：?" in text
+    assert "当前 PLAN：?" in text
     reply_markup = kwargs.get("reply_markup")
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
     all_button_texts = [button.text for row in reply_markup.keyboard for button in row]
-    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN in all_button_texts
+    assert "🧭 PLAN: ?" in all_button_texts
+    assert all("PLAN MODE" not in button_text for button_text in all_button_texts)
 
 
 def test_master_projects_button_accepts_legacy_text(monkeypatch):
@@ -751,7 +777,7 @@ def test_worker_resolve_targets_reads_state_and_config(tmp_path, monkeypatch):
     monkeypatch.delenv("MASTER_PROJECTS_PATH", raising=False)
 
 
-def test_worker_broadcast_pushes_to_targets(tmp_path, monkeypatch):
+def test_worker_broadcast_triggers_start_to_targets(tmp_path, monkeypatch):
     slug = bot.PROJECT_SLUG
     state_file = tmp_path / "state.json"
     state_file.write_text(json.dumps({slug: {"chat_id": 333}}), encoding="utf-8")
@@ -764,14 +790,20 @@ def test_worker_broadcast_pushes_to_targets(tmp_path, monkeypatch):
     monkeypatch.setenv("MASTER_PROJECTS_PATH", str(projects_file))
     monkeypatch.delenv("ALLOWED_CHAT_ID", raising=False)
     monkeypatch.delenv("WORKER_CHAT_ID", raising=False)
+
     fake_task_view = AsyncMock(return_value=("任务列表", None))
     monkeypatch.setattr(bot, "_build_task_list_view", fake_task_view)
 
     mock_bot = AsyncMock()
     asyncio.run(bot._broadcast_worker_keyboard(mock_bot))
+
+    fake_task_view.assert_not_awaited()
     assert mock_bot.send_message.await_count == 2
     payload = {call.kwargs["chat_id"] for call in mock_bot.send_message.await_args_list}
     assert payload == {333, 444}
+    for call in mock_bot.send_message.await_args_list:
+        assert "主菜单已准备好" in call.kwargs["text"]
+        assert isinstance(call.kwargs["reply_markup"], ReplyKeyboardMarkup)
 
     monkeypatch.delenv("STATE_FILE", raising=False)
     monkeypatch.delenv("MASTER_PROJECTS_PATH", raising=False)

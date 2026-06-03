@@ -55,3 +55,11 @@ PYTHONPATH=. pytest -q
   https://core.telegram.org/bots/api#callbackquery
 - tmux `send-keys`（预命令注入相关）：
   https://man7.org/linux/man-pages/man1/tmux.1.html
+
+---
+
+## 7. 后续变更提示（2026-06-03）
+
+`TASK_0137` 是当时“普通消息不自动 PLAN”的历史契约。用户在 `TASK_20260603_004_Telegram普通消息自动确保PLAN模式.md` 中已明确改回：普通 Telegram 消息发送前需要确保 PLAN 模式；若当前不是 PLAN，则先切 PLAN，再发送/排队正文。
+
+后续实现与排障以 `TASK_20260603_004` 和 `AGENTS.md` 最新 Facts Table 为准。

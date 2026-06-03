@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Literal, Optional
 
 import aiosqlite
 
@@ -4064,6 +4064,7 @@ def test_dispatch_prompt_plan_mode_sends_plan_switch_for_codex(monkeypatch, tmp_
             reply_to=None,
             ack_immediately=False,
             intended_mode=bot.PUSH_MODE_PLAN,
+            probe_plan_mode_before_switch=True,
         )
         assert ok
         assert path == session_file
@@ -4072,6 +4073,80 @@ def test_dispatch_prompt_plan_mode_sends_plan_switch_for_codex(monkeypatch, tmp_
 
     assert sent_lines[0] == bot.PLAN_MODE_SWITCH_COMMAND
     assert sent_lines[1] == f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def test_dispatch_prompt_plan_mode_skips_plan_switch_when_worker_already_plan(monkeypatch, tmp_path: Path):
+    """Codex + 已处于 PLAN：不应重复发送 /plan，只发送正文。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent_lines: list[str] = []
+    monkeypatch.setattr(bot, "tmux_send_line", lambda _session, line: sent_lines.append(line))
+
+    async def fake_plan_state(*, force_probe: bool = True) -> Literal["on", "off", "unknown"]:
+        return "on"
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache_async", fake_plan_state)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            702,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+            intended_mode=bot.PUSH_MODE_PLAN,
+            probe_plan_mode_before_switch=True,
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
 
     for coro in created_tasks:
         try:
@@ -4145,6 +4220,86 @@ def test_dispatch_prompt_plan_mode_queued_skips_plan_switch_for_codex(monkeypatc
     asyncio.run(scenario())
 
     assert sent_lines == []
+    assert queued_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+
+    for coro in created_tasks:
+        try:
+            coro.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def test_dispatch_prompt_plan_mode_queued_force_sends_plan_switch_for_direct_message(monkeypatch, tmp_path: Path):
+    """普通直聊 + 排队发送：仍应先进入 PLAN，再用 Tab 排队正文。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_BIND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    sent_lines: list[str] = []
+    queued_lines: list[str] = []
+
+    monkeypatch.setattr(bot, "tmux_send_line", lambda _session, line: sent_lines.append(line))
+    monkeypatch.setattr(bot, "tmux_queue_line", lambda _session, line: queued_lines.append(line))
+
+    async def fake_plan_state(*, force_probe: bool = True) -> Literal["on", "off", "unknown"]:
+        return "off"
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return
+
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache_async", fake_plan_state)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            1702,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+            intended_mode=bot.PUSH_MODE_PLAN,
+            send_mode=bot.PUSH_SEND_MODE_QUEUED,
+            force_plan_switch_for_queued=True,
+            probe_plan_mode_before_switch=True,
+        )
+        assert ok
+        assert path == session_file
+
+    asyncio.run(scenario())
+
+    assert sent_lines == [bot.PLAN_MODE_SWITCH_COMMAND]
     assert queued_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
 
     for coro in created_tasks:
@@ -4762,8 +4917,8 @@ def test_dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session(monkeypat
             pass
 
 
-def test_handle_prompt_dispatch_uses_manual_mode_control(monkeypatch):
-    """直接 Telegram 文本消息：不再自动按 PLAN 推送。"""
+def test_handle_prompt_dispatch_auto_ensures_plan_mode(monkeypatch):
+    """直接 Telegram 普通消息：应声明 PLAN，并允许排队模式先切 PLAN。"""
 
     message = DummyMessage()
     message.text = "hello"
@@ -4776,16 +4931,26 @@ def test_handle_prompt_dispatch_uses_manual_mode_control(monkeypatch):
             return None
 
     bot._bot = DummyAiogram()
-    captured: list[Optional[str]] = []
+    captured: list[tuple[Optional[str], bool, bool]] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, intended_mode: Optional[str] = None, **_kwargs):
-        captured.append(intended_mode)
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        intended_mode: Optional[str] = None,
+        force_plan_switch_for_queued: bool = False,
+        probe_plan_mode_before_switch: bool = False,
+        **_kwargs,
+    ):
+        captured.append((intended_mode, force_plan_switch_for_queued, probe_plan_mode_before_switch))
         return True, Path("/tmp/fake-session.jsonl")
 
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
     asyncio.run(bot._handle_prompt_dispatch(message, "hello"))
 
-    assert captured == [None]
+    assert captured == [(bot.PUSH_MODE_PLAN, True, True)]
 
 
 def test_handle_prompt_dispatch_ignores_chat_action_failure(monkeypatch):
@@ -6691,8 +6856,8 @@ def test_on_text_direct_prompt_enables_delivery_confirmation(monkeypatch, tmp_pa
     assert captured == [("hello direct dispatch", True)]
 
 
-def test_on_text_direct_prompt_uses_worker_queued_send_mode(monkeypatch, tmp_path: Path):
-    """普通 Telegram 文本直聊应读取 Worker 发送方式按钮状态并透传 queued。"""
+def test_on_text_direct_prompt_uses_default_queued_send_mode(monkeypatch, tmp_path: Path):
+    """Codex 普通 Telegram 文本直聊默认透传 queued，不再依赖底部切换状态。"""
 
     message = DummyMessage()
     message.text = "hello queued direct dispatch"
@@ -6702,7 +6867,56 @@ def test_on_text_direct_prompt_uses_worker_queued_send_mode(monkeypatch, tmp_pat
         async def send_chat_action(self, *_args, **_kwargs):
             return None
 
-    captured: list[tuple[str, Optional[str], bool]] = []
+    captured: list[tuple[str, Optional[str], Optional[str], bool, bool, bool]] = []
+
+    async def fake_dispatch(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        intended_mode: Optional[str] = None,
+        send_mode: Optional[str] = None,
+        confirm_delivery: bool = False,
+        force_plan_switch_for_queued: bool = False,
+        probe_plan_mode_before_switch: bool = False,
+        **_kwargs,
+    ):
+        captured.append(
+            (
+                prompt,
+                intended_mode,
+                send_mode,
+                force_plan_switch_for_queued,
+                probe_plan_mode_before_switch,
+                confirm_delivery,
+            )
+        )
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "current_bot", lambda: DummyBot())
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(tmp_path / "missing-send-mode.json"))
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert captured == [
+        ("hello queued direct dispatch", bot.PUSH_MODE_PLAN, bot.PUSH_SEND_MODE_QUEUED, True, True, True)
+    ]
+
+
+def test_on_text_direct_prompt_falls_back_to_immediate_when_queue_unsupported(monkeypatch, tmp_path: Path):
+    """不支持排队的模型仍能发送普通直聊，并自动使用 immediate。"""
+
+    message = DummyMessage()
+    message.text = "hello gemini direct dispatch"
+    state, _storage = make_state(message)
+
+    class DummyBot:
+        async def send_chat_action(self, *_args, **_kwargs):
+            return None
+
+    captured: list[tuple[str, Optional[str]]] = []
 
     async def fake_dispatch(
         _chat_id: int,
@@ -6710,19 +6924,19 @@ def test_on_text_direct_prompt_uses_worker_queued_send_mode(monkeypatch, tmp_pat
         *,
         reply_to,
         send_mode: Optional[str] = None,
-        confirm_delivery: bool = False,
         **_kwargs,
     ):
-        captured.append((prompt, send_mode, confirm_delivery))
+        captured.append((prompt, send_mode))
         return True, tmp_path / "session.jsonl"
 
     monkeypatch.setattr(bot, "current_bot", lambda: DummyBot())
-    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_QUEUED, raising=False)
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "gemini")
+    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(tmp_path / "old-send-mode.json"))
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
 
     asyncio.run(bot.on_text(message, state))
 
-    assert captured == [("hello queued direct dispatch", bot.PUSH_SEND_MODE_QUEUED, True)]
+    assert captured == [("hello gemini direct dispatch", bot.PUSH_SEND_MODE_IMMEDIATE)]
 
 
 def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path):
