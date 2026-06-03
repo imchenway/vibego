@@ -5314,6 +5314,8 @@ async def _handle_prompt_dispatch(
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": message,
         "intended_mode": None,
+        # 底部发送方式按钮只影响普通 Telegram 直聊；任务推送仍使用各自流程中的显式选择。
+        "send_mode": _get_worker_direct_send_mode(),
         # 普通 Telegram 直聊必须确认模型 session 真正消费了输入；
         # 否则 tmux send-keys 成功但 Codex TUI 未接收时会形成静默丢消息。
         "confirm_delivery": True,
@@ -5360,6 +5362,8 @@ WORKER_PLAN_MODE_BUTTON_PREFIX = "🧭 PLAN MODE:"
 WORKER_PLAN_MODE_BUTTON_TEXT_ON = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ON"
 WORKER_PLAN_MODE_BUTTON_TEXT_OFF = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} OFF"
 WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN = f"{WORKER_PLAN_MODE_BUTTON_PREFIX} ?"
+WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_IMMEDIATE = "✉️ 立即"
+WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_QUEUED = "✉️ 排队"
 WORKER_COPILOT_MODE_BUTTON_PREFIX = "🧭 MODE:"
 WORKER_COPILOT_MODE_BUTTON_TEXT_INTERACTIVE = f"{WORKER_COPILOT_MODE_BUTTON_PREFIX} INTERACTIVE"
 WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN = f"{WORKER_COPILOT_MODE_BUTTON_PREFIX} PLAN"
@@ -5381,6 +5385,8 @@ WORKER_CREATE_TASK_BUTTON_TEXT = "➕ 创建任务"
 WORKER_PLAN_MODE_STATE_CACHE: Dict[str, Literal["on", "off", "unknown"]] = {}
 # Worker 主菜单 Copilot 三态缓存（按 tmux session 维度）。
 WORKER_COPILOT_MODE_STATE_CACHE: Dict[str, Literal["interactive", "plan", "autopilot", "unknown"]] = {}
+# Worker 普通直聊发送方式缓存；None 表示尚未从运行期状态文件加载。
+WORKER_DIRECT_SEND_MODE_CACHE: Optional[str] = None
 
 GOAL_CALLBACK_PREFIX = "goal:"
 GOAL_VIEW_CALLBACK = f"{GOAL_CALLBACK_PREFIX}view"
@@ -5671,6 +5677,89 @@ async def _refresh_worker_copilot_mode_state_cache_async(
     return await asyncio.to_thread(_refresh_worker_copilot_mode_state_cache, force_probe=force_probe)
 
 
+def _worker_direct_send_mode_state_file() -> Path:
+    """返回普通直聊发送方式的运行期状态文件路径。"""
+
+    override = (os.environ.get("WORKER_DIRECT_SEND_MODE_STATE_FILE") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    raw_slug = PROJECT_SLUG or PROJECT_NAME or MODEL_CANONICAL_NAME or "worker"
+    safe_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_slug).strip("._-") or "worker"
+    return STATE_DIR_PATH / f"{safe_slug}_direct_send_mode.json"
+
+
+def _direct_send_mode_supported(send_mode: Optional[str]) -> str:
+    """把普通直聊发送方式收敛到当前模型支持的安全值。"""
+
+    normalized = _normalize_push_send_mode(send_mode)
+    if normalized == PUSH_SEND_MODE_QUEUED and not _supports_queued_send_mode():
+        return PUSH_SEND_MODE_IMMEDIATE
+    return normalized
+
+
+def _load_worker_direct_send_mode_from_file() -> str:
+    """从运行期状态文件读取普通直聊发送方式，异常时回退立即发送。"""
+
+    path = _worker_direct_send_mode_state_file()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return PUSH_SEND_MODE_IMMEDIATE
+    except json.JSONDecodeError as exc:
+        worker_log.warning(
+            "普通消息发送方式状态文件解析失败，回退立即发送：%s",
+            exc,
+            extra={**_session_extra(), "path": str(path)},
+        )
+        return PUSH_SEND_MODE_IMMEDIATE
+    if not isinstance(raw, dict):
+        return PUSH_SEND_MODE_IMMEDIATE
+    return _direct_send_mode_supported(raw.get("send_mode"))
+
+
+def _get_worker_direct_send_mode() -> str:
+    """获取 Worker 普通直聊发送方式；默认立即发送。"""
+
+    global WORKER_DIRECT_SEND_MODE_CACHE
+    if WORKER_DIRECT_SEND_MODE_CACHE is None:
+        WORKER_DIRECT_SEND_MODE_CACHE = _load_worker_direct_send_mode_from_file()
+    return _direct_send_mode_supported(WORKER_DIRECT_SEND_MODE_CACHE)
+
+
+def _set_worker_direct_send_mode(send_mode: Optional[str]) -> str:
+    """设置并持久化 Worker 普通直聊发送方式。"""
+
+    global WORKER_DIRECT_SEND_MODE_CACHE
+    resolved = _direct_send_mode_supported(send_mode)
+    WORKER_DIRECT_SEND_MODE_CACHE = resolved
+    path = _worker_direct_send_mode_state_file()
+    payload = {
+        "send_mode": resolved,
+        "model": MODEL_CANONICAL_NAME,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        # 发送方式是用户体验状态，持久化失败不能阻断按钮切换和消息投递。
+        worker_log.warning(
+            "普通消息发送方式状态写入失败：%s",
+            exc,
+            extra={**_session_extra(), "path": str(path)},
+        )
+    return resolved
+
+
+def _worker_direct_send_mode_button_text(send_mode: Optional[str] = None) -> str:
+    """返回底部键盘中的普通消息发送方式按钮文案。"""
+
+    resolved = _direct_send_mode_supported(send_mode or _get_worker_direct_send_mode())
+    if resolved == PUSH_SEND_MODE_QUEUED:
+        return WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_QUEUED
+    return WORKER_DIRECT_SEND_MODE_BUTTON_TEXT_IMMEDIATE
+
+
 def _resolve_worker_plan_mode_button_text(
     *,
     plan_mode_state: Optional[Literal["on", "off", "unknown"]] = None,
@@ -5820,6 +5909,7 @@ def _build_worker_main_keyboard(
             [
                 KeyboardButton(text=WORKER_COMMANDS_BUTTON_TEXT),
                 KeyboardButton(text=mode_button_text),
+                KeyboardButton(text=_worker_direct_send_mode_button_text()),
             ],
         ],
         resize_keyboard=True,
@@ -19375,6 +19465,34 @@ async def _handle_worker_plan_mode_toggle_request(message: Message) -> None:
 @router.message(F.text.regexp(r"^🧭 (?:PLAN MODE:|MODE:)"))
 async def on_worker_plan_mode_button(message: Message) -> None:
     await _handle_worker_plan_mode_toggle_request(message)
+
+
+async def _handle_worker_direct_send_mode_toggle_request(message: Message) -> None:
+    """切换普通 Telegram 直聊消息的发送方式。"""
+
+    current_mode = _get_worker_direct_send_mode()
+    target_mode = PUSH_SEND_MODE_IMMEDIATE
+    if current_mode != PUSH_SEND_MODE_QUEUED:
+        target_mode = PUSH_SEND_MODE_QUEUED
+
+    if target_mode == PUSH_SEND_MODE_QUEUED and not _supports_queued_send_mode():
+        _set_worker_direct_send_mode(PUSH_SEND_MODE_IMMEDIATE)
+        await message.answer(
+            "当前模型不支持排队发送，已保持立即发送。",
+            reply_markup=_build_worker_main_keyboard(),
+        )
+        return
+
+    resolved_mode = _set_worker_direct_send_mode(target_mode)
+    await message.answer(
+        f"普通消息发送方式已切换为：{_push_send_mode_label(resolved_mode)}",
+        reply_markup=_build_worker_main_keyboard(),
+    )
+
+
+@router.message(F.text.regexp(r"^✉️ (?:立即|排队)$"))
+async def on_worker_direct_send_mode_button(message: Message) -> None:
+    await _handle_worker_direct_send_mode_toggle_request(message)
 
 
 @router.message(Command("plan_mode"))

@@ -34,10 +34,11 @@ def test_worker_menu_button_handles_bad_request(caplog):
 
 def test_worker_keyboard_structure(monkeypatch):
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
+    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
     markup = bot._build_worker_main_keyboard()
     assert isinstance(markup, ReplyKeyboardMarkup)
     assert len(markup.keyboard) == 1
-    assert len(markup.keyboard[0]) == 2
+    assert len(markup.keyboard[0]) == 3
     for row in markup.keyboard:
         for button in row:
             assert isinstance(button, KeyboardButton)
@@ -45,9 +46,11 @@ def test_worker_keyboard_structure(monkeypatch):
 
 def test_worker_keyboard_button_text(monkeypatch):
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
+    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
     markup = bot._build_worker_main_keyboard()
     assert markup.keyboard[0][0].text == bot.WORKER_COMMANDS_BUTTON_TEXT
     assert markup.keyboard[0][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF
+    assert markup.keyboard[0][2].text == "✉️ 立即"
     all_button_texts = [button.text for row in markup.keyboard for button in row]
     assert bot.WORKER_MENU_BUTTON_TEXT not in all_button_texts
     assert bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT not in all_button_texts
@@ -69,13 +72,60 @@ def test_worker_main_keyboard_probes_visible_plan_mode_button(monkeypatch):
 
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", fake_plan_probe)
     monkeypatch.setattr(bot, "_probe_worker_copilot_mode_state", fail_copilot_probe)
+    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
 
     markup = bot._build_worker_main_keyboard()
 
     assert [[button.text for button in row] for row in markup.keyboard] == [
-        [bot.WORKER_COMMANDS_BUTTON_TEXT, bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON]
+        [bot.WORKER_COMMANDS_BUTTON_TEXT, bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON, "✉️ 立即"]
     ]
     assert probed["count"] == 1
+
+
+def test_worker_direct_send_mode_button_toggles_to_queued(monkeypatch, tmp_path):
+    """点击发送方式按钮后，普通消息发送方式应从立即切换为排队并刷新同一行按钮。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
+    monkeypatch.setattr(bot, "WORKER_DIRECT_SEND_MODE_CACHE", bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
+    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(tmp_path / "send-mode.json"))
+
+    message = _DummyMessage("✉️ 立即")
+    asyncio.run(bot.on_worker_direct_send_mode_button(message))
+
+    assert message._answers
+    text, kwargs = message._answers[-1]
+    assert "排队发送" in text
+    markup = kwargs.get("reply_markup")
+    assert isinstance(markup, ReplyKeyboardMarkup)
+    assert [button.text for button in markup.keyboard[0]] == [
+        bot.WORKER_COMMANDS_BUTTON_TEXT,
+        bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF,
+        "✉️ 排队",
+    ]
+
+
+def test_worker_direct_send_mode_button_rejects_queued_when_model_unsupported(monkeypatch, tmp_path):
+    """非 Codex/Copilot worker 不应把普通消息切到排队发送。"""
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "gemini")
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
+    monkeypatch.setattr(bot, "WORKER_DIRECT_SEND_MODE_CACHE", bot.PUSH_SEND_MODE_IMMEDIATE, raising=False)
+    monkeypatch.setenv("WORKER_DIRECT_SEND_MODE_STATE_FILE", str(tmp_path / "send-mode.json"))
+
+    message = _DummyMessage("✉️ 立即")
+    asyncio.run(bot.on_worker_direct_send_mode_button(message))
+
+    assert message._answers
+    text, kwargs = message._answers[-1]
+    assert "当前模型不支持排队发送" in text
+    markup = kwargs.get("reply_markup")
+    assert isinstance(markup, ReplyKeyboardMarkup)
+    assert [button.text for button in markup.keyboard[0]] == [
+        bot.WORKER_COMMANDS_BUTTON_TEXT,
+        bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF,
+        "✉️ 立即",
+    ]
 
 
 def test_worker_commands_menu_exposes_session_plan_and_goal_commands():

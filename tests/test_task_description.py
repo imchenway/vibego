@@ -6691,6 +6691,40 @@ def test_on_text_direct_prompt_enables_delivery_confirmation(monkeypatch, tmp_pa
     assert captured == [("hello direct dispatch", True)]
 
 
+def test_on_text_direct_prompt_uses_worker_queued_send_mode(monkeypatch, tmp_path: Path):
+    """普通 Telegram 文本直聊应读取 Worker 发送方式按钮状态并透传 queued。"""
+
+    message = DummyMessage()
+    message.text = "hello queued direct dispatch"
+    state, _storage = make_state(message)
+
+    class DummyBot:
+        async def send_chat_action(self, *_args, **_kwargs):
+            return None
+
+    captured: list[tuple[str, Optional[str], bool]] = []
+
+    async def fake_dispatch(
+        _chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        send_mode: Optional[str] = None,
+        confirm_delivery: bool = False,
+        **_kwargs,
+    ):
+        captured.append((prompt, send_mode, confirm_delivery))
+        return True, tmp_path / "session.jsonl"
+
+    monkeypatch.setattr(bot, "current_bot", lambda: DummyBot())
+    monkeypatch.setattr(bot, "_get_worker_direct_send_mode", lambda: bot.PUSH_SEND_MODE_QUEUED, raising=False)
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert captured == [("hello queued direct dispatch", bot.PUSH_SEND_MODE_QUEUED, True)]
+
+
 def test_goal_command_dispatches_objective_to_codex(monkeypatch, tmp_path: Path):
     """Telegram /goal objective 应原样透传到 Codex，而不是被普通 slash 兜底吞掉。"""
 
