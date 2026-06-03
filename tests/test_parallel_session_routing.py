@@ -251,7 +251,9 @@ def test_parallel_reply_cancel_restores_main_keyboard(monkeypatch):
     assert message.calls and message.calls[-1][0] == "已取消 /TASK_0115 回复模式。"
     reply_markup = message.calls[-1][2]
     labels = [button.text for row in reply_markup.keyboard for button in row]
-    assert bot.WORKER_MENU_BUTTON_TEXT in labels
+    assert bot.WORKER_COMMANDS_BUTTON_TEXT in labels
+    assert any(label.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX) for label in labels)
+    assert bot.WORKER_MENU_BUTTON_TEXT not in labels
     assert message.chat.id not in bot.CHAT_PARALLEL_REPLY_TARGETS
 
 

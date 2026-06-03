@@ -46,31 +46,36 @@ def test_worker_keyboard_structure(monkeypatch):
 def test_worker_keyboard_button_text(monkeypatch):
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", lambda: "off")
     markup = bot._build_worker_main_keyboard()
-    assert markup.keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
-    assert markup.keyboard[0][1].text == bot.WORKER_COMMANDS_BUTTON_TEXT
+    assert markup.keyboard[0][0].text == bot.WORKER_COMMANDS_BUTTON_TEXT
+    assert markup.keyboard[0][1].text == bot.WORKER_PLAN_MODE_BUTTON_TEXT_OFF
     all_button_texts = [button.text for row in markup.keyboard for button in row]
+    assert bot.WORKER_MENU_BUTTON_TEXT not in all_button_texts
     assert bot.WORKER_TERMINAL_SNAPSHOT_BUTTON_TEXT not in all_button_texts
     assert bot.WORKER_GOAL_BUTTON_TEXT not in all_button_texts
-    assert not any(text.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX) for text in all_button_texts)
+    assert any(text.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX) for text in all_button_texts)
 
 
-def test_worker_main_keyboard_does_not_probe_hidden_mode_buttons(monkeypatch):
-    """底部键盘不再展示会话实况/PLAN/GOAL，因此渲染主菜单不应探测 tmux 状态。"""
+def test_worker_main_keyboard_probes_visible_plan_mode_button(monkeypatch):
+    """底部键盘展示 PLAN MODE 时，应读取终端状态并把按钮放在右侧。"""
 
-    def fail_plan_probe():
-        raise AssertionError("底部 PLAN MODE 按钮已移除，不应探测 tmux")
+    probed = {"count": 0}
 
     def fail_copilot_probe():
-        raise AssertionError("底部 MODE 按钮已移除，不应探测 tmux")
+        raise AssertionError("Codex PLAN MODE 按钮不应探测 Copilot MODE 状态")
 
-    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", fail_plan_probe)
+    def fake_plan_probe():
+        probed["count"] += 1
+        return "on"
+
+    monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", fake_plan_probe)
     monkeypatch.setattr(bot, "_probe_worker_copilot_mode_state", fail_copilot_probe)
 
     markup = bot._build_worker_main_keyboard()
 
     assert [[button.text for button in row] for row in markup.keyboard] == [
-        [bot.WORKER_MENU_BUTTON_TEXT, bot.WORKER_COMMANDS_BUTTON_TEXT]
+        [bot.WORKER_COMMANDS_BUTTON_TEXT, bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON]
     ]
+    assert probed["count"] == 1
 
 
 def test_worker_commands_menu_exposes_session_plan_and_goal_commands():
@@ -448,16 +453,16 @@ def test_worker_main_keyboard_uses_cached_plan_mode_when_refresh_disabled(monkey
     monkeypatch.setattr(bot, "_probe_worker_plan_mode_state", fail_probe)
     markup = bot._build_worker_main_keyboard(refresh_plan_mode_state=False)
     all_button_texts = [button.text for row in markup.keyboard for button in row]
-    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON not in all_button_texts
+    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON in all_button_texts
 
 
-def test_worker_main_keyboard_force_probe_even_with_explicit_state(monkeypatch):
+def test_worker_main_keyboard_uses_explicit_plan_mode_state(monkeypatch):
     bot.WORKER_PLAN_MODE_STATE_CACHE.clear()
 
     markup = bot._build_worker_main_keyboard(plan_mode_state="on")
     all_button_texts = [button.text for row in markup.keyboard for button in row]
-    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON not in all_button_texts
-    assert bot._get_worker_plan_mode_state_cache() is None
+    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON in all_button_texts
+    assert bot._get_worker_plan_mode_state_cache() == "on"
 
 
 def test_refresh_worker_plan_mode_state_cache_updates_cache(monkeypatch):
@@ -471,12 +476,13 @@ def test_refresh_worker_plan_mode_state_cache_updates_cache(monkeypatch):
 def test_worker_main_keyboard_uses_copilot_mode_button(monkeypatch):
     bot.WORKER_COPILOT_MODE_STATE_CACHE.clear()
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "copilot")
+    monkeypatch.setattr(bot, "_probe_worker_copilot_mode_state", lambda: "autopilot")
 
     markup = bot._build_worker_main_keyboard()
 
     all_button_texts = [button.text for row in markup.keyboard for button in row]
-    assert bot.WORKER_COPILOT_MODE_BUTTON_TEXT_AUTOPILOT not in all_button_texts
-    assert bot._get_worker_copilot_mode_state_cache() is None
+    assert bot.WORKER_COPILOT_MODE_BUTTON_TEXT_AUTOPILOT in all_button_texts
+    assert bot._get_worker_copilot_mode_state_cache() == "autopilot"
 
 
 def test_refresh_worker_copilot_mode_state_cache_updates_cache(monkeypatch):
@@ -514,7 +520,7 @@ def test_worker_copilot_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
     reply_markup = kwargs.get("reply_markup")
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
     all_button_texts = [button.text for row in reply_markup.keyboard for button in row]
-    assert bot.WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN not in all_button_texts
+    assert bot.WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN in all_button_texts
 
 
 def test_refresh_worker_plan_mode_state_after_toggle_retries_until_changed(monkeypatch):
@@ -553,7 +559,7 @@ def test_worker_plan_mode_button_toggles_and_refreshes_keyboard(monkeypatch):
     reply_markup = kwargs.get("reply_markup")
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
     all_button_texts = [button.text for row in reply_markup.keyboard for button in row]
-    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON not in all_button_texts
+    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_ON in all_button_texts
 
 
 def test_worker_plan_mode_button_unknown_still_attempts_toggle(monkeypatch):
@@ -580,7 +586,7 @@ def test_worker_plan_mode_button_unknown_still_attempts_toggle(monkeypatch):
     reply_markup = kwargs.get("reply_markup")
     assert isinstance(reply_markup, ReplyKeyboardMarkup)
     all_button_texts = [button.text for row in reply_markup.keyboard for button in row]
-    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN not in all_button_texts
+    assert bot.WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN in all_button_texts
 
 
 def test_master_projects_button_accepts_legacy_text(monkeypatch):

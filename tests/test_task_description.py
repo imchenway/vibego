@@ -647,8 +647,9 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         assert final_text == f"已推送到模型：\n{expected_block}"
         assert isinstance(final_markup, ReplyKeyboardMarkup)
         final_buttons = [button.text for row in final_markup.keyboard for button in row]
-        assert bot.WORKER_MENU_BUTTON_TEXT in final_buttons
         assert bot.WORKER_COMMANDS_BUTTON_TEXT in final_buttons
+        assert any(text.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX) for text in final_buttons)
+        assert bot.WORKER_MENU_BUTTON_TEXT not in final_buttons
         assert ack_calls and ack_calls[0][2] is message
         assert not logged_events
 
@@ -1170,8 +1171,9 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         assert final_text == f"已推送到模型：\n{expected_block}"
         assert isinstance(final_markup, ReplyKeyboardMarkup)
         final_buttons = [button.text for row in final_markup.keyboard for button in row]
-        assert bot.WORKER_MENU_BUTTON_TEXT in final_buttons
         assert bot.WORKER_COMMANDS_BUTTON_TEXT in final_buttons
+        assert any(text.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX) for text in final_buttons)
+        assert bot.WORKER_MENU_BUTTON_TEXT not in final_buttons
         assert ack_calls and ack_calls[0][2] is message
         assert message.calls and "已推送到模型" in message.calls[-1][0]
         assert not logged_events

@@ -721,7 +721,8 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup)
     main_keyboard_rows = message.calls[-1][2].keyboard
     assert main_keyboard_rows
-    assert main_keyboard_rows[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
+    assert main_keyboard_rows[0][0].text == bot.WORKER_COMMANDS_BUTTON_TEXT
+    assert main_keyboard_rows[0][1].text.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX)
 
 
 def test_request_input_custom_text_auto_submits_to_parallel_context(monkeypatch, tmp_path: Path):
@@ -977,7 +978,8 @@ def test_request_input_custom_text_submit_failure_restores_main_keyboard(monkeyp
     assert message.calls, "失败后应提示重试并恢复主菜单"
     assert isinstance(message.calls[0][2], InlineKeyboardMarkup), "首条应保留重试提交按钮"
     assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup), "最后一条应恢复主菜单"
-    assert message.calls[-1][2].keyboard[0][0].text == bot.WORKER_MENU_BUTTON_TEXT
+    assert message.calls[-1][2].keyboard[0][0].text == bot.WORKER_COMMANDS_BUTTON_TEXT
+    assert message.calls[-1][2].keyboard[0][1].text.startswith(bot.WORKER_PLAN_MODE_BUTTON_PREFIX)
 
 
 def test_request_input_submission_summary_keeps_full_custom_text():

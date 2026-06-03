@@ -5671,6 +5671,52 @@ async def _refresh_worker_copilot_mode_state_cache_async(
     return await asyncio.to_thread(_refresh_worker_copilot_mode_state_cache, force_probe=force_probe)
 
 
+def _resolve_worker_plan_mode_button_text(
+    *,
+    plan_mode_state: Optional[Literal["on", "off", "unknown"]] = None,
+    refresh_plan_mode_state: bool = True,
+) -> str:
+    """解析底部键盘右侧 PLAN MODE 按钮文案。"""
+
+    if plan_mode_state in {"on", "off", "unknown"}:
+        # 显式状态通常来自刚切换后的稳定探测结果，写入缓存便于后续无刷新渲染复用。
+        resolved_state = _set_worker_plan_mode_state_cache(plan_mode_state)
+    elif refresh_plan_mode_state:
+        resolved_state = _refresh_worker_plan_mode_state_cache(force_probe=True)
+    else:
+        # 非刷新场景用于避免频繁阻塞 tmux；无缓存时展示未知态。
+        resolved_state = _get_worker_plan_mode_state_cache() or "unknown"
+
+    return {
+        "on": WORKER_PLAN_MODE_BUTTON_TEXT_ON,
+        "off": WORKER_PLAN_MODE_BUTTON_TEXT_OFF,
+        "unknown": WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN,
+    }.get(resolved_state, WORKER_PLAN_MODE_BUTTON_TEXT_UNKNOWN)
+
+
+def _resolve_worker_copilot_mode_button_text(
+    *,
+    copilot_mode_state: Optional[Literal["interactive", "plan", "autopilot", "unknown"]] = None,
+    refresh_plan_mode_state: bool = True,
+) -> str:
+    """解析 Copilot worker 底部键盘右侧 MODE 按钮文案。"""
+
+    if copilot_mode_state in {"interactive", "plan", "autopilot", "unknown"}:
+        # Copilot 使用三态 MODE，显式状态同样写入缓存，保持按钮与刚切换后的终端一致。
+        resolved_state = _set_worker_copilot_mode_state_cache(copilot_mode_state)
+    elif refresh_plan_mode_state:
+        resolved_state = _refresh_worker_copilot_mode_state_cache(force_probe=True)
+    else:
+        resolved_state = _get_worker_copilot_mode_state_cache() or "unknown"
+
+    return {
+        "interactive": WORKER_COPILOT_MODE_BUTTON_TEXT_INTERACTIVE,
+        "plan": WORKER_COPILOT_MODE_BUTTON_TEXT_PLAN,
+        "autopilot": WORKER_COPILOT_MODE_BUTTON_TEXT_AUTOPILOT,
+        "unknown": WORKER_COPILOT_MODE_BUTTON_TEXT_UNKNOWN,
+    }.get(resolved_state, WORKER_COPILOT_MODE_BUTTON_TEXT_UNKNOWN)
+
+
 async def _refresh_worker_plan_mode_state_after_toggle_async(
     *,
     before_state: Literal["on", "off", "unknown"],
@@ -5752,17 +5798,28 @@ def _build_worker_main_keyboard(
     copilot_mode_state: Optional[Literal["interactive", "plan", "autopilot", "unknown"]] = None,
     refresh_plan_mode_state: bool = True,
 ) -> ReplyKeyboardMarkup:
-    """Worker 端常驻键盘，仅保留高频任务入口。
+    """Worker 端常驻键盘，仅保留高频命令入口与终端模式切换。
 
-    会话实况、PLAN/MODE 切换与 GOAL 均通过 Telegram 命令菜单唤起，
-    避免底部键盘堆叠过多低频按钮，也避免渲染主菜单时为隐藏按钮探测 tmux。
+    任务列表、会话实况与 GOAL 仍通过 Telegram 命令菜单唤起；
+    右侧 PLAN/MODE 保留为常驻按钮，方便高频切换终端协作模式。
     """
 
+    mode_button_text = (
+        _resolve_worker_copilot_mode_button_text(
+            copilot_mode_state=copilot_mode_state,
+            refresh_plan_mode_state=refresh_plan_mode_state,
+        )
+        if _is_copilot_model()
+        else _resolve_worker_plan_mode_button_text(
+            plan_mode_state=plan_mode_state,
+            refresh_plan_mode_state=refresh_plan_mode_state,
+        )
+    )
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text=WORKER_MENU_BUTTON_TEXT),
                 KeyboardButton(text=WORKER_COMMANDS_BUTTON_TEXT),
+                KeyboardButton(text=mode_button_text),
             ],
         ],
         resize_keyboard=True,
