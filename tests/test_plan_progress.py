@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 from types import SimpleNamespace
@@ -875,11 +876,13 @@ def test_deliver_pending_messages_uses_split_mode_for_model_output(monkeypatch, 
 def test_session_ack_message_silent(monkeypatch, tmp_path):
     original_mode = bot.MODE
     original_model = bot.ACTIVE_MODEL
+    original_canonical_model = bot.MODEL_CANONICAL_NAME
     original_plan_flag = bot.ENABLE_PLAN_PROGRESS
     original_bot = bot._bot
 
     bot.MODE = "B"
     bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
     bot.ENABLE_PLAN_PROGRESS = False
     bot.SESSION_OFFSETS.clear()
     bot.CHAT_SESSION_MAP.clear()
@@ -912,16 +915,22 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
     def fake_tmux_send_line(*_args, **_kwargs):
         # 普通直聊现在会等待 Codex session 中出现用户输入确认；
-        # 投递确认测试哨兵：模拟模型已消费本次输入，避免使用真实自然语言 prompt。
+        # 使用函数内局部随机文本模拟模型已消费本次输入，避免固定保留提示词进入仓库。
+        event = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt_text}],
+            },
+        }
         session_file.write_text(
-            (
-                '{"type":"response_item","payload":{"type":"message","role":"user",'
-                '"content":[{"type":"input_text","text":"__VIBEGO_DELIVERY_CONFIRMATION_TEST_PROMPT__"}]}}\n'
-            ),
+            json.dumps(event, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
 
     monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "tmux_queue_line", fake_tmux_send_line)
     monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
 
     captured_answers: list[tuple[str, dict]] = []
@@ -936,13 +945,15 @@ def test_session_ack_message_silent(monkeypatch, tmp_path):
             captured_answers.append((text, kwargs))
             return SimpleNamespace(message_id=len(captured_answers))
 
-    msg = DummyMessage("__VIBEGO_DELIVERY_CONFIRMATION_TEST_PROMPT__")
+    prompt_text = f"hello from delivery confirmation test {time.monotonic_ns()}"
+    msg = DummyMessage(prompt_text)
     try:
         # 直接调用内部派发函数，避免依赖 router 注入的 FSMContext 参数。
         asyncio.run(bot._handle_prompt_dispatch(msg, msg.text))
     finally:
         bot.MODE = original_mode
         bot.ACTIVE_MODEL = original_model
+        bot.MODEL_CANONICAL_NAME = original_canonical_model
         bot.ENABLE_PLAN_PROGRESS = original_plan_flag
         bot._bot = original_bot
         bot.SESSION_OFFSETS.clear()

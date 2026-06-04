@@ -436,6 +436,8 @@ TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS = max(_env_int("TEXT_PASTE_LEADING_FRAGMEN
 ENFORCED_AGENTS_NOTICE = (
     "以下是用户需求描述："
 )
+# 内部测试标记只允许留在测试/日志夹具中，若被误当成整条用户 prompt 推送则必须 fail-closed。
+INTERNAL_RESERVED_TEST_MARKER_RE = re.compile(r"__VIBEGO_[A-Z0-9_]*TEST[A-Z0-9_]*__")
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
 MODEL_QUICK_REPLY_ALL_CALLBACK = "model:quick_reply:all"
 MODEL_QUICK_REPLY_PARTIAL_CALLBACK = "model:quick_reply:partial"
@@ -2871,6 +2873,15 @@ def _prepend_enforced_agents_notice(raw_prompt: str) -> str:
     return f"{notice}\n\n{raw_prompt}"
 
 
+def _is_internal_reserved_test_prompt(raw_prompt: str) -> bool:
+    """识别整条 prompt 是否为 vibego 内部保留测试标记。"""
+
+    text = (raw_prompt or "").strip()
+    if not text:
+        return False
+    return bool(INTERNAL_RESERVED_TEST_MARKER_RE.fullmatch(text))
+
+
 def _supports_prompt_delivery_confirmation() -> bool:
     """判断当前模型是否能通过本地 session 文件确认“用户输入已被消费”。
 
@@ -3295,6 +3306,19 @@ async def _dispatch_prompt_to_model(
     confirm_delivery: bool = False,
 ) -> tuple[bool, Optional[Path]]:
     """统一处理向模型推送提示后的会话绑定、确认与监听。"""
+
+    if _is_internal_reserved_test_prompt(prompt):
+        # 纯内部测试标记进入真实 tmux 没有业务意义，优先阻断以避免污染模型会话。
+        worker_log.warning(
+            "已阻断内部保留测试提示词进入 tmux",
+            extra={"chat": chat_id},
+        )
+        await _reply_to_chat(
+            chat_id,
+            "⚠️ 已拦截内部保留测试提示词，未发送到 tmux。",
+            reply_to=reply_to,
+        )
+        return False, None
 
     is_parallel_dispatch = dispatch_context is not None
     parallel_task_id = _normalize_task_id(dispatch_context.task_id) if dispatch_context is not None else None

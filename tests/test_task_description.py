@@ -3667,6 +3667,98 @@ def test_dispatch_prompt_injects_enforced_agents_notice(monkeypatch, tmp_path: P
     bot.CHAT_DELIVERED_OFFSETS.clear()
 
 
+def test_dispatch_prompt_blocks_internal_reserved_vibego_test_marker_before_tmux(monkeypatch, tmp_path: Path):
+    """纯内部测试标记不应进入 tmux，避免测试夹具误入真实模型会话。"""
+
+    pointer = tmp_path / "pointer.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    reserved_prompt = f"__VIBEGO_{time.monotonic_ns()}_TEST_MARKER__"
+    sent_lines: list[tuple[str, str]] = []
+    replies: list[str] = []
+
+    def fake_tmux_send_line(session: str, line: str) -> None:
+        sent_lines.append((session, line))
+
+    async def fake_reply(chat_id: int, text: str, **_kwargs):
+        replies.append(text)
+        return None
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return None
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_reply_to_chat", fake_reply)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+
+    created_tasks: list = []
+
+    class DummyTask:
+        def __init__(self):
+            self._done = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            self._done = True
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> None:
+        ok, path = await bot._dispatch_prompt_to_model(
+            780,
+            reserved_prompt,
+            reply_to=None,
+            ack_immediately=False,
+        )
+        assert ok is False
+        assert path is None
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        for coro in created_tasks:
+            try:
+                coro.close()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    assert sent_lines == []
+    assert replies and "内部保留测试提示词" in replies[-1]
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
 def test_dispatch_prompt_strict_fallback_locates_latest_session_when_pointer_empty(monkeypatch, tmp_path: Path):
     """strict 绑定模式下，当 pointer 长时间为空时，应兜底扫描会话目录定位最新 session。"""
 
