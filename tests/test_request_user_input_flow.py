@@ -121,6 +121,13 @@ def _build_request_input_event(*, call_id: str = "call_123") -> dict:
     }
 
 
+def _extract_question_context_from_prompt(prompt: str) -> dict:
+    """从回推 prompt 中解析 question_context 行，便于断言不影响 answers JSON。"""
+
+    context_line = next(line for line in prompt.splitlines() if line.startswith("question_context="))
+    return json.loads(context_line.removeprefix("question_context="))
+
+
 @pytest.fixture(autouse=True)
 def _reset_runtime(monkeypatch):
     monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex")
@@ -220,13 +227,21 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     questions = [
         bot.RequestInputQuestion(
             question_id="scope",
+            header="定位范围",
             question="请选择范围",
-            options=[bot.RequestInputOption(label="库存页"), bot.RequestInputOption(label="两页")],
+            options=[
+                bot.RequestInputOption(label="库存页", description="只改库存页"),
+                bot.RequestInputOption(label="两页", description="库存页与订单页统一改"),
+            ],
         ),
         bot.RequestInputQuestion(
             question_id="style",
+            header="交互样式",
             question="请选择风格",
-            options=[bot.RequestInputOption(label="胶囊"), bot.RequestInputOption(label="下拉")],
+            options=[
+                bot.RequestInputOption(label="胶囊", description="按钮视觉更明显"),
+                bot.RequestInputOption(label="下拉", description="更节省空间"),
+            ],
         ),
     ]
     session = bot.RequestInputSession(
@@ -274,6 +289,28 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     assert dispatched, "提交后应推送到模型"
     prompt = dispatched[-1]
     assert "call_id=call_submit_1" in prompt
+    assert "question_context=" in prompt
+    assert _extract_question_context_from_prompt(prompt) == {
+        "questions": [
+            {
+                "id": "scope",
+                "header": "定位范围",
+                "question": "请选择范围",
+                "selected_kind": "option",
+                "selected_option_label": "两页",
+                "selected_option_description": "库存页与订单页统一改",
+            },
+            {
+                "id": "style",
+                "header": "交互样式",
+                "question": "请选择风格",
+                "selected_kind": "option",
+                "selected_option_label": "胶囊",
+                "selected_option_description": "按钮视觉更明显",
+            },
+        ]
+    }
+    assert prompt.index("question_context=") < prompt.index('{"answers"')
     assert '{"answers":{"scope":{"answers":["两页"]},"style":{"answers":["胶囊"]}}}' in prompt
     assert not preview_calls, "提交后不应再发送中间推送代码块预览"
     assert ack_calls, "应发送 session ack"
@@ -288,6 +325,7 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
 def test_ask_user_submit_dispatches_schema_payload(monkeypatch, tmp_path: Path):
     question = bot.RequestInputQuestion(
         question_id="scope",
+        header="请选择范围",
         question="请选择范围",
         options=[
             bot.RequestInputOption(label="仅库存页", value="inventory"),
@@ -339,6 +377,20 @@ def test_ask_user_submit_dispatches_schema_payload(monkeypatch, tmp_path: Path):
     prompt = dispatched[-1]
     assert "ask_user 工具结果" in prompt
     assert "call_id=tool_ask_submit_1" in prompt
+    assert "question_context=" in prompt
+    assert _extract_question_context_from_prompt(prompt) == {
+        "questions": [
+            {
+                "id": "scope",
+                "header": "请选择范围",
+                "question": "请选择范围",
+                "selected_kind": "option",
+                "selected_option_label": "两页都改",
+                "selected_option_description": "",
+            }
+        ]
+    }
+    assert prompt.index("question_context=") < prompt.index('{"scope"')
     assert '{"scope":"all_pages"}' in prompt
 
 
@@ -501,8 +553,12 @@ def test_request_input_keyboard_hides_submit_button():
 def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_path: Path):
     question = bot.RequestInputQuestion(
         question_id="scope",
+        header="定位范围",
         question="请选择范围",
-        options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
+        options=[
+            bot.RequestInputOption(label="仅库存页", description="单页改造"),
+            bot.RequestInputOption(label="两页都改", description="统一改造"),
+        ],
     )
     session = bot.RequestInputSession(
         token="token_auto_submit",
@@ -545,6 +601,18 @@ def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_pa
     asyncio.run(bot.on_request_user_input_callback(callback))
 
     assert dispatched, "选项作答完成后应自动推送"
+    assert _extract_question_context_from_prompt(dispatched[-1]) == {
+        "questions": [
+            {
+                "id": "scope",
+                "header": "定位范围",
+                "question": "请选择范围",
+                "selected_kind": "option",
+                "selected_option_label": "两页都改",
+                "selected_option_description": "统一改造",
+            }
+        ]
+    }
     assert '{"answers":{"scope":{"answers":["两页都改"]}}}' in dispatched[-1]
     assert callback.message.calls, "自动提交后应恢复主菜单"
     auto_summary_reply_markup = callback.message.calls[-1][2]
@@ -669,8 +737,10 @@ def test_request_input_old_callback_still_works_after_newer_session_created():
 
 
 def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
+    custom_text = "按现有逻辑先仅做归因"
     question = bot.RequestInputQuestion(
         question_id="scope",
+        header="定位范围",
         question="请选择范围",
         options=[bot.RequestInputOption(label="仅库存页"), bot.RequestInputOption(label="两页都改")],
     )
@@ -708,11 +778,25 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
     monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
 
-    message = DummyMessage(chat_id=66, user_id=66, text="按现有逻辑先仅做归因")
+    message = DummyMessage(chat_id=66, user_id=66, text=custom_text)
     handled = asyncio.run(bot._handle_request_input_custom_text_message(message))
 
     assert handled is True
     assert dispatched, "输入自定义决策后应自动推送"
+    context_line = next(line for line in dispatched[-1].splitlines() if line.startswith("question_context="))
+    assert custom_text not in context_line, "自定义答案正文不应在 question_context 中重复出现"
+    assert _extract_question_context_from_prompt(dispatched[-1]) == {
+        "questions": [
+            {
+                "id": "scope",
+                "header": "定位范围",
+                "question": "请选择范围",
+                "selected_kind": "custom",
+                "selected_option_label": "",
+                "selected_option_description": "",
+            }
+        ]
+    }
     assert '{"answers":{"scope":{"answers":["按现有逻辑先仅做归因"]}}}' in dispatched[-1]
     assert not preview_calls, "自定义文本自动提交后不应再发送中间推送代码块预览"
     assert ack_calls

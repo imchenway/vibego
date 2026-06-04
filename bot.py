@@ -14479,6 +14479,38 @@ def _build_request_input_output_payload(session: RequestInputSession) -> Dict[st
     return {"answers": answers}
 
 
+def _build_request_input_question_context(session: RequestInputSession) -> Dict[str, Any]:
+    """构建回推模型的问题上下文，补足 answers JSON 缺少的原题信息。"""
+
+    questions_context: List[Dict[str, str]] = []
+    for question in session.questions:
+        selected_index = session.selected_option_indexes.get(question.question_id)
+        selected_kind = "unanswered"
+        selected_option_label = ""
+        selected_option_description = ""
+
+        if selected_index == REQUEST_INPUT_CUSTOM_OPTION_INDEX:
+            # 自定义答案正文只保留在 answers JSON 中，避免长文本在上下文里重复放大。
+            selected_kind = "custom"
+        elif isinstance(selected_index, int) and 0 <= selected_index < len(question.options):
+            selected_option = question.options[selected_index]
+            selected_kind = "option"
+            selected_option_label = str(selected_option.label or "")
+            selected_option_description = str(selected_option.description or "")
+
+        questions_context.append(
+            {
+                "id": str(question.question_id or ""),
+                "header": str(question.header or ""),
+                "question": str(question.question or ""),
+                "selected_kind": selected_kind,
+                "selected_option_label": selected_option_label,
+                "selected_option_description": selected_option_description,
+            }
+        )
+    return {"questions": questions_context}
+
+
 def _request_input_message_has_media(message: Message) -> bool:
     """判断当前 request_input 自定义输入消息是否携带媒体附件。"""
 
@@ -14498,18 +14530,26 @@ def _build_request_input_submission_prompt(
     output_payload: Mapping[str, Any],
     *,
     tool_name: str = "request_user_input",
+    question_context: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """构造回推到模型的提示词（结构化 JSON + call_id 绑定）。"""
 
     payload_json = json.dumps(output_payload, ensure_ascii=False, separators=(",", ":"))
-    return "\n".join(
+    lines = [
+        f"{tool_name} 工具结果（来自 Telegram 按钮交互）：",
+        f"call_id={call_id}",
+    ]
+    if question_context is not None:
+        # question_context 单独成行，既便于模型理解原题，也不破坏原 answers schema。
+        context_json = json.dumps(question_context, ensure_ascii=False, separators=(",", ":"))
+        lines.append(f"question_context={context_json}")
+    lines.extend(
         [
-            f"{tool_name} 工具结果（来自 Telegram 按钮交互）：",
-            f"call_id={call_id}",
             payload_json,
             "请基于上述工具结果继续执行后续步骤。",
         ]
     )
+    return "\n".join(lines)
 
 
 async def _start_request_input_interaction(
@@ -20442,6 +20482,7 @@ async def _submit_request_input_session(
         session.call_id,
         output_payload,
         tool_name=session.tool_name,
+        question_context=_build_request_input_question_context(session),
     )
     _remember_chat_active_user(session.chat_id, actor_user_id)
     dispatch_kwargs: dict[str, Any] = {
