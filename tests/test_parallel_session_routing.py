@@ -230,6 +230,40 @@ def test_manual_task_prefix_routes_parallel_session_without_leaking_slash_prefix
     assert recorded == [("继续补充", binding.dispatch_context)]
 
 
+def test_task_id_identifier_does_not_trigger_parallel_prefix_route(monkeypatch):
+    """业务字段名 task_id 不能被误判为 /TASK_ID 并行路由前缀。"""
+
+    assert bot._extract_task_prefixed_prompt("task_id + srcBatchStockId 不能用吗") == (None, None)
+    assert bot._extract_task_prefixed_prompt("TASK_0093 继续补充") == (None, None)
+    assert bot._extract_task_prefixed_prompt("/TASK_0093 继续补充") == ("TASK_0093", "继续补充")
+
+    message = DummyMessage(chat_id=16, user_id=16, text="task_id + srcBatchStockId 不能用吗")
+    state, _ = _make_state(message)
+    recorded: list[tuple[str, object]] = []
+
+    async def fake_handle_request_input_custom_text_message(_message):
+        return False
+
+    async def fake_handle_command_trigger_message(_message, _prompt, _state):
+        return False
+
+    async def fake_reply_task_detail(_message, _task_id):  # pragma: no cover
+        raise AssertionError("业务变量名不应触发任务详情查询")
+
+    async def fake_handle_prompt_dispatch(_message, prompt: str, *, dispatch_context=None):
+        recorded.append((prompt, dispatch_context))
+
+    monkeypatch.setattr(bot, "_handle_request_input_custom_text_message", fake_handle_request_input_custom_text_message)
+    monkeypatch.setattr(bot, "_handle_command_trigger_message", fake_handle_command_trigger_message)
+    monkeypatch.setattr(bot, "_reply_task_detail_message", fake_reply_task_detail)
+    monkeypatch.setattr(bot, "_handle_prompt_dispatch", fake_handle_prompt_dispatch)
+
+    asyncio.run(bot.on_text(message, state))
+
+    assert recorded == [("task_id + srcBatchStockId 不能用吗", None)]
+    assert not message.calls
+
+
 def test_parallel_reply_cancel_restores_main_keyboard(monkeypatch):
     """回复态发送“取消”时应退出回复模式并恢复主菜单。"""
 

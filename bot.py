@@ -5510,6 +5510,8 @@ class WxPreviewCandidate:
     source: Literal["current", "child"]
 
 TASK_ID_VALID_PATTERN = re.compile(r"^TASK_[A-Z0-9_]+$")
+# 并行手动路由只接受明确的 /TASK_数字 前缀，避免 task_id 这类业务字段名误触发。
+PARALLEL_ROUTE_TASK_ID_PATTERN = re.compile(r"^TASK_\d+(?:_\d+)*$")
 TASK_ID_USAGE_TIP = "任务 ID 格式无效，请使用 TASK_0001"
 
 
@@ -12709,10 +12711,31 @@ def _extract_task_prefixed_prompt(prompt: str) -> tuple[Optional[str], Optional[
     if not stripped:
         return None, None
     first, _, rest = stripped.partition(" ")
-    task_id = _normalize_task_id(first)
+    task_id = _normalize_parallel_route_task_prefix(first)
     if not task_id or not rest.strip():
         return None, None
     return task_id, rest.strip()
+
+
+def _normalize_parallel_route_task_prefix(value: Optional[str]) -> Optional[str]:
+    """解析手动并行路由前缀；只允许显式 /TASK_数字，避免业务变量名误触。"""
+
+    token = (value or "").strip()
+    if not token.startswith("/"):
+        return None
+    task_id = _normalize_task_id(token)
+    if not task_id or not PARALLEL_ROUTE_TASK_ID_PATTERN.fullmatch(task_id):
+        return None
+    return task_id
+
+
+def _normalize_exact_task_lookup_id(value: Optional[str]) -> Optional[str]:
+    """解析纯任务 ID 查询；带空白的普通句子不应被当成任务查询。"""
+
+    token = (value or "").strip()
+    if not token or any(char.isspace() for char in token):
+        return None
+    return _normalize_task_id(token)
 
 
 async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -> tuple[str, Path]:
@@ -25901,7 +25924,7 @@ async def on_text(m: Message, state: FSMContext):
             dispatch_context=dispatch_context,
         )
         return
-    task_id_candidate = _normalize_task_id(prompt)
+    task_id_candidate = _normalize_exact_task_lookup_id(prompt)
     if task_id_candidate:
         await _reply_task_detail_message(m, task_id_candidate)
         return

@@ -4113,6 +4113,11 @@ def test_dispatch_prompt_plan_mode_sends_plan_switch_for_codex(monkeypatch, tmp_
     monkeypatch.setattr(bot, "SESSION_BIND_POLL_INTERVAL", 0.01)
     monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
 
+    async def fake_refresh_plan_mode_state(*_args, **_kwargs):
+        return "off"
+
+    monkeypatch.setattr(bot, "_refresh_worker_plan_mode_state_cache_async", fake_refresh_plan_mode_state)
+
     bot.CHAT_SESSION_MAP.clear()
     bot.SESSION_OFFSETS.clear()
     bot.CHAT_WATCHERS.clear()
