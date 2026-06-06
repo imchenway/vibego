@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""监听 Codex/Claude/Copilot JSONL 会话文件并在首次生成时绑定 session。
+
+此脚本在后台运行：
+1. 周期性扫描会话目录，只要发现符合条件（同 CWD、满足启动时间）的 rollout 文件，
+   就会把绝对路径写入 pointer 文件；
+2. 同时可选地把 sessionId（即文件 stem）写入独立文件，方便其它进程引用；
+3. 成功绑定一次后立即退出，确保单次 worker 生命周期只使用同一个 session。
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import json
+import time
+from pathlib import Path
+import hashlib
+from datetime import datetime, timezone
+from typing import Iterable, List, Optional, Sequence, Set
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="绑定首个可用的 Codex/Claude/Copilot/Gemini 会话文件")
+    parser.add_argument("--pointer", required=True, help="current_session.txt 路径")
+    parser.add_argument(
+        "--session-root",
+        action="append",
+        default=[],
+        help="JSONL 搜索根目录，可多次指定",
+    )
+    parser.add_argument(
+        "--glob",
+        default="rollout-*.jsonl",
+        help="会话文件匹配模式，默认 rollout-*.jsonl",
+    )
+    parser.add_argument("--cwd", default="", help="期望匹配的 MODEL_WORKDIR，留空则不校验")
+    parser.add_argument(
+        "--boot-ts-ms",
+        type=float,
+        default=0.0,
+        help="worker 启动时间戳 (ms)，只接受晚于该时间的文件",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=0.5,
+        help="轮询间隔（秒）",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="最大等待时长（秒），0 表示一直等待",
+    )
+    parser.add_argument(
+        "--session-id-file",
+        default="",
+        help="写入 sessionId（文件 stem ）的路径",
+    )
+    parser.add_argument(
+        "--extra-root",
+        action="append",
+        default=[],
+        help="额外搜索目录，可多次指定",
+    )
+    parser.add_argument(
+        "--log",
+        default="",
+        help="可选的日志文件路径，仅用于调试信息",
+    )
+    parser.add_argument(
+        "--required-marker",
+        default="",
+        help="候选会话首行 base_instructions 中必须包含的 worker 同源标识，留空则不校验",
+    )
+    parser.add_argument(
+        "--recent-sessions-file",
+        default="",
+        help="可选：写入当前项目最近会话路径索引的 JSON 文件",
+    )
+    parser.add_argument(
+        "--recent-limit",
+        type=int,
+        default=3,
+        help="最近会话路径索引保留条数，默认 3",
+    )
+    parser.add_argument(
+        "--project-slug",
+        default="",
+        help="可选：写入最近会话路径索引的项目标识",
+    )
+    return parser.parse_args()
+
+
+def _normalize_path(path: str) -> Path:
+    """展开 ~ / 环境变量，统一返回 Path。"""
+
+    expanded = Path(path).expanduser()
+    try:
+        return expanded.resolve()
+    except OSError:
+        return expanded
+
+
+def _dedup_roots(candidates: Sequence[str]) -> List[Path]:
+    """去重合法目录，保持原有顺序。"""
+
+    normalized: List[Path] = []
+    seen: Set[str] = set()
+    for raw in candidates:
+        if not raw:
+            continue
+        path = _normalize_path(raw)
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(path)
+    return normalized
+
+
+def _iter_rollouts(roots: Iterable[Path], pattern: str) -> Iterable[Path]:
+    """遍历所有候选 rollout 文件。"""
+
+    for root in roots:
+        if not root.exists():
+            continue
+        try:
+            iterator = root.rglob(pattern)
+        except OSError:
+            continue
+        for candidate in iterator:
+            if candidate.is_file():
+                yield candidate
+
+
+def _read_session_cwd(path: Path) -> Optional[str]:
+    """读取 JSONL 首行的 cwd 字段用于过滤。"""
+
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline()
+    except OSError:
+        return None
+    if not first_line:
+        return None
+    try:
+        data = json.loads(first_line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        cwd = payload.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            return cwd
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        context = nested.get("context")
+        if isinstance(context, dict):
+            cwd = context.get("cwd")
+            if isinstance(cwd, str) and cwd:
+                return cwd
+    return None
+
+
+def _read_first_jsonl_object(path: Path) -> Optional[dict]:
+    """读取 JSONL 首行对象；会话元数据过滤统一复用该入口。"""
+
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline()
+    except OSError:
+        return None
+    if not first_line:
+        return None
+    try:
+        data = json.loads(first_line)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _codex_session_contains_marker(path: Path, required_marker: str) -> bool:
+    """校验 Codex JSONL 会话是否带有当前 worker 注入的同源标识。"""
+
+    marker = (required_marker or "").strip()
+    if not marker:
+        return True
+    data = _read_first_jsonl_object(path)
+    if not data:
+        return False
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    instructions = payload.get("base_instructions")
+    if isinstance(instructions, dict):
+        text = instructions.get("text")
+        if isinstance(text, str) and marker in text:
+            return True
+    return False
+
+
+def _sha256_hex(text: str) -> str:
+    """计算 sha256 hex（用于 Gemini projectHash 匹配）。"""
+
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _normalize_cwd_variants(target_cwd: str) -> List[str]:
+    """为同一个工作目录生成多种等价表示，提升 Gemini projectHash 匹配鲁棒性。
+
+    Gemini CLI 的 projectHash 目前可通过“工作目录绝对路径字符串”的 sha256 计算得到，
+    但不同环境下可能出现“逻辑路径/物理路径”差异（例如 symlink）。
+    """
+
+    raw = target_cwd.strip()
+    if not raw:
+        return []
+
+    # 保留“逻辑路径”版本：只展开 ~ 和环境变量，不做 resolve。
+    expanded = Path(os.path.expandvars(raw)).expanduser()
+    candidates: List[str] = []
+    raw_str = str(expanded).rstrip("/")
+    if raw_str:
+        candidates.append(raw_str)
+
+    try:
+        resolved = expanded.resolve()
+    except OSError:
+        resolved = expanded
+    resolved_str = str(resolved).rstrip("/")
+    if resolved_str and resolved_str not in candidates:
+        candidates.append(resolved_str)
+
+    return candidates
+
+
+def _read_gemini_session_meta(path: Path) -> Optional[dict]:
+    """读取 Gemini session-*.json 的顶层元数据。"""
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _gemini_project_hash_matches(meta: dict, target_cwd: str) -> bool:
+    """判断 Gemini 会话文件是否属于目标工作目录。"""
+
+    project_hash = meta.get("projectHash")
+    if not isinstance(project_hash, str) or not project_hash:
+        return False
+    cwd_variants = _normalize_cwd_variants(target_cwd)
+    if not cwd_variants:
+        return True
+    for variant in cwd_variants:
+        if _sha256_hex(variant) == project_hash:
+            return True
+    return False
+
+
+def _parse_iso_to_epoch_ms(value: str) -> Optional[float]:
+    """解析 ISO-8601 时间为 epoch(ms)。"""
+
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp() * 1000.0
+
+
+def _select_latest_session(
+    roots: Sequence[Path],
+    pattern: str,
+    target_cwd: str,
+    boot_ts_ms: float,
+    required_marker: str = "",
+) -> Optional[Path]:
+    """从候选目录中挑选满足 CWD + 启动时间过滤的最新文件。"""
+
+    latest_path: Optional[Path] = None
+    latest_mtime = -1.0
+    for candidate in _iter_rollouts(roots, pattern):
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        # Gemini 会话文件是 JSON（非 JSONL），过滤逻辑不同
+        if candidate.suffix.lower() == ".json":
+            meta = _read_gemini_session_meta(candidate)
+            if meta is None:
+                continue
+            # 优先使用 startTime 做启动时间过滤，避免“旧会话被更新”导致误选
+            start_ms = _parse_iso_to_epoch_ms(meta.get("startTime", ""))
+            effective_ms = start_ms if start_ms is not None else (mtime * 1000.0)
+            if boot_ts_ms > 0 and effective_ms < boot_ts_ms:
+                continue
+            if target_cwd and not _gemini_project_hash_matches(meta, target_cwd):
+                continue
+        else:
+            if boot_ts_ms > 0 and (mtime * 1000.0) < boot_ts_ms:
+                continue
+            if target_cwd:
+                cwd = _read_session_cwd(candidate)
+                if cwd != target_cwd:
+                    continue
+            if required_marker and not _codex_session_contains_marker(candidate, required_marker):
+                continue
+        if mtime > latest_mtime:
+            latest_mtime = mtime
+            latest_path = candidate
+    return latest_path
+
+
+def _write_text(path: Path, content: str) -> None:
+    """原子写入文本，必要时创建父目录。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _utc_now_iso() -> str:
+    """返回 UTC ISO 时间，避免最近会话索引受本机时区变化影响。"""
+
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _session_id_for_path(path: Path) -> str:
+    """读取会话 id；Gemini 优先取文件元数据，其它模型使用文件 stem。"""
+
+    if path.suffix.lower() == ".json":
+        meta = _read_gemini_session_meta(path) or {}
+        session_id = meta.get("sessionId")
+        if isinstance(session_id, str) and session_id:
+            return session_id
+    return path.stem
+
+
+def _build_recent_session_entry(path: Path, target_cwd: str, project_slug: str) -> dict:
+    """构建最近会话路径索引项；只写元数据，不复制 JSONL 正文。"""
+
+    cwd = target_cwd.strip()
+    if not cwd and path.suffix.lower() != ".json":
+        cwd = _read_session_cwd(path) or ""
+    return {
+        "session_id": _session_id_for_path(path),
+        "jsonl_path": str(path),
+        "cwd": cwd,
+        "project_slug": project_slug.strip(),
+        "bound_at": _utc_now_iso(),
+    }
+
+
+def _read_recent_sessions_index(path: Path) -> list[dict]:
+    """读取最近会话索引；损坏或非列表时按空索引处理。"""
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _update_recent_sessions_index(path: Path, entry: dict, limit: int = 3) -> None:
+    """更新最近会话路径索引，按 session_id/jsonl_path 去重并限制条数。"""
+
+    normalized_limit = max(int(limit or 3), 1)
+    session_id = str(entry.get("session_id") or "").strip()
+    jsonl_path = str(entry.get("jsonl_path") or "").strip()
+    existing = _read_recent_sessions_index(path)
+    deduped: list[dict] = []
+    for item in existing:
+        item_session_id = str(item.get("session_id") or "").strip()
+        item_jsonl_path = str(item.get("jsonl_path") or "").strip()
+        if session_id and item_session_id == session_id:
+            continue
+        if jsonl_path and item_jsonl_path == jsonl_path:
+            continue
+        deduped.append(item)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps([entry, *deduped][:normalized_limit], ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _append_log(log_file: str, message: str) -> None:
+    """将调试信息附加写入日志文件。"""
+
+    if not log_file:
+        return
+    try:
+        with open(log_file, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def main() -> int:
+    args = _parse_args()
+    pointer = _normalize_path(args.pointer)
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+
+    session_roots = list(args.session_root or [])
+    session_roots.extend(args.extra_root or [])
+    # 指针文件所在目录及其 sessions 子目录也加入搜索范围
+    pointer_dir = str(pointer.parent)
+    session_roots.append(pointer_dir)
+    session_roots.append(str(Path(pointer_dir) / "sessions"))
+    roots = _dedup_roots(session_roots)
+
+    session_id_path = Path(args.session_id_file).expanduser() if args.session_id_file else None
+    target_cwd = args.cwd.strip()
+    strict_boot_ts = float(args.boot_ts_ms or 0.0)
+    required_marker = (args.required_marker or "").strip()
+    recent_sessions_path = (
+        Path(args.recent_sessions_file).expanduser() if args.recent_sessions_file else None
+    )
+    recent_limit = int(args.recent_limit or 3)
+    project_slug = (args.project_slug or "").strip()
+
+    _append_log(
+        args.log,
+        (
+            f"[binder] start, pointer={pointer}, roots={roots}, cwd={target_cwd!r}, "
+            f"boot_ts={strict_boot_ts}, required_marker={'yes' if required_marker else 'no'}"
+        ),
+    )
+
+    # 若启动前已存在有效指针，直接退出
+    try:
+        existing = pointer.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        existing = ""
+    if existing:
+        bound = Path(existing)
+        if bound.exists():
+            if session_id_path is not None:
+                _write_text(session_id_path, bound.stem)
+            if recent_sessions_path is not None:
+                try:
+                    _update_recent_sessions_index(
+                        recent_sessions_path,
+                        _build_recent_session_entry(bound, target_cwd, project_slug),
+                        limit=recent_limit,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _append_log(args.log, f"[binder] recent session index update failed: {exc}")
+            _append_log(args.log, "[binder] pointer already bound, exit early")
+            return 0
+
+    start = time.monotonic()
+    poll_interval = max(args.poll_interval, 0.1)
+    timeout = max(args.timeout, 0.0)
+
+    while True:
+        candidate = _select_latest_session(roots, args.glob, target_cwd, strict_boot_ts, required_marker)
+        if candidate is not None:
+            _write_text(pointer, str(candidate))
+            if session_id_path is not None:
+                if candidate.suffix.lower() == ".json":
+                    meta = _read_gemini_session_meta(candidate) or {}
+                    session_id = meta.get("sessionId")
+                    if isinstance(session_id, str) and session_id:
+                        _write_text(session_id_path, session_id)
+                    else:
+                        _write_text(session_id_path, candidate.stem)
+                else:
+                    _write_text(session_id_path, candidate.stem)
+            if recent_sessions_path is not None:
+                try:
+                    _update_recent_sessions_index(
+                        recent_sessions_path,
+                        _build_recent_session_entry(candidate, target_cwd, project_slug),
+                        limit=recent_limit,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _append_log(args.log, f"[binder] recent session index update failed: {exc}")
+            _append_log(args.log, f"[binder] bind session -> {candidate}")
+            return 0
+
+        if timeout and (time.monotonic() - start) >= timeout:
+            _append_log(args.log, "[binder] timeout reached, stop watching")
+            return 1
+
+        time.sleep(poll_interval)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
