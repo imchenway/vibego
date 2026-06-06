@@ -5469,6 +5469,7 @@ class CodexSessionStatusSnapshot:
     model: Optional[str] = None
     reasoning_effort: Optional[str] = None
     context_window: Optional[int] = None
+    last_token_usage_total_tokens: Optional[int] = None
     token_count_seen: bool = False
     rate_limits: Optional[dict[str, Any]] = None
 
@@ -16039,11 +16040,16 @@ def _parse_codex_session_status_snapshot(path: Path) -> CodexSessionStatusSnapsh
         if payload_type == "token_count":
             # 多条 token_count 按 JSONL 顺序覆盖，最终保留最新一条。
             snapshot.token_count_seen = True
+            snapshot.last_token_usage_total_tokens = None
             info = payload.get("info")
             if isinstance(info, dict):
                 token_context_window = _coerce_int(info.get("model_context_window"))
                 if token_context_window is not None:
                     snapshot.context_window = token_context_window
+                last_token_usage = info.get("last_token_usage")
+                if isinstance(last_token_usage, dict):
+                    # Codex CLI 的 context 剩余口径取 latest active context 的 total_tokens。
+                    snapshot.last_token_usage_total_tokens = _coerce_int(last_token_usage.get("total_tokens"))
             rate_limits = payload.get("rate_limits")
             if isinstance(rate_limits, dict):
                 snapshot.rate_limits = rate_limits
@@ -16074,16 +16080,23 @@ def _format_codex_reset_time(value: Any, *, weekly: bool) -> str:
     return dt.strftime("%m-%d %H:%M" if weekly else "%H:%M")
 
 
-def _format_codex_used_percent(value: Any) -> str:
-    """格式化 Codex 限额百分比，整数百分比不保留小数。"""
+def _format_codex_percent(value: float) -> str:
+    """格式化百分比，整数不保留小数，非整数最多保留一位小数。"""
+
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.1f}".rstrip("0").rstrip(".")
+
+
+def _format_codex_remaining_percent_from_used(value: Any) -> str:
+    """把 Codex used_percent 转为剩余百分比，避免接近或超过上限时出现负数。"""
 
     try:
         used_percent = float(value)
     except (TypeError, ValueError):
         return "未知"
-    if used_percent.is_integer():
-        return str(int(used_percent))
-    return f"{used_percent:.1f}".rstrip("0").rstrip(".")
+    remaining_percent = max(0.0, min(100.0, 100.0 - used_percent))
+    return _format_codex_percent(remaining_percent)
 
 
 def _select_codex_rate_limit(rate_limits: Optional[dict[str, Any]], window_minutes: int) -> Optional[dict[str, Any]]:
@@ -16104,9 +16117,9 @@ def _format_codex_rate_limit(label: str, entry: Optional[dict[str, Any]], *, wee
 
     if not isinstance(entry, dict):
         return None
-    used = _format_codex_used_percent(entry.get("used_percent"))
+    remaining = _format_codex_remaining_percent_from_used(entry.get("used_percent"))
     reset = _format_codex_reset_time(entry.get("resets_at"), weekly=weekly)
-    return f"{label} {used}%（{reset} 重置）"
+    return f"{label} 剩余 {remaining}%（{reset} 重置）"
 
 
 def _format_codex_rate_limits(snapshot: CodexSessionStatusSnapshot) -> str:
@@ -16131,6 +16144,38 @@ def _format_codex_rate_limits(snapshot: CodexSessionStatusSnapshot) -> str:
     return " · ".join(parts)
 
 
+CODEX_CONTEXT_BASELINE_TOKENS = 12000
+
+
+def _codex_context_remaining_percent(snapshot: CodexSessionStatusSnapshot) -> Optional[int]:
+    """按 Codex CLI `/status` 口径计算当前上下文窗口剩余百分比。"""
+
+    context_window = snapshot.context_window
+    total_tokens = snapshot.last_token_usage_total_tokens
+    if context_window is None or total_tokens is None:
+        return None
+    if context_window <= CODEX_CONTEXT_BASELINE_TOKENS:
+        return 0
+    # Codex CLI 会扣除 12k baseline 后再计算 remaining percent，避免固定系统开销稀释展示。
+    effective_window = context_window - CODEX_CONTEXT_BASELINE_TOKENS
+    used_tokens = max(total_tokens - CODEX_CONTEXT_BASELINE_TOKENS, 0)
+    remaining_tokens = max(effective_window - used_tokens, 0)
+    percent = (remaining_tokens / effective_window) * 100.0
+    return int(max(0.0, min(100.0, percent)) + 0.5)
+
+
+def _format_codex_context_remaining(snapshot: CodexSessionStatusSnapshot) -> str:
+    """格式化 Context 剩余空间；缺 usage 时保留窗口值并标记未知。"""
+
+    if snapshot.context_window is None:
+        return "未知"
+    window_text = f"{snapshot.context_window:,} tokens"
+    remaining_percent = _codex_context_remaining_percent(snapshot)
+    if remaining_percent is None:
+        return f"未知（窗口 {window_text}）"
+    return f"{remaining_percent}% 剩余（窗口 {window_text}）"
+
+
 def _build_codex_session_status_view() -> str:
     """构造 `/status` 的只读模型与限额状态文本。"""
 
@@ -16141,18 +16186,14 @@ def _build_codex_session_status_view() -> str:
     snapshot = _parse_codex_session_status_snapshot(session_path)
     model = snapshot.model or ACTIVE_MODEL or "未知"
     reasoning_effort = snapshot.reasoning_effort or "未知"
-    context_window = (
-        f"{snapshot.context_window:,} tokens"
-        if snapshot.context_window is not None
-        else "未知"
-    )
+    context_remaining = _format_codex_context_remaining(snapshot)
     rate_limits = _format_codex_rate_limits(snapshot)
     return "\n".join(
         [
             "*会话状态*",
             f"模型：{model}",
             f"推理等级：{reasoning_effort}",
-            f"Context Window：{context_window}",
+            f"Context：{context_remaining}",
             f"限额：{rate_limits}",
         ]
     )

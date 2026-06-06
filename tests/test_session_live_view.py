@@ -161,6 +161,13 @@ def test_build_codex_session_status_view_reads_model_context_and_limits(monkeypa
             "payload": {
                 "type": "token_count",
                 "info": {
+                    "last_token_usage": {
+                        "input_tokens": 24000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 1000,
+                        "reasoning_output_tokens": 0,
+                        "total_tokens": 25000,
+                    },
                     "model_context_window": 243200,
                 },
                 "rate_limits": {
@@ -186,8 +193,8 @@ def test_build_codex_session_status_view_reads_model_context_and_limits(monkeypa
     assert "*会话状态*" in text
     assert "模型：gpt-5.5" in text
     assert "推理等级：xhigh" in text
-    assert "Context Window：243,200 tokens" in text
-    assert "限额：5h 6%（20:43 重置） · 周 65%（06-08 07:41 重置）" in text
+    assert "Context：94% 剩余（窗口 243,200 tokens）" in text
+    assert "限额：5h 剩余 94%（20:43 重置） · 周 剩余 35%（06-08 07:41 重置）" in text
 
 
 def test_build_codex_session_status_view_uses_latest_token_count(monkeypatch, tmp_path):
@@ -217,7 +224,16 @@ def test_build_codex_session_status_view_uses_latest_token_count(monkeypatch, tm
             "type": "event_msg",
             "payload": {
                 "type": "token_count",
-                "info": {"model_context_window": 243200},
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 145000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 5000,
+                        "reasoning_output_tokens": 0,
+                        "total_tokens": 150000,
+                    },
+                    "model_context_window": 243200,
+                },
                 "rate_limits": {
                     "primary": {"used_percent": 42.0, "window_minutes": 300, "resets_at": 1780490580},
                     "secondary": {"used_percent": 64.0, "window_minutes": 10080, "resets_at": 1780875660},
@@ -232,8 +248,8 @@ def test_build_codex_session_status_view_uses_latest_token_count(monkeypatch, tm
     text = bot._build_codex_session_status_view()
 
     assert "模型：codex-fallback" in text
-    assert "Context Window：243,200 tokens" in text
-    assert "限额：5h 42%（20:43 重置） · 周 64%（06-08 07:41 重置）" in text
+    assert "Context：40% 剩余（窗口 243,200 tokens）" in text
+    assert "限额：5h 剩余 58%（20:43 重置） · 周 剩余 36%（06-08 07:41 重置）" in text
     assert "5h 10%" not in text
 
 
@@ -269,8 +285,76 @@ def test_build_codex_session_status_view_reports_missing_token_count(monkeypatch
     text = bot._build_codex_session_status_view()
 
     assert "模型：gpt-5.5" in text
-    assert "Context Window：128,000 tokens" in text
+    assert "Context：未知（窗口 128,000 tokens）" in text
     assert "暂无限额数据，等待下一次模型事件" in text
+
+
+def test_build_codex_session_status_view_clamps_context_and_limit_remaining(monkeypatch, tmp_path):
+    """Context 与限额剩余百分比低于 0 时，应按 0% 展示，避免 Telegram 状态出现负数。"""
+
+    session_file = tmp_path / "rollout-status-clamped.jsonl"
+    pointer_file = tmp_path / "codex-session.pointer"
+    pointer_file.write_text(str(session_file), encoding="utf-8")
+    _write_jsonl(
+        session_file,
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 300000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "reasoning_output_tokens": 0,
+                        "total_tokens": 300000,
+                    },
+                    "model_context_window": 12000,
+                },
+                "rate_limits": {
+                    "primary": {"used_percent": 123.0, "window_minutes": 300, "resets_at": 1780490580},
+                    "secondary": {"used_percent": 100.0, "window_minutes": 10080, "resets_at": 1780875660},
+                },
+            },
+        },
+    )
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer_file))
+
+    text = bot._build_codex_session_status_view()
+
+    assert "Context：0% 剩余（窗口 12,000 tokens）" in text
+    assert "限额：5h 剩余 0%（20:43 重置） · 周 剩余 0%（06-08 07:41 重置）" in text
+
+
+def test_build_codex_session_status_view_reports_unknown_context_without_last_usage(monkeypatch, tmp_path):
+    """缺少 last_token_usage 时，只将 Context 剩余标为未知，限额仍按 token_count 展示。"""
+
+    session_file = tmp_path / "rollout-status-missing-last-usage.jsonl"
+    pointer_file = tmp_path / "codex-session.pointer"
+    pointer_file.write_text(str(session_file), encoding="utf-8")
+    _write_jsonl(
+        session_file,
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "model_context_window": 243200,
+                },
+                "rate_limits": {
+                    "primary": {"used_percent": 8.5, "window_minutes": 300, "resets_at": 1780490580},
+                },
+            },
+        },
+    )
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer_file))
+
+    text = bot._build_codex_session_status_view()
+
+    assert "Context：未知（窗口 243,200 tokens）" in text
+    assert "限额：5h 剩余 91.5%（20:43 重置）" in text
 
 
 def test_build_codex_session_status_view_reports_unbound_session(monkeypatch, tmp_path):
