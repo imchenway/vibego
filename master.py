@@ -1567,8 +1567,11 @@ def _detect_proxy() -> Tuple[Optional[str], Optional[BasicAuth], Optional[str]]:
 def _sanitize_slug(text: str) -> str:
     """将任意字符串转换为 project_slug 可用的短标签。"""
 
-    slug = text.lower().replace(" ", "-")
-    slug = slug.replace("/", "-").replace("\\", "-")
+    slug = (text or "").strip().lower()
+    # 与 scripts/models/common.sh::sanitize_slug 保持一致，确保 Master 与 worker
+    # 读取同一个日志目录；点号等 shell 侧会删除的字符也必须在这里删除。
+    slug = slug.translate(str.maketrans({" ": "-", "/": "-", ":": "-", "\\": "-", "@": "-"}))
+    slug = re.sub(r"[^a-z0-9_-]", "", slug)
     slug = slug.strip("-")
     return slug or "project"
 
@@ -1664,6 +1667,13 @@ class StateStore:
         """更新配置映射，新增项目时写入默认状态，删除项目时移除记录。"""
         self.configs = configs
         dirty = False
+        legacy_state_by_slug: Dict[str, ProjectState] = {}
+        for old_slug, state in list(self.data.items()):
+            normalized_slug = _sanitize_slug(old_slug)
+            # 配置 slug 归一化规则收紧后，旧 state key（如 zeus.）要迁移到
+            # 新 key（如 zeus），避免刷新配置时把运行态误删。
+            if normalized_slug in configs and old_slug != normalized_slug and normalized_slug not in self.data:
+                legacy_state_by_slug.setdefault(normalized_slug, state)
         # 移除已删除项目的状态
         for slug in list(self.data.keys()):
             if slug not in configs:
@@ -1672,11 +1682,15 @@ class StateStore:
         # 为新增项目补充默认状态
         for slug, cfg in configs.items():
             if slug not in self.data:
-                self.data[slug] = ProjectState(
-                    model=cfg.default_model,
-                    status="stopped",
-                    chat_id=cfg.allowed_chat_id,
-                )
+                migrated_state = legacy_state_by_slug.get(slug)
+                if migrated_state is not None:
+                    self.data[slug] = migrated_state
+                else:
+                    self.data[slug] = ProjectState(
+                        model=cfg.default_model,
+                        status="stopped",
+                        chat_id=cfg.allowed_chat_id,
+                    )
                 dirty = True
             if self._sync_bot_identity(slug):
                 dirty = True
@@ -1699,13 +1713,7 @@ class StateStore:
             raw = {}
         dirty = False
         for slug, cfg in self.configs.items():
-            item = (
-                raw.get(slug)
-                or raw.get(cfg.bot_name)
-                or raw.get(f"@{cfg.bot_name}")
-                or (cfg.legacy_name and raw.get(cfg.legacy_name))
-                or {}
-            )
+            item = self._resolve_state_item(raw, slug, cfg)
             model = item.get("model", cfg.default_model)
             status = item.get("status", "stopped")
             chat_id_value = item.get("chat_id", cfg.allowed_chat_id)
@@ -1736,6 +1744,22 @@ class StateStore:
                 dirty = True
         if dirty:
             self.save()
+
+    def _resolve_state_item(self, raw: Dict[str, dict], slug: str, cfg: ProjectConfig) -> dict:
+        """兼容旧 state key，并按归一化 slug 迁移读取运行态。"""
+
+        candidate_keys = [slug, cfg.bot_name, f"@{cfg.bot_name}"]
+        if cfg.legacy_name:
+            candidate_keys.append(cfg.legacy_name)
+        for key in candidate_keys:
+            if key in raw and isinstance(raw[key], dict):
+                return raw[key]
+        for old_key, item in raw.items():
+            # 旧版本允许 zeus. 这类 key；新版本要按 zeus 读取，避免 Master
+            # 健康检查与 run_bot.sh 的运行目录脱节。
+            if _sanitize_slug(str(old_key)) == slug and isinstance(item, dict):
+                return item
+        return {}
 
     def save(self) -> None:
         """将当前内存状态写入磁盘文件。"""

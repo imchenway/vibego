@@ -52,6 +52,75 @@ def _build_manager(tmp_path: Path) -> master.MasterManager:
     return master.MasterManager(configs, state_store=store)
 
 
+def test_project_slug_drops_shell_unsafe_punctuation_for_runtime_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """带标点的项目 slug 应与 run_bot.sh 一样归一到同一个运行目录。"""
+
+    cfg = master.ProjectConfig.from_dict(
+        {
+            "bot_name": "Zeus.",
+            "bot_token": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+            "project_slug": "Zeus.",
+            "default_model": "codex",
+            "workdir": str(tmp_path),
+            "allowed_chat_id": 100,
+        }
+    )
+    state_path = tmp_path / "state.json"
+    manager = master.MasterManager(
+        [cfg],
+        state_store=master.StateStore(state_path, {cfg.project_slug: cfg}),
+    )
+    log_root = tmp_path / "logs"
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+
+    pid_path, run_log = manager._worker_runtime_paths(cfg, "codex")
+
+    assert cfg.project_slug == "zeus"
+    assert pid_path == log_root / "codex" / "zeus" / "bot.pid"
+    assert run_log == log_root / "codex" / "zeus" / "run_bot.log"
+
+
+def test_state_store_migrates_legacy_punctuated_slug_from_disk(tmp_path: Path) -> None:
+    """状态文件中的旧 zeus. key 应迁移到新 zeus key，避免丢失运行态。"""
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "zeus.": {
+                    "model": "codex",
+                    "status": "running",
+                    "chat_id": 100,
+                    "actual_username": "HyphaZeusBot",
+                    "telegram_user_id": 8439549268,
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    cfg = master.ProjectConfig.from_dict(
+        {
+            "bot_name": "Zeus.",
+            "bot_token": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+            "project_slug": "Zeus.",
+            "default_model": "codex",
+            "workdir": str(tmp_path),
+        }
+    )
+
+    store = master.StateStore(state_path, {cfg.project_slug: cfg})
+
+    assert cfg.project_slug == "zeus"
+    assert "zeus." not in store.data
+    assert store.data["zeus"].status == "running"
+    assert store.data["zeus"].chat_id == 100
+    assert store.data["zeus"].actual_username == "HyphaZeusBot"
+
+
 @pytest.mark.asyncio
 async def test_run_worker_keeps_starting_when_health_timeout_but_pid_alive(
     tmp_path: Path,

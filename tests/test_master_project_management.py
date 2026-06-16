@@ -160,6 +160,35 @@ def test_repository_insert_normalizes_fields(repo: ProjectRepository, tmp_path: 
     assert targets[0]["project_slug"] == "mixed-slug"
 
 
+def test_repository_removes_shell_unsafe_punctuation_from_slug(
+    repo: ProjectRepository,
+    tmp_path: Path,
+):
+    """仓库层 slug 归一化必须与 run_bot.sh 一致，避免健康检查读错目录。"""
+
+    workdir_dir = tmp_path / "zeus"
+    workdir_dir.mkdir()
+    repo.insert_project(
+        ProjectRecord(
+            bot_name="Zeus.",
+            bot_token="444444:ABCDEFGHIJKLMNOPQRSTUVWXYZ999999",
+            project_slug="Zeus.",
+            default_model="codex",
+            workdir=str(workdir_dir),
+            allowed_chat_id=None,
+            legacy_name=None,
+        )
+    )
+
+    stored = repo.get_by_slug("zeus")
+    exported = json.loads(repo.json_path.read_text(encoding="utf-8"))
+    targets = [item for item in exported if item["bot_name"] == "Zeus."]
+
+    assert stored is not None
+    assert stored.project_slug == "zeus"
+    assert targets and targets[0]["project_slug"] == "zeus"
+
+
 def test_repository_repair_existing_rows(tmp_path: Path):
     json_path = tmp_path / "projects.json"
     json_path.write_text("[]", encoding="utf-8")

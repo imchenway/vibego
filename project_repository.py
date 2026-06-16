@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -300,7 +301,10 @@ class ProjectRepository:
     def _sanitize_slug(self, slug: str) -> str:
         """复用 master 侧逻辑，将 slug 归一化为小写并替换非法字符。"""
         text = (slug or "").strip().lower()
-        text = text.replace(" ", "-").replace("/", "-").replace("\\", "-")
+        # 与 scripts/models/common.sh::sanitize_slug 保持一致，避免配置层
+        # 保存的 slug 与 worker 实际日志目录不一致。
+        text = text.translate(str.maketrans({" ": "-", "/": "-", ":": "-", "\\": "-", "@": "-"}))
+        text = re.sub(r"[^a-z0-9_-]", "", text)
         text = text.strip("-")
         return text or "project"
 
