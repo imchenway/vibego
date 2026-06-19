@@ -1601,9 +1601,9 @@ class ProjectConfig:
 
     @property
     def display_name(self) -> str:
-        """返回展示用的 bot 名称。"""
+        """返回展示用项目名称；旧配置缺少 name 时回退到 bot 名。"""
 
-        return self.bot_name
+        return self.legacy_name or self.bot_name
 
     @property
     def jump_url(self) -> str:
@@ -2441,7 +2441,15 @@ class MasterManager:
 
 MANAGER: Optional[MasterManager] = None
 PROJECT_REPOSITORY: Optional[ProjectRepository] = None
-ProjectField = Literal["bot_name", "bot_token", "project_slug", "default_model", "workdir", "allowed_chat_id"]
+ProjectField = Literal[
+    "project_name",
+    "bot_name",
+    "bot_token",
+    "project_slug",
+    "default_model",
+    "workdir",
+    "allowed_chat_id",
+]
 
 
 @dataclass
@@ -2459,12 +2467,14 @@ class ProjectWizardSession:
 
 
 PROJECT_WIZARD_FIELDS_CREATE: Tuple[ProjectField, ...] = (
+    "project_name",
     "bot_name",
     "bot_token",
     "default_model",
     "workdir",
 )
 PROJECT_WIZARD_FIELDS_EDIT: Tuple[ProjectField, ...] = (
+    "project_name",
     "bot_name",
     "bot_token",
     "project_slug",
@@ -2477,7 +2487,8 @@ PROJECT_MODEL_CHOICES: Tuple[str, ...] = ("codex", "claudecode", "gemini", "copi
 PROJECT_WIZARD_SESSIONS: Dict[int, ProjectWizardSession] = {}
 PROJECT_WIZARD_LOCK: Optional[asyncio.Lock] = None
 PROJECT_FIELD_PROMPTS_CREATE: Dict[ProjectField, str] = {
-    "bot_name": "请输入 bot 名称（不含 @，仅字母、数字、下划线或点）：",
+    "project_name": "请输入项目名称（展示用，可使用短名称，例如 AI、Zeus）：",
+    "bot_name": "请输入 Telegram bot 用户名（不含 @，仅字母、数字、下划线或点，通常以 bot 结尾）：",
     "bot_token": "请输入 Telegram Bot Token（格式类似 123456:ABCdef）：",
     "project_slug": "请输入项目 slug（用于日志目录，留空自动根据 bot 名生成）：",
     "default_model": "请输入默认模型（codex/claudecode/gemini/copilot，留空采用 codex）：",
@@ -2485,7 +2496,8 @@ PROJECT_FIELD_PROMPTS_CREATE: Dict[ProjectField, str] = {
     "allowed_chat_id": "请输入预设 chat_id（可留空，暂不支持多个）：",
 }
 PROJECT_FIELD_PROMPTS_EDIT: Dict[ProjectField, str] = {
-    "bot_name": "请输入新的 bot 名（不含 @，发送 - 保持当前值：{current}）：",
+    "project_name": "请输入新的项目名称（展示用，发送 - 保持当前值：{current}）：",
+    "bot_name": "请输入新的 Telegram bot 用户名（不含 @，发送 - 保持当前值：{current}）：",
     "bot_token": "请输入新的 Bot Token（发送 - 保持当前值）：",
     "project_slug": "请输入新的项目 slug（发送 - 保持当前值：{current}）：",
     "default_model": "请输入新的默认模型（codex/claudecode/gemini/copilot，发送 - 保持当前值：{current}）：",
@@ -2530,6 +2542,18 @@ def _reload_manager_configs(
     return configs
 
 
+def _project_record_display_name(record: ProjectRecord) -> str:
+    """返回项目记录的展示名，兼容没有 name 字段的旧配置。"""
+
+    return record.legacy_name or record.bot_name
+
+
+def _project_name_has_control_chars(value: str) -> bool:
+    """判断项目展示名是否包含换行或不可见控制字符。"""
+
+    return any(ord(char) < 32 or ord(char) == 127 for char in value)
+
+
 def _validate_field_value(
     session: ProjectWizardSession,
     field_name: ProjectField,
@@ -2544,6 +2568,23 @@ def _validate_field_value(
 
     if field_name in PROJECT_WIZARD_OPTIONAL_FIELDS and not text:
         return None, None
+
+    if field_name == "project_name":
+        candidate = text.strip()
+        if not candidate:
+            return None, "项目名称不能为空"
+        if _project_name_has_control_chars(candidate):
+            return None, "项目名称不能包含换行或控制字符"
+        if len(candidate) > 64:
+            return None, "项目名称不能超过 64 个字符"
+        # 项目展示名也会进入项目查找索引，保持唯一可避免按钮与命令路由歧义。
+        for record in repository.list_projects():
+            same_project = session.mode == "edit" and record.project_slug == session.original_slug
+            if same_project:
+                continue
+            if _project_record_display_name(record).casefold() == candidate.casefold():
+                return None, "该项目名称已被其它项目占用"
+        return candidate, None
 
     if field_name == "bot_name":
         candidate = text.lstrip("@").strip()
@@ -2646,7 +2687,10 @@ async def _send_field_prompt(
 
 def _session_to_record(session: ProjectWizardSession) -> ProjectRecord:
     """将会话数据转换为 ProjectRecord，编辑时保留 legacy_name。"""
-    legacy_name = session.original_record.legacy_name if session.original_record else None
+    # legacy_name 对应 JSON 的 name 字段；这里用于保存用户可见的项目展示名。
+    legacy_name = session.data.get("project_name")
+    if legacy_name is None and session.original_record:
+        legacy_name = session.original_record.legacy_name
     return ProjectRecord(
         bot_name=session.data["bot_name"],
         bot_token=session.data["bot_token"],
@@ -2693,6 +2737,7 @@ async def _commit_wizard_session(
     chat_desc = record.allowed_chat_id if record.allowed_chat_id is not None else "未设置"
     summary = (
         f"{summary_prefix}\n"
+        f"项目：{record.legacy_name or record.bot_name}\n"
         f"bot：@{record.bot_name}\n"
         f"slug：{record.project_slug}\n"
         f"模型：{record.default_model}\n"
@@ -2811,6 +2856,7 @@ async def _start_project_edit(
             fields=PROJECT_WIZARD_FIELDS_EDIT,
         )
         session.data = {
+            "project_name": record.legacy_name or record.bot_name,
             "bot_name": record.bot_name,
             "bot_token": record.bot_token,
             "project_slug": record.project_slug,

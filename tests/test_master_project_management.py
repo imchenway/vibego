@@ -246,6 +246,128 @@ def test_validate_field_rejects_duplicate_bot(repo: ProjectRepository):
     assert error == "该 bot 名已被其它项目占用"
 
 
+def test_project_display_name_accepts_short_name_and_controls_button_label(repo: ProjectRepository, tmp_path: Path):
+    """项目显示名允许短名称，不能再被 bot_name 的 5 字符限制拦截。"""
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    callback = DummyCallback("project:create:*")
+
+    async def _prepare():
+        await master._start_project_create(callback, manager)
+
+    asyncio.run(_prepare())
+    message = callback.message
+    workdir = tmp_path / "zeus_workdir"
+    workdir.mkdir()
+    inputs = [
+        "Zeus",
+        "ZeusProjectBot",
+        "222222:ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+        "",
+        str(workdir),
+    ]
+
+    async def _run_flow():
+        for text in inputs:
+            message.text = text
+            await master._handle_wizard_message(message, manager)
+
+    asyncio.run(_run_flow())
+
+    record = repo.get_by_slug("zeusprojectbot")
+    assert record is not None
+    assert record.legacy_name == "Zeus"
+    assert record.bot_name == "ZeusProjectBot"
+    exported = json.loads(repo.json_path.read_text(encoding="utf-8"))
+    target = next(item for item in exported if item["project_slug"] == "zeusprojectbot")
+    assert target["name"] == "Zeus"
+
+    manager = _build_manager(repo, tmp_path)
+    text, markup = master._projects_overview(manager)
+    labels = [btn.text for row in markup.inline_keyboard for btn in row]
+    assert "Zeus" in labels
+    assert "ZeusProjectBot" not in labels
+
+
+def test_project_config_display_name_prefers_project_name():
+    cfg = master.ProjectConfig.from_dict(
+        {
+            "name": "AI",
+            "bot_name": "AiProjectBot",
+            "bot_token": "222222:ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+            "project_slug": "ai-project",
+            "default_model": "codex",
+        }
+    )
+
+    assert cfg.display_name == "AI"
+
+
+def test_validate_project_name_rejects_invalid_and_duplicate_names(repo: ProjectRepository):
+    session = master.ProjectWizardSession(chat_id=1, user_id=1, mode="create")
+
+    value, error = master._validate_field_value(session, "project_name", "")
+    assert value is None
+    assert error == "项目名称不能为空"
+
+    value, error = master._validate_field_value(session, "project_name", "bad\nname")
+    assert value is None
+    assert error == "项目名称不能包含换行或控制字符"
+
+    value, error = master._validate_field_value(session, "project_name", "甲" * 65)
+    assert value is None
+    assert error == "项目名称不能超过 64 个字符"
+
+    value, error = master._validate_field_value(session, "project_name", "SampleBot")
+    assert value is None
+    assert error == "该项目名称已被其它项目占用"
+
+    value, error = master._validate_field_value(session, "project_name", "AI")
+    assert value == "AI"
+    assert error is None
+
+
+def test_validate_bot_name_still_requires_telegram_length(repo: ProjectRepository):
+    session = master.ProjectWizardSession(chat_id=1, user_id=1, mode="create")
+    value, error = master._validate_field_value(session, "bot_name", "AI")
+    assert value is None
+    assert error == "bot 名仅允许 5-64 位字母、数字、下划线或点"
+
+
+def test_edit_flow_updates_short_project_display_name(repo: ProjectRepository, tmp_path: Path):
+    """编辑流程也应允许把项目展示名改成短名称。"""
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    cfg = manager.require_project_by_slug("sample")
+    callback = DummyCallback("project:edit:sample")
+
+    async def _prepare():
+        await master._start_project_edit(callback, cfg, manager)
+
+    asyncio.run(_prepare())
+    message = callback.message
+    inputs = [
+        "AI",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+    ]
+
+    async def _run_flow():
+        for text in inputs:
+            message.text = text
+            await master._handle_wizard_message(message, manager)
+
+    asyncio.run(_run_flow())
+    record = repo.get_by_slug("sample")
+    assert record.legacy_name == "AI"
+    configs = [master.ProjectConfig.from_dict(item.to_dict()) for item in repo.list_projects()]
+    assert configs[0].display_name == "AI"
+
+
 def test_validate_workdir_requires_existing_path(repo: ProjectRepository, tmp_path: Path):
     session = master.ProjectWizardSession(chat_id=1, user_id=1, mode="create")
     missing_value, missing_error = master._validate_field_value(session, "workdir", str(tmp_path / "missing"))
@@ -302,12 +424,11 @@ def test_create_flow_writes_repository(repo: ProjectRepository, tmp_path: Path, 
     workdir = tmp_path / "new_workdir"
     workdir.mkdir()
     inputs = [
+        "New Tester",
         "NewTesterBot",
         "222222:ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
-        "",  # 让系统自动生成 slug
         "",  # 默认模型回落到 codex
         str(workdir),
-        "-10001",
     ]
 
     async def _run_flow():
@@ -318,6 +439,7 @@ def test_create_flow_writes_repository(repo: ProjectRepository, tmp_path: Path, 
     asyncio.run(_run_flow())
     records = repo.list_projects()
     assert any(r.project_slug == "newtesterbot" for r in records)
+    assert any(r.legacy_name == "New Tester" for r in records)
     assert message.bot.send_message.await_count >= 1
 
 

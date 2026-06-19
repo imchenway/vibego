@@ -1,5 +1,6 @@
 [
   {
+    "name": "Your Project",
     "bot_name": "your_project_bot",
     "bot_token": "__REPLACE_WITH_PROJECT_BOT_TOKEN__",
     "allowed_chat_id": null,

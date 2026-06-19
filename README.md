@@ -204,6 +204,7 @@ Telegram 命令菜单可通过 `/plan_mode` 切换 Copilot 的 `interactive / pl
   `~/.config/vibego/config/projects.json`。如需离线编辑，可参考仓库内的 `config/projects.json.example` 模板。
 - Master「⚙️ 项目管理」可新增/编辑/删除项目；仍可离线编辑 JSON，启动时会自动导入并同步至数据库。
 - 必填字段：`bot_name`、`bot_token`、`project_slug`、`default_model`。
+- 展示字段：`name` 为项目显示名，可使用短名称；未配置时回退展示 `bot_name`。
 - 可选字段：`workdir`（项目路径）、`allowed_chat_id`（用于预设授权）。留空时，worker 首次收到消息会自动记录 chat_id 并写回
   `~/.config/vibego/state/master_state.json`。
 - 其他自定义字段暂不读取。
@@ -240,6 +241,7 @@ Telegram 命令菜单可通过 `/plan_mode` 切换 Copilot 的 `interactive / pl
 - 管理员 Bot 使用 `MASTER_BOT_TOKEN` 启动（运行 `python master.py`）。
 - 项目列表由 Master 仓库（`~/.config/vibego/config/master.db`）维护，可通过项目管理按钮或
   `~/.config/vibego/config/projects.json` 同步文件更新。示例字段：
+    - `name`：项目显示名（展示用，可短名；不影响日志目录或 Telegram bot 用户名）
     - `bot_name`：对应 Telegram 机器人的用户名（可带或不带 `@`，展示与交互时自动加 `@`）
     - `bot_token`：对应 worker 的 Telegram Token
     - `default_model`：默认模型（codex / claudecode / gemini / copilot）
