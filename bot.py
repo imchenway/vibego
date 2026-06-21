@@ -3185,6 +3185,14 @@ def _push_send_mode_label(send_mode: Optional[str]) -> str:
     return PUSH_SEND_MODE_IMMEDIATE_LABEL
 
 
+def _resolve_business_prompt_send_mode() -> str:
+    """业务提示统一排队；不支持 queued 的模型按用户确认继续回退立即发送。"""
+
+    if _supports_queued_send_mode():
+        return PUSH_SEND_MODE_QUEUED
+    return PUSH_SEND_MODE_IMMEDIATE
+
+
 def _should_send_plan_switch_command(
     *,
     intended_mode: Optional[str],
@@ -3900,11 +3908,13 @@ async def _push_task_to_model(
         reply_to=reply_to,
     )
     _remember_chat_active_user(chat_id, _extract_actor_user_id(actor))
+    business_send_mode = _resolve_business_prompt_send_mode()
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": reply_to,
         "ack_immediately": False,
         "intended_mode": push_mode,
-        "send_mode": send_mode,
+        # 任务推送属于 Telegram 业务提示，即使旧键盘残留传入 immediate，也统一收口到 queued。
+        "send_mode": business_send_mode,
     }
     if dispatch_context is not None:
         dispatch_kwargs["dispatch_context"] = dispatch_context
@@ -3929,7 +3939,7 @@ async def _push_task_to_model(
         "history_chars": len(history_text),
         "prompt_chars": len(dispatch_prompt),
         "model": ACTIVE_MODEL or "",
-        "send_mode": _normalize_push_send_mode(send_mode),
+        "send_mode": business_send_mode,
     }
     if dispatch_prompt != prompt:
         payload["original_prompt_chars"] = len(prompt)
@@ -5366,8 +5376,8 @@ async def _handle_prompt_dispatch(
         "intended_mode": PUSH_MODE_PLAN,
         "force_plan_switch_for_queued": True,
         "probe_plan_mode_before_switch": True,
-        # 普通 Telegram 直聊默认排队；任务推送仍使用各自流程中的显式发送方式选择。
-        "send_mode": _get_worker_direct_send_mode(),
+        # 普通 Telegram 直聊属于业务提示，统一按 queued 优先发送。
+        "send_mode": _resolve_business_prompt_send_mode(),
         # 普通 Telegram 直聊必须确认模型 session 真正消费了输入；
         # 否则 tmux send-keys 成功但 Codex TUI 未接收时会形成静默丢消息。
         "confirm_delivery": True,
@@ -5751,9 +5761,7 @@ def _get_worker_direct_send_mode() -> str:
     其他不支持排队的模型自动回退立即发送，避免暴露不可用的 queued 状态。
     """
 
-    if _supports_queued_send_mode():
-        return PUSH_SEND_MODE_QUEUED
-    return PUSH_SEND_MODE_IMMEDIATE
+    return _resolve_business_prompt_send_mode()
 
 
 def _resolve_worker_plan_mode_button_text(
@@ -10649,9 +10657,9 @@ def _build_push_mode_prompt() -> str:
 
 
 def _build_push_send_mode_prompt() -> str:
-    """推送到模型：构建立即/排队发送方式选择提示。"""
+    """兼容旧任务推送发送方式键盘；真实业务提示已统一排队。"""
 
-    return "请选择本次发送方式：立即发送 / 排队发送（发送“取消”退出）"
+    return "发送方式已收口：业务提示默认排队发送；点击任一旧发送按钮继续，发送“取消”退出。"
 
 
 def _build_push_dispatch_target_prompt() -> str:
@@ -19750,7 +19758,7 @@ async def _handle_worker_direct_send_mode_toggle_request(message: Message) -> No
     default_mode = _get_worker_direct_send_mode()
     default_label = _push_send_mode_label(default_mode)
     await message.answer(
-        f"发送方式按钮已移除；普通消息默认{default_label}。如需立即/排队选择，请使用任务推送流程中的发送方式选择。",
+        f"发送方式按钮已移除；Telegram 业务提示默认{default_label}，控制命令仍按原生语义立即发送。",
         reply_markup=_build_worker_main_keyboard(),
     )
 
@@ -19824,6 +19832,7 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": origin_message,
         "ack_immediately": False,
+        "send_mode": _resolve_business_prompt_send_mode(),
     }
     if dispatch_context is not None:
         dispatch_kwargs["dispatch_context"] = dispatch_context
@@ -20387,6 +20396,7 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": origin_message,
         "ack_immediately": False,
+        "send_mode": _resolve_business_prompt_send_mode(),
     }
     if dispatch_context is not None:
         dispatch_kwargs["dispatch_context"] = dispatch_context
@@ -20576,6 +20586,7 @@ async def _submit_request_input_session(
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": reply_to,
         "ack_immediately": False,
+        "send_mode": _resolve_business_prompt_send_mode(),
     }
     dispatch_context = session.parallel_dispatch_context
     parallel_task_id = _normalize_task_id(session.parallel_task_id)
@@ -20952,6 +20963,7 @@ async def on_plan_confirm_callback(callback: CallbackQuery) -> None:
                 "force_exit_plan_ui": True,
                 "force_exit_plan_ui_key_sequence": _build_plan_develop_retry_exit_plan_key_sequence(),
                 "force_exit_plan_ui_max_rounds": PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+                "send_mode": _resolve_business_prompt_send_mode(),
             }
             if isinstance(dispatch_context, ParallelDispatchContext):
                 dispatch_kwargs["dispatch_context"] = dispatch_context
@@ -21008,6 +21020,7 @@ async def on_plan_develop_retry_callback(callback: CallbackQuery) -> None:
         force_exit_plan_ui=True,
         force_exit_plan_ui_key_sequence=_build_plan_develop_retry_exit_plan_key_sequence(),
         force_exit_plan_ui_max_rounds=PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+        send_mode=_resolve_business_prompt_send_mode(),
     )
     if not success:
         await callback.answer("重试失败：模型未就绪，请稍后再试。", show_alert=True)
@@ -23828,13 +23841,12 @@ async def on_task_push_model_send_mode(message: Message, state: FSMContext) -> N
         await message.answer("已取消推送到模型。", reply_markup=_build_worker_main_keyboard())
         return
 
-    if resolved == PUSH_SEND_MODE_QUEUED_LABEL:
-        send_mode = PUSH_SEND_MODE_QUEUED
-    elif resolved == PUSH_SEND_MODE_IMMEDIATE_LABEL:
-        send_mode = PUSH_SEND_MODE_IMMEDIATE
+    if resolved in {PUSH_SEND_MODE_QUEUED_LABEL, PUSH_SEND_MODE_IMMEDIATE_LABEL}:
+        # 兼容旧 Telegram 键盘残留：业务提示仍统一走 queued，不支持 queued 的模型再回退 immediate。
+        send_mode = _resolve_business_prompt_send_mode()
     else:
         await message.answer(
-            "请选择立即发送或排队发送，发送“取消”可退出：",
+            "发送方式已收口为业务提示默认排队；请点击旧按钮之一继续，发送“取消”可退出：",
             reply_markup=_build_push_send_mode_keyboard(),
         )
         return
@@ -23875,17 +23887,7 @@ async def on_task_push_model_skip(callback: CallbackQuery, state: FSMContext) ->
         return
     actor = _actor_from_callback(callback)
     push_mode = (data.get("push_mode") or "").strip().upper()
-    send_mode = _normalize_push_send_mode(data.get("send_mode"))
-    if _supports_queued_send_mode() and not data.get("send_mode"):
-        await state.update_data(
-            pending_push_supplement=None,
-            pending_push_attachments=[],
-        )
-        await state.set_state(TaskPushStates.waiting_send_mode)
-        await callback.answer("请选择发送方式")
-        if callback.message is not None:
-            await _prompt_push_send_mode_input(callback.message, push_mode=push_mode or None)
-        return
+    send_mode = _resolve_business_prompt_send_mode()
     await _execute_task_push_from_state_data(
         task=task,
         state=state,
@@ -23949,7 +23951,7 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         await message.answer("推送会话已失效，请重新点击按钮。", reply_markup=_build_worker_main_keyboard())
         return
     push_mode = (data.get("push_mode") or "").strip().upper()
-    send_mode = _normalize_push_send_mode(data.get("send_mode"))
+    send_mode = _resolve_business_prompt_send_mode()
     task = await TASK_SERVICE.get_task(task_id)
     if task is None:
         await state.clear()
@@ -23998,15 +24000,6 @@ async def on_task_push_model_supplement(message: Message, state: FSMContext) -> 
         supplement = _build_attachment_only_supplement(saved_attachments)
 
     serialized = [_serialize_saved_attachment(item) for item in saved_attachments] if saved_attachments else []
-    if _supports_queued_send_mode() and not data.get("send_mode"):
-        await state.update_data(
-            pending_push_supplement=supplement,
-            pending_push_attachments=serialized,
-        )
-        await state.set_state(TaskPushStates.waiting_send_mode)
-        await _prompt_push_send_mode_input(message, push_mode=push_mode or None)
-        return
-
     await _execute_task_push_from_state_data(
         task=task,
         state=state,
@@ -24188,6 +24181,7 @@ async def _request_task_summary(
         prompt,
         reply_to=reply_to,
         ack_immediately=False,
+        send_mode=_resolve_business_prompt_send_mode(),
     )
     if not success:
         raise TaskSummaryRequestError("模型未就绪，摘要生成失败")

@@ -548,7 +548,7 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
 
-    recorded: list[tuple[int, str, DummyMessage]] = []
+    recorded: list[tuple[int, str, DummyMessage, Optional[str]]] = []
     ack_calls: list[tuple[int, Path | None, DummyMessage | None]] = []
     logged_events: list[tuple[str, dict]] = []
 
@@ -571,10 +571,11 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         *,
         reply_to,
         ack_immediately: bool = True,
+        send_mode: Optional[str] = None,
         **_kwargs,
     ):
         assert not ack_immediately
-        recorded.append((chat_id, prompt, reply_to))
+        recorded.append((chat_id, prompt, reply_to, send_mode))
         assert reply_to is message
         return True, tmp_path / "session.jsonl"
 
@@ -615,21 +616,13 @@ def test_push_model_success(monkeypatch, tmp_path: Path):
         supplement_message = DummyMessage()
         supplement_message.text = bot.SKIP_TEXT
         await bot.on_task_push_model_supplement(supplement_message, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
-        assert supplement_message.calls
-        supplement_text, _, supplement_markup, _ = supplement_message.calls[0]
-        assert f"已选择 {bot.PUSH_MODE_PLAN} 模式" in supplement_text
-        assert bot._build_push_send_mode_prompt() in supplement_text
-        assert supplement_markup is not None
-
-        send_mode_message = DummyMessage()
-        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
-        await bot.on_task_push_model_send_mode(send_mode_message, state)
+        assert await state.get_state() is None
 
         assert recorded
-        chat_id, payload, reply_to = recorded[0]
+        chat_id, payload, reply_to, send_mode = recorded[0]
         assert chat_id == message.chat.id
         assert reply_to is message
+        assert send_mode == bot.PUSH_SEND_MODE_QUEUED
         lines = payload.splitlines()
         assert lines[0].startswith(f"进入 {bot.PUSH_MODE_PLAN} 模式")
         assert "进入vibe阶段" not in lines[0]
@@ -719,7 +712,7 @@ def test_push_model_supplement_uses_caption(monkeypatch, tmp_path: Path):
 
     assert push_calls, "应触发推送"
     assert push_calls[0]["supplement"] == message.caption
-    assert push_calls[0]["send_mode"] == bot.PUSH_SEND_MODE_IMMEDIATE
+    assert push_calls[0]["send_mode"] == bot.PUSH_SEND_MODE_QUEUED
 
 
 def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
@@ -781,14 +774,6 @@ def test_push_model_skip_keeps_selected_push_mode(monkeypatch, tmp_path: Path):
 
     async def _scenario() -> None:
         await bot.on_task_push_model_skip(callback, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
-        assert message.calls
-        prompt_text, _, _markup, _kwargs = message.calls[0]
-        assert bot._build_push_send_mode_prompt() in prompt_text
-
-        send_mode_message = DummyMessage()
-        send_mode_message.text = bot.PUSH_SEND_MODE_QUEUED_LABEL
-        await bot.on_task_push_model_send_mode(send_mode_message, state)
         assert await state.get_state() is None
 
     asyncio.run(_scenario())
@@ -878,7 +863,7 @@ def test_push_model_supplement_falls_back_to_attachment_names(monkeypatch, tmp_p
     assert bound_calls, "应绑定附件"
     assert push_calls, "应触发推送"
     assert push_calls[0]["supplement"] == "见补充附件：photo.jpg"
-    assert push_calls[0]["send_mode"] == bot.PUSH_SEND_MODE_IMMEDIATE
+    assert push_calls[0]["send_mode"] == bot.PUSH_SEND_MODE_QUEUED
 
 
 def test_push_model_supplement_binds_attachments(monkeypatch, tmp_path: Path):
@@ -1089,7 +1074,7 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(bot.TASK_SERVICE, "list_history", fake_list_history)
 
-    recorded: list[tuple[int, str, DummyMessage]] = []
+    recorded: list[tuple[int, str, DummyMessage, Optional[str]]] = []
     ack_calls: list[tuple[int, Path | None, DummyMessage | None]] = []
     logged_events: list[tuple[str, dict]] = []
 
@@ -1107,10 +1092,11 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         *,
         reply_to,
         ack_immediately: bool = True,
+        send_mode: Optional[str] = None,
         **_kwargs,
     ):
         assert not ack_immediately
-        recorded.append((chat_id, prompt, reply_to))
+        recorded.append((chat_id, prompt, reply_to, send_mode))
         assert reply_to is message
         return True, tmp_path / "session.jsonl"
 
@@ -1146,16 +1132,13 @@ def test_push_model_test_push(monkeypatch, tmp_path: Path):
         input_message = DummyMessage()
         input_message.text = "补充说明内容"
         await bot.on_task_push_model_supplement(input_message, state)
-        assert await state.get_state() == bot.TaskPushStates.waiting_send_mode.state
-
-        send_mode_message = DummyMessage()
-        send_mode_message.text = bot.PUSH_SEND_MODE_IMMEDIATE_LABEL
-        await bot.on_task_push_model_send_mode(send_mode_message, state)
+        assert await state.get_state() is None
 
         assert recorded
-        chat_id, payload, reply_to = recorded[0]
+        chat_id, payload, reply_to, send_mode = recorded[0]
         assert chat_id == message.chat.id
         assert reply_to is message
+        assert send_mode == bot.PUSH_SEND_MODE_QUEUED
         lines = payload.splitlines()
         assert lines[0].startswith(f"{bot.PUSH_MODE_YOLO} ")
         assert "进入vibe阶段" not in lines[0]
@@ -1207,8 +1190,8 @@ def test_push_model_choice_for_non_codex_skips_send_mode(monkeypatch):
     assert bot._build_push_supplement_prompt() in choice_text
 
 
-def test_push_model_choice_for_copilot_prompts_send_mode(monkeypatch):
-    """Copilot 在补充描述后，也应进入发送方式选择。"""
+def test_push_model_choice_for_copilot_dispatches_queued_without_send_mode_prompt(monkeypatch):
+    """Copilot 任务推送是业务提示，应跳过发送方式选择并直接排队。"""
 
     message = DummyMessage()
     state, _storage = make_state(message)
@@ -1225,6 +1208,13 @@ def test_push_model_choice_for_copilot_prompts_send_mode(monkeypatch):
         return object()
 
     monkeypatch.setattr(bot.TASK_SERVICE, "get_task", fake_get_task)
+    captured_send_modes: list[Optional[str]] = []
+
+    async def fake_execute_task_push_from_state_data(*, state, send_mode=None, **_kwargs):
+        captured_send_modes.append(send_mode)
+        await state.clear()
+
+    monkeypatch.setattr(bot, "_execute_task_push_from_state_data", fake_execute_task_push_from_state_data)
 
     choice_message = DummyMessage()
     choice_message.text = bot.PUSH_MODE_PLAN
@@ -1237,11 +1227,8 @@ def test_push_model_choice_for_copilot_prompts_send_mode(monkeypatch):
     supplement_message.text = "补充上下文"
     asyncio.run(bot.on_task_push_model_supplement(supplement_message, state))
 
-    assert asyncio.run(state.get_state()) == bot.TaskPushStates.waiting_send_mode.state
-    assert choice_message.calls
-    assert supplement_message.calls
-    prompt_text, _, _, _ = supplement_message.calls[0]
-    assert bot._build_push_send_mode_prompt() in prompt_text
+    assert asyncio.run(state.get_state()) is None
+    assert captured_send_modes == [bot.PUSH_SEND_MODE_QUEUED]
 
 
 def test_push_model_test_push_includes_related_task_context(monkeypatch, tmp_path: Path):
@@ -2747,9 +2734,9 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     session_path = tmp_path / "summary_session.jsonl"
     session_path.write_text("", encoding="utf-8")
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool, **_kwargs):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool, send_mode=None, **_kwargs):
         assert ack_immediately is False
-        dispatch_calls.append((chat_id, prompt))
+        dispatch_calls.append((chat_id, prompt, send_mode))
         return True, session_path
 
     async def fake_log_task_action(*args, **kwargs):
@@ -2772,6 +2759,7 @@ def test_task_summary_command_triggers_request(monkeypatch, tmp_path: Path):
     assert updates, "应更新任务状态为测试"
     assert dispatch_calls, "应向模型推送摘要请求"
     prompt_text = dispatch_calls[0][1]
+    assert dispatch_calls[0][2] == bot.PUSH_SEND_MODE_QUEUED
     assert prompt_text.startswith(
         "进入摘要阶段...\n任务编码：/TASK_0200\nSUMMARY_REQUEST_ID::"
     )
@@ -2852,6 +2840,76 @@ def test_model_quick_reply_keyboard_includes_task_to_test_button():
         if getattr(button, "callback_data", None)
     ]
     assert any(value == f"{bot.MODEL_TASK_TO_TEST_PREFIX}TASK_0001" for value in callbacks)
+
+
+def test_model_quick_reply_all_dispatches_as_queued_business_prompt(monkeypatch, tmp_path: Path):
+    """模型快捷回复是用户业务提示，应使用 queued 而不是 immediate。"""
+
+    message = DummyMessage()
+    callback = DummyCallback(bot.MODEL_QUICK_REPLY_ALL_CALLBACK, message)
+    session_path = tmp_path / "quick-all.jsonl"
+    captured_send_modes: list[Optional[str]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool, send_mode=None, **_kwargs):
+        assert chat_id == message.chat.id
+        assert prompt == "待决策项全部按模型推荐"
+        assert reply_to is message
+        assert ack_immediately is False
+        captured_send_modes.append(send_mode)
+        return True, session_path
+
+    async def fake_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    asyncio.run(bot.on_model_quick_reply_all(callback))
+
+    assert captured_send_modes == [bot.PUSH_SEND_MODE_QUEUED]
+
+
+def test_model_quick_reply_partial_dispatches_as_queued_business_prompt(monkeypatch, tmp_path: Path):
+    """带补充说明的快捷回复也必须按业务提示 queued。"""
+
+    message = DummyMessage()
+    message.text = "补充风险说明"
+    state, _storage = make_state(message)
+    asyncio.run(
+        state.update_data(
+            chat_id=message.chat.id,
+            origin_message=message,
+        )
+    )
+    asyncio.run(state.set_state(bot.ModelQuickReplyStates.waiting_partial_supplement))
+    session_path = tmp_path / "quick-partial.jsonl"
+    captured_send_modes: list[Optional[str]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool, send_mode=None, **_kwargs):
+        assert chat_id == message.chat.id
+        assert "补充风险说明" in prompt
+        assert reply_to is message
+        assert ack_immediately is False
+        captured_send_modes.append(send_mode)
+        return True, session_path
+
+    async def fake_preview(*_args, **_kwargs):
+        return None
+
+    async def fake_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_model_push_preview", fake_preview)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    asyncio.run(bot.on_model_quick_reply_partial_supplement(message, state))
+
+    assert captured_send_modes == [bot.PUSH_SEND_MODE_QUEUED]
 
 
 def test_model_task_to_test_callback_updates_status(monkeypatch):

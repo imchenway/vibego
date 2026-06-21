@@ -114,7 +114,8 @@ def test_worker_direct_send_mode_button_removed_refreshes_keyboard(monkeypatch, 
     assert message._answers
     text, kwargs = message._answers[-1]
     assert "按钮已移除" in text
-    assert "普通消息默认排队发送" in text
+    assert "业务提示默认排队发送" in text
+    assert "控制命令仍按原生语义立即发送" in text
     assert not state_file.exists()
     markup = kwargs.get("reply_markup")
     assert isinstance(markup, ReplyKeyboardMarkup)

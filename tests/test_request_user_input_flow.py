@@ -259,13 +259,13 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     bot.REQUEST_INPUT_SESSIONS[session.token] = session
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[10] = session.token
 
-    dispatched: list[str] = []
+    dispatched: list[tuple[str, str | None]] = []
     preview_calls: list[str] = []
     ack_calls: list[str] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, send_mode=None):
         assert chat_id == 10
-        dispatched.append(prompt)
+        dispatched.append((prompt, send_mode))
         return True, tmp_path / "rollout.jsonl"
 
     async def fake_preview(chat_id: int, preview_block: str, *, reply_to, parse_mode, reply_markup):
@@ -287,7 +287,8 @@ def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_pat
     asyncio.run(bot.on_request_user_input_callback(callback))
 
     assert dispatched, "提交后应推送到模型"
-    prompt = dispatched[-1]
+    prompt, send_mode = dispatched[-1]
+    assert send_mode == bot.PUSH_SEND_MODE_QUEUED
     assert "call_id=call_submit_1" in prompt
     assert "question_context=" in prompt
     assert _extract_question_context_from_prompt(prompt) == {
@@ -350,7 +351,7 @@ def test_ask_user_submit_dispatches_schema_payload(monkeypatch, tmp_path: Path):
 
     dispatched: list[str] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         assert chat_id == 11
         dispatched.append(prompt)
         return True, tmp_path / "copilot-events.jsonl"
@@ -426,10 +427,20 @@ def test_request_input_submit_dispatches_parallel_context(monkeypatch, tmp_path:
     bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[20] = session.token
 
     captured_contexts: list[object] = []
+    captured_send_modes: list[str | None] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, dispatch_context=None):
+    async def fake_dispatch(
+        chat_id: int,
+        prompt: str,
+        *,
+        reply_to,
+        ack_immediately: bool = True,
+        dispatch_context=None,
+        send_mode=None,
+    ):
         assert chat_id == 20
         captured_contexts.append(dispatch_context)
+        captured_send_modes.append(send_mode)
         return True, tmp_path / "parallel.jsonl"
 
     async def fake_preview(*_args, **_kwargs):
@@ -451,6 +462,7 @@ def test_request_input_submit_dispatches_parallel_context(monkeypatch, tmp_path:
     asyncio.run(bot.on_request_user_input_callback(callback))
 
     assert captured_contexts == [dispatch_context]
+    assert captured_send_modes == [bot.PUSH_SEND_MODE_QUEUED]
 
 
 def test_request_input_submit_requires_all_answers(monkeypatch):
@@ -578,7 +590,7 @@ def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_pa
     preview_calls: list[str] = []
     ack_calls: list[str] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         assert chat_id == 88
         dispatched.append(prompt)
         return True, tmp_path / "auto_submit.jsonl"
@@ -763,7 +775,7 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
     preview_calls: list[str] = []
     ack_calls: list[str] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         assert chat_id == 66
         dispatched.append(prompt)
         return True, tmp_path / "custom_submit.jsonl"
@@ -842,7 +854,7 @@ def test_request_input_custom_text_auto_submits_to_parallel_context(monkeypatch,
 
     captured_contexts: list[object] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, dispatch_context=None):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, dispatch_context=None, **_kwargs):
         assert chat_id == 166
         captured_contexts.append(dispatch_context)
         return True, tmp_path / "parallel_custom.jsonl"
@@ -953,7 +965,7 @@ def test_request_input_custom_media_message_auto_submits_with_attachment_prompt(
     dispatched: list[str] = []
     ack_calls: list[str] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         assert chat_id == 266
         dispatched.append(prompt)
         return True, tmp_path / "custom_media_submit.jsonl"
@@ -1005,7 +1017,7 @@ def test_request_input_custom_media_only_auto_submits_with_attachment_prompt(mon
 
     dispatched: list[str] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         assert chat_id == 366
         dispatched.append(prompt)
         return True, None
@@ -1118,7 +1130,7 @@ def test_request_input_submit_falls_back_to_long_text_attachment_without_truncat
 
     fallback_calls: list[tuple[str, object, object]] = []
 
-    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True):
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, **_kwargs):
         assert chat_id == 566
         return True, tmp_path / "custom_summary_attachment.jsonl"
 

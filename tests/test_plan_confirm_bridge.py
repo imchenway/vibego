@@ -180,7 +180,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
     bot.PLAN_CONFIRM_SESSIONS[token] = session
     bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
 
-    dispatched: list[tuple[int, str, bool, tuple[str, ...] | None, int | None]] = []
+    dispatched: list[tuple[int, str, bool, tuple[str, ...] | None, int | None, str | None]] = []
 
     async def fake_dispatch(
         chat_id: int,
@@ -192,6 +192,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
         force_exit_plan_ui: bool = False,
         force_exit_plan_ui_key_sequence=None,
         force_exit_plan_ui_max_rounds=None,
+        send_mode=None,
     ):
         dispatched.append(
             (
@@ -200,6 +201,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
                 force_exit_plan_ui,
                 tuple(force_exit_plan_ui_key_sequence) if force_exit_plan_ui_key_sequence is not None else None,
                 force_exit_plan_ui_max_rounds,
+                send_mode,
             )
         )
         return True, None
@@ -221,6 +223,7 @@ def test_plan_confirm_yes_dispatches_implement_prompt(monkeypatch: pytest.Monkey
             True,
             bot._build_plan_develop_retry_exit_plan_key_sequence(),
             bot.PLAN_DEVELOP_RETRY_EXIT_PLAN_MAX_ROUNDS,
+            bot.PUSH_SEND_MODE_QUEUED,
         )
     ]
     assert token not in bot.PLAN_CONFIRM_SESSIONS
@@ -260,9 +263,11 @@ def test_plan_confirm_yes_acknowledges_callback_before_dispatch(monkeypatch: pyt
         force_exit_plan_ui: bool = False,
         force_exit_plan_ui_key_sequence=None,
         force_exit_plan_ui_max_rounds=None,
+        send_mode=None,
     ):
         assert callback.answers, "进入 tmux 派发前应先答复 Telegram callback，避免按钮一直转圈"
         assert callback.answers[0] == ("已收到，正在推送到模型…", False)
+        assert send_mode == bot.PUSH_SEND_MODE_QUEUED
         return True, None
 
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
@@ -392,6 +397,7 @@ def test_parallel_plan_confirm_yes_dispatches_bound_parallel_context(monkeypatch
         force_exit_plan_ui_key_sequence=None,
         force_exit_plan_ui_max_rounds=None,
         dispatch_context=None,
+        **_kwargs,
     ):
         assert prompt == bot.PLAN_IMPLEMENT_PROMPT
         captured_contexts.append(dispatch_context)
@@ -800,6 +806,7 @@ def test_plan_confirm_old_callback_still_works_after_newer_session_created(monke
         force_exit_plan_ui_key_sequence=None,
         force_exit_plan_ui_max_rounds=None,
         dispatch_context=None,
+        **_kwargs,
     ):
         dispatched.append((_chat_id, prompt))
         return True, None
@@ -875,6 +882,7 @@ def test_old_native_quick_reply_fail_closed_does_not_drop_other_session_plan_con
         force_exit_plan_ui_key_sequence=None,
         force_exit_plan_ui_max_rounds=None,
         dispatch_context=None,
+        **_kwargs,
     ):
         dispatched.append((_chat_id, prompt))
         return True, None
@@ -922,6 +930,7 @@ def test_plan_confirm_yes_is_idempotent_under_concurrent_clicks(monkeypatch: pyt
         force_exit_plan_ui: bool = False,
         force_exit_plan_ui_key_sequence=None,
         force_exit_plan_ui_max_rounds=None,
+        **_kwargs,
     ):
         dispatched.append((chat_id, prompt))
         if len(dispatched) == 1:
@@ -987,6 +996,7 @@ def test_plan_confirm_no_keeps_plan_mode(monkeypatch: pytest.MonkeyPatch):
         ack_immediately: bool = True,
         intended_mode=None,
         force_exit_plan_ui: bool = False,
+        **_kwargs,
     ):
         dispatched.append((chat_id, prompt))
         return True, None
@@ -1072,6 +1082,7 @@ def test_plan_develop_retry_callback_dispatches_implement_prompt_without_session
         force_exit_plan_ui: bool = False,
         force_exit_plan_ui_key_sequence=None,
         force_exit_plan_ui_max_rounds=None,
+        **_kwargs,
     ):
         dispatched.append(
             (
