@@ -364,14 +364,11 @@ def test_gen_preview_auto_preview_mode_uses_auto_preview_without_qr(tmp_path: Pa
 
             command="$1"
             shift
-            if [[ "$command" != "auto-preview" ]]; then
-              echo "unexpected command: $command" >&2
-              exit 2
-            fi
 
             port=""
             project=""
             info_output=""
+            qr_output=""
             while [[ $# -gt 0 ]]; do
               case "$1" in
                 --port)
@@ -386,9 +383,12 @@ def test_gen_preview_auto_preview_mode_uses_auto_preview_without_qr(tmp_path: Pa
                   info_output="$2"
                   shift 2
                   ;;
-                --qr-output|--qr-format)
-                  echo "auto-preview must not receive $1" >&2
-                  exit 3
+                --qr-output)
+                  qr_output="$2"
+                  shift 2
+                  ;;
+                --qr-format)
+                  shift 2
                   ;;
                 *)
                   shift
@@ -396,8 +396,23 @@ def test_gen_preview_auto_preview_mode_uses_auto_preview_without_qr(tmp_path: Pa
               esac
             done
 
+            if [[ "$command" == "preview" ]]; then
+              if [[ -z "$port" || -z "$project" || -z "$qr_output" ]]; then
+                echo "missing preview args" >&2
+                exit 4
+              fi
+              mkdir -p "$(dirname "$qr_output")"
+              printf 'fake-qr' > "$qr_output"
+              exit 0
+            fi
+
+            if [[ "$command" != "auto-preview" ]]; then
+              echo "unexpected command: $command" >&2
+              exit 2
+            fi
+
             if [[ -z "$port" || -z "$project" || -z "$info_output" ]]; then
-              echo "missing required args" >&2
+              echo "missing auto-preview args" >&2
               exit 4
             fi
             mkdir -p "$(dirname "$info_output")"
@@ -459,6 +474,129 @@ def test_gen_preview_auto_preview_mode_uses_auto_preview_without_qr(tmp_path: Pa
     assert "TG_PHOTO_FILE" not in stdout
     assert port_capture_file.read_text(encoding="utf-8") == "45927"
     assert project_capture_file.read_text(encoding="utf-8") == str(project_root)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-auto-preview 脚本依赖 bash/Posix 环境")
+def test_gen_preview_auto_preview_fails_when_preview_compile_fails(tmp_path: Path) -> None:
+    """自动预览前置编译失败时，不能仅因 auto-preview 可触发就显示成功。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_preview.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "fake-wx-cli-auto-preview-fail"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+            command="$1"
+            shift
+            if [[ "$command" == "preview" ]]; then
+              echo "Error: wxml 编译错误，Bad attr wx:elif unexpected token ." >&2
+              exit 10
+            fi
+            if [[ "$command" == "auto-preview" ]]; then
+              exit 0
+            fi
+            echo "unexpected command: $command" >&2
+            exit 2
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+    ports_file = tmp_path / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps({"projects": {"hyphamall": 45927}, "paths": {str(project_root.resolve()): 45927}}),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_NAME"] = "hyphamall"
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["WX_DEVTOOLS_PORTS_FILE"] = str(ports_file)
+    env["WX_PREVIEW_ACTION"] = "auto-preview"
+    env.pop("PORT", None)
+
+    proc = subprocess.run([bash_bin, str(script_path)], check=False, capture_output=True, env=env, cwd=str(tmp_path))
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    assert proc.returncode == 10, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert "自动预览前置编译校验失败" in stderr
+    assert "wxml 编译错误" in stderr
+    assert "手机自动预览已触发" not in stdout
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-auto-preview 脚本依赖 bash/Posix 环境")
+def test_gen_preview_auto_preview_fails_when_preview_does_not_generate_qr(tmp_path: Path) -> None:
+    """preview 返回 0 但未生成校验二维码时，自动预览也必须失败。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_preview.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "fake-wx-cli-auto-preview-no-qr"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+            command="$1"
+            shift
+            if [[ "$command" == "preview" ]]; then
+              echo "preview returned zero but produced no QR"
+              exit 0
+            fi
+            if [[ "$command" == "auto-preview" ]]; then
+              exit 0
+            fi
+            echo "unexpected command: $command" >&2
+            exit 2
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+    ports_file = tmp_path / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps({"projects": {"hyphamall": 45927}, "paths": {str(project_root.resolve()): 45927}}),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_NAME"] = "hyphamall"
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["WX_DEVTOOLS_PORTS_FILE"] = str(ports_file)
+    env["WX_PREVIEW_ACTION"] = "auto-preview"
+    env.pop("PORT", None)
+
+    proc = subprocess.run([bash_bin, str(script_path)], check=False, capture_output=True, env=env, cwd=str(tmp_path))
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    assert proc.returncode == 3, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert "自动预览前置编译校验未生成二维码文件" in stderr
+    assert "手机自动预览已触发" not in stdout
 
 
 @pytest.mark.skipif(os.name != "posix", reason="wx-dev-upload 脚本依赖 bash/Posix 环境")

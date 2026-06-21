@@ -382,11 +382,49 @@ if [[ "$WX_PREVIEW_ACTION" == "auto-preview" ]]; then
   PHYSICAL_AUTO_PREVIEW_INFO_DIR="$(cd "$AUTO_PREVIEW_INFO_DIR" && pwd -P)"
   AUTO_PREVIEW_INFO_OUTPUT="${PHYSICAL_AUTO_PREVIEW_INFO_DIR}/$(basename "$AUTO_PREVIEW_INFO_OUTPUT")"
 
+  AUTO_PREVIEW_CHECK_QR="${AUTO_PREVIEW_CHECK_QR:-${TMPDIR:-/tmp}/wx-auto-preview-check-${VERSION}.jpg}"
+  AUTO_PREVIEW_CHECK_DIR="$(dirname "$AUTO_PREVIEW_CHECK_QR")"
+  mkdir -p "$AUTO_PREVIEW_CHECK_DIR"
+  PHYSICAL_AUTO_PREVIEW_CHECK_DIR="$(cd "$AUTO_PREVIEW_CHECK_DIR" && pwd -P)"
+  AUTO_PREVIEW_CHECK_QR="${PHYSICAL_AUTO_PREVIEW_CHECK_DIR}/$(basename "$AUTO_PREVIEW_CHECK_QR")"
+
   # 清理代理，避免请求走代理失败
   export http_proxy= https_proxy= all_proxy=
   export no_proxy="servicewechat.com,.weixin.qq.com"
 
-  echo "[信息] 手机自动预览，项目：${RESOLVED_PROJECT_PATH}，端口：${PORT}，信息输出：${AUTO_PREVIEW_INFO_OUTPUT}"
+  echo "[信息] 手机自动预览前置编译校验，项目：${RESOLVED_PROJECT_PATH}，版本：${VERSION}，端口：${PORT}，输出：${AUTO_PREVIEW_CHECK_QR}"
+
+  # auto-preview 自身可能只表示“触发命令成功”，无法证明小程序编译/预览链路可用；
+  # 因此先执行一次内部 preview 校验，二维码仅用于判定产物存在，不回传 Telegram。
+  PREVIEW_CHECK_LOG="$(mktemp -t wx-auto-preview-check-cli)"
+  rm -f "$AUTO_PREVIEW_CHECK_QR"
+  set +e
+  pushd "$RESOLVED_PROJECT_PATH" >/dev/null
+  "$CLI_BIN" preview \
+    --project "$RESOLVED_PROJECT_PATH" \
+    --upload-version "$VERSION" \
+    --qr-format image \
+    --qr-output "$AUTO_PREVIEW_CHECK_QR" \
+    --compile-condition '{}' \
+    --robot 1 \
+    --port "$PORT" >"$PREVIEW_CHECK_LOG" 2>&1
+  PREVIEW_CHECK_STATUS=$?
+  popd >/dev/null
+  set -e
+
+  if [[ $PREVIEW_CHECK_STATUS -ne 0 ]]; then
+    echo "[错误] 自动预览前置编译校验失败，微信开发者工具 CLI 退出码：$PREVIEW_CHECK_STATUS" >&2
+    tail -n 40 "$PREVIEW_CHECK_LOG" >&2 || true
+    exit "$PREVIEW_CHECK_STATUS"
+  fi
+
+  if [[ ! -f "$AUTO_PREVIEW_CHECK_QR" ]]; then
+    echo "[错误] 自动预览前置编译校验未生成二维码文件：$AUTO_PREVIEW_CHECK_QR" >&2
+    tail -n 40 "$PREVIEW_CHECK_LOG" >&2 || true
+    exit 3
+  fi
+
+  echo "[信息] 自动预览前置编译校验通过，开始触发手机自动预览，信息输出：${AUTO_PREVIEW_INFO_OUTPUT}"
 
   CLI_LOG="$(mktemp -t wx-auto-preview-cli)"
   set +e
@@ -408,7 +446,7 @@ if [[ "$WX_PREVIEW_ACTION" == "auto-preview" ]]; then
   if [[ -f "$AUTO_PREVIEW_INFO_OUTPUT" ]]; then
     echo "INFO_OUTPUT: $AUTO_PREVIEW_INFO_OUTPUT"
   fi
-  echo "[完成] 手机自动预览已触发：$RESOLVED_PROJECT_PATH"
+  echo "[完成] 编译校验通过，手机自动预览已触发：$RESOLVED_PROJECT_PATH"
   exit 0
 fi
 

@@ -110,6 +110,23 @@ def _build_preview_command() -> CommandDefinition:
     )
 
 
+def _build_auto_preview_command() -> CommandDefinition:
+    """构造最小可执行的自动预览命令对象。"""
+
+    return CommandDefinition(
+        id=17,
+        project_slug="__global__",
+        scope="global",
+        name=bot.WX_AUTO_PREVIEW_COMMAND_NAME,
+        title="微信手机自动预览",
+        command='echo "auto-preview"',
+        description="",
+        timeout=600,
+        enabled=True,
+        aliases=(),
+    )
+
+
 def _build_project_preview_command(project_root: Path, *, retry_marker: bool = False) -> CommandDefinition:
     """构造带小程序目录的预览命令对象。"""
 
@@ -303,6 +320,50 @@ async def test_execute_command_failure_keeps_output_preview_and_detail_buttons(m
     assert "🔎 查询详情" in button_texts
     assert "🧾 最近执行" in button_texts
     assert events[-1][3] == events[0][3]
+
+
+@pytest.mark.asyncio
+async def test_execute_wx_auto_preview_compile_failure_is_reported_as_failure(monkeypatch):
+    """自动预览前置编译校验失败时，Telegram 不能显示成功态。"""
+
+    events: list[tuple] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        return (
+            10,
+            "[信息] 手机自动预览前置编译校验，项目：/tmp/mini",
+            "[错误] 自动预览前置编译校验失败，微信开发者工具 CLI 退出码：10\nwxml 编译错误",
+            0.31,
+        )
+
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
+
+    await bot._execute_command_definition(
+        command=_build_auto_preview_command(),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=None,
+    )
+
+    summary_text = events[-1][1]
+    summary_markup = events[-1][2]
+    assert [item[0] for item in events] == ["progress-send", "result-edit"]
+    assert "状态：⚠️ 失败" in summary_text
+    assert "退出码：10" in summary_text
+    assert "自动预览前置编译校验失败" in summary_text
+    assert "wxml 编译错误" in summary_text
+    assert "状态：✅ 成功" not in summary_text
+    assert summary_markup is not None
+    button_texts = [button.text for row in summary_markup.inline_keyboard for button in row]
+    assert "🔎 查询详情" in button_texts
+    assert service.calls[-1]["kwargs"]["status"] == "failed"
+    assert service.calls[-1]["kwargs"]["exit_code"] == 10
 
 
 @pytest.mark.asyncio
