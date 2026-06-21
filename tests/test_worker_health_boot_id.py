@@ -121,6 +121,47 @@ def test_state_store_migrates_legacy_punctuated_slug_from_disk(tmp_path: Path) -
     assert store.data["zeus"].actual_username == "HyphaZeusBot"
 
 
+def test_state_store_migrates_slug_alias_from_repository_repair(tmp_path: Path) -> None:
+    """展示名迁移后的新 slug 应继承旧自定义 slug 下的运行态。"""
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "cckgwmsappcore": {
+                    "model": "codex",
+                    "status": "running",
+                    "chat_id": 100,
+                    "actual_username": "CckgWmsAppCoreBot",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    cfg = master.ProjectConfig.from_dict(
+        {
+            "bot_name": "CckgWmsBot",
+            "bot_token": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+            "project_slug": "wms",
+            "name": "WMS",
+            "default_model": "codex",
+            "workdir": str(tmp_path),
+        }
+    )
+
+    store = master.StateStore(
+        state_path,
+        {cfg.project_slug: cfg},
+        slug_aliases={"cckgwmsappcore": "wms"},
+    )
+
+    assert "cckgwmsappcore" not in store.data
+    assert store.data["wms"].status == "running"
+    assert store.data["wms"].chat_id == 100
+    assert store.data["wms"].actual_username == "CckgWmsAppCoreBot"
+
+
 @pytest.mark.asyncio
 async def test_run_worker_keeps_starting_when_health_timeout_but_pid_alive(
     tmp_path: Path,

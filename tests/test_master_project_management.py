@@ -189,6 +189,101 @@ def test_repository_removes_shell_unsafe_punctuation_from_slug(
     assert targets and targets[0]["project_slug"] == "zeus"
 
 
+def test_repository_repair_aligns_existing_slug_to_display_name(tmp_path: Path):
+    """升级后已有项目应自动把运行 slug 收敛到项目展示名。"""
+
+    json_path = tmp_path / "projects.json"
+    json_path.write_text("[]", encoding="utf-8")
+    db_path = tmp_path / "master.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_name TEXT NOT NULL UNIQUE,
+            bot_token TEXT NOT NULL,
+            project_slug TEXT NOT NULL UNIQUE,
+            default_model TEXT NOT NULL,
+            workdir TEXT,
+            allowed_chat_id INTEGER,
+            legacy_name TEXT,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO projects (
+            bot_name, bot_token, project_slug, default_model,
+            workdir, allowed_chat_id, legacy_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'));
+        """,
+        (
+            "HyphaFawnStudioBot",
+            "999999:ABCDEFGHIJKLMNOPQRSTUVWXYZ888888",
+            "hyphafawnstudiobot",
+            "codex",
+            str(tmp_path),
+            100,
+            "FawnStudio",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    repo = ProjectRepository(db_path, json_path)
+
+    repaired = repo.get_by_slug("fawnstudio")
+    exported = json.loads(json_path.read_text(encoding="utf-8"))
+    assert repaired is not None
+    assert repaired.project_slug == "fawnstudio"
+    assert repo.slug_migrations == {"hyphafawnstudiobot": "fawnstudio"}
+    assert exported[0]["project_slug"] == "fawnstudio"
+
+
+def test_repository_repair_display_slug_conflict_fails_closed(tmp_path: Path):
+    """两个展示名归一到同一 slug 时必须拒绝启动，避免运行目录互相覆盖。"""
+
+    json_path = tmp_path / "projects.json"
+    json_path.write_text("[]", encoding="utf-8")
+    db_path = tmp_path / "master.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_name TEXT NOT NULL UNIQUE,
+            bot_token TEXT NOT NULL,
+            project_slug TEXT NOT NULL UNIQUE,
+            default_model TEXT NOT NULL,
+            workdir TEXT,
+            allowed_chat_id INTEGER,
+            legacy_name TEXT,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO projects (
+            bot_name, bot_token, project_slug, default_model,
+            workdir, allowed_chat_id, legacy_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'));
+        """,
+        [
+            ("FirstBot", "111111:ABCDEFGHIJKLMNOPQRSTUVWXYZ111111", "firstbot", "codex", None, None, "AI"),
+            ("SecondBot", "222222:ABCDEFGHIJKLMNOPQRSTUVWXYZ222222", "secondbot", "codex", None, None, "ai"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="项目 slug 归一化冲突"):
+        ProjectRepository(db_path, json_path)
+
+
 def test_repository_repair_existing_rows(tmp_path: Path):
     json_path = tmp_path / "projects.json"
     json_path.write_text("[]", encoding="utf-8")
@@ -230,13 +325,13 @@ def test_repository_repair_existing_rows(tmp_path: Path):
     conn.commit()
     conn.close()
     repo = ProjectRepository(db_path, json_path)
-    repaired = repo.get_by_slug("Legacy Project")
+    repaired = repo.get_by_slug("Legacy Alias")
     assert repaired is not None
-    assert repaired.project_slug == "legacy-project"
+    assert repaired.project_slug == "legacy-alias"
     assert repaired.bot_name == "LegacyBot"
     assert repaired.allowed_chat_id == 42
     exported = json.loads(json_path.read_text(encoding="utf-8"))
-    assert exported[0]["project_slug"] == "legacy-project"
+    assert exported[0]["project_slug"] == "legacy-alias"
 
 
 def test_validate_field_rejects_duplicate_bot(repo: ProjectRepository):
@@ -274,12 +369,12 @@ def test_project_display_name_accepts_short_name_and_controls_button_label(repo:
 
     asyncio.run(_run_flow())
 
-    record = repo.get_by_slug("zeusprojectbot")
+    record = repo.get_by_slug("zeus")
     assert record is not None
     assert record.legacy_name == "Zeus"
     assert record.bot_name == "ZeusProjectBot"
     exported = json.loads(repo.json_path.read_text(encoding="utf-8"))
-    target = next(item for item in exported if item["project_slug"] == "zeusprojectbot")
+    target = next(item for item in exported if item["project_slug"] == "zeus")
     assert target["name"] == "Zeus"
 
     manager = _build_manager(repo, tmp_path)
@@ -438,7 +533,7 @@ def test_create_flow_writes_repository(repo: ProjectRepository, tmp_path: Path, 
 
     asyncio.run(_run_flow())
     records = repo.list_projects()
-    assert any(r.project_slug == "newtesterbot" for r in records)
+    assert any(r.project_slug == "new-tester" for r in records)
     assert any(r.legacy_name == "New Tester" for r in records)
     assert message.bot.send_message.await_count >= 1
 

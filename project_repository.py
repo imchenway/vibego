@@ -56,6 +56,8 @@ class ProjectRepository:
         # 保存路径，确保目录存在
         self.db_path = db_path
         self.json_path = json_path
+        # 记录本次启动修复出的 slug 迁移关系，供 Master 状态文件迁移复用。
+        self.slug_migrations: dict[str, str] = {}
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.json_path.parent.mkdir(parents=True, exist_ok=True)
         # 初始化数据库文件
@@ -334,6 +336,25 @@ class ProjectRepository:
             legacy_name=clean_legacy,
         )
 
+    def _align_slug_to_display_name(self, record: ProjectRecord) -> ProjectRecord:
+        """升级修复时将运行 slug 收敛到展示名，保证 tmux 会话名对齐项目名。"""
+
+        normalized = self._normalize_record_fields(record)
+        if not normalized.legacy_name:
+            return normalized
+        display_slug = self._sanitize_slug(normalized.legacy_name)
+        if display_slug == normalized.project_slug:
+            return normalized
+        return ProjectRecord(
+            bot_name=normalized.bot_name,
+            bot_token=normalized.bot_token,
+            project_slug=display_slug,
+            default_model=normalized.default_model,
+            workdir=normalized.workdir,
+            allowed_chat_id=normalized.allowed_chat_id,
+            legacy_name=normalized.legacy_name,
+        )
+
     def _row_to_record(self, row: sqlite3.Row, *, normalize: bool = True) -> ProjectRecord:
         """将数据库行转换为 ProjectRecord，可选是否立即归一化。"""
         record = ProjectRecord(
@@ -364,9 +385,10 @@ class ProjectRepository:
         slug_owner: dict[str, int] = {}
         bot_owner: dict[str, int] = {}
         updates: List[tuple[int, ProjectRecord]] = []
+        migrations: dict[str, str] = {}
         for row in rows:
             record = self._row_to_record(row, normalize=False)
-            normalized = self._normalize_record_fields(record)
+            normalized = self._align_slug_to_display_name(record)
             current_id = row["id"]
             existing_slug_id = slug_owner.get(normalized.project_slug)
             if existing_slug_id is not None and existing_slug_id != current_id:
@@ -382,7 +404,11 @@ class ProjectRepository:
             bot_owner[normalized.bot_name] = current_id
             if normalized != record:
                 updates.append((current_id, normalized))
+            old_slug = self._sanitize_slug(record.project_slug)
+            if old_slug != normalized.project_slug:
+                migrations[old_slug] = normalized.project_slug
         if not updates:
+            self.slug_migrations = migrations
             return
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE;")
@@ -406,6 +432,7 @@ class ProjectRepository:
                     ),
                 )
             conn.commit()
+        self.slug_migrations = migrations
         logger.info("已修复 %s 条项目配置，统一 slug/bot 名格式", len(updates))
 
     def _export_to_json(self, records: Iterable[ProjectRecord]) -> None:

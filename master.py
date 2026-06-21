@@ -1650,11 +1650,24 @@ class ProjectState:
 class StateStore:
     """负责维护项目运行状态的文件持久化。"""
 
-    def __init__(self, path: Path, configs: Dict[str, ProjectConfig]):
+    def __init__(
+        self,
+        path: Path,
+        configs: Dict[str, ProjectConfig],
+        *,
+        slug_aliases: Optional[Dict[str, str]] = None,
+    ):
         """初始化状态存储，加载已有 state 文件并对缺失项使用默认值。"""
 
         self.path = path
         self.configs = configs  # key 使用 project_slug
+        # repository 启动修复会把旧长 slug 改为展示名 slug；这里保留旧->新映射，
+        # 让状态文件在升级后自动继承 chat_id、模型和运行状态。
+        self.slug_aliases = {
+            _sanitize_slug(old): _sanitize_slug(new)
+            for old, new in (slug_aliases or {}).items()
+            if old and new
+        }
         self.data: Dict[str, ProjectState] = {}
         self.refresh()
         self.save()
@@ -1751,6 +1764,9 @@ class StateStore:
         candidate_keys = [slug, cfg.bot_name, f"@{cfg.bot_name}"]
         if cfg.legacy_name:
             candidate_keys.append(cfg.legacy_name)
+        candidate_keys.extend(
+            old_slug for old_slug, new_slug in self.slug_aliases.items() if new_slug == slug
+        )
         for key in candidate_keys:
             if key in raw and isinstance(raw[key], dict):
                 return raw[key]
@@ -2691,10 +2707,11 @@ def _session_to_record(session: ProjectWizardSession) -> ProjectRecord:
     legacy_name = session.data.get("project_name")
     if legacy_name is None and session.original_record:
         legacy_name = session.original_record.legacy_name
+    default_slug_source = legacy_name or session.data["bot_name"]
     return ProjectRecord(
         bot_name=session.data["bot_name"],
         bot_token=session.data["bot_token"],
-        project_slug=session.data.get("project_slug") or _sanitize_slug(session.data["bot_name"]),
+        project_slug=session.data.get("project_slug") or _sanitize_slug(default_slug_source),
         default_model=session.data["default_model"],
         workdir=session.data.get("workdir"),
         allowed_chat_id=session.data.get("allowed_chat_id"),
@@ -2780,7 +2797,8 @@ async def _advance_wizard_session(
 
     if session.mode == "create" and field_name == "bot_name":
         repository = _ensure_repository()
-        base_slug = _sanitize_slug(session.data["bot_name"])
+        # 新项目默认按展示名生成运行 slug，避免 tmux 会话继续使用 bot 长名称。
+        base_slug = _sanitize_slug(session.data.get("project_name") or session.data["bot_name"])
         candidate = base_slug
         suffix = 1
         while repository.get_by_slug(candidate):
@@ -5014,7 +5032,11 @@ async def bootstrap_manager() -> MasterManager:
 
     configs = [ProjectConfig.from_dict(record.to_dict()) for record in records]
 
-    state_store = StateStore(STATE_PATH, {cfg.project_slug: cfg for cfg in configs})
+    state_store = StateStore(
+        STATE_PATH,
+        {cfg.project_slug: cfg for cfg in configs},
+        slug_aliases=getattr(repository, "slug_migrations", {}),
+    )
     manager = MasterManager(configs, state_store=state_store)
 
     await manager.stop_all(update_state=True)
