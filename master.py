@@ -1347,16 +1347,21 @@ def _build_upgrade_report_message(payload: dict) -> str:
     old_version = payload.get("old_version") or payload.get("version") or "未知"
     new_version = payload.get("new_version") or __version__
     restart_command = payload.get("restart_command") or "未知"
-    pipx_tail_raw = payload.get("log_tail")
-    pipx_tail = pipx_tail_raw if isinstance(pipx_tail_raw, list) else []
-    pipx_preview = _render_upgrade_preview([str(line) for line in pipx_tail])
     restart_tail, restart_started, restart_log_path = _render_upgrade_restart_log_tail(
         payload.get("restart_log_path")
     )
     if restart_started:
-        status_line = "✅ 升级流程完成，master 已重新上线。"
-    else:
-        status_line = "⚠️ 升级 pipx 阶段完成，但重启日志未确认 master 已启动。"
+        return (
+            "✅ 升级流程完成，master 已重新上线。\n"
+            f"📦 版本：{old_version} -> {new_version}\n"
+            f"⏱️ pipx 阶段耗时：{elapsed_text} 秒\n"
+            "📂 正在刷新项目列表…"
+        )
+
+    pipx_tail_raw = payload.get("log_tail")
+    pipx_tail = pipx_tail_raw if isinstance(pipx_tail_raw, list) else []
+    pipx_preview = _render_upgrade_preview([str(line) for line in pipx_tail])
+    status_line = "⚠️ 升级 pipx 阶段完成，但重启日志未确认 master 已启动。"
     restart_preview = "\n".join(restart_tail) if restart_tail else "（暂无重启日志输出）"
     restart_log_text = restart_log_path or "未记录"
     return (
@@ -1428,20 +1433,17 @@ async def _run_single_upgrade_step(
     last_push = 0.0
 
     async def _push(status: str, *, force: bool = False) -> None:
-        """按节流频率将最新日志写回 Telegram。"""
+        """按节流频率更新升级进度；成功路径不刷底层日志，失败时再给诊断。"""
 
         nonlocal last_push
         now = loop.time()
         if not force and (now - last_push) < 1.0:
             return
         last_push = now
-        preview = _render_upgrade_preview(lines)
         text = (
-            f"升级流水线进行中（步骤 {step_index}/{total_steps}）\n"
+            f"升级进行中（步骤 {step_index}/{total_steps}）\n"
             f"当前动作：{description}\n"
-            f"命令：{command}\n"
-            f"状态：{status}\n\n"
-            f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+            f"状态：{status}"
         )
         await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
 
@@ -1561,14 +1563,12 @@ async def _announce_upgrade_completion(
     """记录成功结果并提示即将重启或保持在线。"""
 
     elapsed = time.monotonic() - started_at
-    preview = _render_upgrade_preview(lines)
     restart_command = _UPGRADE_RESTART_COMMAND.strip()
     if not restart_command:
         text = (
             "升级流程完成 ✅\n"
             f"pipx upgrade 耗时 {elapsed:.1f} 秒。\n"
-            "未配置自动重启命令，请手动执行 `vibego stop && vibego start` 完成切换。\n\n"
-            f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+            "未配置自动重启命令，请手动执行 `vibego stop && vibego start` 完成切换。"
         )
         await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
         return
@@ -1576,11 +1576,9 @@ async def _announce_upgrade_completion(
     _persist_upgrade_report(chat_id, lines, elapsed, restart_command, _UPGRADE_RESTART_DELAY)
     text = (
         "pipx 阶段完成，正在重启 master ✅\n"
-        f"pipx upgrade 耗时 {elapsed:.1f} 秒，将在 {_UPGRADE_RESTART_DELAY:.1f} 秒后执行：{restart_command}\n"
-        "旧 master 即将短暂离线；新 master 上线后会另发最终结果。\n"
-        "若最终通知发送失败，会保留升级报告供下次启动重试。\n\n"
-        f"重启日志：{_UPGRADE_RESTART_LOG_PATH}\n\n"
-        f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
+        f"⏱️ pipx 阶段耗时：{elapsed:.1f} 秒\n"
+        f"🔁 将在 {_UPGRADE_RESTART_DELAY:.1f} 秒后重启。\n"
+        "新 master 上线后会发送最终结果和项目列表。"
     )
     await _safe_edit_upgrade_message(bot, chat_id, message_id, text)
     proc = _spawn_detached_restart(restart_command, _UPGRADE_RESTART_DELAY)
@@ -3556,6 +3554,12 @@ async def _notify_upgrade_report(bot: Bot) -> None:
         except OSError as write_exc:
             log.error("保留升级报告失败: %s", write_exc, extra={"path": str(_UPGRADE_REPORT_PATH)})
         return
+    try:
+        manager = await _ensure_manager()
+        await _send_projects_overview_to_chat(bot, chat_id, manager)
+    except Exception as exc:
+        # 最终态已经送达；项目列表失败只记录日志，避免下次启动重复刷升级报告。
+        log.error("升级完成后发送项目列表失败: %s", exc, extra={"chat": chat_id})
     _safe_remove(_UPGRADE_REPORT_PATH)
 
 

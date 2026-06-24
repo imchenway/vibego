@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -265,7 +266,7 @@ async def test_run_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch, upg
 
     async def fake_step(*args, **kwargs):
         calls.append(args)
-        return 0, ["ok"]
+        return 0, ["upgrading shared libraries...", "ok"]
 
     spawned = {}
     def fake_spawn(command, delay):
@@ -287,6 +288,8 @@ async def test_run_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch, upg
     assert bot.edits, "应至少更新一次状态"
     assert "pipx 阶段完成" in bot.edits[-1][2]
     assert "正在重启 master" in bot.edits[-1][2]
+    assert "最近输出" not in bot.edits[-1][2]
+    assert "upgrading shared libraries" not in bot.edits[-1][2]
     assert recorded["args"][0] == 1
     assert spawned["args"][0] == "echo restart"
 
@@ -413,7 +416,7 @@ def test_persist_upgrade_report_records_versions(upgrade_report_path: Path):
 
 @pytest.mark.asyncio
 async def test_notify_upgrade_report(monkeypatch: pytest.MonkeyPatch, upgrade_report_path: Path):
-    """启动时若存在升级报告应推送摘要并清理文件。"""
+    """启动时若存在升级报告应推送简洁成功摘要、自动项目列表并清理文件。"""
 
     restart_log = upgrade_report_path.parent / "upgrade_restart.log"
     restart_log.write_text(
@@ -440,13 +443,22 @@ async def test_notify_upgrade_report(monkeypatch: pytest.MonkeyPatch, upgrade_re
     upgrade_report_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     bot = DummyBot()
+    manager = SimpleNamespace()
+    master.MANAGER = manager
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_send_projects_overview_to_chat", overview_mock)
+
     await master._notify_upgrade_report(bot)
     assert bot.messages, "应推送升级摘要"
     lines = bot.messages[0][1].splitlines()
     assert lines[0].startswith("✅ 升级流程完成，master 已重新上线")
     assert "📦 版本：1.1.13 -> 1.1.14" in bot.messages[0][1]
-    assert "重启日志：" in bot.messages[0][1]
-    assert "master 已启动，PID: 200" in bot.messages[0][1]
+    assert "最近 pipx 输出" not in bot.messages[0][1]
+    assert "最近重启日志" not in bot.messages[0][1]
+    assert "重启日志：" not in bot.messages[0][1]
+    assert "line1" not in bot.messages[0][1]
+    assert "master 已启动，PID: 200" not in bot.messages[0][1]
+    overview_mock.assert_awaited_once_with(bot, 777, manager)
     assert not upgrade_report_path.exists()
 
 
