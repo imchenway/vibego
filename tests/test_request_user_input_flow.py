@@ -465,7 +465,7 @@ def test_request_input_submit_dispatches_parallel_context(monkeypatch, tmp_path:
     assert captured_send_modes == [bot.PUSH_SEND_MODE_QUEUED]
 
 
-def test_request_input_submit_requires_all_answers(monkeypatch):
+def test_request_input_submit_with_unanswered_requires_telegram_confirmation(monkeypatch):
     question_scope = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -504,8 +504,125 @@ def test_request_input_submit_requires_all_answers(monkeypatch):
     )
     asyncio.run(bot.on_request_user_input_callback(callback))
 
-    assert callback.answers[-1] == ("请先完成全部题目后再提交。", True)
-    assert not message.calls, "未答完时仅提示，不额外发送跳题消息"
+    assert callback.answers[-1] == ("还有未答题，请确认是否提交。", False)
+    assert message.calls, "未答完提交时应发送二次确认消息"
+    confirm_text, _parse_mode, confirm_markup, _kwargs = message.calls[-1]
+    assert "Submit with unanswered questions?" in confirm_text
+    assert "1 unanswered question" in confirm_text
+    assert "1. Proceed" in confirm_text
+    assert "2. Go back" in confirm_text
+    assert isinstance(confirm_markup, InlineKeyboardMarkup)
+    labels = [button.text for row in confirm_markup.inline_keyboard for button in row]
+    assert labels == ["1. Proceed", "2. Go back"]
+    assert not message.calls[-1][3], "确认消息不应依赖额外发送参数"
+
+
+def test_request_input_submit_confirm_proceed_dispatches_unanswered_context(monkeypatch, tmp_path: Path):
+    question_scope = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="库存页"), bot.RequestInputOption(label="两页")],
+    )
+    question_style = bot.RequestInputQuestion(
+        question_id="style",
+        question="请选择风格",
+        options=[bot.RequestInputOption(label="胶囊"), bot.RequestInputOption(label="下拉")],
+    )
+    session = bot.RequestInputSession(
+        token="token_confirm_proceed",
+        chat_id=34,
+        user_id=34,
+        call_id="call_confirm_proceed",
+        session_key="s-confirm-proceed",
+        questions=[question_scope, question_style],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": 0},
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[34] = session.token
+
+    dispatched: list[tuple[str, str | None]] = []
+
+    async def fake_dispatch(chat_id: int, prompt: str, *, reply_to, ack_immediately: bool = True, send_mode=None):
+        assert chat_id == 34
+        dispatched.append((prompt, send_mode))
+        return True, tmp_path / "confirm_proceed.jsonl"
+
+    async def fake_ack(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    message = DummyMessage(chat_id=34, user_id=34)
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_CONFIRM_SUBMIT),
+        message=message,
+        user_id=34,
+    )
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert dispatched, "确认 Proceed 后应推送到模型"
+    prompt, send_mode = dispatched[-1]
+    assert send_mode == bot.PUSH_SEND_MODE_QUEUED
+    assert '{"answers":{"scope":{"answers":["库存页"]}}}' in prompt
+    assert "style" not in json.loads(prompt.splitlines()[3])["answers"], "未答题不应写入 answers"
+    context = _extract_question_context_from_prompt(prompt)
+    assert context["questions"][0]["selected_kind"] == "option"
+    assert context["questions"][1]["selected_kind"] == "unanswered"
+    assert "请选择风格 -> 未作答（已跳过）" in message.calls[-1][0]
+    assert callback.answers[-1] == ("已提交并推送到模型", False)
+    assert message.edited_reply_markup == 1
+    assert session.token not in bot.REQUEST_INPUT_SESSIONS
+
+
+def test_request_input_submit_confirm_go_back_sends_first_unanswered_question(monkeypatch):
+    question_scope = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="库存页"), bot.RequestInputOption(label="两页")],
+    )
+    question_style = bot.RequestInputQuestion(
+        question_id="style",
+        question="请选择风格",
+        options=[bot.RequestInputOption(label="胶囊"), bot.RequestInputOption(label="下拉")],
+    )
+    session = bot.RequestInputSession(
+        token="token_confirm_back",
+        chat_id=35,
+        user_id=35,
+        call_id="call_confirm_back",
+        session_key="s-confirm-back",
+        questions=[question_scope, question_style],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": 0},
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[35] = session.token
+
+    async def fake_dispatch(*_args, **_kwargs):
+        raise AssertionError("Go back 不应推送到模型")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
+
+    message = DummyMessage(chat_id=35, user_id=35)
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_GO_BACK_UNANSWERED),
+        message=message,
+        user_id=35,
+    )
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert callback.answers[-1] == ("已返回第 2 题未答题", False)
+    assert session.current_index == 1
+    assert message.edited_reply_markup == 1
+    assert message.calls, "Go back 应发送首个未答题"
+    assert "问题：请选择风格" in message.calls[-1][0]
+    assert session.token in bot.REQUEST_INPUT_SESSIONS
 
 
 def test_request_input_callback_expired_session():
@@ -539,7 +656,7 @@ def test_request_input_callback_expired_session():
     assert session.token not in bot.REQUEST_INPUT_SESSIONS
 
 
-def test_request_input_keyboard_hides_submit_button():
+def test_request_input_keyboard_includes_submit_button_for_unanswered_confirmation():
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -559,7 +676,7 @@ def test_request_input_keyboard_hides_submit_button():
     keyboard = bot._build_request_input_keyboard(session, question_index=0)
     labels = [button.text for row in keyboard.inline_keyboard for button in row]
     assert any("D." in text for text in labels)
-    assert not any("提交" in text for text in labels)
+    assert any("提交/跳过未答" in text for text in labels)
 
 
 def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_path: Path):
@@ -1227,9 +1344,11 @@ def test_request_input_keyboard_includes_question_index_in_callback_data():
 
     keyboard = bot._build_request_input_keyboard(session, question_index=0)
     first_button = keyboard.inline_keyboard[0][0]
-    custom_button = keyboard.inline_keyboard[-1][0]
+    custom_button = keyboard.inline_keyboard[-2][0]
+    submit_button = keyboard.inline_keyboard[-1][0]
     assert first_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_OPTION}:0:0"
     assert custom_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_CUSTOM}:0"
+    assert submit_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_SUBMIT}"
 
 
 def test_request_input_repeated_click_same_question_is_locked(monkeypatch):

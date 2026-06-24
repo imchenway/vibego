@@ -474,6 +474,8 @@ REQUEST_INPUT_ACTION_NEXT = "next"
 REQUEST_INPUT_ACTION_SUBMIT = "submit"
 REQUEST_INPUT_ACTION_CANCEL = "cancel"
 REQUEST_INPUT_ACTION_RETRY_SUBMIT = "retry_submit"
+REQUEST_INPUT_ACTION_CONFIRM_SUBMIT = "submit_confirm"
+REQUEST_INPUT_ACTION_GO_BACK_UNANSWERED = "go_back_unanswered"
 REQUEST_INPUT_CUSTOM_OPTION_INDEX = -1
 REQUEST_INPUT_CUSTOM_LABEL = "输入自定义决策"
 REQUEST_INPUT_SESSION_TTL_SECONDS = max(_env_float("REQUEST_INPUT_SESSION_TTL_SECONDS", 900.0), 60.0)
@@ -14435,6 +14437,17 @@ def _build_request_input_keyboard(session: RequestInputSession, *, question_inde
             )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⏭ 提交/跳过未答",
+                callback_data=_build_request_input_callback_data(
+                    session.token,
+                    REQUEST_INPUT_ACTION_SUBMIT,
+                ),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -20480,7 +20493,7 @@ def _build_request_input_submission_summary(session: RequestInputSession) -> str
     ]
     for index, question in enumerate(session.questions, 1):
         selected_index = session.selected_option_indexes.get(question.question_id)
-        answer_text = "未作答"
+        answer_text = "未作答（已跳过）"
         if selected_index == REQUEST_INPUT_CUSTOM_OPTION_INDEX:
             custom_text = session.custom_answers.get(question.question_id) or ""
             answer_text = f"自定义：{custom_text}"
@@ -20543,6 +20556,80 @@ def _build_request_input_retry_submit_keyboard(token: str) -> InlineKeyboardMark
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _unanswered_request_input_indexes(session: RequestInputSession) -> List[int]:
+    """返回当前会话仍未作答的题目下标。"""
+
+    return [
+        index
+        for index, question in enumerate(session.questions)
+        if not _is_request_input_question_answered(session, question.question_id)
+    ]
+
+
+def _build_request_input_unanswered_submit_confirm_text(session: RequestInputSession) -> str:
+    """构造未答题提交前的 Telegram 二次确认文案。"""
+
+    unanswered_indexes = _unanswered_request_input_indexes(session)
+    count = len(unanswered_indexes)
+    question_word = "question" if count == 1 else "questions"
+    lines = [
+        "Submit with unanswered questions?",
+        f"{count} unanswered {question_word}",
+        "",
+        f"1. Proceed  Submit with {count} unanswered {question_word}.",
+        "2. Go back  Return to the first unanswered question.",
+    ]
+    return "\n".join(lines)
+
+
+def _build_request_input_unanswered_submit_confirm_keyboard(token: str) -> InlineKeyboardMarkup:
+    """构造未答题提交二次确认按钮。"""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="1. Proceed",
+                    callback_data=_build_request_input_callback_data(
+                        token,
+                        REQUEST_INPUT_ACTION_CONFIRM_SUBMIT,
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="2. Go back",
+                    callback_data=_build_request_input_callback_data(
+                        token,
+                        REQUEST_INPUT_ACTION_GO_BACK_UNANSWERED,
+                    ),
+                )
+            ],
+        ]
+    )
+
+
+async def _send_request_input_unanswered_submit_confirmation(
+    session: RequestInputSession,
+    *,
+    reply_to: Optional[Message],
+) -> None:
+    """发送“未答题也提交吗”的二次确认消息。"""
+
+    text = _build_request_input_unanswered_submit_confirm_text(session)
+    markup = _build_request_input_unanswered_submit_confirm_keyboard(session.token)
+    if reply_to is not None:
+        await reply_to.answer(text, parse_mode=None, reply_markup=markup)
+        return
+    await _reply_to_chat(
+        session.chat_id,
+        text,
+        reply_to=None,
+        parse_mode=None,
+        reply_markup=markup,
+    )
 
 
 async def _send_request_input_retry_prompt(
@@ -21095,6 +21182,36 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
         await callback.answer("当前正在输入自定义决策，请先发送文本或发送“取消”。", show_alert=True)
         return
 
+    if action == REQUEST_INPUT_ACTION_CONFIRM_SUBMIT:
+        await _lock_request_input_callback_message(callback.message)
+        success = await _submit_request_input_session_with_auto_retry(
+            session,
+            reply_to=callback.message,
+            actor_user_id=callback.from_user.id if callback.from_user else None,
+            allow_auto_retry=False,
+            remove_reply_keyboard=True,
+        )
+        if not success:
+            await callback.answer("提交失败，可点击“重试提交”继续。", show_alert=True)
+            return
+        await callback.answer("已提交并推送到模型")
+        return
+
+    if action == REQUEST_INPUT_ACTION_GO_BACK_UNANSWERED:
+        missing_index = _first_unanswered_request_input_index(session)
+        if missing_index is None:
+            await _lock_request_input_callback_message(callback.message)
+            await callback.answer("已无未答题，请重新提交。", show_alert=True)
+            return
+        session.current_index = missing_index
+        await _lock_request_input_callback_message(callback.message)
+        sent = await _send_request_input_question(session, reply_to=callback.message)
+        if not sent:
+            await callback.answer("返回未答题失败，请稍后重试。", show_alert=True)
+            return
+        await callback.answer(f"已返回第 {missing_index + 1} 题未答题")
+        return
+
     if action == REQUEST_INPUT_ACTION_OPTION:
         resolved = _resolve_request_input_option_selection(
             session,
@@ -21197,7 +21314,11 @@ async def on_request_user_input_callback(callback: CallbackQuery) -> None:
     if action == REQUEST_INPUT_ACTION_SUBMIT:
         missing_index = _first_unanswered_request_input_index(session)
         if missing_index is not None:
-            await callback.answer("请先完成全部题目后再提交。", show_alert=True)
+            await _send_request_input_unanswered_submit_confirmation(
+                session,
+                reply_to=callback.message,
+            )
+            await callback.answer("还有未答题，请确认是否提交。")
             return
 
         success = await _submit_request_input_session_with_auto_retry(
