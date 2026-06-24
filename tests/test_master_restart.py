@@ -21,8 +21,9 @@ from project_repository import ProjectRepository
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
+def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """重置全局状态"""
+    monkeypatch.setattr(master, "_UPGRADE_REPORT_PATH", tmp_path / "state" / "upgrade_report.json")
     master.PROJECT_WIZARD_SESSIONS.clear()
     master.reset_project_wizard_lock()
     yield

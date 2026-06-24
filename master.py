@@ -374,8 +374,22 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return normalized not in {"0", "false", "off", "no"}
 
 
+def _env_float(name: str, default: float) -> float:
+    """解析浮点环境变量，异常输入回退默认值。"""
+
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        # 此处位于 logger 初始化之前，异常输入只能静默回退，避免导入阶段失败。
+        return default
+
+
 MASTER_FORCE_MENU_RESYNC = _env_flag("MASTER_FORCE_MENU_RESYNC", True)
 MASTER_FORCE_COMMAND_RESYNC = _env_flag("MASTER_FORCE_COMMAND_RESYNC", True)
+MASTER_STARTUP_UI_SYNC_TIMEOUT = _env_float("MASTER_STARTUP_UI_SYNC_TIMEOUT", 5.0)
 
 
 def _is_projects_menu_trigger(text: Optional[str]) -> bool:
@@ -570,9 +584,19 @@ async def _detect_project_command_conflict(identifiers: Sequence[str]) -> Option
 async def _verify_master_menu_button(bot: Bot, expected_text: str) -> bool:
     """获取 Telegram 端菜单，确认文本与预期一致。"""
     try:
-        current = await bot.get_chat_menu_button()
+        current = await asyncio.wait_for(
+            bot.get_chat_menu_button(),
+            timeout=MASTER_STARTUP_UI_SYNC_TIMEOUT,
+        )
     except TelegramBadRequest as exc:
         log.warning("获取聊天菜单失败：%s", exc)
+        return False
+    except asyncio.TimeoutError as exc:
+        log.warning("获取聊天菜单超时，已跳过校验：%s", exc)
+        return False
+    except Exception as exc:
+        # 菜单校验只是启动期的体验补偿，代理/网络抖动不能阻断 master 接收消息。
+        log.warning("获取聊天菜单异常，已跳过校验：%s", exc)
         return False
     if not isinstance(current, MenuButtonCommands):
         log.warning(
@@ -598,9 +622,19 @@ async def _ensure_master_menu_button(bot: Bot) -> None:
         return
     button = MenuButtonCommands(text=MASTER_MENU_BUTTON_TEXT)
     try:
-        await bot.set_chat_menu_button(menu_button=button)
+        await asyncio.wait_for(
+            bot.set_chat_menu_button(menu_button=button),
+            timeout=MASTER_STARTUP_UI_SYNC_TIMEOUT,
+        )
     except TelegramBadRequest as exc:
         log.warning("设置聊天菜单失败：%s", exc)
+        return
+    except asyncio.TimeoutError as exc:
+        log.warning("设置聊天菜单超时，已继续启动：%s", exc)
+        return
+    except Exception as exc:
+        # set_chat_menu_button 是可选的 UI 同步；失败时继续启动，避免 /upgrade 卡在中间态。
+        log.warning("设置聊天菜单异常，已继续启动：%s", exc)
         return
     if await _verify_master_menu_button(bot, MASTER_MENU_BUTTON_TEXT):
         log.info("聊天菜单已同步", extra={"text": MASTER_MENU_BUTTON_TEXT})
@@ -623,11 +657,25 @@ async def _ensure_master_commands(bot: Bot) -> None:
     for scope, label in scopes:
         try:
             if scope is None:
-                await bot.set_my_commands(commands)
+                await asyncio.wait_for(
+                    bot.set_my_commands(commands),
+                    timeout=MASTER_STARTUP_UI_SYNC_TIMEOUT,
+                )
             else:
-                await bot.set_my_commands(commands, scope=scope)
+                await asyncio.wait_for(
+                    bot.set_my_commands(commands, scope=scope),
+                    timeout=MASTER_STARTUP_UI_SYNC_TIMEOUT,
+                )
         except TelegramBadRequest as exc:
             log.warning("设置 master 命令失败：%s", exc, extra={"scope": label})
+        except asyncio.TimeoutError as exc:
+            # 网络不可用时不要继续尝试其它 scope，避免启动被多次超时拖慢。
+            log.warning("设置 master 命令超时，已跳过后续命令同步：%s", exc, extra={"scope": label})
+            return
+        except Exception as exc:
+            # 网络不可用时不要继续尝试其它 scope，避免启动被多次超时拖慢。
+            log.warning("设置 master 命令异常，已跳过后续命令同步：%s", exc, extra={"scope": label})
+            return
         else:
             if await _verify_master_commands(bot, commands, scope, label):
                 log.info("master 命令已同步", extra={"scope": label})
@@ -643,9 +691,17 @@ async def _verify_master_commands(
 ) -> bool:
     """读取并校验当前命令列表，确保 scope 内容一致。"""
     try:
-        current = await bot.get_my_commands() if scope is None else await bot.get_my_commands(scope=scope)
+        command_getter = bot.get_my_commands() if scope is None else bot.get_my_commands(scope=scope)
+        current = await asyncio.wait_for(command_getter, timeout=MASTER_STARTUP_UI_SYNC_TIMEOUT)
     except TelegramBadRequest as exc:
         log.warning("获取 master 命令失败：%s", exc, extra={"scope": label})
+        return False
+    except asyncio.TimeoutError as exc:
+        log.warning("获取 master 命令超时，已跳过校验：%s", exc, extra={"scope": label})
+        return False
+    except Exception as exc:
+        # 命令校验失败不影响轮询主流程；下次启动或手动 /start 仍可继续使用现有菜单。
+        log.warning("获取 master 命令异常，已跳过校验：%s", exc, extra={"scope": label})
         return False
 
     expected_pairs = [(cmd.command, cmd.description) for cmd in expected]
