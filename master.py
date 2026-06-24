@@ -62,7 +62,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from codex_trust import CODEX_CONFIG_PATH as DEFAULT_CODEX_CONFIG_PATH, ensure_codex_project_trust
 from logging_setup import create_logger
-from project_repository import ProjectRepository, ProjectRecord
+from project_repository import (
+    ProjectRepository,
+    ProjectRecord,
+    RuntimeDataMigrationConflictError,
+    migrate_runtime_data_for_slug_migrations,
+)
 from tasks.fsm import ProjectDeleteStates
 from command_center import (
     CommandDefinition,
@@ -5022,9 +5027,30 @@ async def bootstrap_manager() -> MasterManager:
     _clear_related_tmux_sessions()
     try:
         repository = ProjectRepository(CONFIG_DB_PATH, CONFIG_PATH)
+        runtime_migrations = migrate_runtime_data_for_slug_migrations(
+            DATA_DIR,
+            getattr(repository, "slug_migrations", {}),
+        )
+    except RuntimeDataMigrationConflictError as exc:
+        log.error("项目运行期数据库 slug 迁移冲突，已阻断启动: %s", exc)
+        sys.exit(1)
     except Exception as exc:
         log.error("初始化项目仓库失败: %s", exc)
         sys.exit(1)
+    for result in runtime_migrations:
+        if result.action == "copied":
+            log.info(
+                "已迁移项目运行期数据库: %s -> %s，已改写表: %s",
+                result.old_slug,
+                result.new_slug,
+                ",".join(result.rewritten_tables) or "-",
+            )
+        elif result.action == "skipped_missing_source":
+            log.info(
+                "跳过项目运行期数据库迁移，旧库不存在: %s -> %s",
+                result.old_slug,
+                result.new_slug,
+            )
 
     records = repository.list_projects()
     if not records:

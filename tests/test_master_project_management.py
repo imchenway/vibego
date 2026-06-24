@@ -14,7 +14,12 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import master
-from project_repository import ProjectRecord, ProjectRepository
+from project_repository import (
+    ProjectRecord,
+    ProjectRepository,
+    RuntimeDataMigrationConflictError,
+    migrate_runtime_data_for_slug_migrations,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -240,6 +245,357 @@ def test_repository_repair_aligns_existing_slug_to_display_name(tmp_path: Path):
     assert repaired.project_slug == "fawnstudio"
     assert repo.slug_migrations == {"hyphafawnstudiobot": "fawnstudio"}
     assert exported[0]["project_slug"] == "fawnstudio"
+
+
+def _create_runtime_db(path: Path, project_slug: str, *, command_name: str = "pipx-publish-patch") -> None:
+    """创建最小运行期数据库，用来复现命令/任务被旧 slug 留在旧库的问题。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE commands (id INTEGER PRIMARY KEY, project_slug TEXT, name TEXT);")
+    conn.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_slug TEXT, task_id TEXT);")
+    conn.execute(
+        "CREATE TABLE command_history (id INTEGER PRIMARY KEY, project_slug TEXT, command_name TEXT);"
+    )
+    conn.execute(
+        "INSERT INTO commands (project_slug, name) VALUES (?, ?);",
+        (project_slug, command_name),
+    )
+    conn.execute(
+        "INSERT INTO tasks (project_slug, task_id) VALUES (?, ?);",
+        (project_slug, f"TASK_{project_slug.upper()}_001"),
+    )
+    conn.execute(
+        "INSERT INTO command_history (project_slug, command_name) VALUES (?, ?);",
+        (project_slug, command_name),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _fetch_runtime_rows(path: Path, table: str) -> list[sqlite3.Row]:
+    """读取运行期数据库指定表，便于断言 project_slug 是否已改写。"""
+
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(f"SELECT * FROM {table} ORDER BY id;").fetchall()
+    conn.close()
+    return rows
+
+
+def test_runtime_data_migration_copies_old_slug_db_and_rewrites_project_slug(tmp_path: Path):
+    """项目 slug 改名后应把旧运行期 DB 复制到新 slug，避免命令管理看不到旧命令。"""
+
+    data_dir = tmp_path / "data"
+    old_db = data_dir / "vibegobot.db"
+    new_db = data_dir / "vibego.db"
+    _create_runtime_db(old_db, "vibegobot")
+
+    results = migrate_runtime_data_for_slug_migrations(
+        data_dir,
+        {"vibegobot": "vibego"},
+        backup_suffix="test",
+    )
+
+    assert [(item.old_slug, item.new_slug, item.action) for item in results] == [
+        ("vibegobot", "vibego", "copied")
+    ]
+    assert old_db.exists(), "旧 DB 应保留为回滚来源"
+    assert new_db.exists(), "新 slug 应能直接读到运行期 DB"
+    assert _fetch_runtime_rows(new_db, "commands")[0]["project_slug"] == "vibego"
+    assert _fetch_runtime_rows(new_db, "commands")[0]["name"] == "pipx-publish-patch"
+    assert _fetch_runtime_rows(new_db, "tasks")[0]["project_slug"] == "vibego"
+    assert _fetch_runtime_rows(new_db, "command_history")[0]["project_slug"] == "vibego"
+
+
+def test_runtime_data_migration_replaces_empty_target_and_keeps_backup(tmp_path: Path):
+    """新 slug 目标库只有空 schema 时可安全替换，并保留目标库备份。"""
+
+    data_dir = tmp_path / "data"
+    old_db = data_dir / "vibegobot.db"
+    new_db = data_dir / "vibego.db"
+    _create_runtime_db(old_db, "vibegobot")
+    conn = sqlite3.connect(str(new_db))
+    conn.execute("CREATE TABLE commands (id INTEGER PRIMARY KEY, project_slug TEXT, name TEXT);")
+    conn.commit()
+    conn.close()
+
+    migrate_runtime_data_for_slug_migrations(
+        data_dir,
+        {"vibegobot": "vibego"},
+        backup_suffix="test",
+    )
+
+    assert (data_dir / "vibego.db.bak-test").exists()
+    assert _fetch_runtime_rows(new_db, "commands")[0]["project_slug"] == "vibego"
+
+
+def test_runtime_data_migration_treats_codex_trust_rows_as_replaceable_metadata(tmp_path: Path):
+    """目标库只有 Codex trust 元数据时仍应迁移旧命令库，符合真实升级现场。"""
+
+    data_dir = tmp_path / "data"
+    old_db = data_dir / "vibegobot.db"
+    new_db = data_dir / "vibego.db"
+    _create_runtime_db(old_db, "vibegobot")
+    conn = sqlite3.connect(str(new_db))
+    conn.execute("CREATE TABLE codex_trusted_paths (id INTEGER PRIMARY KEY, path TEXT);")
+    conn.execute("INSERT INTO codex_trusted_paths (path) VALUES (?);", (str(tmp_path),))
+    conn.commit()
+    conn.close()
+
+    results = migrate_runtime_data_for_slug_migrations(
+        data_dir,
+        {"vibegobot": "vibego"},
+        backup_suffix="test",
+    )
+
+    assert results[0].action == "copied"
+    assert (data_dir / "vibego.db.bak-test").exists()
+    assert _fetch_runtime_rows(new_db, "commands")[0]["project_slug"] == "vibego"
+
+
+def test_runtime_data_migration_fails_closed_when_target_has_business_rows(tmp_path: Path):
+    """新旧 slug 目标库都有业务数据时必须拒绝覆盖，避免误删新数据。"""
+
+    data_dir = tmp_path / "data"
+    old_db = data_dir / "vibegobot.db"
+    new_db = data_dir / "vibego.db"
+    _create_runtime_db(old_db, "vibegobot", command_name="old-patch")
+    _create_runtime_db(new_db, "vibego", command_name="new-command")
+
+    with pytest.raises(RuntimeDataMigrationConflictError, match="目标运行期数据库已有业务数据"):
+        migrate_runtime_data_for_slug_migrations(
+            data_dir,
+            {"vibegobot": "vibego"},
+            backup_suffix="test",
+        )
+
+    assert _fetch_runtime_rows(new_db, "commands")[0]["name"] == "new-command"
+
+
+def test_runtime_data_migration_is_idempotent_after_marker_exists(tmp_path: Path):
+    """成功迁移后再次启动不应因旧 DB 仍保留而误报冲突。"""
+
+    data_dir = tmp_path / "data"
+    old_db = data_dir / "vibegobot.db"
+    new_db = data_dir / "vibego.db"
+    _create_runtime_db(old_db, "vibegobot", command_name="old-patch")
+
+    first_results = migrate_runtime_data_for_slug_migrations(
+        data_dir,
+        {"vibegobot": "vibego"},
+        backup_suffix="test",
+    )
+    second_results = migrate_runtime_data_for_slug_migrations(
+        data_dir,
+        {"vibegobot": "vibego"},
+        backup_suffix="test",
+    )
+
+    assert first_results[0].action == "copied"
+    assert second_results[0].action == "skipped_already_migrated"
+    assert _fetch_runtime_rows(new_db, "commands")[0]["name"] == "old-patch"
+
+
+def test_repository_recovers_slug_migration_from_projects_json_backup(tmp_path: Path):
+    """若 master.db 已经是新 slug，也应从 projects.json 备份找回旧 slug 映射。"""
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    json_path = config_dir / "projects.json"
+    current_payload = [
+        {
+            "bot_name": "vibego",
+            "bot_token": "999999:ABCDEFGHIJKLMNOPQRSTUVWXYZ888888",
+            "project_slug": "vibego",
+            "default_model": "codex",
+            "workdir": str(tmp_path),
+            "allowed_chat_id": 100,
+            "name": "Vibego",
+        }
+    ]
+    legacy_payload = [
+        {
+            "bot_name": "vibego",
+            "bot_token": "999999:ABCDEFGHIJKLMNOPQRSTUVWXYZ888888",
+            "project_slug": "vibegobot",
+            "default_model": "codex",
+            "workdir": str(tmp_path),
+            "allowed_chat_id": 100,
+        }
+    ]
+    json_path.write_text(json.dumps(current_payload, ensure_ascii=False), encoding="utf-8")
+    (config_dir / "projects.json.bak-old").write_text(
+        json.dumps(legacy_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    repo = ProjectRepository(config_dir / "master.db", json_path)
+
+    assert repo.get_by_slug("vibego") is not None
+    assert repo.slug_migrations == {"vibegobot": "vibego"}
+
+
+def test_bootstrap_manager_migrates_runtime_data_after_repository_slug_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Master 启动时必须消费 repository.slug_migrations，把旧命令库迁到新 slug。"""
+
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    state_dir = tmp_path / "state"
+    config_dir.mkdir()
+    state_dir.mkdir()
+    json_path = config_dir / "projects.json"
+    json_path.write_text("[]", encoding="utf-8")
+    db_path = config_dir / "master.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_name TEXT NOT NULL UNIQUE,
+            bot_token TEXT NOT NULL,
+            project_slug TEXT NOT NULL UNIQUE,
+            default_model TEXT NOT NULL,
+            workdir TEXT,
+            allowed_chat_id INTEGER,
+            legacy_name TEXT,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO projects (
+            bot_name, bot_token, project_slug, default_model,
+            workdir, allowed_chat_id, legacy_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'));
+        """,
+        (
+            "VibegoBot",
+            "999999:ABCDEFGHIJKLMNOPQRSTUVWXYZ888888",
+            "vibegobot",
+            "codex",
+            str(tmp_path),
+            100,
+            "Vibego",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    _create_runtime_db(data_dir / "vibegobot.db", "vibegobot")
+
+    async def _noop_stop_all(self, update_state: bool = True):
+        return None
+
+    monkeypatch.setattr(master, "CONFIG_DB_PATH", db_path)
+    monkeypatch.setattr(master, "CONFIG_PATH", json_path)
+    monkeypatch.setattr(master, "STATE_PATH", state_dir / "state.json")
+    monkeypatch.setattr(master, "DATA_DIR", data_dir)
+    monkeypatch.setattr(master, "_clear_related_tmux_sessions", lambda: None)
+    monkeypatch.setattr(master.MasterManager, "stop_all", _noop_stop_all)
+
+    manager = asyncio.run(master.bootstrap_manager())
+
+    assert manager.require_project_by_slug("vibego").project_slug == "vibego"
+    assert (data_dir / "vibego.db").exists()
+    assert _fetch_runtime_rows(data_dir / "vibego.db", "commands")[0]["project_slug"] == "vibego"
+
+
+def test_bootstrap_manager_migrates_runtime_data_from_project_backup_after_slug_already_repaired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """已经修复过 master.db 的环境仍应从 projects.json 备份恢复旧命令库。"""
+
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    state_dir = tmp_path / "state"
+    config_dir.mkdir()
+    state_dir.mkdir()
+    json_path = config_dir / "projects.json"
+    current_payload = [
+        {
+            "bot_name": "vibego",
+            "bot_token": "999999:ABCDEFGHIJKLMNOPQRSTUVWXYZ888888",
+            "project_slug": "vibego",
+            "default_model": "codex",
+            "workdir": str(tmp_path),
+            "allowed_chat_id": 100,
+            "name": "Vibego",
+        }
+    ]
+    legacy_payload = [
+        {
+            "bot_name": "vibego",
+            "bot_token": "999999:ABCDEFGHIJKLMNOPQRSTUVWXYZ888888",
+            "project_slug": "vibegobot",
+            "default_model": "codex",
+            "workdir": str(tmp_path),
+            "allowed_chat_id": 100,
+        }
+    ]
+    json_path.write_text(json.dumps(current_payload, ensure_ascii=False), encoding="utf-8")
+    (config_dir / "projects.json.bak-old").write_text(
+        json.dumps(legacy_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    db_path = config_dir / "master.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_name TEXT NOT NULL UNIQUE,
+            bot_token TEXT NOT NULL,
+            project_slug TEXT NOT NULL UNIQUE,
+            default_model TEXT NOT NULL,
+            workdir TEXT,
+            allowed_chat_id INTEGER,
+            legacy_name TEXT,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO projects (
+            bot_name, bot_token, project_slug, default_model,
+            workdir, allowed_chat_id, legacy_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'));
+        """,
+        (
+            "vibego",
+            "999999:ABCDEFGHIJKLMNOPQRSTUVWXYZ888888",
+            "vibego",
+            "codex",
+            str(tmp_path),
+            100,
+            "Vibego",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    _create_runtime_db(data_dir / "vibegobot.db", "vibegobot")
+
+    async def _noop_stop_all(self, update_state: bool = True):
+        return None
+
+    monkeypatch.setattr(master, "CONFIG_DB_PATH", db_path)
+    monkeypatch.setattr(master, "CONFIG_PATH", json_path)
+    monkeypatch.setattr(master, "STATE_PATH", state_dir / "state.json")
+    monkeypatch.setattr(master, "DATA_DIR", data_dir)
+    monkeypatch.setattr(master, "_clear_related_tmux_sessions", lambda: None)
+    monkeypatch.setattr(master.MasterManager, "stop_all", _noop_stop_all)
+
+    manager = asyncio.run(master.bootstrap_manager())
+
+    assert manager.require_project_by_slug("vibego").project_slug == "vibego"
+    assert _fetch_runtime_rows(data_dir / "vibego.db", "commands")[0]["project_slug"] == "vibego"
 
 
 def test_repository_repair_display_slug_conflict_fails_closed(tmp_path: Path):
