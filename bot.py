@@ -8122,6 +8122,9 @@ SESSION_LIVE_PARALLEL_PREFIX = "session:view:parallel:"
 SESSION_LIVE_REFRESH_MAIN_CALLBACK = "session:view:refresh:main"
 SESSION_LIVE_REFRESH_PARALLEL_PREFIX = "session:view:refresh:parallel:"
 SESSION_LIVE_RESUME_CALLBACK = "session:resume"
+SESSION_LIVE_RESUME_SELECT_PREFIX = "session:resume:select:"
+SESSION_LIVE_RESUME_REFRESH_CALLBACK = "session:resume:refresh"
+SESSION_LIVE_RESUME_MANUAL_CALLBACK = "session:resume:manual"
 PUSH_EXISTING_SESSION_MAIN_CALLBACK = "task:push_existing_session:main"
 PUSH_EXISTING_SESSION_PARALLEL_PREFIX = "task:push_existing_session:parallel:"
 PUSH_EXISTING_SESSION_REFRESH_CALLBACK = "task:push_existing_session:refresh"
@@ -12347,6 +12350,10 @@ PARALLEL_SESSION_TASK_BINDINGS: Dict[str, str] = {}
 CHAT_PARALLEL_REPLY_TARGETS: Dict[int, dict[str, Any]] = {}
 SESSION_COMMIT_CALLBACK_BINDINGS: Dict[str, "SessionCommitBinding"] = {}
 SESSION_QUICK_REPLY_CALLBACK_BINDINGS: Dict[str, "SessionQuickReplyBinding"] = {}
+# 会话实况 Resume 最近列表：短 token -> 可恢复主会话，避免 Telegram callback_data 超长。
+SESSION_RESUME_RECENT_BINDINGS: Dict[str, MainSessionResumeRecentBinding] = {}
+SESSION_RESUME_RECENT_BINDING_TTL_SECONDS = 15 * 60
+SESSION_RESUME_RECENT_LIMIT = _env_int("SESSION_RESUME_RECENT_LIMIT", 8)
 
 
 @dataclass
@@ -12395,6 +12402,15 @@ class MainSessionBindingTarget:
     session_path: Path
     resume_session_id: str
     display_session_id: str
+
+
+@dataclass
+class MainSessionResumeRecentBinding:
+    """描述 Telegram 最近会话按钮到可恢复 Codex 会话的短期绑定。"""
+
+    token: str
+    target: MainSessionBindingTarget
+    created_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -16947,6 +16963,175 @@ def _resolve_main_session_binding_target(
     return None, "未找到匹配的 sessionId，请确认复制的是当前机器上的 Codex 会话。"
 
 
+def _main_session_resume_target_cwd() -> str:
+    """返回主会话 resume 必须匹配的当前项目工作目录。"""
+
+    return (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
+
+
+def _candidate_to_main_session_binding_target(
+    candidate: Path,
+    *,
+    target_cwd: str,
+) -> Optional[MainSessionBindingTarget]:
+    """将一个 Codex JSONL 候选文件转换为可 resume 的主会话目标。"""
+
+    if not candidate.is_file() or candidate.suffix.lower() != ".jsonl":
+        return None
+    target_path = resolve_path(target_cwd) if target_cwd else None
+    session_cwd = _read_session_meta_cwd(candidate)
+    if target_path is not None:
+        if not session_cwd:
+            return None
+        if not _paths_equal(resolve_path(session_cwd), target_path):
+            return None
+    resume_session_id = _read_codex_session_meta_id(candidate) or candidate.stem
+    return MainSessionBindingTarget(
+        session_path=candidate,
+        resume_session_id=resume_session_id,
+        display_session_id=candidate.stem,
+    )
+
+
+def _list_recent_main_session_binding_targets(limit: Optional[int] = None) -> list[MainSessionBindingTarget]:
+    """扫描当前项目最近可 resume 的 Codex JSONL 会话。"""
+
+    target_cwd = _main_session_resume_target_cwd()
+    pattern = MODEL_SESSION_GLOB or "rollout-*.jsonl"
+    normalized_limit = max(int(limit or SESSION_RESUME_RECENT_LIMIT or 8), 1)
+    candidates: list[tuple[float, MainSessionBindingTarget]] = []
+    seen_paths: set[str] = set()
+    for root in _iter_main_session_search_roots():
+        if not root.exists():
+            continue
+        try:
+            matches = root.glob(f"**/{pattern}")
+        except OSError:
+            continue
+        for candidate in matches:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                resolved = candidate
+            key = str(resolved)
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            target = _candidate_to_main_session_binding_target(resolved, target_cwd=target_cwd)
+            if target is None:
+                continue
+            try:
+                mtime = resolved.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, target))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [target for _mtime, target in candidates[:normalized_limit]]
+
+
+def _cleanup_session_resume_recent_bindings(now: Optional[float] = None) -> None:
+    """清理过期的最近会话按钮绑定，避免进程长期运行时内存增长。"""
+
+    current = time.time() if now is None else now
+    expired = [
+        token
+        for token, binding in SESSION_RESUME_RECENT_BINDINGS.items()
+        if current - binding.created_at > SESSION_RESUME_RECENT_BINDING_TTL_SECONDS
+    ]
+    for token in expired:
+        SESSION_RESUME_RECENT_BINDINGS.pop(token, None)
+
+
+def _bind_session_resume_recent_target(target: MainSessionBindingTarget) -> str:
+    """为最近会话目标生成短 token，供 Telegram callback 安全引用。"""
+
+    _cleanup_session_resume_recent_bindings()
+    for _attempt in range(8):
+        token = uuid.uuid4().hex[:12]
+        if token not in SESSION_RESUME_RECENT_BINDINGS:
+            SESSION_RESUME_RECENT_BINDINGS[token] = MainSessionResumeRecentBinding(token=token, target=target)
+            return token
+    token = uuid.uuid4().hex
+    SESSION_RESUME_RECENT_BINDINGS[token] = MainSessionResumeRecentBinding(token=token, target=target)
+    return token
+
+
+def _resolve_session_resume_recent_target(token: str) -> Optional[MainSessionBindingTarget]:
+    """按短 token 解析用户点击的最近会话目标。"""
+
+    _cleanup_session_resume_recent_bindings()
+    binding = SESSION_RESUME_RECENT_BINDINGS.get((token or "").strip())
+    if binding is None:
+        return None
+    # 点击时再次按当前项目 cwd 复核 JSONL，避免短 token 存活期间文件变化导致串会话。
+    return _candidate_to_main_session_binding_target(
+        binding.target.session_path,
+        target_cwd=_main_session_resume_target_cwd(),
+    )
+
+
+def _format_session_resume_recent_label(target: MainSessionBindingTarget) -> str:
+    """格式化最近会话按钮文案，保持 Telegram inline button 简短。"""
+
+    try:
+        updated_at = datetime.fromtimestamp(target.session_path.stat().st_mtime, tz=_codex_status_display_timezone())
+        time_label = updated_at.strftime("%m-%d %H:%M")
+    except OSError:
+        time_label = "-- --:--"
+    short_id = target.display_session_id
+    if len(short_id) > 28:
+        short_id = f"{short_id[:18]}…{short_id[-8:]}"
+    return f"↩️ {time_label} · {short_id}"
+
+
+def _build_session_resume_recent_markup(targets: Sequence[MainSessionBindingTarget]) -> InlineKeyboardMarkup:
+    """构造最近会话 resume 选择按钮。"""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for target in targets:
+        token = _bind_session_resume_recent_target(target)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_format_session_resume_recent_label(target),
+                    callback_data=f"{SESSION_LIVE_RESUME_SELECT_PREFIX}{token}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="🔄 刷新最近会话", callback_data=SESSION_LIVE_RESUME_REFRESH_CALLBACK)])
+    rows.append([InlineKeyboardButton(text="✍️ 手动输入 sessionId", callback_data=SESSION_LIVE_RESUME_MANUAL_CALLBACK)])
+    rows.append([InlineKeyboardButton(text="⬅️ 返回会话实况", callback_data=SESSION_LIVE_LIST_CALLBACK)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_session_resume_recent_view() -> tuple[str, InlineKeyboardMarkup]:
+    """构造当前项目最近可 resume 会话列表。"""
+
+    targets = _list_recent_main_session_binding_targets()
+    lines = [
+        "*Resume 会话*",
+        "选择要 resume 的最近会话：",
+    ]
+    if targets:
+        lines.append(f"当前项目最近可恢复会话：{len(targets)} 个")
+        lines.append("点击某个会话后，将重启主 CLI 并绑定为当前主会话。")
+    else:
+        lines.append("当前项目暂未找到可恢复的最近会话。")
+        lines.append("可刷新列表，或手动输入 sessionId。")
+    return "\n".join(lines), _build_session_resume_recent_markup(targets)
+
+
+async def _show_session_resume_recent_view(message: Message, *, prefer_edit: bool = False) -> bool:
+    """展示当前项目最近可 resume 会话列表。"""
+
+    text, markup = _build_session_resume_recent_view()
+    if prefer_edit and await _try_edit_message(message, text, reply_markup=markup):
+        return True
+    sent = await _answer_with_markdown(message, text, reply_markup=markup)
+    return sent is not None
+
+
 def _session_end_offset(session_path: Path) -> int:
     """绑定历史会话时从文件末尾监听，避免重复回推旧输出。"""
 
@@ -18016,11 +18201,22 @@ async def _resume_main_session_from_user_input(
     if not session_id:
         await message.answer(empty_prompt)
         return False
-    target_cwd = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
+    target_cwd = _main_session_resume_target_cwd()
     target, error = _resolve_main_session_binding_target(session_id, target_cwd)
     if target is None:
         await message.answer(error or "未找到匹配的 sessionId，请确认后重试。")
         return False
+
+    return await _resume_main_session_to_target(message, target, success_intro=success_intro)
+
+
+async def _resume_main_session_to_target(
+    message: Message,
+    target: MainSessionBindingTarget,
+    *,
+    success_intro: str,
+) -> bool:
+    """恢复指定 Codex 主会话目标，并绑定 Telegram watcher。"""
 
     ok, output = await _restart_main_tmux_with_resume_session(target.resume_session_id)
     if not ok:
@@ -19777,7 +19973,7 @@ async def on_session_live_list_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == SESSION_LIVE_RESUME_CALLBACK)
 async def on_session_live_resume_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    """从“会话实况”进入 Codex resume 输入流程。"""
+    """从“会话实况”进入 Codex 最近会话 resume 选择页。"""
 
     message = callback.message
     if message is None:
@@ -19790,6 +19986,40 @@ async def on_session_live_resume_callback(callback: CallbackQuery, state: FSMCon
         return
 
     await state.clear()
+    success = await _show_session_resume_recent_view(message)
+    await callback.answer("请选择要 resume 的会话" if success else "最近会话列表发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data == SESSION_LIVE_RESUME_REFRESH_CALLBACK)
+async def on_session_live_resume_refresh_callback(callback: CallbackQuery) -> None:
+    """刷新当前项目最近可 resume 会话列表。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    current_model = _canonical_model_name(ACTIVE_MODEL or os.environ.get("MODEL_NAME") or MODEL_CANONICAL_NAME)
+    if current_model != "codex":
+        await callback.answer("暂仅支持 Codex 会话 resume。", show_alert=True)
+        return
+    success = await _show_session_resume_recent_view(message, prefer_edit=True)
+    await callback.answer("已刷新最近会话" if success else "最近会话列表发送失败", show_alert=not success)
+
+
+@router.callback_query(F.data == SESSION_LIVE_RESUME_MANUAL_CALLBACK)
+async def on_session_live_resume_manual_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """从最近会话页进入手动 sessionId 输入流程。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    current_model = _canonical_model_name(ACTIVE_MODEL or os.environ.get("MODEL_NAME") or MODEL_CANONICAL_NAME)
+    if current_model != "codex":
+        await state.clear()
+        await callback.answer("暂仅支持 Codex 会话 resume。", show_alert=True)
+        return
+    await state.clear()
     await state.set_state(SessionResumeStates.waiting_session_id)
     await message.answer(
         (
@@ -19800,6 +20030,31 @@ async def on_session_live_resume_callback(callback: CallbackQuery, state: FSMCon
         reply_markup=_build_session_resume_input_keyboard(),
     )
     await callback.answer("请输入 sessionId")
+
+
+@router.callback_query(F.data.startswith(SESSION_LIVE_RESUME_SELECT_PREFIX))
+async def on_session_live_resume_select_callback(callback: CallbackQuery) -> None:
+    """点击最近会话列表中的某个会话后直接 resume。"""
+
+    message = callback.message
+    if message is None:
+        await callback.answer("无法定位原消息", show_alert=True)
+        return
+    current_model = _canonical_model_name(ACTIVE_MODEL or os.environ.get("MODEL_NAME") or MODEL_CANONICAL_NAME)
+    if current_model != "codex":
+        await callback.answer("暂仅支持 Codex 会话 resume。", show_alert=True)
+        return
+    token = (callback.data or "")[len(SESSION_LIVE_RESUME_SELECT_PREFIX) :]
+    target = _resolve_session_resume_recent_target(token)
+    if target is None:
+        await callback.answer("会话选择已过期，请刷新最近会话列表。", show_alert=True)
+        return
+    await callback.answer("正在 resume 会话")
+    await _resume_main_session_to_target(
+        message,
+        target,
+        success_intro="已恢复并绑定为主会话，后续消息将继续进入该会话。",
+    )
 
 
 @router.message(SessionResumeStates.waiting_session_id)

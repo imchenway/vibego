@@ -285,7 +285,8 @@ async def test_run_upgrade_pipeline_success(monkeypatch: pytest.MonkeyPatch, upg
     await master._run_upgrade_pipeline(bot, chat_id=1, message_id=10)
     assert len(calls) == len(master._UPGRADE_COMMANDS)
     assert bot.edits, "应至少更新一次状态"
-    assert "升级流程完成" in bot.edits[-1][2]
+    assert "pipx 阶段完成" in bot.edits[-1][2]
+    assert "正在重启 master" in bot.edits[-1][2]
     assert recorded["args"][0] == 1
     assert spawned["args"][0] == "echo restart"
 
@@ -414,12 +415,24 @@ def test_persist_upgrade_report_records_versions(upgrade_report_path: Path):
 async def test_notify_upgrade_report(monkeypatch: pytest.MonkeyPatch, upgrade_report_path: Path):
     """启动时若存在升级报告应推送摘要并清理文件。"""
 
+    restart_log = upgrade_report_path.parent / "upgrade_restart.log"
+    restart_log.write_text(
+        "\n".join(
+            [
+                "正在停止 master（PID = 100 )...",
+                "正在启动 master 服务...",
+                "master 已启动，PID: 200",
+            ]
+        ),
+        encoding="utf-8",
+    )
     payload = {
         "chat_id": 777,
         "log_tail": ["line1", "line2"],
         "elapsed": 3.5,
         "restart_command": "echo restart",
         "restart_delay": 1.0,
+        "restart_log_path": str(restart_log),
         "recorded_at": "2025-11-12T10:00:00+00:00",
         "old_version": "1.1.13",
         "new_version": "1.1.14",
@@ -430,7 +443,67 @@ async def test_notify_upgrade_report(monkeypatch: pytest.MonkeyPatch, upgrade_re
     await master._notify_upgrade_report(bot)
     assert bot.messages, "应推送升级摘要"
     lines = bot.messages[0][1].splitlines()
-    assert lines[0].startswith("✅ 升级流程完成")
-    assert lines[1] == "📦 旧版本 1.1.13 -> 新版本 1.1.14"
-    assert lines[2].startswith("🚀 master 已重新上线")
+    assert lines[0].startswith("✅ 升级流程完成，master 已重新上线")
+    assert "📦 版本：1.1.13 -> 1.1.14" in bot.messages[0][1]
+    assert "重启日志：" in bot.messages[0][1]
+    assert "master 已启动，PID: 200" in bot.messages[0][1]
+    assert not upgrade_report_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_notify_upgrade_report_keeps_report_when_send_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    upgrade_report_path: Path,
+):
+    """升级最终态发送失败时必须保留报告，避免成功/失败状态永久丢失。"""
+
+    payload = {
+        "chat_id": 777,
+        "log_tail": ["line1"],
+        "elapsed": 3.5,
+        "restart_command": "echo restart",
+        "restart_delay": 1.0,
+        "recorded_at": "2025-11-12T10:00:00+00:00",
+        "old_version": "1.1.13",
+        "new_version": "1.1.14",
+    }
+    upgrade_report_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    class FailingBot(DummyBot):
+        async def send_message(self, chat_id: int, text: str, **kwargs) -> None:
+            raise RuntimeError("telegram timeout")
+
+    await master._notify_upgrade_report(FailingBot())
+
+    assert upgrade_report_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_notify_upgrade_report_warns_when_restart_log_missing_start_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    upgrade_report_path: Path,
+):
+    """最终态应显式说明重启日志未确认 master 启动，避免误报成功。"""
+
+    restart_log = upgrade_report_path.parent / "upgrade_restart.log"
+    restart_log.write_text("正在停止 master\n正在启动 master 服务\n", encoding="utf-8")
+    payload = {
+        "chat_id": 777,
+        "log_tail": ["line1"],
+        "elapsed": 3.5,
+        "restart_command": "echo restart",
+        "restart_delay": 1.0,
+        "restart_log_path": str(restart_log),
+        "recorded_at": "2025-11-12T10:00:00+00:00",
+        "old_version": "1.1.13",
+        "new_version": "1.1.14",
+    }
+    upgrade_report_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    bot = DummyBot()
+    await master._notify_upgrade_report(bot)
+
+    assert bot.messages
+    assert "⚠️ 升级 pipx 阶段完成，但重启日志未确认 master 已启动" in bot.messages[0][1]
+    assert "正在启动 master 服务" in bot.messages[0][1]
     assert not upgrade_report_path.exists()

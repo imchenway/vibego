@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -11,6 +12,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
 import bot
 
@@ -254,15 +257,160 @@ def test_bind_session_command_rejects_non_codex_model(monkeypatch, tmp_path: Pat
     assert "暂仅支持 Codex" in message.calls[-1]
 
 
-def test_session_live_resume_callback_prompts_for_session_id(monkeypatch) -> None:
-    """会话实况 Resume：点击入口后应进入 sessionId 输入态。"""
+def test_build_session_resume_recent_view_lists_current_project_sessions(monkeypatch, tmp_path: Path) -> None:
+    """会话实况 Resume：应列出当前项目最近可恢复的 Codex 会话。"""
+
+    workdir = tmp_path / "workdir"
+    other_workdir = tmp_path / "other"
+    workdir.mkdir()
+    other_workdir.mkdir()
+    sessions_dir = tmp_path / "sessions"
+    session_uuid_old = "019d0f8d-fd9d-7000-a111-123456789ac1"
+    session_uuid_new = "019d0f8d-fd9d-7000-a111-123456789ac2"
+    session_uuid_other = "019d0f8d-fd9d-7000-a111-123456789ac3"
+    old_session = sessions_dir / f"rollout-old-{session_uuid_old}.jsonl"
+    new_session = sessions_dir / f"rollout-new-{session_uuid_new}.jsonl"
+    other_session = sessions_dir / f"rollout-other-{session_uuid_other}.jsonl"
+    _write_codex_session(old_session, session_uuid=session_uuid_old, cwd=workdir)
+    _write_codex_session(new_session, session_uuid=session_uuid_new, cwd=workdir)
+    _write_codex_session(other_session, session_uuid=session_uuid_other, cwd=other_workdir)
+    os.utime(old_session, (100, 100))
+    os.utime(new_session, (200, 200))
+    os.utime(other_session, (300, 300))
+
+    monkeypatch.setenv("MODEL_WORKDIR", str(workdir))
+    monkeypatch.setattr(bot, "MODEL_SESSION_ROOT", str(sessions_dir))
+    monkeypatch.setattr(bot, "CODEX_SESSIONS_ROOT", "")
+    monkeypatch.setattr(bot, "MODEL_SESSION_GLOB", "rollout-*.jsonl")
+    bot.SESSION_RESUME_RECENT_BINDINGS.clear()
+
+    text, markup = bot._build_session_resume_recent_view()
+
+    assert "选择要 resume 的最近会话" in text
+    callback_data = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    select_callbacks = [
+        value
+        for value in callback_data
+        if value.startswith(bot.SESSION_LIVE_RESUME_SELECT_PREFIX)
+    ]
+    assert len(select_callbacks) == 2
+    assert callback_data.index(select_callbacks[0]) < callback_data.index(select_callbacks[1])
+    bound_resume_ids = {
+        binding.target.resume_session_id
+        for binding in bot.SESSION_RESUME_RECENT_BINDINGS.values()
+    }
+    assert bound_resume_ids == {session_uuid_new, session_uuid_old}
+    assert session_uuid_other not in bound_resume_ids
+
+
+def test_session_live_resume_callback_shows_recent_session_choices(monkeypatch) -> None:
+    """会话实况 Resume：点击入口后应先展示最近会话列表，而不是直接要求手输。"""
 
     monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex")
     message = DummyMessage("", chat_id=818)
     callback = DummyCallback(bot.SESSION_LIVE_RESUME_CALLBACK, message)
     state = make_state(message)
+    shown: list[DummyMessage] = []
+
+    async def fake_show_recent(message_arg: DummyMessage) -> bool:
+        shown.append(message_arg)
+        await message_arg.answer("选择要 resume 的最近会话")
+        return True
+
+    monkeypatch.setattr(bot, "_show_session_resume_recent_view", fake_show_recent)
 
     asyncio.run(bot.on_session_live_resume_callback(callback, state))
+
+    assert asyncio.run(state.get_state()) is None
+    assert shown == [message]
+    assert callback.answers[-1] == ("请选择要 resume 的会话", False)
+    assert "选择要 resume 的最近会话" in message.calls[-1]
+
+
+def test_session_live_resume_select_callback_resumes_bound_recent_session(monkeypatch, tmp_path: Path) -> None:
+    """会话实况 Resume：点击最近会话按钮后应直接恢复对应 session。"""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    session_uuid = "019d0f8d-fd9d-7000-a111-123456789ac4"
+    session_file = tmp_path / "sessions" / f"rollout-select-{session_uuid}.jsonl"
+    _write_codex_session(session_file, session_uuid=session_uuid, cwd=workdir)
+    target = bot.MainSessionBindingTarget(
+        session_path=session_file,
+        resume_session_id=session_uuid,
+        display_session_id=session_file.stem,
+    )
+
+    monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex")
+    monkeypatch.setenv("MODEL_WORKDIR", str(workdir))
+    bot.SESSION_RESUME_RECENT_BINDINGS.clear()
+    token = bot._bind_session_resume_recent_target(target)
+    message = DummyMessage("", chat_id=820)
+    callback = DummyCallback(f"{bot.SESSION_LIVE_RESUME_SELECT_PREFIX}{token}", message)
+    resumed: list[tuple[DummyMessage, bot.MainSessionBindingTarget, str]] = []
+
+    async def fake_resume_target(message_arg, target_arg, *, success_intro: str) -> bool:
+        resumed.append((message_arg, target_arg, success_intro))
+        await message_arg.answer(f"{success_intro}\n{target_arg.display_session_id}")
+        return True
+
+    monkeypatch.setattr(bot, "_resume_main_session_to_target", fake_resume_target)
+
+    asyncio.run(bot.on_session_live_resume_select_callback(callback))
+
+    assert resumed == [(message, target, "已恢复并绑定为主会话，后续消息将继续进入该会话。")]
+    assert callback.answers[-1] == ("正在 resume 会话", False)
+    assert session_file.stem in message.calls[-1]
+
+
+def test_session_live_resume_select_callback_revalidates_current_project(monkeypatch, tmp_path: Path) -> None:
+    """会话实况 Resume：点击短 token 时仍需复核当前项目，防止过期期间串会话。"""
+
+    workdir = tmp_path / "workdir"
+    other_workdir = tmp_path / "other"
+    workdir.mkdir()
+    other_workdir.mkdir()
+    session_uuid = "019d0f8d-fd9d-7000-a111-123456789ac5"
+    session_file = tmp_path / "sessions" / f"rollout-mismatch-{session_uuid}.jsonl"
+    _write_codex_session(session_file, session_uuid=session_uuid, cwd=other_workdir)
+    target = bot.MainSessionBindingTarget(
+        session_path=session_file,
+        resume_session_id=session_uuid,
+        display_session_id=session_file.stem,
+    )
+
+    monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex")
+    monkeypatch.setenv("MODEL_WORKDIR", str(workdir))
+    bot.SESSION_RESUME_RECENT_BINDINGS.clear()
+    token = bot._bind_session_resume_recent_target(target)
+    message = DummyMessage("", chat_id=822)
+    callback = DummyCallback(f"{bot.SESSION_LIVE_RESUME_SELECT_PREFIX}{token}", message)
+
+    async def fake_resume_target(*_args, **_kwargs) -> bool:
+        raise AssertionError("cwd 不匹配的最近会话不应进入恢复逻辑")
+
+    monkeypatch.setattr(bot, "_resume_main_session_to_target", fake_resume_target)
+
+    asyncio.run(bot.on_session_live_resume_select_callback(callback))
+
+    assert callback.answers[-1] == ("会话选择已过期，请刷新最近会话列表。", True)
+    assert not message.calls
+
+
+def test_session_live_resume_manual_callback_enters_session_id_input(monkeypatch) -> None:
+    """会话实况 Resume：手动入口应保留原 sessionId 输入流程。"""
+
+    monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex")
+    message = DummyMessage("", chat_id=821)
+    callback = DummyCallback(bot.SESSION_LIVE_RESUME_MANUAL_CALLBACK, message)
+    state = make_state(message)
+
+    asyncio.run(bot.on_session_live_resume_manual_callback(callback, state))
 
     assert asyncio.run(state.get_state()) == bot.SessionResumeStates.waiting_session_id.state
     assert callback.answers[-1] == ("请输入 sessionId", False)

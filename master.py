@@ -314,6 +314,7 @@ _UPGRADE_COMMANDS: Tuple[Tuple[str, str], ...] = (
     ("pipx upgrade vibego", "升级 vibego 包"),
 )
 _UPGRADE_LOG_TAIL = int(os.environ.get("MASTER_UPGRADE_LOG_TAIL", "20"))
+_UPGRADE_RESTART_LOG_TAIL = int(os.environ.get("MASTER_UPGRADE_RESTART_LOG_TAIL", "12"))
 _UPGRADE_LOG_BUFFER_LIMIT = int(os.environ.get("MASTER_UPGRADE_LOG_BUFFER_LIMIT", "200"))
 _UPGRADE_LINE_LIMIT = int(os.environ.get("MASTER_UPGRADE_LINE_LIMIT", "160"))
 _UPGRADE_STATE_LOCK = asyncio.Lock()
@@ -1253,6 +1254,66 @@ def _render_upgrade_preview(lines: Sequence[str]) -> str:
     return "\n".join(tail)
 
 
+def _render_upgrade_restart_log_tail(path_raw: object) -> tuple[list[str], bool, str]:
+    """读取升级重启日志尾部，并判断是否出现 master 已启动标记。"""
+
+    if not isinstance(path_raw, str) or not path_raw.strip():
+        return [], False, ""
+    path = Path(path_raw).expanduser()
+    try:
+        raw_lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except FileNotFoundError:
+        return [], False, str(path)
+    except OSError as exc:
+        log.warning("读取升级重启日志失败: %s", exc, extra={"path": str(path)})
+        return [], False, str(path)
+    sanitized = [_sanitize_upgrade_line(line) for line in raw_lines]
+    lines = [line for line in sanitized if line]
+    tail = lines[-_UPGRADE_RESTART_LOG_TAIL:]
+    started = any("master 已启动" in line for line in tail)
+    return tail, started, str(path)
+
+
+def _write_upgrade_report_payload(payload: dict) -> None:
+    """原子写回升级报告，用于发送失败时保留可重试状态。"""
+
+    _UPGRADE_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = _UPGRADE_REPORT_PATH.with_suffix(_UPGRADE_REPORT_PATH.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(_UPGRADE_REPORT_PATH)
+
+
+def _build_upgrade_report_message(payload: dict) -> str:
+    """构造新 master 上线后的最终升级状态消息。"""
+
+    elapsed = payload.get("elapsed")
+    elapsed_text = f"{elapsed:.1f}" if isinstance(elapsed, (int, float)) else "未知"
+    old_version = payload.get("old_version") or payload.get("version") or "未知"
+    new_version = payload.get("new_version") or __version__
+    restart_command = payload.get("restart_command") or "未知"
+    pipx_tail_raw = payload.get("log_tail")
+    pipx_tail = pipx_tail_raw if isinstance(pipx_tail_raw, list) else []
+    pipx_preview = _render_upgrade_preview([str(line) for line in pipx_tail])
+    restart_tail, restart_started, restart_log_path = _render_upgrade_restart_log_tail(
+        payload.get("restart_log_path")
+    )
+    if restart_started:
+        status_line = "✅ 升级流程完成，master 已重新上线。"
+    else:
+        status_line = "⚠️ 升级 pipx 阶段完成，但重启日志未确认 master 已启动。"
+    restart_preview = "\n".join(restart_tail) if restart_tail else "（暂无重启日志输出）"
+    restart_log_text = restart_log_path or "未记录"
+    return (
+        f"{status_line}\n"
+        f"📦 版本：{old_version} -> {new_version}\n"
+        f"⏱️ pipx 阶段耗时：{elapsed_text} 秒\n"
+        f"🔁 重启命令：{restart_command}\n"
+        f"📄 重启日志：{restart_log_text}\n\n"
+        f"最近 pipx 输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{pipx_preview}\n\n"
+        f"最近重启日志（最多 {_UPGRADE_RESTART_LOG_TAIL} 行）：\n{restart_preview}"
+    )
+
+
 def _extract_upgrade_versions(lines: Sequence[str]) -> Tuple[Optional[str], Optional[str]]:
     """从 pipx 输出中提取旧/新版本，若未匹配则返回 None。"""
 
@@ -1396,10 +1457,7 @@ def _persist_upgrade_report(
         "old_version": old_version,
         "new_version": new_version,
     }
-    _UPGRADE_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _UPGRADE_REPORT_PATH.with_suffix(_UPGRADE_REPORT_PATH.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(_UPGRADE_REPORT_PATH)
+    _write_upgrade_report_payload(payload)
 
 
 def _spawn_detached_restart(command: str, delay: float) -> Optional[subprocess.Popen[str]]:
@@ -1461,9 +1519,10 @@ async def _announce_upgrade_completion(
 
     _persist_upgrade_report(chat_id, lines, elapsed, restart_command, _UPGRADE_RESTART_DELAY)
     text = (
-        "升级流程完成（pipx 阶段） ✅\n"
+        "pipx 阶段完成，正在重启 master ✅\n"
         f"pipx upgrade 耗时 {elapsed:.1f} 秒，将在 {_UPGRADE_RESTART_DELAY:.1f} 秒后执行：{restart_command}\n"
-        "master 即将重启并短暂离线，稍后使用 /start 验证状态。\n\n"
+        "旧 master 即将短暂离线；新 master 上线后会另发最终结果。\n"
+        "若最终通知发送失败，会保留升级报告供下次启动重试。\n\n"
         f"重启日志：{_UPGRADE_RESTART_LOG_PATH}\n\n"
         f"最近输出（最多 {_UPGRADE_LOG_TAIL} 行）：\n{preview}"
     )
@@ -3398,22 +3457,21 @@ async def _notify_upgrade_report(bot: Bot) -> None:
         _safe_remove(_UPGRADE_REPORT_PATH)
         return
 
-    elapsed = payload.get("elapsed")
-    elapsed_text = f"{elapsed:.1f}" if isinstance(elapsed, (int, float)) else "未知"
-    old_version = payload.get("old_version") or payload.get("version") or "未知"
-    new_version = payload.get("new_version") or __version__
-    text = (
-        f"✅ 升级流程完成，执行耗时 {elapsed_text} 秒。\n"
-        f"📦 旧版本 {old_version} -> 新版本 {new_version}\n"
-        "🚀 master 已重新上线，请使用 /start 校验项目状态。"
-    )
+    text = _build_upgrade_report_message(payload)
 
     try:
         await bot.send_message(chat_id=chat_id, text=text)
     except Exception as exc:
         log.error("发送升级完成通知失败: %s", exc, extra={"chat": chat_id})
-    finally:
-        _safe_remove(_UPGRADE_REPORT_PATH)
+        # 发送失败时保留报告，避免用户永远看不到升级最终态；下次 master 启动会继续重试。
+        payload["last_notify_error"] = str(exc)
+        payload["last_notify_failed_at"] = _utcnow().isoformat()
+        try:
+            _write_upgrade_report_payload(payload)
+        except OSError as write_exc:
+            log.error("保留升级报告失败: %s", write_exc, extra={"path": str(_UPGRADE_REPORT_PATH)})
+        return
+    _safe_remove(_UPGRADE_REPORT_PATH)
 
 
 async def _ensure_manager() -> MasterManager:
