@@ -22,10 +22,14 @@ import bot
 
 
 class DummyBot:
-    def __init__(self):
+    def __init__(self, delivery_events: Optional[list[tuple]] = None, *, fail_photo: bool = False):
         self.sent_messages: list[tuple[int, str, Optional[str], bool, object]] = []
         self.edited_messages: list[tuple[int, int, str, Optional[str]]] = []
         self.deleted_messages: list[tuple[int, int]] = []
+        self.sent_photos: list[tuple[int, object, Optional[str]]] = []
+        self.sent_documents: list[tuple[int, object, Optional[str]]] = []
+        self.delivery_events = delivery_events
+        self.fail_photo = fail_photo
         self.delete_error: Optional[Exception] = None
 
     async def send_message(
@@ -50,6 +54,20 @@ class DummyBot:
             raise self.delete_error
         self.deleted_messages.append((chat_id, message_id))
 
+    async def send_photo(self, chat_id: int, photo, caption: Optional[str] = None):
+        if self.delivery_events is not None:
+            self.delivery_events.append(("photo", chat_id, caption, type(photo).__name__))
+        self.sent_photos.append((chat_id, photo, caption))
+        if self.fail_photo:
+            raise RuntimeError("photo send failed")
+        return SimpleNamespace(message_id=len(self.sent_photos))
+
+    async def send_document(self, chat_id: int, document, caption: Optional[str] = None, **_kwargs):
+        if self.delivery_events is not None:
+            self.delivery_events.append(("document", chat_id, caption, type(document).__name__))
+        self.sent_documents.append((chat_id, document, caption))
+        return SimpleNamespace(message_id=len(self.sent_documents))
+
 
 class DummyDocumentBot(DummyBot):
     def __init__(self):
@@ -72,7 +90,8 @@ def plan_test_env(monkeypatch, tmp_path):
     bot.CHAT_PLAN_TEXT.clear()
     bot.CHAT_PLAN_COMPLETION.clear()
     bot.CHAT_DELIVERY_LOCKS.clear()
-    dummy = DummyBot()
+    delivery_events: list[tuple] = []
+    dummy = DummyBot(delivery_events)
     bot._bot = dummy
     bot.ENABLE_PLAN_PROGRESS = True
     bot.PLAN_PROGRESS_PARSE_MODE = None
@@ -88,6 +107,7 @@ def plan_test_env(monkeypatch, tmp_path):
         attachment_reply_markup=None,
         overflow_mode: str = "attachment",
     ):
+        delivery_events.append(("text", chat_id, text))
         replies.append((chat_id, text))
         return text
 
@@ -108,6 +128,7 @@ def plan_test_env(monkeypatch, tmp_path):
     return {
         "dummy_bot": dummy,
         "replies": replies,
+        "delivery_events": delivery_events,
         "session": session_file,
         "append_events": append_events,
     }
@@ -345,6 +366,93 @@ def test_deliver_pending_messages_renders_markdown_table_before_telegram(plan_te
     assert "   - WRITE 阶段：不预占" in delivered_text
     assert "   - BATCH 阶段：直接扣减" in delivered_text
     assert "<oai-mem-citation>" not in delivered_text
+
+
+def test_deliver_pending_messages_sends_project_local_image_after_text(plan_test_env, monkeypatch, tmp_path: Path):
+    """模型回复引用项目内本地图片时，Telegram 应在文字后补发可预览图片。"""
+
+    env = plan_test_env
+    chat_id = 1510
+    image_path = tmp_path / "docs" / "diagram.png"
+    image_path.parent.mkdir()
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    monkeypatch.setattr(bot, "PRIMARY_WORKDIR", tmp_path)
+    final_text = "\n".join(
+        [
+            "已生成 Telegram 可预览的本地 PNG 流程图。",
+            "",
+            "## 产物",
+            f"- PNG: {image_path.relative_to(tmp_path)}",
+            "- 文档: docs/TASK_20260624_003.md",
+        ]
+    )
+    env["append_events"]([_codex_response_item_final_event(final_text)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert [item[0] for item in env["delivery_events"]] == ["text", "photo"]
+    assert len(env["dummy_bot"].sent_photos) == 1
+    sent_chat_id, sent_photo, caption = env["dummy_bot"].sent_photos[0]
+    assert sent_chat_id == chat_id
+    assert type(sent_photo).__name__ == "FSInputFile"
+    assert "diagram.png" in (caption or "")
+
+
+def test_deliver_pending_messages_ignores_local_image_outside_project(plan_test_env, monkeypatch, tmp_path: Path):
+    """模型回复里的项目外本地图片路径不得自动回传，避免误发本机文件。"""
+
+    env = plan_test_env
+    chat_id = 1511
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    outside_image = tmp_path / "outside.png"
+    outside_image.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    monkeypatch.setattr(bot, "PRIMARY_WORKDIR", project_root)
+    final_text = f"调试图片：{outside_image}"
+    env["append_events"]([_codex_response_item_final_event(final_text)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert env["dummy_bot"].sent_photos == []
+    assert env["dummy_bot"].sent_documents == []
+
+
+def test_deliver_pending_messages_falls_back_to_document_when_local_image_photo_fails(
+    plan_test_env,
+    monkeypatch,
+    tmp_path: Path,
+):
+    """图片直发失败时应降级文件发送，避免模型产物彻底丢失。"""
+
+    env = plan_test_env
+    chat_id = 1512
+    image_path = tmp_path / "docs" / "diagram.png"
+    image_path.parent.mkdir()
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    monkeypatch.setattr(bot, "PRIMARY_WORKDIR", tmp_path)
+    env["dummy_bot"].fail_photo = True
+    env["append_events"]([_codex_response_item_final_event(f"![流程图](docs/{image_path.name})")])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert [item[0] for item in env["delivery_events"]] == ["text", "photo", "document"]
+    assert len(env["dummy_bot"].sent_documents) == 1
+    sent_chat_id, sent_document, caption = env["dummy_bot"].sent_documents[0]
+    assert sent_chat_id == chat_id
+    assert type(sent_document).__name__ == "FSInputFile"
+    assert "图片直发失败，已降级为文件" in (caption or "")
 
 
 def test_plan_incomplete_keeps_watcher(plan_test_env):

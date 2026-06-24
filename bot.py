@@ -407,6 +407,16 @@ CODEX_MESSAGE_PHASE_FINAL_ANSWER = "final_answer"
 MODEL_COMPLETION_PREFIX = "✅模型执行完成，响应结果如下："
 TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
 TELEGRAM_TABLE_RENDER_MODE = (os.environ.get("TELEGRAM_TABLE_RENDER_MODE") or "cards").strip().lower()
+MODEL_RESPONSE_LOCAL_IMAGE_MAX_COUNT = int(os.environ.get("TELEGRAM_MODEL_LOCAL_IMAGE_MAX_COUNT", "4"))
+MODEL_RESPONSE_LOCAL_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+MODEL_RESPONSE_LOCAL_IMAGE_TOKEN_RE = re.compile(
+    r"(?P<path>(?:~|/|[A-Za-z0-9_.-]+/)[^\s`\"'<>|\]]+?\.(?:png|jpe?g|webp))",
+    re.IGNORECASE,
+)
+MODEL_RESPONSE_MARKDOWN_IMAGE_RE = re.compile(
+    r"!?\[[^\]]*\]\((?P<path>[^)\s]+?\.(?:png|jpe?g|webp))(?:\s+\"[^\"]*\")?\)",
+    re.IGNORECASE,
+)
 if TELEGRAM_TABLE_RENDER_MODE not in {"cards", "pre", "off"}:
     worker_log.warning(
         "未识别的 TELEGRAM_TABLE_RENDER_MODE=%s，回退为 cards",
@@ -1618,6 +1628,196 @@ def _render_markdown_tables_for_telegram(text: str) -> str:
     if not changed:
         return text
     return "\n".join(rendered_lines)
+
+
+def _path_is_within_directory(path: Path, directory: Path) -> bool:
+    """判断文件是否位于允许目录内，防止模型回复触发任意本机文件回传。"""
+
+    try:
+        path.resolve(strict=False).relative_to(directory.resolve(strict=False))
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _model_response_local_image_roots(
+    *,
+    session_path: Optional[Path] = None,
+    session_cwd: Optional[str] = None,
+) -> list[Path]:
+    """返回模型回复图片可自动回传的项目根目录列表。"""
+
+    root_candidates: list[Path] = []
+    if session_cwd:
+        root_candidates.append(resolve_path(session_cwd))
+    elif session_path is not None:
+        detected_cwd = _read_session_meta_cwd(session_path)
+        if detected_cwd:
+            root_candidates.append(resolve_path(detected_cwd))
+    if PRIMARY_WORKDIR is not None:
+        root_candidates.append(PRIMARY_WORKDIR)
+    env_workdir = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
+    if env_workdir:
+        root_candidates.append(resolve_path(env_workdir))
+
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in root_candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        if not resolved.exists() or not resolved.is_dir():
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+def _clean_model_response_local_image_token(raw_path: str) -> Optional[str]:
+    """清洗模型输出中的图片路径 token，过滤 URL 与明显无效内容。"""
+
+    token = (raw_path or "").strip().strip("`'\"")
+    token = token.rstrip(".,;:，。；：、")
+    if not token:
+        return None
+    parsed = urlparse(token)
+    if parsed.scheme and parsed.scheme != "file":
+        return None
+    if parsed.scheme == "file":
+        token = unquote(parsed.path or "")
+    return token or None
+
+
+def _iter_model_response_local_image_tokens(text: str) -> list[str]:
+    """从模型最终回复中提取可能的本地图片路径 token。"""
+
+    tokens: list[str] = []
+    for pattern in (MODEL_RESPONSE_MARKDOWN_IMAGE_RE, MODEL_RESPONSE_LOCAL_IMAGE_TOKEN_RE):
+        for match in pattern.finditer(text or ""):
+            raw_path = match.group("path")
+            cleaned = _clean_model_response_local_image_token(raw_path)
+            if cleaned:
+                tokens.append(cleaned)
+    return tokens
+
+
+def _resolve_model_response_local_image_path(raw_path: str, roots: Sequence[Path]) -> Optional[Path]:
+    """把模型输出路径解析为允许项目目录内的真实图片文件。"""
+
+    if not roots:
+        return None
+    token_path = Path(raw_path).expanduser()
+    candidates: list[Path]
+    if token_path.is_absolute():
+        candidates = [token_path]
+    else:
+        candidates = [root / token_path for root in roots]
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            continue
+        if resolved.suffix.lower() not in MODEL_RESPONSE_LOCAL_IMAGE_EXTENSIONS:
+            continue
+        if not any(_path_is_within_directory(resolved, root) for root in roots):
+            continue
+        if not resolved.is_file():
+            continue
+        mime_type, _encoding = mimetypes.guess_type(str(resolved))
+        if mime_type and not mime_type.startswith("image/"):
+            continue
+        return resolved
+    return None
+
+
+def _collect_model_response_local_images(
+    text: str,
+    *,
+    session_path: Optional[Path] = None,
+    session_cwd: Optional[str] = None,
+) -> list[Path]:
+    """收集模型回复中可安全回传到 Telegram 的项目内本地图片。"""
+
+    roots = _model_response_local_image_roots(session_path=session_path, session_cwd=session_cwd)
+    if not roots:
+        return []
+
+    images: list[Path] = []
+    seen: set[str] = set()
+    max_count = max(MODEL_RESPONSE_LOCAL_IMAGE_MAX_COUNT, 0)
+    if max_count == 0:
+        return []
+    for token in _iter_model_response_local_image_tokens(text):
+        image_path = _resolve_model_response_local_image_path(token, roots)
+        if image_path is None:
+            continue
+        key = str(image_path.resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        images.append(image_path)
+        if len(images) >= max_count:
+            break
+    return images
+
+
+def _model_response_local_image_caption(image_path: Path, index: int, total: int) -> str:
+    """生成模型产物图片的 Telegram caption。"""
+
+    prefix = "模型输出图片"
+    if total > 1:
+        prefix = f"{prefix} {index}/{total}"
+    return f"{prefix}：{image_path.name}"
+
+
+async def _send_model_response_local_images(chat_id: int, image_paths: Sequence[Path]) -> None:
+    """把模型回复引用的本地图片发送为 Telegram 可预览图片，失败时降级文件。"""
+
+    if not image_paths:
+        return
+    bot = current_bot()
+    total = len(image_paths)
+    for index, image_path in enumerate(image_paths, 1):
+        caption = _model_response_local_image_caption(image_path, index, total)
+        try:
+            await _send_with_retry(
+                lambda image_path=image_path, caption=caption: bot.send_photo(
+                    chat_id=chat_id,
+                    photo=FSInputFile(str(image_path)),
+                    caption=caption,
+                )
+            )
+            worker_log.info(
+                "模型输出本地图片已发送",
+                extra={"chat": chat_id, "photo": str(image_path), **_session_extra()},
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001
+            worker_log.warning(
+                "模型输出本地图片发送失败，准备降级为文件：%s",
+                exc,
+                extra={"chat": chat_id, "photo": str(image_path), **_session_extra()},
+            )
+
+        try:
+            await _send_with_retry(
+                lambda image_path=image_path, caption=caption: bot.send_document(
+                    chat_id=chat_id,
+                    document=FSInputFile(str(image_path)),
+                    caption=f"{caption}（图片直发失败，已降级为文件）",
+                )
+            )
+        except Exception as fallback_exc:  # noqa: BLE001
+            worker_log.warning(
+                "模型输出本地图片降级文件发送失败：%s",
+                fallback_exc,
+                extra={"chat": chat_id, "photo": str(image_path), **_session_extra()},
+            )
 
 
 _TELEGRAM_FENCE_LINE_RE = re.compile(r"^\s*```")
@@ -14964,6 +15164,12 @@ async def _deliver_pending_messages_locked(
             continue
         # Telegram 不支持 Markdown 表格；只在展示层转为卡片/清单，终端与 JSONL 原文保持不变。
         text_to_send = _render_markdown_tables_for_telegram(text_to_send)
+        # 模型可能只在最终回复中列出本地图片产物路径；这里在 Telegram 展示层补发可预览图片。
+        local_images_to_send = _collect_model_response_local_images(
+            text_to_send,
+            session_path=session_path,
+            session_cwd=native_session_cwd,
+        )
         message_task_id = parallel_task_id or _peek_pending_session_task_binding(session_key) or bound_task_id
         native_quick_reply_payload = None
         native_commit_callback_payload = None
@@ -15083,6 +15289,7 @@ async def _deliver_pending_messages_locked(
                     event_offset=event_offset,
                     content=delivered_payload or formatted_text,
                 )
+            await _send_model_response_local_images(chat_id, local_images_to_send)
             if should_prompt_plan_confirm:
                 await _maybe_send_plan_confirm_prompt(chat_id, session_key, plan_text=text_to_send)
             await _post_delivery_compact_checks(chat_id, session_key)
