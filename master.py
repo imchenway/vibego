@@ -3263,9 +3263,33 @@ async def _send_restart_project_overview(bot: Bot, chat_ids: Sequence[int]) -> N
             delivered.add(chat_id)
 
 
+def _upgrade_report_pending() -> bool:
+    """判断是否有升级最终报告待发送，用于抑制重复启动通知。"""
+
+    return _UPGRADE_REPORT_PATH.exists()
+
+
+def _discard_restart_signal_files() -> None:
+    """升级最终报告接管通知后，清理重启信号避免下次启动重复推送。"""
+
+    for candidate in (RESTART_SIGNAL_PATH, *LEGACY_RESTART_SIGNAL_PATHS):
+        _safe_remove(candidate)
+
+
+def _discard_start_signal_file() -> None:
+    """升级最终报告接管通知后，清理 CLI 自动 /start 信号。"""
+
+    _safe_remove(START_SIGNAL_PATH)
+
+
 async def _notify_restart_success(bot: Bot) -> None:
     """在新 master 启动时读取 signal 并通知触发者（改进版：支持超时检测和详细诊断）"""
     restart_expected = os.environ.pop("MASTER_RESTART_EXPECTED", None)
+    if _upgrade_report_pending():
+        # 升级重启场景由 _notify_upgrade_report 统一发送最终态；这里不再重复发项目列表。
+        log.info("检测到升级最终报告待发送，跳过重启成功通知以避免重复项目列表。")
+        _discard_restart_signal_files()
+        return
     payload, signal_path = _read_restart_signal()
 
     # 定义重启健康检查阈值（2 分钟）
@@ -3404,6 +3428,11 @@ async def _notify_restart_success(bot: Bot) -> None:
 async def _notify_start_signal(bot: Bot) -> None:
     """启动后读取 CLI 写入的自动 /start 信号并推送通知。"""
 
+    if _upgrade_report_pending():
+        # 升级重启后 start.sh 写入的自动 /start 会与升级最终报告重复，直接交给升级报告处理。
+        log.info("检测到升级最终报告待发送，跳过自动 /start 概览以避免重复项目列表。")
+        _discard_start_signal_file()
+        return
     payload, signal_path = _read_start_signal()
     if not payload:
         return

@@ -432,6 +432,42 @@ async def test_notify_restart_success_pushes_project_overview(repo: ProjectRepos
 
 
 @pytest.mark.asyncio
+async def test_notify_restart_success_skips_overview_when_upgrade_report_pending(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """升级最终报告待发送时，重启通知不应再额外推送项目列表。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+
+    restart_signal = tmp_path / "state" / "restart_signal.json"
+    restart_signal.parent.mkdir(parents=True, exist_ok=True)
+    restart_signal.write_text(
+        json.dumps({"chat_id": 321, "timestamp": datetime.now(master.LOCAL_TZ).isoformat()}),
+        encoding="utf-8",
+    )
+    upgrade_report = tmp_path / "state" / "upgrade_report.json"
+    upgrade_report.write_text(json.dumps({"chat_id": 321}), encoding="utf-8")
+
+    monkeypatch.setattr(master, "RESTART_SIGNAL_PATH", restart_signal)
+    monkeypatch.setattr(master, "LEGACY_RESTART_SIGNAL_PATHS", tuple())
+    monkeypatch.setattr(master, "_UPGRADE_REPORT_PATH", upgrade_report)
+
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_send_projects_overview_to_chat", overview_mock)
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    await master._notify_restart_success(bot)
+
+    bot.send_message.assert_not_awaited()
+    overview_mock.assert_not_awaited()
+    assert not restart_signal.exists()
+    assert upgrade_report.exists()
+
+
+@pytest.mark.asyncio
 async def test_notify_restart_success_missing_signal_triggers_admin_overview(repo: ProjectRepository, tmp_path: Path, monkeypatch):
     """缺少重启信号但预期重启时，应向管理员推送项目列表。"""
     manager = _build_manager(repo, tmp_path)
@@ -512,6 +548,42 @@ async def test_notify_restart_success_send_failure_triggers_admin_overview(repo:
     assert overview_mock.await_count == len(manager.admin_ids)
     called_ids = sorted(call.args[1] for call in overview_mock.await_args_list)
     assert called_ids == sorted(manager.admin_ids)
+
+
+@pytest.mark.asyncio
+async def test_notify_start_signal_skips_overview_when_upgrade_report_pending(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """升级最终报告待发送时，CLI 自动 /start 概览不应重复推送。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+
+    start_signal = tmp_path / "state" / "start_signal.json"
+    start_signal.parent.mkdir(parents=True, exist_ok=True)
+    start_signal.write_text(
+        json.dumps({"chat_ids": [321], "timestamp": datetime.now(master.LOCAL_TZ).isoformat()}),
+        encoding="utf-8",
+    )
+    upgrade_report = tmp_path / "state" / "upgrade_report.json"
+    upgrade_report.write_text(json.dumps({"chat_id": 321}), encoding="utf-8")
+
+    monkeypatch.setattr(master, "START_SIGNAL_PATH", start_signal)
+    monkeypatch.setattr(master, "_UPGRADE_REPORT_PATH", upgrade_report)
+
+    overview_mock = AsyncMock()
+    monkeypatch.setattr(master, "_deliver_master_start_overview", overview_mock)
+    monkeypatch.setattr(master.asyncio, "sleep", AsyncMock())
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    await master._notify_start_signal(bot)
+
+    overview_mock.assert_not_awaited()
+    assert not start_signal.exists()
+    assert upgrade_report.exists()
 
 
 @pytest.mark.asyncio
