@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from types import SimpleNamespace
@@ -202,6 +203,12 @@ def _codex_response_item_final_event(message: str) -> dict:
             "content": [{"type": "output_text", "text": message}],
         },
     }
+
+
+def _codex_response_item_final_event_at(message: str, timestamp: str) -> dict:
+    event = _codex_response_item_final_event(message)
+    event["timestamp"] = timestamp
+    return event
 
 
 def _memory_citation_block() -> str:
@@ -419,6 +426,68 @@ def test_deliver_pending_messages_ignores_local_image_outside_project(plan_test_
     bot.MODEL_CANONICAL_NAME = "codex"
 
     result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert env["dummy_bot"].sent_photos == []
+    assert env["dummy_bot"].sent_documents == []
+
+
+def test_deliver_pending_messages_sends_recent_tmp_image_after_text(plan_test_env, monkeypatch, tmp_path: Path):
+    """模型刚生成并明确引用的 /tmp 图片应在文字后直发到 Telegram。"""
+
+    env = plan_test_env
+    chat_id = 1513
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    tmp_image = Path("/tmp") / f"vibego-model-response-recent-{os.getpid()}-{int(time.time() * 1000)}.png"
+    tmp_image.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    now = time.time()
+    os.utime(tmp_image, (now, now))
+    event_timestamp = datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z")
+    monkeypatch.setattr(bot, "PRIMARY_WORKDIR", project_root)
+    final_text = f"我又画了 4 个细稿方向：`{tmp_image}`"
+    env["append_events"]([_codex_response_item_final_event_at(final_text, event_timestamp)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    try:
+        result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+    finally:
+        tmp_image.unlink(missing_ok=True)
+
+    assert result is True
+    assert [item[0] for item in env["delivery_events"]] == ["text", "photo"]
+    assert len(env["dummy_bot"].sent_photos) == 1
+    sent_chat_id, sent_photo, caption = env["dummy_bot"].sent_photos[0]
+    assert sent_chat_id == chat_id
+    assert type(sent_photo).__name__ == "FSInputFile"
+    assert tmp_image.name in (caption or "")
+
+
+def test_deliver_pending_messages_ignores_stale_tmp_image(plan_test_env, monkeypatch, tmp_path: Path):
+    """过旧的 /tmp 图片不得自动回传，避免误发历史临时文件。"""
+
+    env = plan_test_env
+    chat_id = 1514
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    tmp_image = Path("/tmp") / f"vibego-model-response-stale-{os.getpid()}-{int(time.time() * 1000)}.png"
+    tmp_image.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    old_time = time.time() - 86400
+    os.utime(tmp_image, (old_time, old_time))
+    event_timestamp = datetime.fromtimestamp(time.time(), timezone.utc).isoformat().replace("+00:00", "Z")
+    monkeypatch.setattr(bot, "PRIMARY_WORKDIR", project_root)
+    final_text = f"历史调试图：`{tmp_image}`"
+    env["append_events"]([_codex_response_item_final_event_at(final_text, event_timestamp)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    try:
+        result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+    finally:
+        tmp_image.unlink(missing_ok=True)
 
     assert result is True
     assert env["dummy_bot"].sent_photos == []

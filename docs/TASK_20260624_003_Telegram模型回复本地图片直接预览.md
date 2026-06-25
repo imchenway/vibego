@@ -4,7 +4,7 @@
 
 用户反馈：模型已经生成了本地 PNG 流程图，并在 Telegram 回复中列出路径，但 Telegram 只能看到文本路径，不能直接预览图片。
 
-目标：当模型最终回复引用当前项目目录内的本地图片产物时，vibego 自动在文本回复后补发 Telegram 可预览图片；若 Telegram 图片直发失败，则降级为文件发送，避免产物丢失。
+目标：当模型最终回复引用当前项目目录内的本地图片产物时，vibego 自动在文本回复后补发 Telegram 可预览图片；后续 `TASK_20260625_002` 已补充近期 `/tmp`/`TMPDIR` 图片安全白名单；若 Telegram 图片直发失败，则降级为文件发送，避免产物丢失。
 
 ## 2. 现状与根因
 
@@ -36,7 +36,7 @@
   - 反引号包裹路径。
 - 安全边界：
   - 只允许当前 session cwd、`PRIMARY_WORKDIR`、`MODEL_WORKDIR/CODEX_WORKDIR` 内的图片；
-  - 项目目录外绝对路径不自动发送；
+  - 项目目录外绝对路径默认不自动发送；`TASK_20260625_002` 起，模型显式引用且通过扩展名、MIME、大小、mtime 与事件时间窗口校验的近期 `/tmp`/`TMPDIR` 图片例外允许直发；
   - 缺失文件或非图片扩展不发送；
   - 每条回复最多发送 `TELEGRAM_MODEL_LOCAL_IMAGE_MAX_COUNT` 张，默认 4 张；
   - 同一路径去重。
@@ -57,6 +57,8 @@
 | --- | --- | --- |
 | 模型回复列出项目内 PNG | `test_deliver_pending_messages_sends_project_local_image_after_text` | 文本先发，随后 `send_photo` 发送图片。 |
 | 模型回复列出项目外图片 | `test_deliver_pending_messages_ignores_local_image_outside_project` | 不发送图片/文件，避免误发本机文件。 |
+| 模型回复列出近期 `/tmp` 图片 | `test_deliver_pending_messages_sends_recent_tmp_image_after_text` | 文本先发，随后 `send_photo` 发送图片。 |
+| 模型回复列出过旧 `/tmp` 图片 | `test_deliver_pending_messages_ignores_stale_tmp_image` | 不发送图片/文件，避免误发历史临时文件。 |
 | Telegram 图片直发失败 | `test_deliver_pending_messages_falls_back_to_document_when_local_image_photo_fails` | 先尝试 `send_photo`，失败后降级 `send_document`。 |
 | 命令二维码回传回归 | `tests/test_command_execution_flow.py` | 既有 `TG_PHOTO_FILE` 行为不变。 |
 

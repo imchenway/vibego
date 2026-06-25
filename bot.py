@@ -409,6 +409,14 @@ TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
 TELEGRAM_TABLE_RENDER_MODE = (os.environ.get("TELEGRAM_TABLE_RENDER_MODE") or "cards").strip().lower()
 MODEL_RESPONSE_LOCAL_IMAGE_MAX_COUNT = int(os.environ.get("TELEGRAM_MODEL_LOCAL_IMAGE_MAX_COUNT", "4"))
 MODEL_RESPONSE_LOCAL_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+MODEL_RESPONSE_TMP_IMAGE_MAX_AGE_SECONDS = max(
+    _env_float("TELEGRAM_MODEL_TMP_IMAGE_MAX_AGE_SECONDS", 1800.0),
+    0.0,
+)
+MODEL_RESPONSE_TMP_IMAGE_MAX_BYTES = max(
+    _env_int("TELEGRAM_MODEL_TMP_IMAGE_MAX_BYTES", 20 * 1024 * 1024),
+    0,
+)
 MODEL_RESPONSE_LOCAL_IMAGE_TOKEN_RE = re.compile(
     r"(?P<path>(?:~|/|[A-Za-z0-9_.-]+/)[^\s`\"'<>|\]]+?\.(?:png|jpe?g|webp))",
     re.IGNORECASE,
@@ -1640,6 +1648,20 @@ def _path_is_within_directory(path: Path, directory: Path) -> bool:
         return False
 
 
+def _parse_model_response_event_timestamp_epoch(event_timestamp: Optional[str]) -> Optional[float]:
+    """解析模型输出事件时间，用于限制 /tmp 图片只能回传近期产物。"""
+
+    if not event_timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(event_timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
 def _model_response_local_image_roots(
     *,
     session_path: Optional[Path] = None,
@@ -1659,6 +1681,31 @@ def _model_response_local_image_roots(
     env_workdir = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
     if env_workdir:
         root_candidates.append(resolve_path(env_workdir))
+
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in root_candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        if not resolved.exists() or not resolved.is_dir():
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+def _model_response_tmp_image_roots() -> list[Path]:
+    """返回允许直发近期临时图片的系统临时目录，兼容 macOS /tmp -> /private/tmp。"""
+
+    root_candidates: list[Path] = [Path("/tmp"), Path("/private/tmp")]
+    tmpdir = (os.environ.get("TMPDIR") or "").strip()
+    if tmpdir:
+        root_candidates.append(Path(tmpdir).expanduser())
 
     roots: list[Path] = []
     seen: set[str] = set()
@@ -1705,8 +1752,46 @@ def _iter_model_response_local_image_tokens(text: str) -> list[str]:
     return tokens
 
 
-def _resolve_model_response_local_image_path(raw_path: str, roots: Sequence[Path]) -> Optional[Path]:
-    """把模型输出路径解析为允许项目目录内的真实图片文件。"""
+def _is_recent_tmp_model_response_image(
+    resolved: Path,
+    *,
+    event_timestamp: Optional[str],
+) -> bool:
+    """判断项目外 /tmp 图片是否满足近期产物安全边界。"""
+
+    event_epoch = _parse_model_response_event_timestamp_epoch(event_timestamp)
+    if event_epoch is None:
+        return False
+    if resolved.suffix.lower() not in MODEL_RESPONSE_LOCAL_IMAGE_EXTENSIONS:
+        return False
+    if not any(_path_is_within_directory(resolved, root) for root in _model_response_tmp_image_roots()):
+        return False
+    if not resolved.is_file():
+        return False
+    try:
+        stat = resolved.stat()
+    except OSError:
+        return False
+    if MODEL_RESPONSE_TMP_IMAGE_MAX_BYTES > 0 and stat.st_size > MODEL_RESPONSE_TMP_IMAGE_MAX_BYTES:
+        return False
+    if (
+        MODEL_RESPONSE_TMP_IMAGE_MAX_AGE_SECONDS > 0
+        and abs(stat.st_mtime - event_epoch) > MODEL_RESPONSE_TMP_IMAGE_MAX_AGE_SECONDS
+    ):
+        return False
+    mime_type, _encoding = mimetypes.guess_type(str(resolved))
+    if mime_type and not mime_type.startswith("image/"):
+        return False
+    return True
+
+
+def _resolve_model_response_local_image_path(
+    raw_path: str,
+    roots: Sequence[Path],
+    *,
+    event_timestamp: Optional[str] = None,
+) -> Optional[Path]:
+    """把模型输出路径解析为允许项目目录内或近期 /tmp 的真实图片文件。"""
 
     if not roots:
         return None
@@ -1724,8 +1809,14 @@ def _resolve_model_response_local_image_path(raw_path: str, roots: Sequence[Path
             continue
         if resolved.suffix.lower() not in MODEL_RESPONSE_LOCAL_IMAGE_EXTENSIONS:
             continue
-        if not any(_path_is_within_directory(resolved, root) for root in roots):
-            continue
+        within_project_root = any(_path_is_within_directory(resolved, root) for root in roots)
+        if not within_project_root:
+            # /tmp 是模型常用的临时产物目录；只允许“绝对路径 + 近期 + 图片 MIME/大小受限”的显式产物。
+            if not token_path.is_absolute() or not _is_recent_tmp_model_response_image(
+                resolved,
+                event_timestamp=event_timestamp,
+            ):
+                continue
         if not resolved.is_file():
             continue
         mime_type, _encoding = mimetypes.guess_type(str(resolved))
@@ -1740,8 +1831,9 @@ def _collect_model_response_local_images(
     *,
     session_path: Optional[Path] = None,
     session_cwd: Optional[str] = None,
+    event_timestamp: Optional[str] = None,
 ) -> list[Path]:
-    """收集模型回复中可安全回传到 Telegram 的项目内本地图片。"""
+    """收集模型回复中可安全回传到 Telegram 的项目内或近期 /tmp 本地图片。"""
 
     roots = _model_response_local_image_roots(session_path=session_path, session_cwd=session_cwd)
     if not roots:
@@ -1753,7 +1845,11 @@ def _collect_model_response_local_images(
     if max_count == 0:
         return []
     for token in _iter_model_response_local_image_tokens(text):
-        image_path = _resolve_model_response_local_image_path(token, roots)
+        image_path = _resolve_model_response_local_image_path(
+            token,
+            roots,
+            event_timestamp=event_timestamp,
+        )
         if image_path is None:
             continue
         key = str(image_path.resolve(strict=False))
@@ -15185,6 +15281,7 @@ async def _deliver_pending_messages_locked(
             text_to_send,
             session_path=session_path,
             session_cwd=native_session_cwd,
+            event_timestamp=deliverable.timestamp,
         )
         message_task_id = parallel_task_id or _peek_pending_session_task_binding(session_key) or bound_task_id
         native_quick_reply_payload = None
