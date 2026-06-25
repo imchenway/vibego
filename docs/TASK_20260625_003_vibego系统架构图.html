@@ -1,0 +1,328 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>vibego 系统架构图</title><style>:root{color-scheme:light;--bg:oklch(0.985 0.006 250);--ink:oklch(0.22 0.035 248);--muted:oklch(0.48 0.035 248);--line:oklch(0.82 0.02 250);--accent:oklch(0.57 0.16 250);--surface:oklch(0.965 0.012 250);--paper:oklch(0.995 0.004 250)}*{box-sizing:border-box}body{margin:0;min-width:1024px;background:radial-gradient(circle at 16% 8%,oklch(0.94 0.04 250),transparent 30%),var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",system-ui,sans-serif}header{padding:28px 40px 14px;display:flex;align-items:end;justify-content:space-between;gap:24px;border-bottom:1px solid var(--line);background:color-mix(in oklch,var(--bg) 88%,transparent);position:sticky;top:0;z-index:10;backdrop-filter:blur(10px)}h1{margin:0;font-size:30px;letter-spacing:-.03em}.sub{margin:6px 0 0;color:var(--muted);max-width:78ch}nav{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}nav a{min-height:34px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:999px;color:var(--ink);text-decoration:none;background:var(--paper)}nav a:hover,nav a:focus{outline:3px solid color-mix(in oklch,var(--accent) 28%,transparent)}main{padding:24px 40px 48px}.hero{overflow:auto;border:1px solid var(--line);border-radius:26px;background:var(--paper);box-shadow:0 20px 70px oklch(0.45 0.06 250/.14)}.hero svg{display:block;width:100%;min-width:1480px;height:auto}.grid{margin-top:22px;display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.58fr);gap:18px;align-items:start}section{background:var(--paper);border:1px solid var(--line);border-radius:22px;padding:20px}h2{margin:0 0 12px;font-size:18px;letter-spacing:-.01em}ul{margin:0;padding-left:20px}li+li{margin-top:8px}.compare{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.tile{border:1px solid var(--line);border-radius:16px;padding:14px;background:var(--surface)}.tile strong{display:block;margin-bottom:6px}details{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}summary{cursor:pointer;min-height:32px;font-weight:700}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}pre{overflow:auto;max-height:460px;padding:14px;border-radius:16px;background:oklch(0.955 0.012 250)}@media(max-width:1180px){header{align-items:start;flex-direction:column}.grid,.compare{grid-template-columns:1fr}}</style></head><body><header><div><h1>vibego 系统架构图</h1><p class="sub">单 HTML 可点击预览版本。主图展示 Telegram 入口、Master 控制面、Worker 业务面、tmux 模型运行面与运行期数据目录。</p></div><nav aria-label="页面内导航"><a href="#map">架构图</a><a href="#compare">方式对比</a><a href="#evidence">证据</a><a href="#mermaid">Mermaid</a></nav></header><main><div id="map" class="hero" aria-label="vibego 系统架构图，可横向滚动查看完整内容"><svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1230" viewBox="0 0 1800 1230" role="img" aria-labelledby="title desc"><title id="title">vibego 系统架构图</title><desc id="desc">展示 Telegram、master、worker、tmux 模型 CLI、session JSONL、SQLite 与运行期配置之间的主要关系。</desc><style>
+svg{background:oklch(0.985 0.006 250);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",system-ui,sans-serif}.title{font-size:38px;font-weight:760;fill:oklch(0.22 0.035 248);letter-spacing:-.02em}.subtitle{font-size:16px;fill:oklch(0.48 0.035 248)}.lane-title{font-size:18px;font-weight:720;fill:oklch(0.22 0.035 248)}.lane-desc{font-size:13px;fill:oklch(0.48 0.035 248)}.node-title{font-size:17px;font-weight:760;fill:oklch(0.22 0.035 248)}.node-sub{font-size:12.5px;fill:oklch(0.48 0.035 248)}.arrow{fill:none;stroke:oklch(0.54 0.08 250);stroke-width:2.2}.arrow-soft{fill:none;stroke:oklch(0.62 0.07 165);stroke-width:2;stroke-dasharray:7 6}.arrow-label{font-size:12px;font-weight:650;fill:oklch(0.48 0.035 248);text-anchor:middle;paint-order:stroke;stroke:oklch(0.985 0.006 250);stroke-width:5;stroke-linejoin:round}.legend-title{font-size:13px;font-weight:760;fill:oklch(0.22 0.035 248)}.legend{font-size:12px;fill:oklch(0.48 0.035 248)}.node:focus rect,.node:hover rect{stroke-width:4;filter:drop-shadow(0 8px 18px oklch(0.62 0.05 250/.20))}
+</style><defs><marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="oklch(0.54 0.08 250)"/></marker></defs><text x="80" y="55" class="title">vibego 系统架构图</text><text x="80" y="83" class="subtitle">Telegram 远程入口 → Master 控制面 → Project Worker → tmux 模型 CLI → JSONL 事件回传。证据锚点见任务文档。</text>
+<g class="lane"><rect x="70" y="105" width="1660" height="135" rx="28" fill="oklch(0.965 0.012 250)" stroke="oklch(0.84 0.018 250)" stroke-width="1.5"/><text x="105" y="143" class="lane-title">入口层：Telegram 与用户</text><text x="105" y="169" class="lane-desc">Master 负责项目级管理，Worker 负责项目业务消息。</text></g>
+<g class="node node-gray" tabindex="0">
+<rect x="105" y="160" width="190" height="58" rx="18" fill="oklch(0.978 0.008 250)" stroke="oklch(0.70 0.025 250)" stroke-width="2"/>
+<text x="123" y="192" class="node-title">用户 / 管理员</text>
+<text x="123" y="218" class="node-sub">
+<tspan x="123" dy="0">Telegram 客户端</tspan>
+</text>
+</g>
+<g class="node node-blue" tabindex="0">
+<rect x="355" y="160" width="205" height="58" rx="18" fill="oklch(0.985 0.018 250)" stroke="oklch(0.64 0.11 250)" stroke-width="2"/>
+<text x="373" y="192" class="node-title">Telegram API</text>
+<text x="373" y="218" class="node-sub">
+<tspan x="373" dy="0">Bot API HTTPS</tspan>
+</text>
+</g>
+<g class="node node-violet" tabindex="0">
+<rect x="635" y="150" width="225" height="74" rx="18" fill="oklch(0.982 0.02 300)" stroke="oklch(0.65 0.12 300)" stroke-width="2"/>
+<text x="653" y="182" class="node-title">Master Bot</text>
+<text x="653" y="208" class="node-sub">
+<tspan x="653" dy="0">项目管理 / upgrade / run</tspan>
+</text>
+</g>
+<g class="node node-blue" tabindex="0">
+<rect x="945" y="150" width="245" height="74" rx="18" fill="oklch(0.985 0.018 250)" stroke="oklch(0.64 0.11 250)" stroke-width="2"/>
+<text x="963" y="182" class="node-title">Project Worker Bot</text>
+<text x="963" y="208" class="node-sub">
+<tspan x="963" dy="0">项目消息 / 任务 / 命令</tspan>
+</text>
+</g>
+<g class="node node-green" tabindex="0">
+<rect x="1270" y="160" width="250" height="58" rx="18" fill="oklch(0.985 0.02 165)" stroke="oklch(0.64 0.11 165)" stroke-width="2"/>
+<text x="1288" y="192" class="node-title">Telegram 回传</text>
+<text x="1288" y="218" class="node-sub">
+<tspan x="1288" dy="0">文本 / 图片 / 按钮 / 状态</tspan>
+</text>
+</g>
+<path class="arrow" d="M295,189 C325.0,189 325.0,189 355,189" marker-end="url(#arrowhead)"/>
+<text x="325.0" y="181.0" class="arrow-label">发送</text>
+<path class="arrow" d="M560,189 C597.5,189 597.5,187 635,187" marker-end="url(#arrowhead)"/>
+<text x="597.5" y="180.0" class="arrow-label">管理</text>
+<path class="arrow" d="M860,187 C902.5,187 902.5,187 945,187" marker-end="url(#arrowhead)"/>
+<text x="902.5" y="179.0" class="arrow-label">项目 bot</text>
+<path class="arrow-soft" d="M1190,187 C1230.0,187 1230.0,189 1270,189" marker-end="url(#arrowhead)"/>
+<text x="1230.0" y="180.0" class="arrow-label">回复</text>
+<g class="lane"><rect x="70" y="280" width="1660" height="180" rx="28" fill="oklch(0.965 0.012 250)" stroke="oklch(0.84 0.018 250)" stroke-width="1.5"/><text x="105" y="318" class="lane-title">控制面：CLI、Master 与项目状态</text><text x="105" y="344" class="lane-desc">master.py 管理多项目 worker，ProjectRepository/StateStore 持久化项目与运行状态。</text></g>
+<g class="node node-gray" tabindex="0">
+<rect x="105" y="348" width="190" height="76" rx="18" fill="oklch(0.978 0.008 250)" stroke="oklch(0.70 0.025 250)" stroke-width="2"/>
+<text x="123" y="380" class="node-title">vibego CLI</text>
+<text x="123" y="406" class="node-sub">
+<tspan x="123" dy="0">init / start / stop /</tspan>
+<tspan x="123" dy="18">status</tspan>
+</text>
+</g>
+<g class="node node-violet" tabindex="0">
+<rect x="355" y="344" width="215" height="84" rx="18" fill="oklch(0.982 0.02 300)" stroke="oklch(0.65 0.12 300)" stroke-width="2"/>
+<text x="373" y="376" class="node-title">master.py</text>
+<text x="373" y="402" class="node-sub">
+<tspan x="373" dy="0">run_worker / stop_worker</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="635" y="344" width="230" height="84" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="653" y="376" class="node-title">Project repo</text>
+<text x="653" y="402" class="node-sub">
+<tspan x="653" dy="0">ProjectRepository /</tspan>
+<tspan x="653" dy="18">projects 表</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="930" y="344" width="210" height="84" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="948" y="376" class="node-title">State store</text>
+<text x="948" y="402" class="node-sub">
+<tspan x="948" dy="0">master_state.json</tspan>
+</text>
+</g>
+<g class="node node-green" tabindex="0">
+<rect x="1215" y="344" width="265" height="84" rx="18" fill="oklch(0.985 0.02 165)" stroke="oklch(0.64 0.11 165)" stroke-width="2"/>
+<text x="1233" y="376" class="node-title">run / stop scripts</text>
+<text x="1233" y="402" class="node-sub">
+<tspan x="1233" dy="0">run_bot.sh / stop_bot.sh</tspan>
+</text>
+</g>
+<path class="arrow" d="M295,386 C325.0,386 325.0,386 355,386" marker-end="url(#arrowhead)"/>
+<text x="325.0" y="378.0" class="arrow-label">调用</text>
+<path class="arrow" d="M570,378 C602.5,378 602.5,378 635,378" marker-end="url(#arrowhead)"/>
+<text x="602.5" y="370.0" class="arrow-label">读写</text>
+<path class="arrow" d="M570,416 C690,464 810,464 930,416" marker-end="url(#arrowhead)"/>
+<text x="760" y="456" class="arrow-label">状态</text>
+<path class="arrow" d="M1140,386 C1177.5,386 1177.5,386 1215,386" marker-end="url(#arrowhead)"/>
+<text x="1177.5" y="378.0" class="arrow-label">启动/停止</text>
+<path class="arrow-soft" d="M1330,344 C1197.5,344 1197.5,224 1065,224" marker-end="url(#arrowhead)"/>
+<text x="1197.5" y="276.0" class="arrow-label">启动 worker</text>
+<g class="lane"><rect x="70" y="505" width="1660" height="245" rx="28" fill="oklch(0.965 0.012 250)" stroke="oklch(0.84 0.018 250)" stroke-width="1.5"/><text x="105" y="543" class="lane-title">Worker 面：消息规整、统一派发与业务服务</text><text x="105" y="569" class="lane-desc">bot.py 是项目 worker 核心，统一发送闸口前完成入站规整、任务/命令/并行会话处理。</text></g>
+<g class="node node-blue" tabindex="0">
+<rect x="105" y="582" width="190" height="86" rx="18" fill="oklch(0.985 0.018 250)" stroke="oklch(0.64 0.11 250)" stroke-width="2"/>
+<text x="123" y="614" class="node-title">bot.py worker</text>
+<text x="123" y="640" class="node-sub">
+<tspan x="123" dy="0">aiogram 事件入口</tspan>
+</text>
+</g>
+<g class="node node-blue" tabindex="0">
+<rect x="350" y="582" width="210" height="86" rx="18" fill="oklch(0.985 0.018 250)" stroke="oklch(0.64 0.11 250)" stroke-width="2"/>
+<text x="368" y="614" class="node-title">入站规整</text>
+<text x="368" y="640" class="node-sub">
+<tspan x="368" dy="0">文本 / 附件 / 相册 / 按钮</tspan>
+</text>
+</g>
+<g class="node node-violet" tabindex="0">
+<rect x="625" y="574" width="235" height="102" rx="18" fill="oklch(0.982 0.02 300)" stroke="oklch(0.65 0.12 300)" stroke-width="2"/>
+<text x="643" y="606" class="node-title">Handle dispatch</text>
+<text x="643" y="632" class="node-sub">
+<tspan x="643" dy="0">_handle_prompt_dispatch</tspan>
+</text>
+</g>
+<g class="node node-violet" tabindex="0">
+<rect x="930" y="574" width="245" height="102" rx="18" fill="oklch(0.982 0.02 300)" stroke="oklch(0.65 0.12 300)" stroke-width="2"/>
+<text x="948" y="606" class="node-title">Dispatch gate</text>
+<text x="948" y="632" class="node-sub">
+<tspan x="948" dy="0">_dispatch_prompt_to_model</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="1230" y="528" width="210" height="82" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="1248" y="560" class="node-title">Task service</text>
+<text x="1248" y="586" class="node-sub">
+<tspan x="1248" dy="0">tasks / notes / files</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="1230" y="626" width="210" height="82" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="1248" y="658" class="node-title">Command service</text>
+<text x="1248" y="684" class="node-sub">
+<tspan x="1248" dy="0">commands / aliases /</tspan>
+<tspan x="1248" dy="18">history</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="1490" y="590" width="210" height="82" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="1508" y="622" class="node-title">Parallel sessions</text>
+<text x="1508" y="648" class="node-sub">
+<tspan x="1508" dy="0">ParallelSessionStore /</tspan>
+<tspan x="1508" dy="18">tmux meta</tspan>
+</text>
+</g>
+<path class="arrow" d="M1190,224 C697.5,224 697.5,582 205,582" marker-end="url(#arrowhead)"/>
+<text x="697.5" y="395.0" class="arrow-label">业务消息</text>
+<path class="arrow" d="M295,625 C322.5,625 322.5,625 350,625" marker-end="url(#arrowhead)"/>
+<path class="arrow" d="M560,625 C592.5,625 592.5,625 625,625" marker-end="url(#arrowhead)"/>
+<path class="arrow" d="M860,625 C895.0,625 895.0,625 930,625" marker-end="url(#arrowhead)"/>
+<text x="895.0" y="617.0" class="arrow-label">统一发送</text>
+<path class="arrow" d="M1175,606 C1202.5,606 1202.5,570 1230,570" marker-end="url(#arrowhead)"/>
+<text x="1202.5" y="580.0" class="arrow-label">任务</text>
+<path class="arrow" d="M1175,646 C1202.5,646 1202.5,666 1230,666" marker-end="url(#arrowhead)"/>
+<text x="1202.5" y="648.0" class="arrow-label">命令</text>
+<path class="arrow" d="M1175,625 C1332.5,625 1332.5,631 1490,631" marker-end="url(#arrowhead)"/>
+<text x="1332.5" y="620.0" class="arrow-label">并行</text>
+<g class="lane"><rect x="70" y="795" width="1660" height="205" rx="28" fill="oklch(0.965 0.012 250)" stroke="oklch(0.84 0.018 250)" stroke-width="1.5"/><text x="105" y="833" class="lane-title">运行面：tmux、模型 CLI 与 session JSONL</text><text x="105" y="859" class="lane-desc">queued/immediate 进入 tmux；模型 CLI 产出 JSONL；watcher 读取增量事件回推 Telegram。</text></g>
+<g class="node node-green" tabindex="0">
+<rect x="105" y="858" width="210" height="86" rx="18" fill="oklch(0.985 0.02 165)" stroke="oklch(0.64 0.11 165)" stroke-width="2"/>
+<text x="123" y="890" class="node-title">tmux send</text>
+<text x="123" y="916" class="node-sub">
+<tspan x="123" dy="0">queue_line / send_line</tspan>
+</text>
+</g>
+<g class="node node-green" tabindex="0">
+<rect x="375" y="858" width="220" height="86" rx="18" fill="oklch(0.985 0.02 165)" stroke="oklch(0.64 0.11 165)" stroke-width="2"/>
+<text x="393" y="890" class="node-title">模型 CLI</text>
+<text x="393" y="916" class="node-sub">
+<tspan x="393" dy="0">Codex / ClaudeCode /</tspan>
+<tspan x="393" dy="18">Gemini</tspan>
+</text>
+</g>
+<g class="node node-blue" tabindex="0">
+<rect x="660" y="858" width="220" height="86" rx="18" fill="oklch(0.985 0.018 250)" stroke="oklch(0.64 0.11 250)" stroke-width="2"/>
+<text x="678" y="890" class="node-title">Session binder</text>
+<text x="678" y="916" class="node-sub">
+<tspan x="678" dy="0">session_binder.py /</tspan>
+<tspan x="678" dy="18">pointer</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="945" y="858" width="220" height="86" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="963" y="890" class="node-title">Session JSONL</text>
+<text x="963" y="916" class="node-sub">
+<tspan x="963" dy="0">~ / .codex / sessions 等</tspan>
+</text>
+</g>
+<g class="node node-blue" tabindex="0">
+<rect x="1230" y="858" width="210" height="86" rx="18" fill="oklch(0.985 0.018 250)" stroke="oklch(0.64 0.11 250)" stroke-width="2"/>
+<text x="1248" y="890" class="node-title">事件 watcher</text>
+<text x="1248" y="916" class="node-sub">
+<tspan x="1248" dy="0">读取 / 去重 / 识别事件</tspan>
+</text>
+</g>
+<g class="node node-green" tabindex="0">
+<rect x="1490" y="858" width="210" height="86" rx="18" fill="oklch(0.985 0.02 165)" stroke="oklch(0.64 0.11 165)" stroke-width="2"/>
+<text x="1508" y="890" class="node-title">回复渲染层</text>
+<text x="1508" y="916" class="node-sub">
+<tspan x="1508" dy="0">文本分片 / 本地图片直发</tspan>
+</text>
+</g>
+<path class="arrow" d="M930,676 C570.0,676 570.0,858 210,858" marker-end="url(#arrowhead)"/>
+<text x="570.0" y="759.0" class="arrow-label">tmux 投递</text>
+<path class="arrow" d="M315,901 C345.0,901 345.0,901 375,901" marker-end="url(#arrowhead)"/>
+<path class="arrow" d="M595,901 C770.0,901 770.0,901 945,901" marker-end="url(#arrowhead)"/>
+<text x="770.0" y="893.0" class="arrow-label">写 JSONL</text>
+<path class="arrow-soft" d="M945,884 C912.5,884 912.5,884 880,884" marker-end="url(#arrowhead)"/>
+<text x="912.5" y="876.0" class="arrow-label">发现/绑定</text>
+<path class="arrow" d="M1165,901 C1197.5,901 1197.5,901 1230,901" marker-end="url(#arrowhead)"/>
+<text x="1197.5" y="893.0" class="arrow-label">增量读取</text>
+<path class="arrow" d="M1440,901 C1465.0,901 1465.0,901 1490,901" marker-end="url(#arrowhead)"/>
+<text x="1465.0" y="893.0" class="arrow-label">格式化</text>
+<path class="arrow-soft" d="M1700,901 C1610.0,901 1610.0,218 1520,218" marker-end="url(#arrowhead)"/>
+<text x="1610.0" y="551.5" class="arrow-label">回 Telegram</text>
+<g class="lane"><rect x="70" y="1045" width="1660" height="125" rx="28" fill="oklch(0.965 0.012 250)" stroke="oklch(0.84 0.018 250)" stroke-width="1.5"/><text x="105" y="1083" class="lane-title">存储与运行期目录</text><text x="105" y="1109" class="lane-desc">默认写入 ~/.config/vibego，不把日志、状态和 token 放进仓库。</text></g>
+<g class="node node-gray" tabindex="0">
+<rect x="105" y="1092" width="235" height="66" rx="18" fill="oklch(0.978 0.008 250)" stroke="oklch(0.70 0.025 250)" stroke-width="2"/>
+<text x="123" y="1124" class="node-title">~/.config/vibego</text>
+<text x="123" y="1150" class="node-sub">
+<tspan x="123" dy="0">config / logs / state /</tspan>
+<tspan x="123" dy="18">data</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="405" y="1092" width="245" height="66" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="423" y="1124" class="node-title">Master config DB</text>
+<text x="423" y="1150" class="node-sub">
+<tspan x="423" dy="0">master.db /</tspan>
+<tspan x="423" dy="18">projects.json</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="715" y="1092" width="245" height="66" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="733" y="1124" class="node-title">Task + command DB</text>
+<text x="733" y="1150" class="node-sub">
+<tspan x="733" dy="0">tasks / command_history</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="1015" y="1092" width="250" height="66" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="1033" y="1124" class="node-title">Logs + pointer</text>
+<text x="1033" y="1150" class="node-sub">
+<tspan x="1033" dy="0">run_bot.log /</tspan>
+<tspan x="1033" dy="18">current_session.txt</tspan>
+</text>
+</g>
+<g class="node node-orange" tabindex="0">
+<rect x="1330" y="1092" width="230" height="66" rx="18" fill="oklch(0.985 0.025 70)" stroke="oklch(0.70 0.13 70)" stroke-width="2"/>
+<text x="1348" y="1124" class="node-title">Recent sessions</text>
+<text x="1348" y="1150" class="node-sub">
+<tspan x="1348" dy="0">recent_sessions.json</tspan>
+</text>
+</g>
+<path class="arrow-soft" d="M740,428 C633.5,428 633.5,1092 527,1092" marker-end="url(#arrowhead)"/>
+<text x="633.5" y="752.0" class="arrow-label">项目配置</text>
+<path class="arrow-soft" d="M1480,428 C1600,640 1220,900 1140,1092" marker-end="url(#arrowhead)"/>
+<text x="1300" y="780" class="arrow-label">日志 / pointer</text>
+<path class="arrow-soft" d="M1335,944 C1237.5,944 1237.5,1092 1140,1092" marker-end="url(#arrowhead)"/>
+<text x="1237.5" y="1010.0" class="arrow-label">运行日志</text>
+<path class="arrow-soft" d="M770,944 C1105.0,944 1105.0,1092 1440,1092" marker-end="url(#arrowhead)"/>
+<text x="1105.0" y="1010.0" class="arrow-label">最近会话</text>
+<g class="legend-block"><rect x="1545" y="38" width="180" height="62" rx="16" fill="oklch(0.98 0.008 250)" stroke="oklch(0.84 0.018 250)"/><text x="1562" y="62" class="legend-title">读图提示</text><text x="1562" y="82" class="legend">实线=主链路，虚线=观察/回传/存储</text></g></svg></div><div class="grid"><section id="compare"><h2>这四种交付方式的对比</h2><div class="compare"><div class="tile"><strong>HTML</strong>可点击、可滚动、可折叠证据，最适合在 Codex 内确认页面/图形体验。</div><div class="tile"><strong>SVG</strong>矢量清晰、可缩放，适合文档长期留存和二次编辑。</div><div class="tile"><strong>PNG</strong>打开最快，适合聊天里快速确认，但不可编辑。</div><div class="tile"><strong>Mermaid</strong>最轻、最可维护，适合架构逻辑频繁更新时作为源码。</div></div></section><section><h2>核心结论</h2><ul><li>vibego 是 Telegram 到本地终端 AI CLI 的编排器，不是传统前后端 Web 服务。</li><li>Master 管项目与 worker 生命周期，Project Worker 处理项目内消息、任务、命令和模型会话。</li><li>最终入模边界集中在 <code>_dispatch_prompt_to_model</code>，底层通过 tmux 投递到模型 CLI。</li><li>Codex 等模型的结构化回传主要依赖 session JSONL 与 watcher 增量读取。</li></ul></section></div><section id="evidence" style="margin-top:18px"><h2>仓库证据锚点</h2><ul><li><code>README.md</code>：功能介绍、目录结构、运行期目录、模型切换、配置要点。</li><li><code>pyproject.toml</code>：Python/setuptools 构建、依赖、CLI 入口。</li><li><code>master.py</code>：Master bot controller、run/stop worker、ProjectRepository、StateStore。</li><li><code>bot.py</code>：Telegram 提示词 → Mac 执行 → 回推、TaskService、CommandService、ParallelSessionStore、tmux_send_line、tmux_queue_line、_dispatch_prompt_to_model。</li><li><code>scripts/run_bot.sh</code> / <code>scripts/start_tmux_codex.sh</code> / <code>scripts/session_binder.py</code>：worker 启动、tmux 模型 CLI、session pointer 绑定。</li></ul></section><section id="mermaid" style="margin-top:18px"><h2>Mermaid 源码</h2><details><summary>展开 Mermaid 源码</summary><pre>flowchart LR
+  user[&quot;用户 / 管理员&quot;] --&gt; tg[&quot;Telegram Bot API&quot;]
+  tg --&gt; masterBot[&quot;Master Bot&quot;]
+  tg --&gt; workerBot[&quot;Project Worker Bot&quot;]
+
+  subgraph control[&quot;控制面&quot;]
+    cli[&quot;vibego CLI
+init/start/stop/status/doctor&quot;] --&gt; master[&quot;master.py
+run_worker / stop_worker&quot;]
+    master --&gt; repo[&quot;ProjectRepository
+master.db + projects.json&quot;]
+    master --&gt; state[&quot;StateStore
+master_state.json&quot;]
+    master --&gt; scripts[&quot;scripts/run_bot.sh
+scripts/stop_bot.sh&quot;]
+  end
+
+  masterBot --&gt; master
+  scripts --&gt; worker[&quot;bot.py worker&quot;]
+  workerBot --&gt; worker
+
+  subgraph workerPlane[&quot;Worker 面&quot;]
+    worker --&gt; ingress[&quot;入站规整
+文本/附件/相册/按钮&quot;]
+    ingress --&gt; handle[&quot;_handle_prompt_dispatch
+规约前缀 + PLAN + queued 优先&quot;]
+    handle --&gt; dispatch[&quot;_dispatch_prompt_to_model
+内部标记拦截 + pointer 校验&quot;]
+    worker --&gt; tasks[&quot;TaskService
+任务/备注/附件/历史&quot;]
+    worker --&gt; commands[&quot;CommandService
+命令/别名/历史&quot;]
+    worker --&gt; parallel[&quot;ParallelSessionStore
+并行会话&quot;]
+  end
+
+  subgraph runtime[&quot;运行面&quot;]
+    dispatch --&gt; send[&quot;tmux_queue_line / tmux_send_line&quot;]
+    send --&gt; model[&quot;模型 CLI
+Codex / ClaudeCode / Gemini / Copilot&quot;]
+    model --&gt; jsonl[&quot;Session JSONL&quot;]
+    binder[&quot;session_binder.py&quot;] -.绑定 pointer.-&gt; jsonl
+    jsonl --&gt; watcher[&quot;事件 watcher
+读取/去重/识别&quot;]
+    watcher --&gt; reply[&quot;回复渲染层
+文本分片 / 图片直发&quot;]
+  end
+
+  subgraph storage[&quot;存储与运行期目录&quot;]
+    cfg[&quot;~/.config/vibego&quot;]
+    db[&quot;master.db / projects.json&quot;]
+    taskdb[&quot;task DB / command history&quot;]
+    logs[&quot;run_bot.log / model.log / current_session.txt&quot;]
+    recent[&quot;recent_sessions.json&quot;]
+  end
+
+  repo --&gt; db
+  state --&gt; cfg
+  tasks --&gt; taskdb
+  commands --&gt; taskdb
+  send --&gt; logs
+  binder --&gt; recent
+  reply --&gt; tg
+</pre></details></section></main></body></html>

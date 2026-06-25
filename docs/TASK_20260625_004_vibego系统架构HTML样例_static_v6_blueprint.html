@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vibego 系统架构 HTML 蓝图</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.982 0.006 250);
+      --paper: oklch(0.996 0.004 250);
+      --ink: oklch(0.22 0.035 248);
+      --muted: oklch(0.48 0.035 248);
+      --line: oklch(0.80 0.030 250);
+      --blue: oklch(0.58 0.14 252);
+      --violet: oklch(0.58 0.13 304);
+      --green: oklch(0.57 0.12 166);
+      --cyan: oklch(0.58 0.11 205);
+      --amber: oklch(0.68 0.16 72);
+      --danger: oklch(0.58 0.16 28);
+      --focus: oklch(0.68 0.16 252 / 0.38);
+      --shadow: 0 18px 55px oklch(0.42 0.06 250 / 0.11);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 18% 0%, oklch(0.935 0.035 252), transparent 28rem), var(--bg);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    }
+    button { font: inherit; }
+    .page { max-width: 1260px; margin: 0 auto; padding: 22px 22px 32px; }
+    .map-head { margin-bottom: 12px; }
+    .eyebrow { margin: 0 0 4px; color: var(--blue); font-size: 11px; font-weight: 820; letter-spacing: .09em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 27px; line-height: 1.1; letter-spacing: -.03em; }
+    .summary { margin: 6px 0 0; color: var(--muted); }
+    .blueprint {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(180deg, oklch(0.993 0.004 250), oklch(0.973 0.010 250));
+      box-shadow: var(--shadow);
+      padding: 14px;
+      overflow: hidden;
+    }
+    .band {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 160px minmax(0, 1fr);
+      gap: 14px;
+      align-items: stretch;
+      min-height: 112px;
+      border: 1px solid color-mix(in oklch, var(--line) 88%, transparent);
+      border-radius: 22px;
+      background: color-mix(in oklch, var(--paper) 72%, transparent);
+      padding: 13px;
+    }
+    .band-head { display: grid; align-content: center; gap: 4px; min-width: 0; border-right: 1px solid color-mix(in oklch, var(--line) 72%, transparent); padding-right: 12px; }
+    .band-code { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 999px; color: oklch(0.99 0.004 250); background: var(--blue); font-size: 12px; font-weight: 850; }
+    .band-head h2 { margin: 5px 0 0; font-size: 20px; letter-spacing: -.025em; }
+    .band-head p { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .band-modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 10px; align-content: center; }
+    .module {
+      min-height: 78px;
+      width: 100%;
+      display: grid;
+      align-content: center;
+      gap: 4px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--paper);
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      padding: 12px;
+      overflow-wrap: anywhere;
+    }
+    .module:hover { border-color: var(--blue); }
+    .module:focus-visible { outline: 4px solid var(--focus); outline-offset: 2px; }
+    .module[aria-pressed="true"] { border-color: var(--blue); box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--blue) 45%, transparent); }
+    .module[data-kind="external"] { border-color: color-mix(in oklch, var(--blue) 46%, var(--line)); }
+    .module[data-kind="control"] { border-color: color-mix(in oklch, var(--violet) 50%, var(--line)); background: oklch(0.986 0.010 304); }
+    .module[data-kind="runtime"] { border-color: color-mix(in oklch, var(--cyan) 54%, var(--line)); background: oklch(0.986 0.012 205); }
+    .module[data-kind="data"] { border-color: color-mix(in oklch, var(--green) 54%, var(--line)); background: oklch(0.986 0.014 166); box-shadow: inset 0 -3px 0 color-mix(in oklch, var(--amber) 32%, transparent); }
+    .module-name { font-weight: 800; font-size: 14px; line-height: 1.22; }
+    .module-hint { color: var(--ink); font-size: 12px; line-height: 1.32; opacity: .78; }
+    .module-type { justify-self: start; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; color: var(--muted); background: color-mix(in oklch, var(--paper) 62%, transparent); font-size: 11px; line-height: 1.2; }
+    .flow { position: relative; z-index: 1; display: grid; place-items: center; min-height: 28px; color: var(--muted); font-size: 12px; }
+    .flow::before { content: "↓"; color: var(--blue); font-size: 22px; font-weight: 900; line-height: 1; }
+    .flow span { margin-left: 8px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 12px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; background: color-mix(in oklch, var(--paper) 70%, transparent); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); }
+    .dot.control { background: var(--violet); } .dot.runtime { background: var(--cyan); } .dot.data { background: var(--green); } .dot.absent { background: var(--danger); }
+    .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: oklch(0.20 0.03 250 / .26); }
+    .modal-backdrop[hidden] { display: none; }
+    .node-modal { width: min(520px, 100%); max-height: min(680px, calc(100vh - 40px)); overflow: auto; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); box-shadow: 0 26px 70px oklch(0.30 0.05 250 / .28); padding: 16px; }
+    .modal-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+    .modal-head h2 { margin: 0 0 4px; font-size: 19px; }
+    .modal-close { width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in oklch, var(--paper) 70%, oklch(0.965 0.012 250)); cursor: pointer; }
+    .modal-close:focus-visible { outline: 4px solid var(--focus); outline-offset: 2px; }
+    .details-kind { display: inline-flex; margin: 0 0 9px; border-radius: 999px; padding: 3px 9px; background: oklch(0.965 0.012 250); color: var(--muted); border: 1px solid var(--line); font-size: 12px; }
+    .detail-block { border-top: 1px solid var(--line); padding-top: 9px; margin-top: 9px; }
+    .detail-block h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .detail-list { margin: 0; padding-left: 18px; }
+    .detail-list li + li { margin-top: 5px; }
+    @media (max-width: 760px) {
+      .page { padding: 16px 8px 26px; }
+      .blueprint { padding: 8px; border-radius: 22px; }
+      .band { grid-template-columns: 1fr; gap: 10px; min-height: 0; padding: 10px; border-radius: 18px; }
+      .band-head { grid-template-columns: 34px minmax(0, 1fr); column-gap: 10px; align-items: center; border-right: 0; padding-right: 0; }
+      .band-head h2 { margin: 0; }
+      .band-head p { grid-column: 2; }
+      .band-modules { grid-template-columns: 1fr; }
+      .module { min-height: 72px; }
+      .flow { min-height: 30px; grid-auto-flow: row; }
+      .flow span { margin-left: 0; margin-top: 2px; }
+    }
+    @media print { .modal-backdrop { display: none; } .page { max-width: none; padding: 0; } .blueprint { box-shadow: none; } body { background: oklch(0.996 0.004 250); } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <!-- 页面名称：vibego 系统架构 HTML 蓝图；核心目标：只生成 HTML；一张图展示组件、中间件/运行时、DB/日志/JSONL 和 MQ/队列语义；点击详情为小弹窗，点击空白或 Esc 关闭。 -->
+  <main class="page">
+    <header class="map-head">
+      <p class="eyebrow">HTML Visual Protocol / Blueprint</p>
+      <h1>vibego 系统架构图</h1>
+      <p class="summary">外部入口 → 控制面 → 工作面 → 运行与中间件 → 状态与证据面</p>
+    </header>
+
+    <section class="blueprint" aria-label="vibego 北向南系统架构蓝图">
+      <section class="band band-north" aria-labelledby="L1-title">
+        <div class="band-head">
+          <span class="band-code">L1</span>
+          <h2 id="L1-title">外部入口</h2>
+          <p>Actor / API / Bot</p>
+        </div>
+        <div class="band-modules">
+          <button class="module" type="button" data-detail-type="node" data-detail-id="user" data-kind="external" aria-pressed="false">
+            <span class="module-name">用户 / 管理员</span>
+            <span class="module-hint">触发者</span>
+            <span class="module-type">Actor</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="telegram" data-kind="external" aria-pressed="false">
+            <span class="module-name">Telegram API</span>
+            <span class="module-hint">API 入口</span>
+            <span class="module-type">External API</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="masterbot" data-kind="control" aria-pressed="false">
+            <span class="module-name">Master Bot</span>
+            <span class="module-hint">管理入口</span>
+            <span class="module-type">Bot</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="workerbot" data-kind="external" aria-pressed="false">
+            <span class="module-name">Worker Bot</span>
+            <span class="module-hint">业务入口</span>
+            <span class="module-type">Bot</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow" aria-hidden="true"><span>用户消息 / 管理命令</span></div>
+      <section class="band band-control" aria-labelledby="L2-title">
+        <div class="band-head">
+          <span class="band-code">L2</span>
+          <h2 id="L2-title">控制面</h2>
+          <p>CLI / Process / Config / State</p>
+        </div>
+        <div class="band-modules">
+          <button class="module" type="button" data-detail-type="node" data-detail-id="cli" data-kind="control" aria-pressed="false">
+            <span class="module-name">vibego CLI</span>
+            <span class="module-hint">本地入口</span>
+            <span class="module-type">CLI</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="master" data-kind="control" aria-pressed="false">
+            <span class="module-name">master.py</span>
+            <span class="module-hint">编排进程</span>
+            <span class="module-type">Process</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="repo" data-kind="data" aria-pressed="false">
+            <span class="module-name">ProjectRepository</span>
+            <span class="module-hint">项目配置</span>
+            <span class="module-type">Config Store</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="state" data-kind="data" aria-pressed="false">
+            <span class="module-name">StateStore</span>
+            <span class="module-hint">运行状态</span>
+            <span class="module-type">State Store</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow" aria-hidden="true"><span>项目配置 → worker 生命周期</span></div>
+      <section class="band band-worker" aria-labelledby="L3-title">
+        <div class="band-head">
+          <span class="band-code">L3</span>
+          <h2 id="L3-title">工作面</h2>
+          <p>Worker / Gate / Domain Stores</p>
+        </div>
+        <div class="band-modules">
+          <button class="module" type="button" data-detail-type="node" data-detail-id="bot" data-kind="control" aria-pressed="false">
+            <span class="module-name">bot.py worker</span>
+            <span class="module-hint">会话桥接</span>
+            <span class="module-type">Worker</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="dispatch" data-kind="control" aria-pressed="false">
+            <span class="module-name">Dispatch gate</span>
+            <span class="module-hint">入模边界</span>
+            <span class="module-type">Gate</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="tasks" data-kind="data" aria-pressed="false">
+            <span class="module-name">TaskService</span>
+            <span class="module-hint">任务库</span>
+            <span class="module-type">Service/DB</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="commands" data-kind="data" aria-pressed="false">
+            <span class="module-name">CommandService</span>
+            <span class="module-hint">命令库</span>
+            <span class="module-type">Service/DB</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="parallel" data-kind="data" aria-pressed="false">
+            <span class="module-name">ParallelSessionStore</span>
+            <span class="module-hint">并行会话</span>
+            <span class="module-type">Session Store</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow" aria-hidden="true"><span>prompt 规整 → fail-closed</span></div>
+      <section class="band band-runtime" aria-labelledby="L4-title">
+        <div class="band-head">
+          <span class="band-code">L4</span>
+          <h2 id="L4-title">运行与中间件</h2>
+          <p>Scripts / Queue / Model / Binder</p>
+        </div>
+        <div class="band-modules">
+          <button class="module" type="button" data-detail-type="node" data-detail-id="scripts" data-kind="runtime" aria-pressed="false">
+            <span class="module-name">run/stop scripts</span>
+            <span class="module-hint">生命周期</span>
+            <span class="module-type">Scripts</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="tmux" data-kind="runtime" aria-pressed="false">
+            <span class="module-name">tmux queue</span>
+            <span class="module-hint">队列语义</span>
+            <span class="module-type">Runtime/Queue</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="model" data-kind="runtime" aria-pressed="false">
+            <span class="module-name">模型 CLI</span>
+            <span class="module-hint">模型执行</span>
+            <span class="module-type">Model CLI</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="binder" data-kind="runtime" aria-pressed="false">
+            <span class="module-name">session_binder.py</span>
+            <span class="module-hint">会话绑定</span>
+            <span class="module-type">Binder</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="mq_note" data-kind="runtime" aria-pressed="false">
+            <span class="module-name">MQ / Broker</span>
+            <span class="module-hint">无独立 MQ</span>
+            <span class="module-type">Not Present</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow" aria-hidden="true"><span>queue → model → session event</span></div>
+      <section class="band band-data" aria-labelledby="L5-title">
+        <div class="band-head">
+          <span class="band-code">L5</span>
+          <h2 id="L5-title">状态与证据面</h2>
+          <p>Config FS / SQLite / JSONL / Logs</p>
+        </div>
+        <div class="band-modules">
+          <button class="module" type="button" data-detail-type="node" data-detail-id="config" data-kind="data" aria-pressed="false">
+            <span class="module-name">~/.config/vibego</span>
+            <span class="module-hint">配置目录</span>
+            <span class="module-type">Config FS</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="taskdb" data-kind="data" aria-pressed="false">
+            <span class="module-name">tasks / commands DB</span>
+            <span class="module-hint">SQLite</span>
+            <span class="module-type">SQLite DB</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="jsonl" data-kind="data" aria-pressed="false">
+            <span class="module-name">Session JSONL</span>
+            <span class="module-hint">事件日志</span>
+            <span class="module-type">Event Log</span>
+          </button>
+          <button class="module" type="button" data-detail-type="node" data-detail-id="logs" data-kind="data" aria-pressed="false">
+            <span class="module-name">logs + pointer</span>
+            <span class="module-hint">日志指针</span>
+            <span class="module-type">Logs/Pointer</span>
+          </button>
+        </div>
+      </section>
+      <div class="legend" aria-label="图例">
+        <span class="legend-item"><span class="dot"></span>外部入口</span>
+        <span class="legend-item"><span class="dot control"></span>控制面</span>
+        <span class="legend-item"><span class="dot runtime"></span>运行/中间件</span>
+        <span class="legend-item"><span class="dot data"></span>DB/状态/证据</span>
+        <span class="legend-item"><span class="dot absent"></span>无独立 MQ</span>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <article class="node-modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
+      <div class="modal-head">
+        <div>
+          <h2 id="modalTitle">节点详情</h2>
+          <span class="details-kind" id="modalKind">模块</span>
+        </div>
+        <button class="modal-close" type="button" id="modalClose" aria-label="关闭详情">×</button>
+      </div>
+      <div id="modalBody"></div>
+    </article>
+  </div>
+
+  <script type="application/json" id="diagram-data">{"nodes":{"user":{"name":"用户 / 管理员","role":"Telegram 客户端入口","kind":"external","inputs":["文本消息","按钮回调","命令"],"outputs":["Bot API 请求"],"risks":["权限与 chat_id 需要正确绑定"],"evidence":["README.md：功能介绍"],"displayName":"用户 / 管理员","archType":"Actor"},"telegram":{"name":"Telegram Bot API","role":"HTTPS 指令通道","kind":"external","inputs":["用户消息"],"outputs":["master bot 或 worker bot 更新"],"risks":["代理/API 超时需 fail-soft"],"evidence":["README.md：Telegram Bot API 的 HTTPS 请求通道"],"displayName":"Telegram API","archType":"External API"},"masterbot":{"name":"Master Bot","role":"项目管理入口","kind":"control","inputs":["/run","/stop","/switch","/upgrade"],"outputs":["worker 生命周期动作"],"risks":["启动期菜单同步不应阻断服务"],"evidence":["master.py：Master bot controller.","README.md：管理命令"],"displayName":"Master Bot","archType":"Bot"},"workerbot":{"name":"Project Worker Bot","role":"项目业务入口","kind":"external","inputs":["项目内消息","任务按钮","命令中心回调"],"outputs":["模型提示或命令结果"],"risks":["普通消息与并行会话路由需区分"],"evidence":["bot.py：on_text","bot.py：_handle_prompt_dispatch"],"displayName":"Worker Bot","archType":"Bot"},"cli":{"name":"vibego CLI","role":"本地启动/诊断入口","kind":"control","inputs":["init/start/stop/status/doctor"],"outputs":["master 服务进程"],"risks":["需使用可用 Python 环境"],"evidence":["vibego_cli/main.py：build_parser"],"displayName":"vibego CLI","archType":"CLI"},"master":{"name":"master.py","role":"多项目 worker 编排器","kind":"control","inputs":["项目配置","管理命令"],"outputs":["run_bot.sh / stop_bot.sh"],"risks":["slug 与展示名不一致会造成状态误判"],"evidence":["master.py：run_worker","master.py：stop_worker"],"displayName":"master.py","archType":"Process"},"repo":{"name":"ProjectRepository","role":"项目配置持久化","kind":"data","inputs":["bot_name","project_slug","default_model"],"outputs":["projects 表与 JSON 镜像"],"risks":["slug 迁移需修复运行期数据"],"evidence":["project_repository.py：class ProjectRepository","project_repository.py：CREATE TABLE IF NOT EXISTS projects"],"displayName":"ProjectRepository","archType":"Config Store"},"state":{"name":"StateStore","role":"运行状态持久化","kind":"data","inputs":["项目运行状态","当前模型"],"outputs":["master_state.json"],"risks":["重启恢复依赖状态准确"],"evidence":["master.py：class StateStore"],"displayName":"StateStore","archType":"State Store"},"bot":{"name":"bot.py worker","role":"消息收发与模型会话桥接","kind":"control","inputs":["Telegram update"],"outputs":["模型 prompt 或 Telegram 回复"],"risks":["入站聚合、确认语义、回传去重复杂"],"evidence":["bot.py：文件头注释"],"displayName":"bot.py worker","archType":"Worker"},"dispatch":{"name":"Dispatch gate","role":"最终入模边界","kind":"control","inputs":["规整后的业务 prompt"],"outputs":["tmux send / queue"],"risks":["内部保留测试标记必须 fail-closed"],"evidence":["bot.py：_dispatch_prompt_to_model"],"displayName":"Dispatch gate","archType":"Gate"},"tasks":{"name":"TaskService","role":"任务、备注、附件、历史","kind":"data","inputs":["任务操作"],"outputs":["SQLite task 表"],"risks":["写路径需保持事务语义"],"evidence":["tasks/service.py：class TaskService"],"displayName":"TaskService","archType":"Service/DB"},"commands":{"name":"CommandService","role":"通用命令、别名、历史","kind":"data","inputs":["命令定义与执行记录"],"outputs":["command_history"],"risks":["命令结果成功态必须 fail-closed"],"evidence":["command_center/service.py：class CommandService"],"displayName":"CommandService","archType":"Service/DB"},"parallel":{"name":"ParallelSessionStore","role":"并行会话元数据","kind":"data","inputs":["task_id","tmux_session","pointer_file"],"outputs":["parallel_sessions"],"risks":["普通 task_id 文本不能误路由"],"evidence":["parallel_runtime.py：class ParallelSessionStore"],"displayName":"ParallelSessionStore","archType":"Session Store"},"scripts":{"name":"run/stop scripts","role":"worker 生命周期脚本","kind":"runtime","inputs":["project_slug","model","workdir"],"outputs":["tmux + bot 进程"],"risks":["tmux/PID/handshake 需一致"],"evidence":["scripts/run_bot.sh：usage()","scripts/stop_bot.sh：usage()"],"displayName":"run/stop scripts","archType":"Scripts"},"tmux":{"name":"tmux","role":"模型 CLI 宿主会话","kind":"runtime","inputs":["send_line 或 queue_line"],"outputs":["模型 CLI 输入"],"risks":["复用旧会话时环境变量需同步"],"evidence":["scripts/start_tmux_codex.sh：tmux"],"displayName":"tmux queue","archType":"Runtime/Queue"},"model":{"name":"模型 CLI","role":"Codex / ClaudeCode / Gemini / Copilot","kind":"runtime","inputs":["用户 prompt"],"outputs":["模型输出与会话事件"],"risks":["不同模型 session 格式不同"],"evidence":["scripts/run_bot.sh：--model"],"displayName":"模型 CLI","archType":"Model CLI"},"binder":{"name":"session_binder.py","role":"同源 JSONL pointer 绑定","kind":"runtime","inputs":["session 根目录","worker marker"],"outputs":["current_session.txt","recent_sessions.json"],"risks":["pointer 指向非 worker 会话必须拒绝"],"evidence":["scripts/session_binder.py：--required-marker"],"displayName":"session_binder.py","archType":"Binder"},"config":{"name":"~/.config/vibego","role":"运行期根目录","kind":"data","inputs":["配置、日志、状态、runtime"],"outputs":["config/logs/state/data/runtime"],"risks":["敏感 token 不得进入仓库"],"evidence":["README.md：运行期日志和状态文件统一写入本机 ~/.config/vibego/","vibego_cli/config.py：CONFIG_ROOT"],"displayName":"~/.config/vibego","archType":"Config FS"},"taskdb":{"name":"任务/命令 DB","role":"项目内任务与命令历史","kind":"data","inputs":["TaskService / CommandService 写入"],"outputs":["tasks / command_history"],"risks":["SQLite 迁移需兼容旧数据"],"evidence":["tasks/service.py：CREATE TABLE IF NOT EXISTS","command_center/service.py：CREATE TABLE IF NOT EXISTS"],"displayName":"tasks / commands DB","archType":"SQLite DB"},"jsonl":{"name":"Session JSONL","role":"模型结构化事件源","kind":"data","inputs":["模型 CLI 事件"],"outputs":["watcher 增量读取"],"risks":["Codex JSONL 未确认不等于 tmux 投递失败"],"evidence":["scripts/start_tmux_codex.sh：SESSION_POINTER_FILE","bot.py：_read_session_events"],"displayName":"Session JSONL","archType":"Event Log"},"logs":{"name":"logs + pointer","role":"运行日志和会话指针","kind":"data","inputs":["run_bot.log","model.log","bot.pid"],"outputs":["排障证据"],"risks":["日志应在运行期目录，不落仓库"],"evidence":["README.md：日志 &amp; 目录"],"displayName":"logs + pointer","archType":"Logs/Pointer"},"mq_note":{"name":"MQ / Broker","displayName":"MQ / Broker","role":"当前无独立 MQ；排队语义由 tmux queue 与 Session JSONL 承担","kind":"runtime","archType":"Not Present","inputs":["业务 prompt"],"outputs":["tmux queued input / JSONL event"],"risks":["不要把 tmux queue 误画成独立消息中间件"],"evidence":["bot.py：tmux_queue_line","scripts/start_tmux_codex.sh：SESSION_POINTER_FILE"]}}}</script>
+  <script>
+    const data = JSON.parse(document.getElementById('diagram-data').textContent);
+    const modalBackdrop = document.getElementById('modalBackdrop');
+    const modal = modalBackdrop.querySelector('.node-modal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalKind = document.getElementById('modalKind');
+    const modalBody = document.getElementById('modalBody');
+    const modalClose = document.getElementById('modalClose');
+    let activeButton = null;
+    const esc = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+    function list(items) { const values = Array.isArray(items) && items.length ? items : ['待补充']; return `<ul class="detail-list">${values.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>`; }
+    function kindLabel(kind) { return ({ external: '外部入口', control: '控制面', runtime: '运行 / 中间件', data: 'DB / 状态 / 证据' })[kind] || '模块'; }
+    function closeModal() { modalBackdrop.hidden = true; if (activeButton) { activeButton.setAttribute('aria-pressed', 'false'); activeButton.focus({ preventScroll: true }); activeButton = null; } }
+    function openModal(button, node) {
+      if (activeButton) activeButton.setAttribute('aria-pressed', 'false');
+      activeButton = button;
+      activeButton.setAttribute('aria-pressed', 'true');
+      modalTitle.textContent = node.displayName || node.name;
+      modalKind.textContent = node.archType ? `${kindLabel(node.kind)} · ${node.archType}` : kindLabel(node.kind);
+      modalBody.innerHTML = `<p class="summary">${esc(node.role)}</p><div class="detail-block"><h3>输入</h3>${list(node.inputs)}</div><div class="detail-block"><h3>输出</h3>${list(node.outputs)}</div><div class="detail-block"><h3>风险</h3>${list(node.risks)}</div><div class="detail-block"><h3>证据</h3>${list(node.evidence)}</div>`;
+      modalBackdrop.hidden = false;
+      modal.focus({ preventScroll: true });
+    }
+    document.querySelectorAll('[data-detail-type="node"]').forEach((button) => {
+      button.addEventListener('click', () => { const node = data.nodes[button.dataset.detailId]; if (node) openModal(button, node); });
+    });
+    modalClose.addEventListener('click', closeModal);
+    modalBackdrop.addEventListener('click', (event) => { if (event.target === modalBackdrop) closeModal(); });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !modalBackdrop.hidden) closeModal(); });
+  </script>
+  <!-- 自检结果：html-only=true；one-map=true；components/middleware/db/queue-visible=true；modal-detail=true；blank-click-close=true；esc-close=true；no-auto-scroll=true；static-first=true；mobile-background-axis=removed。 -->
+</body>
+</html>

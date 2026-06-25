@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vibego 系统架构 HTML 样例 static v4 north south</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.982 0.006 250);
+      --paper: oklch(0.996 0.004 250);
+      --panel: oklch(0.965 0.012 250);
+      --ink: oklch(0.22 0.035 248);
+      --muted: oklch(0.48 0.035 248);
+      --line: oklch(0.82 0.026 250);
+      --blue: oklch(0.58 0.14 252);
+      --green: oklch(0.58 0.12 165);
+      --orange: oklch(0.68 0.16 72);
+      --violet: oklch(0.58 0.13 304);
+      --focus: oklch(0.68 0.16 252 / 0.38);
+      --shadow: 0 18px 55px oklch(0.42 0.06 250 / 0.13);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 15% 0%, oklch(0.94 0.035 252), transparent 28rem), var(--bg);
+      color: var(--ink);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    }
+    button { font: inherit; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 22px 28px 14px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in oklch, var(--bg) 93%, transparent);
+      backdrop-filter: blur(10px);
+    }
+    .eyebrow { margin: 0 0 6px; color: var(--blue); font-size: 12px; font-weight: 780; letter-spacing: 0.08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 28px; line-height: 1.12; letter-spacing: -0.03em; }
+    .summary { max-width: 86ch; margin: 8px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+    .button { min-height: 36px; border: 1px solid var(--line); border-radius: 999px; padding: 0 13px; color: var(--ink); background: var(--paper); cursor: pointer; }
+    .button:hover { border-color: var(--blue); }
+    .button:focus-visible,
+    .flow-step:focus-visible,
+    .node-button:focus-visible { outline: 4px solid var(--focus); outline-offset: 2px; }
+    .shell { max-width: 1320px; margin: 0 auto; padding: 20px 24px 32px; }
+    .workspace { display: grid; gap: 18px; }
+    .panel, .details-panel { background: var(--paper); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); }
+    .panel { padding: 20px; }
+    .section-title { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; margin-bottom: 14px; }
+    .section-title h2 { margin: 0; font-size: 18px; letter-spacing: -0.015em; }
+    .section-note { margin: 0; color: var(--muted); font-size: 13px; }
+    .north-south-map { display: grid; gap: 10px; }
+    .layer {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 16px;
+      background: linear-gradient(180deg, color-mix(in oklch, var(--panel) 88%, var(--paper)), var(--paper));
+    }
+    .layer-head { display: flex; gap: 12px; align-items: start; margin-bottom: 14px; }
+    .layer-number {
+      flex: 0 0 auto;
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      color: oklch(0.99 0.004 250);
+      background: var(--blue);
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .layer-head h2 { margin: 0; font-size: 17px; letter-spacing: -0.012em; }
+    .layer-head p { margin: 5px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+    .layer-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .node-button {
+      min-height: 78px;
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 13px;
+      background: var(--paper);
+      color: inherit;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+    .node-button[data-kind="control"] { border-color: color-mix(in oklch, var(--violet) 48%, var(--line)); }
+    .node-button[data-kind="runtime"] { border-color: color-mix(in oklch, var(--green) 50%, var(--line)); }
+    .node-button[data-kind="data"] { border-color: color-mix(in oklch, var(--orange) 50%, var(--line)); }
+    .node-button[data-kind="external"] { border-color: color-mix(in oklch, var(--blue) 42%, var(--line)); }
+    .node-button:hover { border-color: var(--blue); }
+    .node-button[aria-pressed="true"], .flow-step[aria-pressed="true"] { border-color: var(--blue); box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--blue) 45%, transparent); }
+    .node-name { display: block; font-weight: 780; font-size: 14px; }
+    .node-role { display: block; margin-top: 6px; color: var(--muted); font-size: 12.5px; }
+    .south-arrow { display: grid; place-items: center; min-height: 30px; color: var(--muted); font-size: 12px; }
+    .south-arrow::before { content: "↓"; color: var(--blue); font-size: 22px; font-weight: 900; line-height: 1; }
+    .south-arrow span { margin-left: 8px; }
+    .flow-list { display: grid; gap: 10px; position: relative; }
+    .flow-list::before { content: ""; position: absolute; left: 18px; top: 24px; bottom: 24px; width: 2px; background: color-mix(in oklch, var(--blue) 36%, var(--line)); }
+    .flow-step {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      min-height: 70px;
+      border: 1px solid color-mix(in oklch, var(--blue) 42%, var(--line));
+      border-radius: 18px;
+      padding: 13px;
+      background: oklch(0.986 0.014 250);
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+    .flow-index { width: 34px; height: 34px; border-radius: 999px; display: grid; place-items: center; color: oklch(0.99 0.004 250); background: var(--blue); font-size: 12px; font-weight: 800; }
+    .flow-copy strong { display: block; font-size: 14px; }
+    .flow-copy small { display: block; margin-top: 5px; color: var(--muted); font-size: 12.5px; line-height: 1.42; }
+    .relationship-grid { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 12px; }
+    .relationship { border: 1px solid var(--line); border-radius: 18px; padding: 14px; background: var(--panel); min-width: 0; }
+    .relationship strong { display: block; margin-bottom: 8px; }
+    .relationship p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+    .known-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 12px; }
+    .known-card { border: 1px solid var(--line); border-radius: 18px; padding: 14px; background: var(--paper); }
+    .known-card h3 { margin: 0 0 8px; font-size: 14px; }
+    .known-card p { margin: 0; color: var(--muted); }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; border-radius: 999px; padding: 0 10px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); }
+    .dot.control { background: var(--violet); } .dot.runtime { background: var(--green); } .dot.data { background: var(--orange); }
+    .details-panel { margin-top: 18px; padding: 18px; overflow: auto; }
+    .details-panel[hidden] { display: none; }
+    .details-panel h2 { margin: 0 0 4px; font-size: 18px; }
+    .details-kind { display: inline-flex; margin: 0 0 12px; border-radius: 999px; padding: 3px 9px; background: var(--panel); color: var(--muted); border: 1px solid var(--line); font-size: 12px; }
+    .detail-block { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+    .detail-block h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .detail-list { margin: 0; padding-left: 18px; color: var(--ink); }
+    .detail-list li + li { margin-top: 6px; }
+    .no-js-note { margin-top: 12px; padding: 10px 12px; border: 1px solid color-mix(in oklch, var(--orange) 40%, var(--line)); border-radius: 14px; background: oklch(0.98 0.026 78); color: var(--muted); }
+    @media (max-width: 900px) {
+      .topbar { position: static; flex-direction: column; padding: 22px 20px 14px; }
+      .shell { padding: 14px; }
+      .panel { padding: 18px; border-radius: 22px; }
+      .relationship-grid, .known-grid { grid-template-columns: 1fr; }
+      .section-title { align-items: start; flex-direction: column; }
+    }
+    @media print { .topbar button, .details-panel { display: none; } .shell { max-width: none; padding: 0; } .panel { box-shadow: none; break-inside: avoid; margin-bottom: 16px; } body { background: oklch(0.996 0.004 250); } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <!-- 页面名称：vibego 系统架构 HTML 样例 static v4 north-south；目标用户：Telegram/Codex 阅读者；核心目标：系统架构默认北向南，从入口层流向执行与数据层；主路径：用户消息 -> Telegram API -> worker -> dispatch -> tmux -> 模型 CLI -> JSONL -> watcher。 -->
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">HTML Visual Protocol / North → South</p>
+      <h1>vibego 系统架构图</h1>
+      <p class="summary">系统架构默认按北向南阅读：入口在上，编排居中，执行与数据在下。主图自解释，点击节点只作为底部详情增强。</p>
+      <noscript><p class="no-js-note">当前环境未执行 JavaScript，但北向南分层、主链路和关系表仍可直接阅读。</p></noscript>
+    </div>
+    <div><button class="button" type="button" onclick="window.print()">打印 / PNG 截图</button></div>
+  </header>
+  <main class="shell">
+    <div class="workspace">
+      <section class="panel" aria-labelledby="flow-title">
+        <div class="section-title"><div><h2 id="flow-title">主链路，北向南</h2><p class="section-note">竖向主路径适合 Telegram 阅读，不用横向追箭头。</p></div></div>
+        <div class="flow-list" aria-label="vibego 主链路步骤">
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p1" aria-pressed="false">
+            <span class="flow-index">01</span>
+            <span class="flow-copy"><strong>用户发送消息</strong><small>Telegram 客户端提交指令或业务消息。</small></span>
+          </button>
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p2" aria-pressed="false">
+            <span class="flow-index">02</span>
+            <span class="flow-copy"><strong>Telegram API</strong><small>通过 Bot API HTTPS 进入 master 或 worker。</small></span>
+          </button>
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p3" aria-pressed="false">
+            <span class="flow-index">03</span>
+            <span class="flow-copy"><strong>Worker 规整</strong><small>bot.py 处理文本、附件、按钮、任务上下文。</small></span>
+          </button>
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p4" aria-pressed="false">
+            <span class="flow-index">04</span>
+            <span class="flow-copy"><strong>统一派发闸口</strong><small>补规约、判定 queued/immediate、执行 fail-closed。</small></span>
+          </button>
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p5" aria-pressed="false">
+            <span class="flow-index">05</span>
+            <span class="flow-copy"><strong>tmux 投递</strong><small>通过 queue_line 或 send_line 进入模型 CLI。</small></span>
+          </button>
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p6" aria-pressed="false">
+            <span class="flow-index">06</span>
+            <span class="flow-copy"><strong>模型 CLI 执行</strong><small>Codex / ClaudeCode / Gemini / Copilot 处理输入。</small></span>
+          </button>
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p7" aria-pressed="false">
+            <span class="flow-index">07</span>
+            <span class="flow-copy"><strong>Session JSONL</strong><small>模型事件写入会话文件，binder 维护 pointer。</small></span>
+          </button>
+          <button class="flow-step" type="button" data-detail-type="path" data-detail-id="p8" aria-pressed="false">
+            <span class="flow-index">08</span>
+            <span class="flow-copy"><strong>Watcher 回传</strong><small>增量读取事件，渲染文本/图片/按钮回 Telegram。</small></span>
+          </button>
+        </div>
+      </section>
+      <section class="panel" aria-labelledby="map-title">
+        <div class="section-title">
+          <div><h2 id="map-title">分层模块地图</h2><p class="section-note">从上到下表达系统边界，层内节点只放短职责。</p></div>
+          <div class="legend" aria-label="图例"><span class="tag"><span class="dot"></span>入口/外部</span><span class="tag"><span class="dot control"></span>控制面</span><span class="tag"><span class="dot runtime"></span>运行面</span><span class="tag"><span class="dot data"></span>数据/状态</span></div>
+        </div>
+        <div class="north-south-map">
+        <section class="layer layer-entry" aria-labelledby="layer-entry-title">
+          <div class="layer-head">
+            <span class="layer-number">1</span>
+            <div>
+              <h2 id="layer-entry-title">入口层</h2>
+              <p>所有用户动作先进入这一层，不在这里承载业务细节。</p>
+            </div>
+          </div>
+          <div class="layer-nodes">
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="user" data-kind="external" aria-pressed="false">
+                <span class="node-name">用户 / 管理员</span>
+                <span class="node-role">Telegram 客户端入口</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="telegram" data-kind="external" aria-pressed="false">
+                <span class="node-name">Telegram Bot API</span>
+                <span class="node-role">HTTPS 指令通道</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="masterbot" data-kind="control" aria-pressed="false">
+                <span class="node-name">Master Bot</span>
+                <span class="node-role">项目管理入口</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="workerbot" data-kind="external" aria-pressed="false">
+                <span class="node-name">Project Worker Bot</span>
+                <span class="node-role">项目业务入口</span>
+              </button>
+          </div>
+        </section>
+        <div class="south-arrow" aria-hidden="true"><span>用户与 Telegram API</span></div>
+        <section class="layer layer-control" aria-labelledby="layer-control-title">
+          <div class="layer-head">
+            <span class="layer-number">2</span>
+            <div>
+              <h2 id="layer-control-title">控制与项目编排层</h2>
+              <p>负责启动、停止、项目配置与运行状态，不直接处理模型输出。</p>
+            </div>
+          </div>
+          <div class="layer-nodes">
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="cli" data-kind="control" aria-pressed="false">
+                <span class="node-name">vibego CLI</span>
+                <span class="node-role">本地启动/诊断入口</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="master" data-kind="control" aria-pressed="false">
+                <span class="node-name">master.py</span>
+                <span class="node-role">多项目 worker 编排器</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="repo" data-kind="data" aria-pressed="false">
+                <span class="node-name">ProjectRepository</span>
+                <span class="node-role">项目配置持久化</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="state" data-kind="data" aria-pressed="false">
+                <span class="node-name">StateStore</span>
+                <span class="node-role">运行状态持久化</span>
+              </button>
+          </div>
+        </section>
+        <div class="south-arrow" aria-hidden="true"><span>项目配置与 worker 生命周期</span></div>
+        <section class="layer layer-worker" aria-labelledby="layer-worker-title">
+          <div class="layer-head">
+            <span class="layer-number">3</span>
+            <div>
+              <h2 id="layer-worker-title">Worker 业务处理层</h2>
+              <p>把 Telegram 更新规整为模型输入，并维护任务、命令、并行上下文。</p>
+            </div>
+          </div>
+          <div class="layer-nodes">
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="bot" data-kind="control" aria-pressed="false">
+                <span class="node-name">bot.py worker</span>
+                <span class="node-role">消息收发与模型会话桥接</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="dispatch" data-kind="control" aria-pressed="false">
+                <span class="node-name">Dispatch gate</span>
+                <span class="node-role">最终入模边界</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="tasks" data-kind="data" aria-pressed="false">
+                <span class="node-name">TaskService</span>
+                <span class="node-role">任务、备注、附件、历史</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="commands" data-kind="data" aria-pressed="false">
+                <span class="node-name">CommandService</span>
+                <span class="node-role">通用命令、别名、历史</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="parallel" data-kind="data" aria-pressed="false">
+                <span class="node-name">ParallelSessionStore</span>
+                <span class="node-role">并行会话元数据</span>
+              </button>
+          </div>
+        </section>
+        <div class="south-arrow" aria-hidden="true"><span>消息规整与最终入模边界</span></div>
+        <section class="layer layer-runtime" aria-labelledby="layer-runtime-title">
+          <div class="layer-head">
+            <span class="layer-number">4</span>
+            <div>
+              <h2 id="layer-runtime-title">执行运行层</h2>
+              <p>本地脚本、tmux 与模型 CLI 承担真实执行。</p>
+            </div>
+          </div>
+          <div class="layer-nodes">
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="scripts" data-kind="runtime" aria-pressed="false">
+                <span class="node-name">run/stop scripts</span>
+                <span class="node-role">worker 生命周期脚本</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="tmux" data-kind="runtime" aria-pressed="false">
+                <span class="node-name">tmux</span>
+                <span class="node-role">模型 CLI 宿主会话</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="model" data-kind="runtime" aria-pressed="false">
+                <span class="node-name">模型 CLI</span>
+                <span class="node-role">Codex / ClaudeCode / Gemini / Copilot</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="binder" data-kind="runtime" aria-pressed="false">
+                <span class="node-name">session_binder.py</span>
+                <span class="node-role">同源 JSONL pointer 绑定</span>
+              </button>
+          </div>
+        </section>
+        <div class="south-arrow" aria-hidden="true"><span>tmux 投递与会话绑定</span></div>
+        <section class="layer layer-data" aria-labelledby="layer-data-title">
+          <div class="layer-head">
+            <span class="layer-number">5</span>
+            <div>
+              <h2 id="layer-data-title">数据与回传层</h2>
+              <p>运行期状态、JSONL、日志与 pointer 构成回传和排障证据。</p>
+            </div>
+          </div>
+          <div class="layer-nodes">
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="config" data-kind="data" aria-pressed="false">
+                <span class="node-name">~/.config/vibego</span>
+                <span class="node-role">运行期根目录</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="taskdb" data-kind="data" aria-pressed="false">
+                <span class="node-name">任务/命令 DB</span>
+                <span class="node-role">项目内任务与命令历史</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="jsonl" data-kind="data" aria-pressed="false">
+                <span class="node-name">Session JSONL</span>
+                <span class="node-role">模型结构化事件源</span>
+              </button>
+              <button class="node-button" type="button" data-detail-type="node" data-detail-id="logs" data-kind="data" aria-pressed="false">
+                <span class="node-name">logs + pointer</span>
+                <span class="node-role">运行日志和会话指针</span>
+              </button>
+          </div>
+        </section>
+        </div>
+      </section>
+      <section class="panel" aria-labelledby="relations-title">
+        <div class="section-title"><div><h2 id="relations-title">关键关系，不画蜘蛛网</h2><p class="section-note">跨层关系用表格表达，不用长箭头穿层。</p></div></div>
+        <div class="relationship-grid">
+          <article class="relationship">
+            <strong>控制链路</strong>
+            <p>vibego CLI / Master Bot 通过 master.py 读取项目配置，再调用 run_bot.sh 或 stop_bot.sh 管理 worker。</p>
+          </article>
+          <article class="relationship">
+            <strong>业务链路</strong>
+            <p>Project Worker Bot 接收消息，bot.py 完成入站规整，经 Dispatch gate 投递到 tmux 模型 CLI。</p>
+          </article>
+          <article class="relationship">
+            <strong>会话回传</strong>
+            <p>模型 CLI 写入 Session JSONL，binder 绑定 pointer，watcher 读取事件后回传 Telegram。</p>
+          </article>
+          <article class="relationship">
+            <strong>数据边界</strong>
+            <p>项目配置、任务命令数据、日志、状态默认写入 ~/.config/vibego，避免污染仓库。</p>
+          </article>
+        </div>
+      </section>
+      <section class="panel" aria-labelledby="known-title">
+        <div class="section-title"><div><h2 id="known-title">TODO & Known Issues</h2><p class="section-note">事实不足或容易误解的地方不画成确定结论。</p></div></div>
+        <div class="known-grid">
+          <article class="known-card"><h3>方向口径</h3><p>系统架构默认北向南；业务流程、时序图和页面设计稿可按各自图型另定方向。</p></article>
+          <article class="known-card"><h3>链路粒度</h3><p>本图是系统级地图，不替代发送消息完整时序图。</p></article>
+          <article class="known-card"><h3>交互增强</h3><p>详情面板默认隐藏，点击节点后才展示输入、输出、风险和证据。</p></article>
+        </div>
+      </section>
+      <aside class="details-panel" id="detailsPanel" aria-live="polite" aria-label="节点详情" hidden>
+        <h2>节点详情</h2>
+        <span class="details-kind">点击节点后显示</span>
+        <p class="summary">点击主链路步骤或模块节点后，这里会显示输入、输出、风险和证据锚点。</p>
+      </aside>
+    </div>
+  </main>
+  <script type="application/json" id="diagram-data">{"path":[{"id":"p1","name":"用户发送消息","desc":"Telegram 客户端提交指令或业务消息。","detail":"入口来自用户或管理员，消息先进入 Telegram Bot API。","evidence":["README.md：功能介绍","bot.py：on_text"]},{"id":"p2","name":"Telegram API","desc":"通过 Bot API HTTPS 进入 master 或 worker。","detail":"Master bot 负责项目管理，Project worker bot 负责项目内业务消息。","evidence":["README.md：Telegram Bot API 的 HTTPS 请求通道"]},{"id":"p3","name":"Worker 规整","desc":"bot.py 处理文本、附件、按钮、任务上下文。","detail":"入站消息在 worker 内完成规整，业务提示进入统一派发。","evidence":["bot.py：Telegram 提示词 → Mac 执行 → 回推","bot.py：_handle_prompt_dispatch"]},{"id":"p4","name":"统一派发闸口","desc":"补规约、判定 queued/immediate、执行 fail-closed。","detail":"_dispatch_prompt_to_model 是最终入模边界，负责 tmux 投递前的关键校验。","evidence":["bot.py：_dispatch_prompt_to_model","bot.py：tmux_queue_line / tmux_send_line"]},{"id":"p5","name":"tmux 投递","desc":"通过 queue_line 或 send_line 进入模型 CLI。","detail":"queued 与 immediate 底层分别对应不同 tmux 投递动作。","evidence":["bot.py：tmux_queue_line","bot.py：tmux_send_line"]},{"id":"p6","name":"模型 CLI 执行","desc":"Codex / ClaudeCode / Gemini / Copilot 处理输入。","detail":"run_bot.sh 与 start_tmux_codex.sh 负责启动 tmux 和模型 CLI。","evidence":["scripts/run_bot.sh：--model","scripts/start_tmux_codex.sh：CODEX_BASE_CMD"]},{"id":"p7","name":"Session JSONL","desc":"模型事件写入会话文件，binder 维护 pointer。","detail":"session_binder.py 绑定同源 JSONL，并维护 recent_sessions 索引。","evidence":["scripts/session_binder.py：--required-marker","scripts/start_tmux_codex.sh：SESSION_POINTER_FILE"]},{"id":"p8","name":"Watcher 回传","desc":"增量读取事件，渲染文本/图片/按钮回 Telegram。","detail":"worker 读取 session 事件后做去重、格式化，再回传用户。","evidence":["bot.py：_read_session_events","bot.py：reply_large_text"]}],"zones":[{"title":"入口层","nodes":["user","telegram","masterbot","workerbot"]},{"title":"控制面","nodes":["cli","master","repo","state"]},{"title":"Worker 面","nodes":["bot","dispatch","tasks","commands","parallel"]},{"title":"运行面","nodes":["scripts","tmux","model","binder"]},{"title":"数据层","nodes":["config","taskdb","jsonl","logs"]}],"nodes":{"user":{"name":"用户 / 管理员","role":"Telegram 客户端入口","kind":"external","inputs":["文本消息","按钮回调","命令"],"outputs":["Bot API 请求"],"risks":["权限与 chat_id 需要正确绑定"],"evidence":["README.md：功能介绍"]},"telegram":{"name":"Telegram Bot API","role":"HTTPS 指令通道","kind":"external","inputs":["用户消息"],"outputs":["master bot 或 worker bot 更新"],"risks":["代理/API 超时需 fail-soft"],"evidence":["README.md：Telegram Bot API 的 HTTPS 请求通道"]},"masterbot":{"name":"Master Bot","role":"项目管理入口","kind":"control","inputs":["/run","/stop","/switch","/upgrade"],"outputs":["worker 生命周期动作"],"risks":["启动期菜单同步不应阻断服务"],"evidence":["master.py：Master bot controller.","README.md：管理命令"]},"workerbot":{"name":"Project Worker Bot","role":"项目业务入口","kind":"external","inputs":["项目内消息","任务按钮","命令中心回调"],"outputs":["模型提示或命令结果"],"risks":["普通消息与并行会话路由需区分"],"evidence":["bot.py：on_text","bot.py：_handle_prompt_dispatch"]},"cli":{"name":"vibego CLI","role":"本地启动/诊断入口","kind":"control","inputs":["init/start/stop/status/doctor"],"outputs":["master 服务进程"],"risks":["需使用可用 Python 环境"],"evidence":["vibego_cli/main.py：build_parser"]},"master":{"name":"master.py","role":"多项目 worker 编排器","kind":"control","inputs":["项目配置","管理命令"],"outputs":["run_bot.sh / stop_bot.sh"],"risks":["slug 与展示名不一致会造成状态误判"],"evidence":["master.py：run_worker","master.py：stop_worker"]},"repo":{"name":"ProjectRepository","role":"项目配置持久化","kind":"data","inputs":["bot_name","project_slug","default_model"],"outputs":["projects 表与 JSON 镜像"],"risks":["slug 迁移需修复运行期数据"],"evidence":["project_repository.py：class ProjectRepository","project_repository.py：CREATE TABLE IF NOT EXISTS projects"]},"state":{"name":"StateStore","role":"运行状态持久化","kind":"data","inputs":["项目运行状态","当前模型"],"outputs":["master_state.json"],"risks":["重启恢复依赖状态准确"],"evidence":["master.py：class StateStore"]},"bot":{"name":"bot.py worker","role":"消息收发与模型会话桥接","kind":"control","inputs":["Telegram update"],"outputs":["模型 prompt 或 Telegram 回复"],"risks":["入站聚合、确认语义、回传去重复杂"],"evidence":["bot.py：文件头注释"]},"dispatch":{"name":"Dispatch gate","role":"最终入模边界","kind":"control","inputs":["规整后的业务 prompt"],"outputs":["tmux send / queue"],"risks":["内部保留测试标记必须 fail-closed"],"evidence":["bot.py：_dispatch_prompt_to_model"]},"tasks":{"name":"TaskService","role":"任务、备注、附件、历史","kind":"data","inputs":["任务操作"],"outputs":["SQLite task 表"],"risks":["写路径需保持事务语义"],"evidence":["tasks/service.py：class TaskService"]},"commands":{"name":"CommandService","role":"通用命令、别名、历史","kind":"data","inputs":["命令定义与执行记录"],"outputs":["command_history"],"risks":["命令结果成功态必须 fail-closed"],"evidence":["command_center/service.py：class CommandService"]},"parallel":{"name":"ParallelSessionStore","role":"并行会话元数据","kind":"data","inputs":["task_id","tmux_session","pointer_file"],"outputs":["parallel_sessions"],"risks":["普通 task_id 文本不能误路由"],"evidence":["parallel_runtime.py：class ParallelSessionStore"]},"scripts":{"name":"run/stop scripts","role":"worker 生命周期脚本","kind":"runtime","inputs":["project_slug","model","workdir"],"outputs":["tmux + bot 进程"],"risks":["tmux/PID/handshake 需一致"],"evidence":["scripts/run_bot.sh：usage()","scripts/stop_bot.sh：usage()"]},"tmux":{"name":"tmux","role":"模型 CLI 宿主会话","kind":"runtime","inputs":["send_line 或 queue_line"],"outputs":["模型 CLI 输入"],"risks":["复用旧会话时环境变量需同步"],"evidence":["scripts/start_tmux_codex.sh：tmux"]},"model":{"name":"模型 CLI","role":"Codex / ClaudeCode / Gemini / Copilot","kind":"runtime","inputs":["用户 prompt"],"outputs":["模型输出与会话事件"],"risks":["不同模型 session 格式不同"],"evidence":["scripts/run_bot.sh：--model"]},"binder":{"name":"session_binder.py","role":"同源 JSONL pointer 绑定","kind":"runtime","inputs":["session 根目录","worker marker"],"outputs":["current_session.txt","recent_sessions.json"],"risks":["pointer 指向非 worker 会话必须拒绝"],"evidence":["scripts/session_binder.py：--required-marker"]},"config":{"name":"~/.config/vibego","role":"运行期根目录","kind":"data","inputs":["配置、日志、状态、runtime"],"outputs":["config/logs/state/data/runtime"],"risks":["敏感 token 不得进入仓库"],"evidence":["README.md：运行期日志和状态文件统一写入本机 ~/.config/vibego/","vibego_cli/config.py：CONFIG_ROOT"]},"taskdb":{"name":"任务/命令 DB","role":"项目内任务与命令历史","kind":"data","inputs":["TaskService / CommandService 写入"],"outputs":["tasks / command_history"],"risks":["SQLite 迁移需兼容旧数据"],"evidence":["tasks/service.py：CREATE TABLE IF NOT EXISTS","command_center/service.py：CREATE TABLE IF NOT EXISTS"]},"jsonl":{"name":"Session JSONL","role":"模型结构化事件源","kind":"data","inputs":["模型 CLI 事件"],"outputs":["watcher 增量读取"],"risks":["Codex JSONL 未确认不等于 tmux 投递失败"],"evidence":["scripts/start_tmux_codex.sh：SESSION_POINTER_FILE","bot.py：_read_session_events"]},"logs":{"name":"logs + pointer","role":"运行日志和会话指针","kind":"data","inputs":["run_bot.log","model.log","bot.pid"],"outputs":["排障证据"],"risks":["日志应在运行期目录，不落仓库"],"evidence":["README.md：日志 &amp; 目录"]}},"relationships":[{"title":"控制链路","body":"vibego CLI / Master Bot 通过 master.py 读取项目配置，再调用 run_bot.sh 或 stop_bot.sh 管理 worker。"},{"title":"业务链路","body":"Project Worker Bot 接收消息，bot.py 完成入站规整，经 Dispatch gate 投递到 tmux 模型 CLI。"},{"title":"会话回传","body":"模型 CLI 写入 Session JSONL，binder 绑定 pointer，watcher 读取事件后回传 Telegram。"},{"title":"数据边界","body":"项目配置、任务命令数据、日志、状态默认写入 ~/.config/vibego，避免污染仓库。"}]}</script>
+  <script>
+    // 交互增强：主图内容已静态存在；此脚本只负责点击后的底部详情更新。
+    const data = JSON.parse(document.getElementById('diagram-data').textContent);
+    const detailsPanel = document.getElementById('detailsPanel');
+    const selectedButtons = new Set();
+    const esc = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+    function clearPressed() { selectedButtons.forEach((el) => el.setAttribute('aria-pressed', 'false')); selectedButtons.clear(); }
+    function setPressed(button) { clearPressed(); button.setAttribute('aria-pressed', 'true'); selectedButtons.add(button); }
+    function list(items) { const values = Array.isArray(items) && items.length ? items : ['TODO：待补充']; return `<ul class="detail-list">${values.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>`; }
+    function kindLabel(kind) { return ({ external: '入口 / 外部', control: '控制面', runtime: '运行面', data: '数据 / 状态' })[kind] || '模块'; }
+    function showPath(step) { detailsPanel.hidden = false; detailsPanel.innerHTML = `<h2>${esc(step.name)}</h2><span class="details-kind">主链路步骤 ${esc(step.id.toUpperCase())}</span><p class="summary">${esc(step.detail)}</p><div class="detail-block"><h3>图上摘要</h3><p>${esc(step.desc)}</p></div><div class="detail-block"><h3>证据锚点</h3>${list(step.evidence)}</div>`; detailsPanel.scrollIntoView({ block: 'nearest' }); }
+    function showNode(node) { detailsPanel.hidden = false; detailsPanel.innerHTML = `<h2>${esc(node.name)}</h2><span class="details-kind">${esc(kindLabel(node.kind))}</span><p class="summary">${esc(node.role)}</p><div class="detail-block"><h3>输入</h3>${list(node.inputs)}</div><div class="detail-block"><h3>输出</h3>${list(node.outputs)}</div><div class="detail-block"><h3>风险 / 注意点</h3>${list(node.risks)}</div><div class="detail-block"><h3>证据锚点</h3>${list(node.evidence)}</div>`; detailsPanel.scrollIntoView({ block: 'nearest' }); }
+    document.querySelectorAll('[data-detail-type="path"]').forEach((button) => { button.addEventListener('click', () => { const step = data.path.find((item) => item.id === button.dataset.detailId); if (step) { setPressed(button); showPath(step); } }); });
+    document.querySelectorAll('[data-detail-type="node"]').forEach((button) => { button.addEventListener('click', () => { const node = data.nodes[button.dataset.detailId]; if (node) { setPressed(button); showNode(node); } }); });
+  </script>
+  <!-- 自检结果：orientation=north-south；static-first=true；右侧阅读说明栏=无；无 JS 主内容=可读；节点文字溢出=未发现；箭头穿正文=不使用跨层长箭头，竖向层间箭头与关系表替代；已知限制=这是系统架构图，不替代完整代码时序图。 -->
+</body>
+</html>

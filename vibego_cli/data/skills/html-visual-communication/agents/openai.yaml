@@ -1,0 +1,4 @@
+interface:
+  display_name: "HTML 图形表达"
+  short_description: "把架构、流程、时序、故障和页面设计沟通转成单文件 HTML 图。"
+  default_prompt: "请使用 HTML 图形表达协议生成一个可直接打开的单文件 HTML 图，并直接发送 .html 文件。"

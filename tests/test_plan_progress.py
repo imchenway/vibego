@@ -409,6 +409,42 @@ def test_deliver_pending_messages_sends_project_local_image_after_text(plan_test
     assert "diagram.png" in (caption or "")
 
 
+def test_deliver_pending_messages_sends_project_local_html_as_document_after_text(
+    plan_test_env,
+    monkeypatch,
+    tmp_path: Path,
+):
+    """模型回复引用项目内 HTML 图时，Telegram 应把 HTML 作为文件附件发送。"""
+
+    env = plan_test_env
+    chat_id = 1515
+    html_path = tmp_path / "docs" / "flow.html"
+    html_path.parent.mkdir()
+    html_path.write_text("<!doctype html><title>flow</title>", encoding="utf-8")
+    monkeypatch.setattr(bot, "PRIMARY_WORKDIR", tmp_path)
+    final_text = "\n".join(
+        [
+            "已生成业务流程图 HTML。",
+            "",
+            f"[打开业务流程图 HTML]({html_path})",
+        ]
+    )
+    env["append_events"]([_codex_response_item_final_event(final_text)])
+    bot.SESSION_OFFSETS[str(env["session"])] = 0
+    bot.ACTIVE_MODEL = "codex"
+    bot.MODEL_CANONICAL_NAME = "codex"
+
+    result = asyncio.run(bot._deliver_pending_messages(chat_id, env["session"]))
+
+    assert result is True
+    assert [item[0] for item in env["delivery_events"]] == ["text", "document"]
+    assert len(env["dummy_bot"].sent_documents) == 1
+    sent_chat_id, sent_document, caption = env["dummy_bot"].sent_documents[0]
+    assert sent_chat_id == chat_id
+    assert type(sent_document).__name__ == "FSInputFile"
+    assert "flow.html" in (caption or "")
+
+
 def test_deliver_pending_messages_ignores_local_image_outside_project(plan_test_env, monkeypatch, tmp_path: Path):
     """模型回复里的项目外本地图片路径不得自动回传，避免误发本机文件。"""
 

@@ -32,6 +32,25 @@
 - 不要宣称“已完成/已修复/已验证”，除非已经执行对应验证命令并看到成功结果；验证失败或未跑必须直说。
 - 长回复必须结构化，但每段尽量短；Telegram/移动端场景优先使用清单、短段落和明确标题。
 
+## HTML 图形沟通默认协议
+
+默认协作原则：非琐碎任务默认优先使用 `html-visual-communication` skill，用单文件 HTML 图承载核心沟通；AGENTS 负责判断何时触发；`html-visual-communication` 负责具体制图约束、自动路由、视觉质量、交互和附件交付。
+
+必须触发的场景：
+
+- 功能迭代或开发设计：必须先用 HTML 图展示现状、目标方案、前后差异、影响面、测试矩阵、风险与回滚，再进入实现或让用户确认。
+- 缺陷排查：必须用 HTML 图展示现象、影响、证据链、可疑节点、已确认根因、高亮根因节点、修法、验证与回滚；未验证根因只能标注为假设。
+- 系统/功能理解：必须用 HTML 图展示组件、依赖、中间件、DB、MQ/队列语义、关键调用链或业务规则。
+- 需求评审、方案选择、设计定稿：必须用 HTML 图展示问题、目标、选项、推荐方案、AC、待决策项和风险。
+- 最终交付：如果本轮产出或修改了 HTML 图，必须作为 `.html` 文件附件发送；禁止只发 Markdown 链接或路径。
+
+可跳过的场景：
+
+- 用户明确要求不要画图、只要一句话、或任务是琐碎格式转换时，可不生成 HTML。
+- 无法写文件或平台不支持附件时，必须说明限制，并输出完整 HTML 代码块作为 fallback。
+
+边界：AGENTS 不重复定义具体画图样式；所有制图样式、路由、可访问性、弹窗、移动端和质量红线以 `html-visual-communication` skill 为准。
+
 # ExecPlans
 
 When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to

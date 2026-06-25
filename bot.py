@@ -409,6 +409,12 @@ TELEGRAM_MESSAGE_LIMIT = 4096  # Telegram sendMessage 单条上限
 TELEGRAM_TABLE_RENDER_MODE = (os.environ.get("TELEGRAM_TABLE_RENDER_MODE") or "cards").strip().lower()
 MODEL_RESPONSE_LOCAL_IMAGE_MAX_COUNT = int(os.environ.get("TELEGRAM_MODEL_LOCAL_IMAGE_MAX_COUNT", "4"))
 MODEL_RESPONSE_LOCAL_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+MODEL_RESPONSE_LOCAL_DOCUMENT_MAX_COUNT = int(os.environ.get("TELEGRAM_MODEL_LOCAL_DOCUMENT_MAX_COUNT", "4"))
+MODEL_RESPONSE_LOCAL_DOCUMENT_EXTENSIONS = frozenset({".html", ".htm"})
+MODEL_RESPONSE_LOCAL_DOCUMENT_MAX_BYTES = max(
+    _env_int("TELEGRAM_MODEL_LOCAL_DOCUMENT_MAX_BYTES", 10 * 1024 * 1024),
+    0,
+)
 MODEL_RESPONSE_TMP_IMAGE_MAX_AGE_SECONDS = max(
     _env_float("TELEGRAM_MODEL_TMP_IMAGE_MAX_AGE_SECONDS", 1800.0),
     0.0,
@@ -423,6 +429,14 @@ MODEL_RESPONSE_LOCAL_IMAGE_TOKEN_RE = re.compile(
 )
 MODEL_RESPONSE_MARKDOWN_IMAGE_RE = re.compile(
     r"!?\[[^\]]*\]\((?P<path>[^)\s]+?\.(?:png|jpe?g|webp))(?:\s+\"[^\"]*\")?\)",
+    re.IGNORECASE,
+)
+MODEL_RESPONSE_LOCAL_DOCUMENT_TOKEN_RE = re.compile(
+    r"(?P<path>(?:~|/|[A-Za-z0-9_.-]+/)[^\s`\"'<>|\]]+?\.html?)",
+    re.IGNORECASE,
+)
+MODEL_RESPONSE_MARKDOWN_DOCUMENT_RE = re.compile(
+    r"!?\[[^\]]*\]\((?P<path>[^)\s]+?\.html?)(?:\s+\"[^\"]*\")?\)",
     re.IGNORECASE,
 )
 if TELEGRAM_TABLE_RENDER_MODE not in {"cards", "pre", "off"}:
@@ -1752,6 +1766,19 @@ def _iter_model_response_local_image_tokens(text: str) -> list[str]:
     return tokens
 
 
+def _iter_model_response_local_document_tokens(text: str) -> list[str]:
+    """从模型最终回复中提取可能的本地 HTML 文件路径 token。"""
+
+    tokens: list[str] = []
+    for pattern in (MODEL_RESPONSE_MARKDOWN_DOCUMENT_RE, MODEL_RESPONSE_LOCAL_DOCUMENT_TOKEN_RE):
+        for match in pattern.finditer(text or ""):
+            raw_path = match.group("path")
+            cleaned = _clean_model_response_local_image_token(raw_path)
+            if cleaned:
+                tokens.append(cleaned)
+    return tokens
+
+
 def _is_recent_tmp_model_response_image(
     resolved: Path,
     *,
@@ -1862,6 +1889,69 @@ def _collect_model_response_local_images(
     return images
 
 
+def _resolve_model_response_local_document_path(raw_path: str, roots: Sequence[Path]) -> Optional[Path]:
+    """把模型输出路径解析为允许项目目录内发送的 HTML 文件。"""
+
+    if not roots:
+        return None
+    token_path = Path(raw_path).expanduser()
+    candidates = [token_path] if token_path.is_absolute() else [root / token_path for root in roots]
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            continue
+        if resolved.suffix.lower() not in MODEL_RESPONSE_LOCAL_DOCUMENT_EXTENSIONS:
+            continue
+        if not any(_path_is_within_directory(resolved, root) for root in roots):
+            continue
+        if not resolved.is_file():
+            continue
+        try:
+            stat = resolved.stat()
+        except OSError:
+            continue
+        if MODEL_RESPONSE_LOCAL_DOCUMENT_MAX_BYTES > 0 and stat.st_size > MODEL_RESPONSE_LOCAL_DOCUMENT_MAX_BYTES:
+            continue
+        mime_type, _encoding = mimetypes.guess_type(str(resolved))
+        if mime_type and mime_type not in {"text/html", "application/xhtml+xml"}:
+            continue
+        return resolved
+    return None
+
+
+def _collect_model_response_local_documents(
+    text: str,
+    *,
+    session_path: Optional[Path] = None,
+    session_cwd: Optional[str] = None,
+) -> list[Path]:
+    """收集模型回复中可安全回传到 Telegram 的项目内 HTML 文件。"""
+
+    roots = _model_response_local_image_roots(session_path=session_path, session_cwd=session_cwd)
+    if not roots:
+        return []
+
+    documents: list[Path] = []
+    seen: set[str] = set()
+    max_count = max(MODEL_RESPONSE_LOCAL_DOCUMENT_MAX_COUNT, 0)
+    if max_count == 0:
+        return []
+    for token in _iter_model_response_local_document_tokens(text):
+        document_path = _resolve_model_response_local_document_path(token, roots)
+        if document_path is None:
+            continue
+        key = str(document_path.resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        documents.append(document_path)
+        if len(documents) >= max_count:
+            break
+    return documents
+
+
 def _model_response_local_image_caption(image_path: Path, index: int, total: int) -> str:
     """生成模型产物图片的 Telegram caption。"""
 
@@ -1869,6 +1959,15 @@ def _model_response_local_image_caption(image_path: Path, index: int, total: int
     if total > 1:
         prefix = f"{prefix} {index}/{total}"
     return f"{prefix}：{image_path.name}"
+
+
+def _model_response_local_document_caption(document_path: Path, index: int, total: int) -> str:
+    """生成模型产物 HTML 文件的 Telegram caption。"""
+
+    prefix = "模型输出 HTML 文件"
+    if total > 1:
+        prefix = f"{prefix} {index}/{total}"
+    return f"{prefix}：{document_path.name}"
 
 
 async def _send_model_response_local_images(chat_id: int, image_paths: Sequence[Path]) -> None:
@@ -1913,6 +2012,35 @@ async def _send_model_response_local_images(chat_id: int, image_paths: Sequence[
                 "模型输出本地图片降级文件发送失败：%s",
                 fallback_exc,
                 extra={"chat": chat_id, "photo": str(image_path), **_session_extra()},
+            )
+
+
+async def _send_model_response_local_documents(chat_id: int, document_paths: Sequence[Path]) -> None:
+    """把模型回复引用的本地 HTML 文件发送为 Telegram 文件附件。"""
+
+    if not document_paths:
+        return
+    bot = current_bot()
+    total = len(document_paths)
+    for index, document_path in enumerate(document_paths, 1):
+        caption = _model_response_local_document_caption(document_path, index, total)
+        try:
+            await _send_with_retry(
+                lambda document_path=document_path, caption=caption: bot.send_document(
+                    chat_id=chat_id,
+                    document=FSInputFile(str(document_path)),
+                    caption=caption,
+                )
+            )
+            worker_log.info(
+                "模型输出本地 HTML 文件已发送",
+                extra={"chat": chat_id, "document": str(document_path), **_session_extra()},
+            )
+        except Exception as exc:  # noqa: BLE001
+            worker_log.warning(
+                "模型输出本地 HTML 文件发送失败：%s",
+                exc,
+                extra={"chat": chat_id, "document": str(document_path), **_session_extra()},
             )
 
 
@@ -15283,6 +15411,11 @@ async def _deliver_pending_messages_locked(
             session_cwd=native_session_cwd,
             event_timestamp=deliverable.timestamp,
         )
+        local_documents_to_send = _collect_model_response_local_documents(
+            text_to_send,
+            session_path=session_path,
+            session_cwd=native_session_cwd,
+        )
         message_task_id = parallel_task_id or _peek_pending_session_task_binding(session_key) or bound_task_id
         native_quick_reply_payload = None
         native_commit_callback_payload = None
@@ -15403,6 +15536,7 @@ async def _deliver_pending_messages_locked(
                     content=delivered_payload or formatted_text,
                 )
             await _send_model_response_local_images(chat_id, local_images_to_send)
+            await _send_model_response_local_documents(chat_id, local_documents_to_send)
             if should_prompt_plan_confirm:
                 await _maybe_send_plan_confirm_prompt(chat_id, session_key, plan_text=text_to_send)
             await _post_delivery_compact_checks(chat_id, session_key)

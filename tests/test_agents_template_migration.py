@@ -90,3 +90,17 @@ def test_agents_template_requires_claudecode_like_communication() -> None:
     assert "## Claude Code 风格表达规则" in template_text
     assert "先给结论，再给原因、修法和验证方式" in template_text
     assert "少用术语、少贴过程日志、少堆文件清单" in template_text
+
+
+def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks() -> None:
+    """AGENTS 模板应把 HTML 图形沟通作为非琐碎任务的默认沟通协议。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "## HTML 图形沟通默认协议" in template_text
+    assert "非琐碎任务默认优先使用 `html-visual-communication` skill" in template_text
+    assert "AGENTS 负责判断何时触发；`html-visual-communication` 负责具体制图约束" in template_text
+    assert "功能迭代或开发设计：必须先用 HTML 图展示现状、目标方案、前后差异、影响面、测试矩阵、风险与回滚" in template_text
+    assert "缺陷排查：必须用 HTML 图展示现象、影响、证据链、可疑节点、已确认根因、高亮根因节点、修法、验证与回滚" in template_text
+    assert "系统/功能理解：必须用 HTML 图展示组件、依赖、中间件、DB、MQ/队列语义、关键调用链或业务规则" in template_text
+    assert "用户明确要求不要画图、只要一句话、或任务是琐碎格式转换时，可不生成 HTML" in template_text

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AGENTS 与 HTML 制图 Skill 配合协议</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f8fc;
+    --ink: #102033;
+    --muted: #516477;
+    --line: #c9d8e8;
+    --blue: #2f7fd2;
+    --blue-soft: #e8f2ff;
+    --green: #23865f;
+    --green-soft: #e9f7f0;
+    --amber: #a66a12;
+    --amber-soft: #fff3d9;
+    --red: #b4474f;
+    --red-soft: #fdecef;
+    --card: #ffffff;
+    --shadow: 0 18px 45px rgba(32, 62, 93, .12);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: radial-gradient(circle at top left, #e7f1ff 0, transparent 34rem), var(--bg);
+    color: var(--ink);
+    padding: 22px;
+  }
+  .canvas {
+    max-width: 1180px;
+    margin: 0 auto;
+    background: rgba(255,255,255,.78);
+    border: 1px solid var(--line);
+    border-radius: 28px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  header {
+    padding: 22px 26px 14px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+  }
+  h1 { margin: 0; font-size: clamp(20px, 3.6vw, 28px); line-height: 1.2; letter-spacing: -.03em; }
+  .subtitle { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  main { padding: 24px; }
+  .rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .node {
+    position: relative;
+    width: 100%;
+    border: 1px solid var(--line);
+    background: var(--card);
+    border-radius: 22px;
+    padding: 18px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: center;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+    box-shadow: 0 10px 26px rgba(45, 87, 124, .08);
+  }
+  .node:focus-visible { outline: 3px solid rgba(47,127,210,.38); outline-offset: 3px; }
+  .badge {
+    width: 52px; height: 52px; border-radius: 18px;
+    display: grid; place-items: center;
+    font-weight: 800; color: white;
+    background: var(--blue);
+    flex: 0 0 auto;
+  }
+  .node h2 { margin: 0; font-size: clamp(17px, 3vw, 22px); line-height: 1.22; letter-spacing: -.02em; }
+  .node p { margin: 7px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+  .tag {
+    min-width: 86px;
+    justify-self: end;
+    border-radius: 999px;
+    padding: 8px 11px;
+    font-size: 12px;
+    font-weight: 800;
+    text-align: center;
+    color: #20527f;
+    background: var(--blue-soft);
+    border: 1px solid #bdd8f7;
+  }
+  .node.skill .badge { background: var(--green); }
+  .node.skill .tag { color: #1e684c; background: var(--green-soft); border-color: #b9dfcc; }
+  .node.delivery .badge { background: var(--amber); }
+  .node.delivery .tag { color: #80500d; background: var(--amber-soft); border-color: #efd28e; }
+  .node.risk .badge { background: var(--red); }
+  .node.risk .tag { color: #8e313a; background: var(--red-soft); border-color: #f0bac0; }
+  .connector {
+    display: grid;
+    place-items: center;
+    min-height: 34px;
+    color: var(--blue);
+    font-weight: 900;
+    font-size: 22px;
+  }
+  .matrix {
+    margin-top: 22px;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .matrix-title {
+    padding: 14px 16px;
+    font-weight: 900;
+    border-bottom: 1px solid var(--line);
+    background: #f1f7ff;
+  }
+  .rows { display: grid; grid-template-columns: 1fr; }
+  .row {
+    display: grid;
+    grid-template-columns: minmax(120px, .75fr) minmax(160px, 1fr) minmax(220px, 1.6fr);
+    gap: 0;
+    border-bottom: 1px solid #e1ecf6;
+  }
+  .row:last-child { border-bottom: 0; }
+  .cell {
+    padding: 13px 15px;
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+    border-right: 1px solid #e1ecf6;
+  }
+  .cell:last-child { border-right: 0; }
+  .head .cell { font-weight: 900; color: #28465f; background: #f8fbff; }
+  .stage { font-weight: 900; }
+  .modal-backdrop {
+    position: fixed; inset: 0; display: none; place-items: center;
+    padding: 18px; background: rgba(9, 27, 45, .32); z-index: 10;
+  }
+  .modal-backdrop[open] { display: grid; }
+  .modal {
+    width: min(640px, 100%);
+    border-radius: 24px;
+    background: #fff;
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+    padding: 20px;
+  }
+  .modal h3 { margin: 0; font-size: 21px; letter-spacing: -.02em; }
+  .modal p { color: var(--muted); line-height: 1.65; margin: 10px 0 0; }
+  .modal ul { margin: 12px 0 0; padding-left: 20px; color: var(--muted); line-height: 1.65; }
+  .close {
+    margin-top: 18px;
+    border: 0;
+    border-radius: 14px;
+    padding: 10px 14px;
+    background: var(--blue);
+    color: #fff;
+    font-weight: 800;
+    cursor: pointer;
+  }
+  .close:focus-visible { outline: 3px solid rgba(47,127,210,.38); outline-offset: 3px; }
+  @media (max-width: 720px) {
+    body { padding: 10px; }
+    .canvas { border-radius: 20px; }
+    header { padding: 18px 16px 12px; }
+    main { padding: 16px; }
+    .node { grid-template-columns: auto minmax(0, 1fr); padding: 15px; }
+    .tag { grid-column: 2; justify-self: start; margin-top: 4px; }
+    .badge { width: 46px; height: 46px; border-radius: 15px; }
+    .row { grid-template-columns: 1fr; }
+    .cell { border-right: 0; border-bottom: 1px solid #e1ecf6; }
+    .cell:last-child { border-bottom: 0; }
+    .head { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+  <section class="canvas" aria-labelledby="title">
+    <header>
+      <h1 id="title">AGENTS 与 HTML 制图 Skill 配合协议</h1>
+      <p class="subtitle">AGENTS 负责“何时必须用图”，skill 负责“画什么图、怎么画、怎么作为 HTML 附件交付”。</p>
+    </header>
+    <main>
+      <div class="rail" aria-label="主链路">
+        <button class="node" data-title="AGENTS 触发层" data-body="非琐碎任务默认触发 html-visual-communication：开发设计、缺陷排查、架构理解、需求评审、方案定稿、交付验收都优先用 HTML 图沟通。" data-points="不在 AGENTS 里写具体画法|用户明确不要图或只是琐碎格式转换时可跳过|最终若产出 HTML，必须作为文件附件发送">
+          <span class="badge">1</span>
+          <span><h2>AGENTS 触发层</h2><p>决定什么时候必须把沟通转成 HTML 图。</p></span>
+          <span class="tag">WHEN</span>
+        </button>
+        <div class="connector" aria-hidden="true">↓</div>
+        <button class="node skill" data-title="html-visual-communication 执行层" data-body="skill 接管制图执行：自动路由到系统架构、业务架构、业务流程、代码时序、状态/数据模型、故障排查、页面设计、技术设计、需求/决策等图型。" data-points="所有图共用硬红线：无遮挡、无溢出、短直箭头、不穿正文|点击节点只开小弹窗，不自动滚底|每个 HTML 图都必须能脱离聊天记录独立阅读">
+          <span class="badge">2</span>
+          <span><h2>制图 skill 执行层</h2><p>决定画哪类图，并保证可读性、交互和移动端体验。</p></span>
+          <span class="tag">HOW</span>
+        </button>
+        <div class="connector" aria-hidden="true">↓</div>
+        <button class="node delivery" data-title="Telegram / Codex 交付层" data-body="模型最终回复引用项目内 .html/.htm 后，worker 会把 HTML 作为 Telegram send_document 文件附件补发；Codex 中也保留可点击本地文件。" data-points="禁止只给 Markdown 链接或路径|项目外 HTML 不自动发送，避免误发本机文件|PNG 只做预览 fallback，不能替代 HTML">
+          <span class="badge">3</span>
+          <span><h2>HTML 文件附件交付</h2><p>让 Telegram 看到文件卡片，让 Codex 能直接打开编辑。</p></span>
+          <span class="tag">SEND</span>
+        </button>
+        <div class="connector" aria-hidden="true">↓</div>
+        <button class="node risk" data-title="质量门禁与例外" data-body="质量门禁防止图变成新的噪音源：未验证根因不能标成事实，功能差异不能只画目标态，复杂任务不能用“文字解释更快”跳过图。" data-points="简单一句话任务可不画图|无法发附件时输出完整 HTML 代码块|运行中 worker 需要重启后读取新 AGENTS 与 skill">
+          <span class="badge">4</span>
+          <span><h2>质量门禁与例外</h2><p>防止过度制图，也防止关键任务回退成大段文字。</p></span>
+          <span class="tag">GATE</span>
+        </button>
+      </div>
+
+      <section class="matrix" aria-label="任务场景路由矩阵">
+        <div class="matrix-title">任务场景默认路由</div>
+        <div class="rows">
+          <div class="row head"><div class="cell">场景</div><div class="cell">默认图型</div><div class="cell">必须一眼看到</div></div>
+          <div class="row"><div class="cell stage">功能迭代 / 开发设计</div><div class="cell">前后差异对比图 / 技术设计图</div><div class="cell">现状、目标、影响面、测试矩阵、风险与回滚</div></div>
+          <div class="row"><div class="cell stage">缺陷排查 / 故障分析</div><div class="cell">故障排查图</div><div class="cell">现象、证据链、可疑节点、已确认根因、高亮根因节点、验证</div></div>
+          <div class="row"><div class="cell stage">系统 / 功能理解</div><div class="cell">系统架构图 / 代码时序图 / 状态图</div><div class="cell">组件、依赖、中间件、DB、MQ/队列语义、关键调用链</div></div>
+          <div class="row"><div class="cell stage">方案确认 / 设计定稿</div><div class="cell">需求决策图 / 页面设计稿</div><div class="cell">选项、推荐项、AC、待决策项、前后体验变化</div></div>
+        </div>
+      </section>
+    </main>
+  </section>
+
+  <dialog class="modal-backdrop" id="detail">
+    <article class="modal" role="document">
+      <h3 id="modalTitle">节点详情</h3>
+      <p id="modalBody"></p>
+      <ul id="modalPoints"></ul>
+      <button class="close" id="closeBtn" type="button">关闭</button>
+    </article>
+  </dialog>
+
+<script>
+(() => {
+  const dialog = document.getElementById('detail');
+  const title = document.getElementById('modalTitle');
+  const body = document.getElementById('modalBody');
+  const points = document.getElementById('modalPoints');
+  const closeBtn = document.getElementById('closeBtn');
+  let lastTrigger = null;
+
+  function openModal(btn) {
+    lastTrigger = btn;
+    title.textContent = btn.dataset.title || '节点详情';
+    body.textContent = btn.dataset.body || '';
+    points.innerHTML = '';
+    (btn.dataset.points || '').split('|').filter(Boolean).forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      points.appendChild(li);
+    });
+    dialog.setAttribute('open', '');
+    closeBtn.focus();
+  }
+
+  function closeModal() {
+    dialog.removeAttribute('open');
+    if (lastTrigger) lastTrigger.focus();
+  }
+
+  document.querySelectorAll('.node').forEach((btn) => btn.addEventListener('click', () => openModal(btn)));
+  closeBtn.addEventListener('click', closeModal);
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) closeModal(); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && dialog.hasAttribute('open')) closeModal(); });
+})();
+</script>
+</body>
+</html>

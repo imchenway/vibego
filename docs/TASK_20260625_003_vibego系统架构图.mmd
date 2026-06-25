@@ -1,0 +1,63 @@
+flowchart LR
+  user["用户 / 管理员"] --> tg["Telegram Bot API"]
+  tg --> masterBot["Master Bot"]
+  tg --> workerBot["Project Worker Bot"]
+
+  subgraph control["控制面"]
+    cli["vibego CLI
+init/start/stop/status/doctor"] --> master["master.py
+run_worker / stop_worker"]
+    master --> repo["ProjectRepository
+master.db + projects.json"]
+    master --> state["StateStore
+master_state.json"]
+    master --> scripts["scripts/run_bot.sh
+scripts/stop_bot.sh"]
+  end
+
+  masterBot --> master
+  scripts --> worker["bot.py worker"]
+  workerBot --> worker
+
+  subgraph workerPlane["Worker 面"]
+    worker --> ingress["入站规整
+文本/附件/相册/按钮"]
+    ingress --> handle["_handle_prompt_dispatch
+规约前缀 + PLAN + queued 优先"]
+    handle --> dispatch["_dispatch_prompt_to_model
+内部标记拦截 + pointer 校验"]
+    worker --> tasks["TaskService
+任务/备注/附件/历史"]
+    worker --> commands["CommandService
+命令/别名/历史"]
+    worker --> parallel["ParallelSessionStore
+并行会话"]
+  end
+
+  subgraph runtime["运行面"]
+    dispatch --> send["tmux_queue_line / tmux_send_line"]
+    send --> model["模型 CLI
+Codex / ClaudeCode / Gemini / Copilot"]
+    model --> jsonl["Session JSONL"]
+    binder["session_binder.py"] -.绑定 pointer.-> jsonl
+    jsonl --> watcher["事件 watcher
+读取/去重/识别"]
+    watcher --> reply["回复渲染层
+文本分片 / 图片直发"]
+  end
+
+  subgraph storage["存储与运行期目录"]
+    cfg["~/.config/vibego"]
+    db["master.db / projects.json"]
+    taskdb["task DB / command history"]
+    logs["run_bot.log / model.log / current_session.txt"]
+    recent["recent_sessions.json"]
+  end
+
+  repo --> db
+  state --> cfg
+  tasks --> taskdb
+  commands --> taskdb
+  send --> logs
+  binder --> recent
+  reply --> tg

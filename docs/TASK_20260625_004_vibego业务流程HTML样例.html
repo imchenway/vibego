@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vibego 业务流程图</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --ink: #102033;
+      --muted: #53677c;
+      --soft: #7e93aa;
+      --page: #eef4fa;
+      --paper: #fbfdff;
+      --line: #bfd0e2;
+      --line-soft: #dbe7f2;
+      --blue: #2f7fd1;
+      --blue-dark: #1f65ad;
+      --blue-soft: #e6f1ff;
+      --green: #267a58;
+      --green-soft: #e4f6ed;
+      --amber: #a06b1d;
+      --amber-soft: #fff1d8;
+      --red: #b14753;
+      --red-soft: #fde7ea;
+      --shadow: 0 20px 60px rgba(24, 58, 92, .13);
+      --radius: 24px;
+    }
+
+    html, body { margin: 0; min-height: 100%; background: var(--page); color: var(--ink); }
+    body {
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.45;
+      overflow-x: hidden;
+    }
+    .page {
+      width: min(1280px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: linear-gradient(135deg, rgba(251,253,255,.98), rgba(238,246,255,.94));
+    }
+    .topbar > div:first-child { min-width: 0; }
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--blue-dark);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: 26px;
+      line-height: 1.15;
+      letter-spacing: -.03em;
+    }
+    .summary {
+      margin: 7px 0 0;
+      max-width: 720px;
+      color: var(--muted);
+      font-size: 14px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border: 1px solid #bdd0e3;
+      border-radius: 999px;
+      background: rgba(255,255,255,.82);
+      color: #31506d;
+      font-size: 12px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .board {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .board-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(255,255,255,.72);
+    }
+    .board-head h2 {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: -.02em;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 820;
+    }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .mark { width: 13px; height: 13px; display: inline-block; border: 2px solid var(--blue); background: #fff; }
+    .mark.round { border-radius: 4px; }
+    .mark.diamond { transform: rotate(45deg); border-color: var(--amber); background: var(--amber-soft); }
+    .mark.success { border-radius: 50%; border-color: var(--green); background: var(--green-soft); }
+
+    .flow {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .phase {
+      display: grid;
+      grid-template-columns: 128px minmax(0, 1fr);
+      gap: 18px;
+      align-items: stretch;
+      border: 1px solid #d7e4f0;
+      border-radius: var(--radius);
+      background: linear-gradient(90deg, rgba(230,241,255,.62), rgba(255,255,255,.86));
+      overflow: hidden;
+    }
+    .phase[data-tone="amber"] { background: linear-gradient(90deg, rgba(255,241,216,.68), rgba(255,255,255,.88)); }
+    .phase[data-tone="green"] { background: linear-gradient(90deg, rgba(228,246,237,.70), rgba(255,255,255,.88)); }
+    .phase-label {
+      padding: 18px 16px;
+      border-right: 1px solid #d3e0ec;
+      background: rgba(255,255,255,.48);
+    }
+    .phase-label b {
+      display: block;
+      font-size: 14px;
+      letter-spacing: .02em;
+      color: #193653;
+    }
+    .phase-label strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 22px;
+      line-height: 1.1;
+      letter-spacing: -.04em;
+    }
+    .phase-label small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+      line-height: 1.32;
+    }
+    .phase-body {
+      min-width: 0;
+      padding: 18px 18px 16px 0;
+      display: grid;
+      align-content: center;
+      gap: 12px;
+    }
+    .step-row {
+      min-width: 0;
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+    }
+    .edge {
+      flex: 0 0 34px;
+      display: grid;
+      place-items: center;
+      color: var(--blue-dark);
+      font-size: 22px;
+      font-weight: 900;
+      line-height: 1;
+    }
+    .edge.down {
+      margin: -3px auto -3px 190px;
+      width: 42px;
+      height: 30px;
+      color: #50759b;
+      font-size: 24px;
+      display: grid;
+      place-items: center;
+    }
+
+    .node {
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 112px;
+      padding: 14px;
+      border: 1.5px solid #8db6e6;
+      border-radius: 20px;
+      background: rgba(255,255,255,.96);
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+      overflow-wrap: anywhere;
+      box-shadow: 0 10px 24px rgba(31, 101, 173, .08);
+      transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }
+    .node:hover {
+      transform: translateY(-2px);
+      border-color: var(--blue-dark);
+      box-shadow: 0 16px 34px rgba(31, 101, 173, .13);
+    }
+    .node:focus-visible {
+      outline: 3px solid rgba(47,127,209,.34);
+      outline-offset: 3px;
+    }
+    .node .id {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px;
+      height: 28px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: var(--blue-dark);
+      font-size: 12px;
+      font-weight: 950;
+    }
+    .node .title {
+      display: block;
+      margin-top: 10px;
+      font-size: 17px;
+      font-weight: 950;
+      line-height: 1.18;
+      letter-spacing: -.02em;
+    }
+    .node .desc {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 760;
+      line-height: 1.34;
+    }
+    .node.event, .node.end {
+      flex: 0 0 112px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      border-color: var(--green);
+      background: var(--green-soft);
+    }
+    .node.event .title, .node.end .title { margin-top: 0; font-size: 15px; }
+    .node.gateway {
+      border-color: #d6a050;
+      background: var(--amber-soft);
+    }
+    .node.gateway .id { background: #ffe2ad; color: #7c510f; }
+
+    .branch-note {
+      width: fit-content;
+      max-width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border: 1px dashed #d7aa63;
+      border-radius: 999px;
+      background: rgba(255,249,238,.92);
+      color: #73501b;
+      font-size: 12px;
+      font-weight: 850;
+      overflow-wrap: anywhere;
+    }
+    .branch-note .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      font-weight: 950;
+    }
+
+    .rules {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--line-soft);
+      background: #f8fbfe;
+    }
+    .rule {
+      padding: 14px 16px;
+      border-right: 1px solid var(--line-soft);
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+    .rule:last-child { border-right: 0; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 36px;
+      height: 26px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: var(--blue-dark);
+      font-size: 12px;
+      font-weight: 950;
+    }
+    .badge.green { background: var(--green-soft); color: var(--green); }
+    .badge.amber { background: var(--amber-soft); color: var(--amber); }
+    .badge.red { background: var(--red-soft); color: var(--red); }
+    .rule strong { display: block; margin-bottom: 3px; font-size: 13px; }
+    .rule span { display: block; color: var(--muted); font-size: 12px; font-weight: 720; line-height: 1.35; }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: rgba(12, 27, 42, .36);
+    }
+    .modal-backdrop[aria-hidden="false"] { display: flex; }
+    .modal {
+      width: min(660px, 100%);
+      max-height: min(82vh, 720px);
+      overflow: auto;
+      border: 1px solid #9fb8d2;
+      border-radius: 24px;
+      background: #fbfdff;
+      box-shadow: 0 30px 90px rgba(2,18,34,.28);
+    }
+    .modal-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: start;
+      padding: 20px 22px 14px;
+      border-bottom: 1px solid #d3dfeb;
+    }
+    .modal h3 { margin: 0; font-size: 20px; line-height: 1.2; letter-spacing: -.03em; }
+    .modal-kind { margin-top: 5px; color: var(--muted); font-size: 13px; font-weight: 850; }
+    .close {
+      flex: 0 0 auto;
+      min-width: 40px;
+      min-height: 40px;
+      border: 1px solid #bdd0e3;
+      border-radius: 999px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 20px;
+      cursor: pointer;
+    }
+    .close:focus-visible { outline: 3px solid rgba(47,127,209,.32); outline-offset: 2px; }
+    .modal-body { padding: 18px 22px 22px; display: grid; gap: 12px; }
+    .detail-row {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 12px;
+      padding: 10px 0;
+      border-top: 1px solid #dde8f2;
+    }
+    .detail-row:first-child { border-top: 0; }
+    .detail-label { color: #37526b; font-size: 13px; font-weight: 950; }
+    .detail-value { color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
+
+    @media (max-width: 980px) {
+      .page { padding: 12px; }
+      .topbar, .board-head { align-items: flex-start; flex-direction: column; }
+      h1 { font-size: 22px; }
+      .summary { font-size: 13px; }
+      .meta, .legend { justify-content: flex-start; }
+      .phase { grid-template-columns: 1fr; gap: 0; }
+      .phase-label { border-right: 0; border-bottom: 1px solid #d3e0ec; }
+      .phase-body { padding: 14px; }
+      .step-row { flex-direction: column; gap: 8px; }
+      .edge { flex: 0 0 auto; width: 100%; height: 22px; font-size: 20px; transform: rotate(90deg); }
+      .edge.down { margin: -4px auto; transform: none; }
+      .node, .node.event, .node.end { flex: 1 1 auto; width: 100%; min-height: 0; }
+      .branch-note { width: 100%; border-radius: 16px; align-items: flex-start; }
+      .rules { grid-template-columns: 1fr; }
+      .rule { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+      .rule:last-child { border-bottom: 0; }
+      .detail-row { grid-template-columns: 1fr; gap: 5px; }
+    }
+    @media (max-width: 520px) {
+      .page { padding: 8px; }
+      .topbar, .board { border-radius: 22px; }
+      .flow { padding: 12px; }
+      .chip { white-space: normal; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
+    }
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; padding: 0; }
+      .topbar, .board { box-shadow: none; break-inside: avoid; }
+      .modal-backdrop { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <!-- 自检：单文件HTML；static-first；无外部依赖；无SVG连线；无绝对定位节点；无自动滚动；节点文字换行；点击节点打开弹窗。 -->
+  <div class="page">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Business Process · HTML</p>
+        <h1>vibego 业务流程图</h1>
+        <p class="summary">Telegram 需求按受理、决策、交付三段推进。</p>
+      </div>
+      <div class="meta" aria-label="图形元信息">
+        <span class="chip">主路径 8 步</span>
+        <span class="chip">短箭头</span>
+        <span class="chip">节点弹窗</span>
+      </div>
+    </header>
+
+    <main class="board" aria-labelledby="flow-heading">
+      <section class="board-head">
+        <h2 id="flow-heading">主路径：从用户发起到交付回传</h2>
+        <div class="legend" aria-label="图例">
+          <span><i class="mark round"></i>活动</span>
+          <span><i class="mark diamond"></i>决策</span>
+          <span><i class="mark success"></i>完成</span>
+        </div>
+      </section>
+
+      <section class="flow" aria-label="vibego 三段式业务流程">
+        <section class="phase" aria-labelledby="phase-accept">
+          <div class="phase-label">
+            <b>01</b>
+            <strong id="phase-accept">受理</strong>
+            <small>用户输入被 worker 接住，并进入受控投递链路。</small>
+          </div>
+          <div class="phase-body">
+            <div class="step-row">
+              <button class="node" type="button" data-detail="s1">
+                <span class="id">S1</span>
+                <span class="title">提出需求</span>
+                <span class="desc">用户在 Telegram 或 Codex 描述目标。</span>
+              </button>
+              <span class="edge" aria-hidden="true">→</span>
+              <button class="node" type="button" data-detail="s2">
+                <span class="id">S2</span>
+                <span class="title">补全规约</span>
+                <span class="desc">worker 注入 AGENTS、docs 优先级与 PLAN 约束。</span>
+              </button>
+              <span class="edge" aria-hidden="true">→</span>
+              <button class="node" type="button" data-detail="s3">
+                <span class="id">S3</span>
+                <span class="title">排队投递</span>
+                <span class="desc">通过 tmux queue/send 把业务提示交给模型。</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <div class="edge down" aria-hidden="true">↓</div>
+
+        <section class="phase" data-tone="amber" aria-labelledby="phase-decide">
+          <div class="phase-label">
+            <b>02</b>
+            <strong id="phase-decide">决策</strong>
+            <small>模型输出方案，用户确认后才进入实现。</small>
+          </div>
+          <div class="phase-body">
+            <div class="step-row">
+              <button class="node" type="button" data-detail="s4">
+                <span class="id">S4</span>
+                <span class="title">输出方案</span>
+                <span class="desc">说明 WHAT / WHY / AC / 影响面。</span>
+              </button>
+              <span class="edge" aria-hidden="true">→</span>
+              <button class="node gateway" type="button" data-detail="s5">
+                <span class="id">S5</span>
+                <span class="title">确认方案</span>
+                <span class="desc">选择 A/B/C/D 或直接授权。</span>
+              </button>
+              <span class="edge" aria-hidden="true">→</span>
+              <button class="node" type="button" data-detail="s6">
+                <span class="id">S6</span>
+                <span class="title">进入实现</span>
+                <span class="desc">确认后切 develop，按 TDD 执行。</span>
+              </button>
+            </div>
+            <div class="branch-note" role="note">
+              <span class="tag">E1</span>
+              <span>未确认或信息不足：补充澄清，返回 S4，不进入实现。</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="edge down" aria-hidden="true">↓</div>
+
+        <section class="phase" data-tone="green" aria-labelledby="phase-deliver">
+          <div class="phase-label">
+            <b>03</b>
+            <strong id="phase-deliver">交付</strong>
+            <small>源码、测试、截图或日志证据回传给用户。</small>
+          </div>
+          <div class="phase-body">
+            <div class="step-row">
+              <button class="node" type="button" data-detail="s7">
+                <span class="id">S7</span>
+                <span class="title">实现变更</span>
+                <span class="desc">修改源码与测试，不交付临时产物。</span>
+              </button>
+              <span class="edge" aria-hidden="true">→</span>
+              <button class="node" type="button" data-detail="s8">
+                <span class="id">S8</span>
+                <span class="title">自测验证</span>
+                <span class="desc">执行聚焦测试、截图或命令验证。</span>
+              </button>
+              <span class="edge" aria-hidden="true">→</span>
+              <button class="node end" type="button" data-detail="s9">
+                <span class="title">交付回传</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="rules" aria-label="关键业务规则">
+        <div class="rule">
+          <span class="badge">入口</span>
+          <div><strong>docs 优先</strong><span>定位任务时优先读取 /docs 主任务文档。</span></div>
+        </div>
+        <div class="rule">
+          <span class="badge amber">决策</span>
+          <div><strong>未确认不实现</strong><span>方案或 AC 不清楚时回到澄清。</span></div>
+        </div>
+        <div class="rule">
+          <span class="badge green">验证</span>
+          <div><strong>证据闭环</strong><span>测试、截图、日志或命令结果必须回传。</span></div>
+        </div>
+        <div class="rule">
+          <span class="badge red">异常</span>
+          <div><strong>失败可见</strong><span>阻塞、失败、未验证点必须明确标注。</span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalBody">
+      <div class="modal-head">
+        <div>
+          <h3 id="modalTitle">节点详情</h3>
+          <div class="modal-kind" id="modalKind">业务流程节点</div>
+        </div>
+        <button class="close" type="button" id="closeModal" aria-label="关闭详情弹窗">×</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </section>
+  </div>
+
+  <script>
+    const details = {
+      s1: { title: 'S1 提出需求', kind: '用户动作', duty: '用户用自然语言描述目标、问题或验收期待。', input: 'Telegram 文本、Codex 对话、截图或文件。', output: '待处理需求。', risk: '目标过宽、缺少验收口径时，后续必须澄清。' },
+      s2: { title: 'S2 补全规约', kind: 'Worker 规约注入', duty: '把 AGENTS、docs 优先、PLAN/develop、TDD 与交付口径放到提示词前置上下文。', input: '用户原文、项目配置、全局规约。', output: '受控业务提示。', risk: '规约缺失会导致模型绕过决策和验证门禁。' },
+      s3: { title: 'S3 排队投递', kind: '运行链路', duty: '通过 tmux send 或 queued follow-up 把业务提示送入模型会话。', input: '结构化提示词、当前会话指针。', output: '模型开始消费输入。', risk: '忙碌会话需要排队，不能重复补发造成双执行。' },
+      s4: { title: 'S4 输出方案', kind: 'PLAN 输出', duty: '先说明现状、问题、方案、影响面、验收标准和待决策项。', input: '仓库证据、docs、用户目标。', output: '可确认的方案。', risk: '没有 AC 的方案不能进入实现。' },
+      s5: { title: 'S5 确认方案', kind: '决策网关', duty: '用户选择方案或明确授权，模型据此进入 develop。', input: 'A/B/C/D 决策、补充信息或直接授权。', output: '实现许可或澄清任务。', risk: '确认缺失时必须返回 S4，不得擅自写代码。' },
+      s6: { title: 'S6 进入实现', kind: '阶段切换', duty: '从方案进入执行，先识别最小影响范围，再按 TDD 写测试。', input: '已确认方案、影响文件、测试入口。', output: '可执行任务清单。', risk: '跳过红灯测试会降低回归可信度。' },
+      s7: { title: 'S7 实现变更', kind: '源码修改', duty: '修改受影响源码、测试与 docs，不把运行产物当交付。', input: '失败测试、确认方案。', output: '源码与测试变更。', risk: '无关重构会扩大风险，必须保持最小必要改动。' },
+      s8: { title: 'S8 自测验证', kind: '验证闭环', duty: '运行聚焦测试、截图 QA、doctor 或静态检查，并记录结果。', input: '修改后的文件与验证命令。', output: '通过、失败或未覆盖证据。', risk: '未执行的验证必须明说，不能写已完成。' },
+      s9: { title: '交付回传', kind: '用户可读结果', duty: '把结论、文件、验证结果、风险与待执行动作回传到 Telegram/Codex。', input: '测试输出、截图、修改摘要。', output: '用户可点击、可复核的交付说明。', risk: '只给路径不可接受，HTML 等产物应直接可打开。' }
+    };
+
+    const backdrop = document.getElementById('modalBackdrop');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalKind = document.getElementById('modalKind');
+    const modalBody = document.getElementById('modalBody');
+    const closeModal = document.getElementById('closeModal');
+    let lastTrigger = null;
+
+    function row(label, value) {
+      return `<div class="detail-row"><div class="detail-label">${label}</div><div class="detail-value">${value}</div></div>`;
+    }
+
+    function openDetail(key, trigger) {
+      const detail = details[key];
+      if (!detail) return;
+      lastTrigger = trigger;
+      modalTitle.textContent = detail.title;
+      modalKind.textContent = detail.kind;
+      modalBody.innerHTML = [
+        row('职责', detail.duty),
+        row('输入', detail.input),
+        row('输出', detail.output),
+        row('风险', detail.risk)
+      ].join('');
+      backdrop.setAttribute('aria-hidden', 'false');
+      closeModal.focus({ preventScroll: true });
+    }
+
+    function closeDetail() {
+      backdrop.setAttribute('aria-hidden', 'true');
+      modalBody.innerHTML = '';
+      if (lastTrigger) lastTrigger.focus({ preventScroll: true });
+    }
+
+    document.querySelectorAll('[data-detail]').forEach((node) => {
+      node.addEventListener('click', () => openDetail(node.dataset.detail, node));
+    });
+
+    closeModal.addEventListener('click', closeDetail);
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) closeDetail();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && backdrop.getAttribute('aria-hidden') === 'false') closeDetail();
+    });
+  </script>
+</body>
+</html>

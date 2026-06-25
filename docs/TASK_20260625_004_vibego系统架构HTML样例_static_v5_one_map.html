@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vibego 系统架构 HTML 样例 static v5 one map</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.982 0.006 250);
+      --paper: oklch(0.996 0.004 250);
+      --panel: oklch(0.965 0.012 250);
+      --ink: oklch(0.22 0.035 248);
+      --muted: oklch(0.48 0.035 248);
+      --line: oklch(0.82 0.026 250);
+      --blue: oklch(0.58 0.14 252);
+      --green: oklch(0.58 0.12 165);
+      --orange: oklch(0.68 0.16 72);
+      --violet: oklch(0.58 0.13 304);
+      --focus: oklch(0.68 0.16 252 / 0.38);
+      --shadow: 0 18px 55px oklch(0.42 0.06 250 / 0.13);
+      --data-fill: oklch(0.986 0.014 165);
+      --control-fill: oklch(0.984 0.012 304);
+      --runtime-fill: oklch(0.986 0.014 190);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 16% 0%, oklch(0.94 0.035 252), transparent 28rem), var(--bg);
+      font: 14px/1.48 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    }
+    button { font: inherit; }
+    .page { max-width: 1280px; margin: 0 auto; padding: 22px 24px 34px; }
+    .map-head { margin-bottom: 14px; }
+    .eyebrow { margin: 0 0 5px; color: var(--blue); font-size: 12px; font-weight: 780; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 28px; line-height: 1.12; letter-spacing: -.03em; }
+    .summary { margin: 7px 0 0; max-width: 78ch; color: var(--muted); }
+    .arch-node:focus-visible { outline: 4px solid var(--focus); outline-offset: 2px; }
+    .architecture-map {
+      position: relative;
+      background: color-mix(in oklch, var(--paper) 96%, var(--panel));
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      overflow: hidden;
+    }
+    .architecture-map::before {
+      content: "";
+      position: absolute;
+      top: 92px;
+      bottom: 92px;
+      left: clamp(78px, 9vw, 118px);
+      width: 2px;
+      background: linear-gradient(180deg, var(--blue), var(--green), var(--orange));
+      opacity: .42;
+    }
+    .arch-layer {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 18px;
+      align-items: stretch;
+      padding: 14px;
+      border: 1px solid color-mix(in oklch, var(--line) 88%, transparent);
+      border-radius: 22px;
+      background: color-mix(in oklch, var(--panel) 74%, var(--paper));
+    }
+    .layer-label { display: grid; align-content: start; gap: 5px; min-width: 0; }
+    .layer-label > span {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      color: oklch(0.99 0.004 250);
+      background: var(--blue);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .layer-label h2 { margin: 4px 0 0; font-size: 19px; letter-spacing: -.02em; }
+    .layer-label p { margin: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    .layer-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; align-content: start; }
+    .arch-node {
+      min-height: 72px;
+      width: 100%;
+      display: grid;
+      gap: 5px;
+      align-content: start;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px;
+      color: inherit;
+      background: var(--paper);
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+    .arch-node:hover { border-color: var(--blue); }
+    .arch-node[aria-pressed="true"] { border-color: var(--blue); box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--blue) 45%, transparent); }
+    .arch-node[data-kind="external"] { border-color: color-mix(in oklch, var(--blue) 43%, var(--line)); }
+    .arch-node[data-kind="control"] { border-color: color-mix(in oklch, var(--violet) 48%, var(--line)); background: var(--control-fill); }
+    .arch-node[data-kind="runtime"] { border-color: color-mix(in oklch, var(--green) 50%, var(--line)); background: var(--runtime-fill); }
+    .arch-node[data-kind="data"] { border-color: color-mix(in oklch, var(--orange) 50%, var(--line)); background: var(--data-fill); box-shadow: inset 0 -3px 0 color-mix(in oklch, var(--orange) 30%, transparent); }
+    .node-title { display: block; font-weight: 780; font-size: 14px; line-height: 1.25; }
+    .node-role { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+    .node-badge { justify-self: start; margin-top: 2px; border-radius: 999px; padding: 2px 7px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); font-size: 11px; }
+    .flow-seam {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      min-height: 34px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .flow-seam::before { content: "↓"; color: var(--blue); font-size: 21px; font-weight: 900; line-height: 1; }
+    .flow-seam span { margin-left: 8px; }
+    .map-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; color: var(--muted); font-size: 12px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; background: var(--panel); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); }
+    .dot.control { background: var(--violet); } .dot.runtime { background: var(--green); } .dot.data { background: var(--orange); }
+    .details-panel { grid-column: 1 / -1; margin: 2px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: color-mix(in oklch, var(--paper) 88%, var(--panel)); box-shadow: none; }
+    .details-panel[hidden] { display: none; }
+    .details-panel h2 { margin: 0 0 4px; font-size: 18px; }
+    .details-kind { display: inline-flex; margin: 0 0 10px; border-radius: 999px; padding: 3px 9px; background: var(--panel); color: var(--muted); border: 1px solid var(--line); font-size: 12px; }
+    .detail-block { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+    .detail-block h3 { margin: 0 0 7px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .detail-list { margin: 0; padding-left: 18px; }
+    .detail-list li + li { margin-top: 5px; }
+    @media (max-width: 760px) {
+      .page { padding: 18px 10px 26px; }
+      .architecture-map { padding: 10px; border-radius: 22px; }
+      .architecture-map::before { left: 27px; top: 120px; bottom: 110px; }
+      .arch-layer { grid-template-columns: 1fr; gap: 10px; padding: 12px; border-radius: 18px; }
+      .layer-label { grid-template-columns: 34px minmax(0, 1fr); column-gap: 10px; align-items: start; }
+      .layer-label h2 { margin: 0; }
+      .layer-label p { grid-column: 2; }
+      .layer-nodes { grid-template-columns: 1fr; }
+      .flow-seam span { margin-left: 0; margin-top: 2px; }
+      .flow-seam { grid-auto-flow: row; }
+    }
+    @media print { .details-panel { display: none; } .page { max-width: none; padding: 0; } .architecture-map { box-shadow: none; } body { background: oklch(0.996 0.004 250); } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <!-- 页面名称：vibego 系统架构 HTML 样例 static v5 one-map；目标用户：Telegram/Codex 阅读者；核心目标：一图胜千言，只保留一张北向南分层模块地图；主路径：入口 -> 控制 -> Worker -> 运行 -> 数据。 -->
+  <main class="page">
+    <header class="map-head">
+      <div>
+        <p class="eyebrow">HTML Visual Protocol / One Map</p>
+        <h1>vibego 系统架构图</h1>
+        <p class="summary">外部入口 → 控制面 → 工作面 → 运行面 → 状态与证据面</p>
+      </div>
+    </header>
+
+    <section class="architecture-map" aria-label="vibego 北向南分层模块地图">
+      <section class="arch-layer" aria-labelledby="L1-title">
+        <div class="layer-label">
+          <span>L1</span>
+          <h2 id="L1-title">入口</h2>
+          <p>Telegram 指令入口</p>
+        </div>
+        <div class="layer-nodes">
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="user" data-kind="external" aria-pressed="false">
+            <span class="node-title">用户 / 管理员</span>
+            <span class="node-role">Telegram 客户端入口</span>
+            <span class="node-badge">触发</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="telegram" data-kind="external" aria-pressed="false">
+            <span class="node-title">Telegram Bot API</span>
+            <span class="node-role">HTTPS 指令通道</span>
+            <span class="node-badge">API</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="masterbot" data-kind="control" aria-pressed="false">
+            <span class="node-title">Master Bot</span>
+            <span class="node-role">项目管理入口</span>
+            <span class="node-badge">管理</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="workerbot" data-kind="external" aria-pressed="false">
+            <span class="node-title">Project Worker Bot</span>
+            <span class="node-role">项目业务入口</span>
+            <span class="node-badge">业务</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow-seam" aria-hidden="true"><span>用户消息 / 管理命令</span></div>
+      <section class="arch-layer" aria-labelledby="L2-title">
+        <div class="layer-label">
+          <span>L2</span>
+          <h2 id="L2-title">控制</h2>
+          <p>项目配置与 worker 生命周期</p>
+        </div>
+        <div class="layer-nodes">
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="cli" data-kind="control" aria-pressed="false">
+            <span class="node-title">vibego CLI</span>
+            <span class="node-role">本地启动/诊断入口</span>
+            <span class="node-badge">CLI</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="master" data-kind="control" aria-pressed="false">
+            <span class="node-title">master.py</span>
+            <span class="node-role">多项目 worker 编排器</span>
+            <span class="node-badge">编排</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="repo" data-kind="data" aria-pressed="false">
+            <span class="node-title">ProjectRepository</span>
+            <span class="node-role">项目配置持久化</span>
+            <span class="node-badge">配置</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="state" data-kind="data" aria-pressed="false">
+            <span class="node-title">StateStore</span>
+            <span class="node-role">运行状态持久化</span>
+            <span class="node-badge">状态</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow-seam" aria-hidden="true"><span>启动与配置 worker</span></div>
+      <section class="arch-layer" aria-labelledby="L3-title">
+        <div class="layer-label">
+          <span>L3</span>
+          <h2 id="L3-title">Worker</h2>
+          <p>消息规整与最终入模</p>
+        </div>
+        <div class="layer-nodes">
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="bot" data-kind="control" aria-pressed="false">
+            <span class="node-title">bot.py worker</span>
+            <span class="node-role">消息收发与模型会话桥接</span>
+            <span class="node-badge">桥接</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="dispatch" data-kind="control" aria-pressed="false">
+            <span class="node-title">Dispatch gate</span>
+            <span class="node-role">最终入模边界</span>
+            <span class="node-badge">闸口</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="tasks" data-kind="data" aria-pressed="false">
+            <span class="node-title">TaskService</span>
+            <span class="node-role">任务、备注、附件、历史</span>
+            <span class="node-badge">任务</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="commands" data-kind="data" aria-pressed="false">
+            <span class="node-title">CommandService</span>
+            <span class="node-role">通用命令、别名、历史</span>
+            <span class="node-badge">命令</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="parallel" data-kind="data" aria-pressed="false">
+            <span class="node-title">ParallelSessionStore</span>
+            <span class="node-role">并行会话元数据</span>
+            <span class="node-badge">并行</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow-seam" aria-hidden="true"><span>规整 prompt / fail-closed</span></div>
+      <section class="arch-layer" aria-labelledby="L4-title">
+        <div class="layer-label">
+          <span>L4</span>
+          <h2 id="L4-title">运行</h2>
+          <p>脚本、tmux、模型 CLI</p>
+        </div>
+        <div class="layer-nodes">
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="scripts" data-kind="runtime" aria-pressed="false">
+            <span class="node-title">run/stop scripts</span>
+            <span class="node-role">worker 生命周期脚本</span>
+            <span class="node-badge">启动</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="tmux" data-kind="runtime" aria-pressed="false">
+            <span class="node-title">tmux</span>
+            <span class="node-role">模型 CLI 宿主会话</span>
+            <span class="node-badge">会话</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="model" data-kind="runtime" aria-pressed="false">
+            <span class="node-title">模型 CLI</span>
+            <span class="node-role">Codex / ClaudeCode / Gemini / Copilot</span>
+            <span class="node-badge">模型</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="binder" data-kind="runtime" aria-pressed="false">
+            <span class="node-title">session_binder.py</span>
+            <span class="node-role">同源 JSONL pointer 绑定</span>
+            <span class="node-badge">绑定</span>
+          </button>
+        </div>
+      </section>
+      <div class="flow-seam" aria-hidden="true"><span>tmux 投递 / 模型执行</span></div>
+      <section class="arch-layer" aria-labelledby="L5-title">
+        <div class="layer-label">
+          <span>L5</span>
+          <h2 id="L5-title">数据</h2>
+          <p>JSONL、日志、任务库与回传证据</p>
+        </div>
+        <div class="layer-nodes">
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="config" data-kind="data" aria-pressed="false">
+            <span class="node-title">~/.config/vibego</span>
+            <span class="node-role">运行期根目录</span>
+            <span class="node-badge">目录</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="taskdb" data-kind="data" aria-pressed="false">
+            <span class="node-title">任务/命令 DB</span>
+            <span class="node-role">项目内任务与命令历史</span>
+            <span class="node-badge">DB</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="jsonl" data-kind="data" aria-pressed="false">
+            <span class="node-title">Session JSONL</span>
+            <span class="node-role">模型结构化事件源</span>
+            <span class="node-badge">事件</span>
+          </button>
+          <button class="arch-node" type="button" data-detail-type="node" data-detail-id="logs" data-kind="data" aria-pressed="false">
+            <span class="node-title">logs + pointer</span>
+            <span class="node-role">运行日志和会话指针</span>
+            <span class="node-badge">日志</span>
+          </button>
+        </div>
+      </section>
+      <div class="map-legend" aria-label="图例">
+        <span class="legend-item"><span class="dot"></span>入口/外部</span>
+        <span class="legend-item"><span class="dot control"></span>控制</span>
+        <span class="legend-item"><span class="dot runtime"></span>运行</span>
+        <span class="legend-item"><span class="dot data"></span>数据</span>
+      </div>
+    </section>
+
+    <aside class="details-panel" id="detailsPanel" aria-live="polite" aria-label="节点详情" hidden>
+      <h2>节点详情</h2>
+      <span class="details-kind">点击节点后显示</span>
+      <p class="summary">点击地图中的节点后，这里展示输入、输出、风险和证据锚点。</p>
+    </aside>
+  </main>
+
+  <script type="application/json" id="diagram-data">{"nodes":{"user":{"name":"用户 / 管理员","role":"Telegram 客户端入口","kind":"external","inputs":["文本消息","按钮回调","命令"],"outputs":["Bot API 请求"],"risks":["权限与 chat_id 需要正确绑定"],"evidence":["README.md：功能介绍"]},"telegram":{"name":"Telegram Bot API","role":"HTTPS 指令通道","kind":"external","inputs":["用户消息"],"outputs":["master bot 或 worker bot 更新"],"risks":["代理/API 超时需 fail-soft"],"evidence":["README.md：Telegram Bot API 的 HTTPS 请求通道"]},"masterbot":{"name":"Master Bot","role":"项目管理入口","kind":"control","inputs":["/run","/stop","/switch","/upgrade"],"outputs":["worker 生命周期动作"],"risks":["启动期菜单同步不应阻断服务"],"evidence":["master.py：Master bot controller.","README.md：管理命令"]},"workerbot":{"name":"Project Worker Bot","role":"项目业务入口","kind":"external","inputs":["项目内消息","任务按钮","命令中心回调"],"outputs":["模型提示或命令结果"],"risks":["普通消息与并行会话路由需区分"],"evidence":["bot.py：on_text","bot.py：_handle_prompt_dispatch"]},"cli":{"name":"vibego CLI","role":"本地启动/诊断入口","kind":"control","inputs":["init/start/stop/status/doctor"],"outputs":["master 服务进程"],"risks":["需使用可用 Python 环境"],"evidence":["vibego_cli/main.py：build_parser"]},"master":{"name":"master.py","role":"多项目 worker 编排器","kind":"control","inputs":["项目配置","管理命令"],"outputs":["run_bot.sh / stop_bot.sh"],"risks":["slug 与展示名不一致会造成状态误判"],"evidence":["master.py：run_worker","master.py：stop_worker"]},"repo":{"name":"ProjectRepository","role":"项目配置持久化","kind":"data","inputs":["bot_name","project_slug","default_model"],"outputs":["projects 表与 JSON 镜像"],"risks":["slug 迁移需修复运行期数据"],"evidence":["project_repository.py：class ProjectRepository","project_repository.py：CREATE TABLE IF NOT EXISTS projects"]},"state":{"name":"StateStore","role":"运行状态持久化","kind":"data","inputs":["项目运行状态","当前模型"],"outputs":["master_state.json"],"risks":["重启恢复依赖状态准确"],"evidence":["master.py：class StateStore"]},"bot":{"name":"bot.py worker","role":"消息收发与模型会话桥接","kind":"control","inputs":["Telegram update"],"outputs":["模型 prompt 或 Telegram 回复"],"risks":["入站聚合、确认语义、回传去重复杂"],"evidence":["bot.py：文件头注释"]},"dispatch":{"name":"Dispatch gate","role":"最终入模边界","kind":"control","inputs":["规整后的业务 prompt"],"outputs":["tmux send / queue"],"risks":["内部保留测试标记必须 fail-closed"],"evidence":["bot.py：_dispatch_prompt_to_model"]},"tasks":{"name":"TaskService","role":"任务、备注、附件、历史","kind":"data","inputs":["任务操作"],"outputs":["SQLite task 表"],"risks":["写路径需保持事务语义"],"evidence":["tasks/service.py：class TaskService"]},"commands":{"name":"CommandService","role":"通用命令、别名、历史","kind":"data","inputs":["命令定义与执行记录"],"outputs":["command_history"],"risks":["命令结果成功态必须 fail-closed"],"evidence":["command_center/service.py：class CommandService"]},"parallel":{"name":"ParallelSessionStore","role":"并行会话元数据","kind":"data","inputs":["task_id","tmux_session","pointer_file"],"outputs":["parallel_sessions"],"risks":["普通 task_id 文本不能误路由"],"evidence":["parallel_runtime.py：class ParallelSessionStore"]},"scripts":{"name":"run/stop scripts","role":"worker 生命周期脚本","kind":"runtime","inputs":["project_slug","model","workdir"],"outputs":["tmux + bot 进程"],"risks":["tmux/PID/handshake 需一致"],"evidence":["scripts/run_bot.sh：usage()","scripts/stop_bot.sh：usage()"]},"tmux":{"name":"tmux","role":"模型 CLI 宿主会话","kind":"runtime","inputs":["send_line 或 queue_line"],"outputs":["模型 CLI 输入"],"risks":["复用旧会话时环境变量需同步"],"evidence":["scripts/start_tmux_codex.sh：tmux"]},"model":{"name":"模型 CLI","role":"Codex / ClaudeCode / Gemini / Copilot","kind":"runtime","inputs":["用户 prompt"],"outputs":["模型输出与会话事件"],"risks":["不同模型 session 格式不同"],"evidence":["scripts/run_bot.sh：--model"]},"binder":{"name":"session_binder.py","role":"同源 JSONL pointer 绑定","kind":"runtime","inputs":["session 根目录","worker marker"],"outputs":["current_session.txt","recent_sessions.json"],"risks":["pointer 指向非 worker 会话必须拒绝"],"evidence":["scripts/session_binder.py：--required-marker"]},"config":{"name":"~/.config/vibego","role":"运行期根目录","kind":"data","inputs":["配置、日志、状态、runtime"],"outputs":["config/logs/state/data/runtime"],"risks":["敏感 token 不得进入仓库"],"evidence":["README.md：运行期日志和状态文件统一写入本机 ~/.config/vibego/","vibego_cli/config.py：CONFIG_ROOT"]},"taskdb":{"name":"任务/命令 DB","role":"项目内任务与命令历史","kind":"data","inputs":["TaskService / CommandService 写入"],"outputs":["tasks / command_history"],"risks":["SQLite 迁移需兼容旧数据"],"evidence":["tasks/service.py：CREATE TABLE IF NOT EXISTS","command_center/service.py：CREATE TABLE IF NOT EXISTS"]},"jsonl":{"name":"Session JSONL","role":"模型结构化事件源","kind":"data","inputs":["模型 CLI 事件"],"outputs":["watcher 增量读取"],"risks":["Codex JSONL 未确认不等于 tmux 投递失败"],"evidence":["scripts/start_tmux_codex.sh：SESSION_POINTER_FILE","bot.py：_read_session_events"]},"logs":{"name":"logs + pointer","role":"运行日志和会话指针","kind":"data","inputs":["run_bot.log","model.log","bot.pid"],"outputs":["排障证据"],"risks":["日志应在运行期目录，不落仓库"],"evidence":["README.md：日志 &amp; 目录"]}}}</script>
+  <script>
+    // 交互增强：图本身静态可读；脚本只补充节点证据。
+    const data = JSON.parse(document.getElementById('diagram-data').textContent);
+    const detailsPanel = document.getElementById('detailsPanel');
+    const selectedButtons = new Set();
+    const esc = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+    function clearPressed() { selectedButtons.forEach((el) => el.setAttribute('aria-pressed', 'false')); selectedButtons.clear(); }
+    function setPressed(button) { clearPressed(); button.setAttribute('aria-pressed', 'true'); selectedButtons.add(button); }
+    function list(items) { const values = Array.isArray(items) && items.length ? items : ['待补充']; return `<ul class="detail-list">${values.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>`; }
+    function kindLabel(kind) { return ({ external: '入口 / 外部', control: '控制', runtime: '运行', data: '数据' })[kind] || '模块'; }
+    function showNode(button, node) { detailsPanel.hidden = false; detailsPanel.innerHTML = `<h2>${esc(node.name)}</h2><span class="details-kind">${esc(kindLabel(node.kind))}</span><p class="summary">${esc(node.role)}</p><div class="detail-block"><h3>输入</h3>${list(node.inputs)}</div><div class="detail-block"><h3>输出</h3>${list(node.outputs)}</div><div class="detail-block"><h3>风险</h3>${list(node.risks)}</div><div class="detail-block"><h3>证据</h3>${list(node.evidence)}</div>`; button.insertAdjacentElement('afterend', detailsPanel); }
+    document.querySelectorAll('[data-detail-type="node"]').forEach((button) => { button.addEventListener('click', () => { const node = data.nodes[button.dataset.detailId]; if (node) { setPressed(button); showNode(button, node); } }); });
+  </script>
+  <!-- 自检结果：one-map=true；只保留分层模块地图；无主链路卡片、无关系卡片、无说明卡片；orientation=north-south；static-first=true；节点文字溢出=未发现；点击详情=内联增强且不自动滚动。 -->
+</body>
+</html>

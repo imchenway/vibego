@@ -8,7 +8,8 @@ fi
 _MODEL_COMMON_LOADED=1
 
 COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="${ROOT_DIR:-$(cd "$COMMON_DIR/.." && pwd)}"
+# 公共模型脚本位于 scripts/models；默认根目录应回到包/仓库根，而不是 scripts 目录。
+ROOT_DIR="${ROOT_DIR:-$(cd "$COMMON_DIR/../.." && pwd)}"
 resolve_config_root() {
   local raw=""
   if [[ -n "${MASTER_CONFIG_ROOT:-}" ]]; then
@@ -125,6 +126,7 @@ sync_agents_block() {
   local target_file="$1" template_file="$2"
   local marker_start="${3:-$VIBEGO_AGENTS_MARKER_START}"
   local marker_end="${4:-$VIBEGO_AGENTS_MARKER_END}"
+  local builtin_skills_dir="${VIBEGO_BUILTIN_SKILLS_DIR:-$ROOT_DIR/vibego_cli/data/skills}"
   if [[ -z "$target_file" || -z "$template_file" ]]; then
     return 0
   fi
@@ -135,7 +137,7 @@ sync_agents_block() {
   ensure_dir "$(dirname "$target_file")"
   local py_bin
   py_bin="$(_vibego_python_bin)"
-  "$py_bin" - "$target_file" "$template_file" "$marker_start" "$marker_end" <<'PY'
+  "$py_bin" - "$target_file" "$template_file" "$marker_start" "$marker_end" "$builtin_skills_dir" <<'PY'
 import sys, shutil, datetime
 from pathlib import Path
 
@@ -143,8 +145,46 @@ target = Path(sys.argv[1]).expanduser()
 template = Path(sys.argv[2]).expanduser()
 marker_start = sys.argv[3]
 marker_end = sys.argv[4]
+builtin_skills_dir = Path(sys.argv[5]).expanduser()
 timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def render_builtin_skills(skills_dir: Path) -> str:
+    """把 vibego 内置 skill 合并进 AGENTS，确保全局 Codex 也能被触发。"""
+
+    if not skills_dir.is_dir():
+        return ""
+    skill_files = sorted(skills_dir.glob("*/SKILL.md"))
+    if not skill_files:
+        return ""
+
+    lines = [
+        "# Vibego 内置 Skills",
+        "",
+        "以下技能包由 vibego 在同步 AGENTS 时自动注入，与本文件其他全局规约同级生效。",
+        "当用户需求命中某个 skill 的 description 或正文触发词时，必须执行该 skill 的规则。",
+        "",
+    ]
+    for skill_file in skill_files:
+        skill_name = skill_file.parent.name
+        skill_text = skill_file.read_text(encoding="utf-8").strip()
+        lines.extend(
+            [
+                f"## Skill: {skill_name}",
+                "",
+                f"<!-- vibego-skill-source: {skill_file} -->",
+                "",
+                skill_text,
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip()
+
+
 body = template.read_text(encoding="utf-8").rstrip()
+skills_block = render_builtin_skills(builtin_skills_dir)
+if skills_block:
+    body = body + "\n\n" + skills_block
 block_lines = [
     marker_start,
     f"<!-- vibego-source: {template} -->",
