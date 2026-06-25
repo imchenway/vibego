@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JSONL 未自动按 HTML skill 生成：根因图</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f9fc;
+    --panel: #ffffff;
+    --ink: #102033;
+    --muted: #5b6f82;
+    --line: #cbd8e5;
+    --blue: #276fbf;
+    --blue-soft: #e9f3ff;
+    --green: #1f7a5a;
+    --green-soft: #eaf7f1;
+    --amber: #9c6515;
+    --amber-soft: #fff3dc;
+    --red: #b3404a;
+    --red-soft: #fdecef;
+    --shadow: 0 18px 45px rgba(16, 32, 51, .10);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background: radial-gradient(circle at top left, #e9f3ff 0, rgba(233,243,255,0) 34rem), var(--bg);
+    line-height: 1.5;
+  }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+  header { margin-bottom: 18px; }
+  h1 { margin: 0 0 6px; font-size: clamp(20px, 3vw, 28px); letter-spacing: -.02em; }
+  .subtitle { margin: 0; color: var(--muted); font-size: 14px; }
+  .summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(240px, .8fr);
+    gap: 14px;
+    margin: 18px 0;
+  }
+  .callout {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .callout strong { color: var(--red); }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid transparent; }
+  .badge.red { color: var(--red); background: var(--red-soft); border-color: #f3c4ca; }
+  .badge.green { color: var(--green); background: var(--green-soft); border-color: #bfe6d5; }
+  .badge.blue { color: var(--blue); background: var(--blue-soft); border-color: #bdd8f5; }
+  .flow {
+    background: rgba(255,255,255,.78);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .flow-title { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
+  .flow-title h2 { margin: 0; font-size: 18px; }
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(120px, 1fr));
+    gap: 10px;
+    align-items: stretch;
+  }
+  .step-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 18px; gap: 8px; align-items: center; }
+  .step-wrap:last-child { grid-template-columns: minmax(0, 1fr); }
+  .arrow { color: var(--blue); font-weight: 900; text-align: center; font-size: 20px; }
+  button.node {
+    width: 100%; min-height: 132px; text-align: left; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 16px; padding: 12px;
+    background: #fff; color: var(--ink); font: inherit;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  button.node:hover { border-color: #8db7e4; transform: translateY(-1px); transition: .16s ease; }
+  button.node:focus-visible { outline: 3px solid rgba(39,111,191,.28); outline-offset: 3px; }
+  .node .kicker { font-size: 12px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .node .name { font-size: 15px; font-weight: 800; overflow-wrap: anywhere; }
+  .node .desc { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .node.root { border-color: #efb4bb; background: linear-gradient(180deg, #fff, var(--red-soft)); }
+  .node.ok { border-color: #aedbc9; background: linear-gradient(180deg, #fff, var(--green-soft)); }
+  .matrix { margin-top: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 14px; }
+  .card h3 { margin: 0 0 8px; font-size: 15px; }
+  .card ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+  .evidence { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 10px 12px; border-bottom: 1px solid #e5edf5; vertical-align: top; overflow-wrap: anywhere; }
+  th { text-align: left; background: #f0f6fc; color: #26425d; }
+  tr:last-child td { border-bottom: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #edf3f8; border: 1px solid #d9e5ef; border-radius: 6px; padding: 1px 4px; }
+  .modal-backdrop { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 18px; background: rgba(16,32,51,.34); z-index: 20; }
+  .modal-backdrop[aria-hidden="false"] { display: flex; }
+  .modal { width: min(620px, 100%); max-height: 84vh; overflow: auto; background: #fff; border-radius: 18px; border: 1px solid var(--line); box-shadow: 0 24px 80px rgba(16,32,51,.22); padding: 18px; }
+  .modal h3 { margin: 0 0 8px; font-size: 18px; }
+  .modal p { margin: 8px 0; color: var(--muted); }
+  .close { margin-top: 12px; border: 1px solid var(--line); background: #f7fafc; border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+  .close:focus-visible { outline: 3px solid rgba(39,111,191,.28); outline-offset: 2px; }
+  @media (max-width: 880px) {
+    main { padding: 16px; }
+    .summary, .matrix { grid-template-columns: 1fr; }
+    .steps { grid-template-columns: 1fr; }
+    .step-wrap { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); margin: -2px 0; }
+    button.node { min-height: auto; }
+    table, thead, tbody, tr, th, td { display: block; }
+    th { display: none; }
+    td { border-bottom: 0; padding: 6px 12px; }
+    tr { border-bottom: 1px solid #e5edf5; padding: 8px 0; }
+    tr:last-child { border-bottom: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { button.node:hover { transform: none; transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>JSONL 未自动按 HTML skill 生成：根因图</h1>
+    <p class="subtitle">目标：解释为什么该会话没有在任务开始时按 `html-visual-communication` 自动优先输出 HTML 图。</p>
+  </header>
+
+  <section class="summary" aria-label="关键结论">
+    <div class="callout">
+      <span class="badge red">已确认根因</span>
+      <p><strong>会话级 instructions 快照陈旧。</strong> 该 JSONL 的 `session_meta.base_instructions` 不包含 `HTML 图形沟通默认协议` 和 `html-visual-communication`，所以模型启动时没有自动制图门禁。</p>
+    </div>
+    <div class="callout">
+      <span class="badge green">边界澄清</span>
+      <p>该会话后半段实际生成过 HTML 文件；问题不是“没有文件”，而是“没有在任务开始和最终交付中按 skill 协议自动优先用 HTML 图沟通”。</p>
+    </div>
+  </section>
+
+  <section class="flow" aria-label="故障排查主路径">
+    <div class="flow-title">
+      <h2>现象 → 证据 → 假设 → 根因 → 修法 → 验证</h2>
+      <span class="badge blue">点击节点看详情</span>
+    </div>
+    <div class="steps">
+      <div class="step-wrap">
+        <button class="node" data-title="现象" data-body="用户在 JSONL 对应会话中要求以后通过 HTML 图沟通，但模型没有在任务开始时先生成 HTML 沟通图，而是先进入 AGENTS 与 skill 的代码/文档改造流程。">
+          <span class="kicker">S1 现象</span><span class="name">没有自动优先 HTML 图</span><span class="desc">首轮响应是文本计划和开发动作。</span>
+        </button><div class="arrow">→</div>
+      </div>
+      <div class="step-wrap">
+        <button class="node" data-title="证据" data-body="JSONL line 2237 是用户请求；所有 session_meta 均显示 has_html=False、has_skill=False，同步标记为 2026-06-24T23:50:58Z；line 2247 只声明 writing-skills、TDD、verification。">
+          <span class="kicker">S2 证据</span><span class="name">base_instructions 不含 HTML 规则</span><span class="desc">旧会话快照缺少新协议。</span>
+        </button><div class="arrow">→</div>
+      </div>
+      <div class="step-wrap">
+        <button class="node" data-title="假设" data-body="假设 A：模型忘记遵守 skill；假设 B：会话没有加载到 skill。证据支持 B，因为 JSONL session_meta 明确不含 HTML 默认协议和 skill 内容。">
+          <span class="kicker">S3 假设</span><span class="name">不是忘记，而是没加载</span><span class="desc">规则不在会话快照中。</span>
+        </button><div class="arrow">→</div>
+      </div>
+      <div class="step-wrap">
+        <button class="node root" data-title="根因" data-body="根因成立：该会话创建于 2026-06-25T02:29:25.836Z，AGENTS 同步标记是 2026-06-24T23:50:58Z；HTML 默认协议是在后续任务中才同步到 /Users/david/.config/vibego/AGENTS.md、/Users/david/.codex/AGENTS.md 和 codex_model_instructions.md。旧 JSONL 不会自动回灌新 instructions。">
+          <span class="kicker">S4 根因</span><span class="name">旧 JSONL 不会自动回灌新 AGENTS</span><span class="desc">会话启动快照决定本轮约束。</span>
+        </button><div class="arrow">→</div>
+      </div>
+      <div class="step-wrap">
+        <button class="node" data-title="修法" data-body="让新协议生效的正确路径是新开 Codex 会话或重启 vibego worker，使当前 codex_model_instructions.md 重新注入。继续沿用旧 JSONL 时，需要在用户提示或系统注入中显式带上新 AGENTS。">
+          <span class="kicker">S5 修法</span><span class="name">新会话 / 重启 worker</span><span class="desc">让新 instructions 成为启动快照。</span>
+        </button><div class="arrow">→</div>
+      </div>
+      <div class="step-wrap">
+        <button class="node ok" data-title="验证" data-body="当前 /Users/david/.config/vibego/AGENTS.md、/Users/david/.codex/AGENTS.md、codex_model_instructions.md 已含 HTML 默认协议、html-visual-communication、AGENTS 配合协议；当前 bot 的 HTML 路径提取函数可识别最终回复中的项目内 HTML 链接。">
+          <span class="kicker">S6 验证</span><span class="name">当前配置已具备新规则</span><span class="desc">下一新会话才稳定生效。</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section class="matrix" aria-label="结论矩阵">
+    <article class="card">
+      <h3>不是这个原因</h3>
+      <ul>
+        <li>不是 HTML 文件完全没生成：line 2412 创建过文件。</li>
+        <li>不是文件路径无法识别：当前提取逻辑可识别最终 Markdown 链接。</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>真实影响</h3>
+      <ul>
+        <li>旧会话继续跑时，仍可能按旧行为输出文本。</li>
+        <li>新协议要靠新会话 / 重启 worker 进入启动快照。</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>待确认项</h3>
+      <ul>
+        <li>如果用户说的是 Telegram 没收到附件，需要另查投递层日志。</li>
+        <li>JSONL 只能证明模型输出了路径，不能单独证明 Telegram 已发文件。</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="evidence" aria-label="证据表">
+    <table>
+      <thead><tr><th>证据</th><th>位置</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>E1</td><td><code>rollout-...jsonl:2237</code></td><td>用户提出“以后沟通全部通过 HTML 图”。</td></tr>
+        <tr><td>E2</td><td><code>rollout-...jsonl session_meta</code></td><td>所有会话元信息均不含 HTML 默认协议和 skill，且同步时间为 2026-06-24T23:50:58Z。</td></tr>
+        <tr><td>E3</td><td><code>rollout-...jsonl:2247</code></td><td>实际声明使用 writing-skills、TDD、verification，而非 html-visual-communication。</td></tr>
+        <tr><td>E4</td><td><code>rollout-...jsonl:2412</code></td><td>后半段创建了 `TASK_20260625_004_AGENTS与HTML制图skill配合协议.html`。</td></tr>
+        <tr><td>E5</td><td><code>/Users/david/.config/vibego/AGENTS.md</code></td><td>当前配置已包含 HTML 默认协议，但 mtime 是 2026-06-25 18:23:46 +0800，晚于旧会话快照。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+<div class="modal-backdrop" id="backdrop" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h3 id="modal-title"></h3>
+    <p id="modal-body"></p>
+    <button class="close" id="close" type="button">关闭</button>
+  </div>
+</div>
+<script>
+(function () {
+  const backdrop = document.getElementById('backdrop');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const close = document.getElementById('close');
+  let last = null;
+  function openModal(btn) {
+    last = btn;
+    title.textContent = btn.dataset.title || '详情';
+    body.textContent = btn.dataset.body || '';
+    backdrop.setAttribute('aria-hidden', 'false');
+    close.focus();
+  }
+  function closeModal() {
+    backdrop.setAttribute('aria-hidden', 'true');
+    if (last) last.focus();
+  }
+  document.querySelectorAll('button.node').forEach(btn => btn.addEventListener('click', () => openModal(btn)));
+  close.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+}());
+</script>
+</body>
+</html>

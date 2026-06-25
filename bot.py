@@ -384,8 +384,6 @@ PARALLEL_PLAN_READY_MARKERS: Tuple[str, ...] = (
     "model:",
     "/model to change",
 )
-# 直接 Telegram 文本消息默认按 PLAN 推送（先 /plan 再发正文）
-ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE = _env_bool("ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE", True)
 # tmux 注入兜底：部分终端偶发“文本已进输入框但未真正发送”，默认延迟补发一次 Enter。
 TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED = _env_bool("TMUX_SEND_LINE_DOUBLE_ENTER_ENABLED", True)
 CODEX_TRUST_SCOPE_PARALLEL_WORKSPACE = "parallel_workspace"
@@ -5795,13 +5793,10 @@ async def _handle_prompt_dispatch(
 
     active_user_id = getattr(message.from_user, "id", None) if message.from_user else None
     _remember_chat_active_user(message.chat.id, active_user_id)
-    # 需求约定：普通 Telegram 消息发送前先确保 Codex 处于 PLAN；
-    # 即使用户选择“排队发送”，也要先完成 PLAN 预命令，再把正文排队。
+    # 普通 Telegram 直聊只负责投递用户业务提示，不再隐式发送 /plan；
+    # 终端模式由用户通过 🧭 PLAN / /plan_mode 或 PlanConfirm 显式控制。
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": message,
-        "intended_mode": PUSH_MODE_PLAN,
-        "force_plan_switch_for_queued": True,
-        "probe_plan_mode_before_switch": True,
         # 普通 Telegram 直聊属于业务提示，统一按 queued 优先发送。
         "send_mode": _resolve_business_prompt_send_mode(),
         # 普通 Telegram 直聊必须确认模型 session 真正消费了输入；

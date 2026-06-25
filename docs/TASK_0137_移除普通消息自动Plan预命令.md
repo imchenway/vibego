@@ -63,3 +63,7 @@ PYTHONPATH=. pytest -q
 `TASK_0137` 是当时“普通消息不自动 PLAN”的历史契约。用户在 `TASK_20260603_004_Telegram普通消息自动确保PLAN模式.md` 中已明确改回：普通 Telegram 消息发送前需要确保 PLAN 模式；若当前不是 PLAN，则先切 PLAN，再发送/排队正文。
 
 后续实现与排障以 `TASK_20260603_004` 和 `AGENTS.md` 最新 Facts Table 为准。
+
+## 8. 最新变更提示（2026-06-25）
+
+`TASK_20260625_006_普通直聊移除强制PLAN.md` 已再次把普通 Telegram 直聊调整为“不自动 PLAN”：普通直聊只负责投递业务提示，PLAN 由 `🧭 PLAN:` / `/plan_mode` 或 PlanConfirm 显式控制。后续实现与排障以 `AGENTS.md` 最新 Facts Table 与 `TASK_20260625_006` 为准。

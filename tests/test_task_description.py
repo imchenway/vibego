@@ -5072,14 +5072,13 @@ def test_dispatch_prompt_force_exit_plan_ui_uses_parallel_tmux_session(monkeypat
             pass
 
 
-def test_handle_prompt_dispatch_auto_ensures_plan_mode(monkeypatch):
-    """直接 Telegram 普通消息：应声明 PLAN，并允许排队模式先切 PLAN。"""
+def test_handle_prompt_dispatch_uses_current_terminal_mode(monkeypatch):
+    """直接 Telegram 普通消息：不再自动声明 PLAN，终端模式由用户手动控制。"""
 
     message = DummyMessage()
     message.text = "hello"
     monkeypatch.setattr(bot, "ENV_ISSUES", [])
     monkeypatch.setattr(bot, "MODE", "B")
-    monkeypatch.setattr(bot, "ENABLE_AUTO_PLAN_FOR_DIRECT_MESSAGE", True)
 
     class DummyAiogram:
         async def send_chat_action(self, chat_id: int, action: str):
@@ -5105,7 +5104,7 @@ def test_handle_prompt_dispatch_auto_ensures_plan_mode(monkeypatch):
     monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fake_dispatch)
     asyncio.run(bot._handle_prompt_dispatch(message, "hello"))
 
-    assert captured == [(bot.PUSH_MODE_PLAN, True, True)]
+    assert captured == [(None, False, False)]
 
 
 def test_handle_prompt_dispatch_ignores_chat_action_failure(monkeypatch):
@@ -7012,7 +7011,7 @@ def test_on_text_direct_prompt_enables_delivery_confirmation(monkeypatch, tmp_pa
 
 
 def test_on_text_direct_prompt_uses_default_queued_send_mode(monkeypatch, tmp_path: Path):
-    """Codex 普通 Telegram 文本直聊默认透传 queued，不再依赖底部切换状态。"""
+    """Codex 普通 Telegram 文本直聊默认 queued，但不自动切换到 PLAN。"""
 
     message = DummyMessage()
     message.text = "hello queued direct dispatch"
@@ -7056,7 +7055,7 @@ def test_on_text_direct_prompt_uses_default_queued_send_mode(monkeypatch, tmp_pa
     asyncio.run(bot.on_text(message, state))
 
     assert captured == [
-        ("hello queued direct dispatch", bot.PUSH_MODE_PLAN, bot.PUSH_SEND_MODE_QUEUED, True, True, True)
+        ("hello queued direct dispatch", None, bot.PUSH_SEND_MODE_QUEUED, False, False, True)
     ]
 
 
