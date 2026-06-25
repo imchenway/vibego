@@ -67,6 +67,20 @@ def test_html_visual_skill_pack_exists_and_is_packaged() -> None:
     assert "recursive-include vibego_cli/data/skills" in manifest_text
 
 
+def test_html_visual_fault_diagram_rules_prioritize_storyline() -> None:
+    """故障排查图规则应把主图收敛为来龙去脉，而不是根因长文堆叠。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "html-visual-communication" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "故障故事线" in skill_text
+    assert "证据阶梯" in skill_text
+    assert "假设裁决" in skill_text
+    assert "行动闭环" in skill_text
+    assert "主图不写长段根因分析" in skill_text
+    assert "未验证只能标为最高可疑点" in skill_text
+
+
 def test_sync_agents_block_embeds_builtin_html_visual_skill(tmp_path: Path) -> None:
     """同步全局 AGENTS 时，应把 vibego 内置 skill 注入到同一个受管块。"""
 
