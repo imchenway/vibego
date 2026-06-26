@@ -1,5 +1,5 @@
 ---
-name: html-visual-communication
+name: vibe-diagram
 description: Use when the user asks to draw, diagram, visualize, finalize, or communicate system architecture, business/domain architecture, workflows, code sequence, state/data models, incidents/debugging, page mockups, technical design, requirements, decisions, or any one-picture visual explanation; triggers include 画图, 架构图, 业务架构图, 流程图, 时序图, 状态图, 故障排查图, 设计稿, HTML 图, 一图胜千言.
 ---
 
@@ -26,15 +26,17 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 
 ## 交付铁律
 
-1. 最终必须直接发送 `.html` 文件，必须作为文件附件发送；在 Telegram 中必须看到文件卡片，而不是只看到一段文字。
-2. 禁止只发送 Markdown 链接、截图预览、文件路径或“打开 HTML”文字；这些只能作为附件之外的补充说明。
-3. 在 vibego/Telegram 场景，最终回复必须显式引用项目内 `.html` 文件绝对路径或相对路径，触发 worker 自动 `send_document`；但用户侧交付标准仍是收到 HTML 文件附件。
-4. 如果当前平台无法发送附件，必须输出完整 HTML 代码块，让用户可直接复制保存，并明确说明“当前平台不支持附件发送”。
-5. PNG 只能作为 Telegram 预览 fallback，不能替代 HTML 文件。
-6. 不要输出 Mermaid、PlantUML、Graphviz、纯 Markdown 说明或图片提示词，除非用户明确要求。
-7. 单 HTML 内必须包含 `<!doctype html>`、内联 CSS、少量原生 JS；禁止外部 CDN、npm 包、远程字体、远程图片和构建工具。
-8. 主内容必须 static-first：核心节点、层级、关系、结论直接写在 HTML DOM 中；禁止首屏主内容依赖 JS 动态渲染。
-9. JavaScript 只能做 progressive enhancement：节点详情、小弹窗、选中态、关闭弹窗、复制、打印。
+1. 交付目标按来源判断：**Codex 默认**，vibego 注入了 Telegram 来源上下文时按 Telegram 交付。
+2. Codex 默认场景：最终回复必须给一个可点击的 Markdown `file://` 链接，例如 `[打开 HTML 图](file:///绝对路径/xxx.html)`，并保留绝对路径作为兜底；禁止只给相对路径或裸路径。
+3. Telegram 来源场景：最终回复必须显式引用项目内 `.html/.htm` 文件绝对路径或相对路径，触发 worker 自动 `send_document`；也就是最终必须直接发送 `.html` 文件，必须作为文件附件发送，用户侧交付标准是 Telegram 中必须看到文件卡片，而不是只有文字路径。
+4. Telegram 来源场景不要把 `file://` 作为 Telegram 主入口；如同时提供 Codex 兜底链接，必须放在附件说明之后，且文案保持简短。
+5. 不需要 PNG；只有用户明确要求图片预览时，PNG 才能作为 fallback，且不能替代 HTML 文件。
+6. 禁止只发送 Markdown 链接、截图预览、文件路径或“打开 HTML”文字；这些只能作为对应平台主交付之外的补充说明。
+7. 如果当前平台无法发送附件且 `file://` 链接不可用，必须输出完整 HTML 代码块，让用户可直接复制保存，并明确说明“当前平台不支持附件发送”。
+8. 不要输出 Mermaid、PlantUML、Graphviz、纯 Markdown 说明或图片提示词，除非用户明确要求。
+9. 单 HTML 内必须包含 `<!doctype html>`、内联 CSS、少量原生 JS；禁止外部 CDN、npm 包、远程字体、远程图片和构建工具。
+10. 主内容必须 static-first：核心节点、层级、关系、结论直接写在 HTML DOM 中；禁止首屏主内容依赖 JS 动态渲染。
+11. JavaScript 只能做 progressive enhancement：节点详情、小弹窗、选中态、关闭弹窗、复制、打印。
 
 ## 自动路由规则
 
@@ -235,6 +237,7 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 - 是否节点文字不溢出、无背景线穿字、无横向溢出？
 - 点击节点是否打开小弹窗，空白/Esc 可关闭，且不会自动滚动页面？
 - 系统架构图是否明确展示组件、中间件/运行时、DB、MQ/队列语义？
-- Telegram 场景是否能看到 `.html` 文件卡片，而不是只有 Markdown 链接或路径文字？
+- Codex 默认场景是否提供可点击 `file://` HTML 链接和绝对路径兜底？
+- Telegram 来源场景是否能看到 `.html` 文件卡片，而不是只有 Markdown 链接或路径文字？
 
 最终回复要短，只说明 HTML 已生成/已发送；不要输出冗长过程日志。

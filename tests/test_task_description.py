@@ -3706,7 +3706,7 @@ def test_dispatch_prompt_injects_enforced_agents_notice(monkeypatch, tmp_path: P
 
     asyncio.run(scenario())
 
-    assert sent.get("line") == f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"
+    assert sent.get("line") == bot._prepend_enforced_agents_notice("pwd")
 
     for coro in created_tasks:
         try:
@@ -4227,7 +4227,7 @@ def test_dispatch_prompt_plan_mode_sends_plan_switch_for_codex(monkeypatch, tmp_
     asyncio.run(scenario())
 
     assert sent_lines[0] == bot.PLAN_MODE_SWITCH_COMMAND
-    assert sent_lines[1] == f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"
+    assert sent_lines[1] == bot._prepend_enforced_agents_notice("pwd")
 
     for coro in created_tasks:
         try:
@@ -4301,7 +4301,7 @@ def test_dispatch_prompt_plan_mode_skips_plan_switch_when_worker_already_plan(mo
 
     asyncio.run(scenario())
 
-    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+    assert sent_lines == [bot._prepend_enforced_agents_notice("pwd")]
 
     for coro in created_tasks:
         try:
@@ -4375,7 +4375,7 @@ def test_dispatch_prompt_plan_mode_queued_skips_plan_switch_for_codex(monkeypatc
     asyncio.run(scenario())
 
     assert sent_lines == []
-    assert queued_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+    assert queued_lines == [bot._prepend_enforced_agents_notice("pwd")]
 
     for coro in created_tasks:
         try:
@@ -4455,7 +4455,7 @@ def test_dispatch_prompt_plan_mode_queued_force_sends_plan_switch_for_direct_mes
     asyncio.run(scenario())
 
     assert sent_lines == [bot.PLAN_MODE_SWITCH_COMMAND]
-    assert queued_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+    assert queued_lines == [bot._prepend_enforced_agents_notice("pwd")]
 
     for coro in created_tasks:
         try:
@@ -4525,7 +4525,7 @@ def test_dispatch_prompt_yolo_mode_skips_plan_switch(monkeypatch, tmp_path: Path
 
     asyncio.run(scenario())
 
-    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+    assert sent_lines == [bot._prepend_enforced_agents_notice("pwd")]
 
     for coro in created_tasks:
         try:
@@ -4592,7 +4592,7 @@ def test_dispatch_prompt_plan_mode_skips_switch_for_non_codex(monkeypatch, tmp_p
 
     asyncio.run(scenario())
 
-    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+    assert sent_lines == [bot._prepend_enforced_agents_notice("pwd")]
 
     for coro in created_tasks:
         try:
@@ -4672,7 +4672,7 @@ def test_dispatch_prompt_plan_mode_waits_for_parallel_tmux_ready(monkeypatch, tm
 
     assert wait_calls == [dispatch_context.tmux_session]
     assert sent_lines[0] == bot.PLAN_MODE_SWITCH_COMMAND
-    assert sent_lines[1] == f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"
+    assert sent_lines[1] == bot._prepend_enforced_agents_notice("pwd")
 
     for coro in created_tasks:
         try:
@@ -5132,13 +5132,19 @@ def test_handle_prompt_dispatch_ignores_chat_action_failure(monkeypatch):
     assert captured == ["hello after proxy timeout"]
 
 
+EXPECTED_TELEGRAM_SOURCE_CONTEXT_NOTICE = (
+    "请求来源：vibego Telegram worker / 移动端。HTML 图交付：Telegram 主交付是项目内 `.html/.htm` "
+    "文件附件卡片，不需要 PNG；不要把 `file://` 作为 Telegram 主入口。"
+)
+
+
 @pytest.mark.parametrize(
     "raw_prompt,expected",
     [
-        ("pwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"),
-        ("pwd\n", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd\n"),
-        ("\npwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\n\npwd"),
-        ("  pwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\n  pwd"),
+        ("pwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n{EXPECTED_TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\npwd"),
+        ("pwd\n", f"{bot.ENFORCED_AGENTS_NOTICE}\n{EXPECTED_TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\npwd\n"),
+        ("\npwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n{EXPECTED_TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\n\npwd"),
+        ("  pwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n{EXPECTED_TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\n  pwd"),
         ("/compact", "/compact"),
         (" /compact", " /compact"),
         (bot.PLAN_IMPLEMENT_PROMPT, bot.PLAN_IMPLEMENT_PROMPT),
@@ -5146,7 +5152,10 @@ def test_handle_prompt_dispatch_ignores_chat_action_failure(monkeypatch):
         (bot.PLAN_RECOVERY_DEVELOP_PROMPT, bot.PLAN_RECOVERY_DEVELOP_PROMPT),
         ("", ""),
         ("\n", "\n"),
-        (f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd", f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"),
+        (
+            f"{bot.ENFORCED_AGENTS_NOTICE}\n{EXPECTED_TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\npwd",
+            f"{bot.ENFORCED_AGENTS_NOTICE}\n{EXPECTED_TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\npwd",
+        ),
         (f"  {bot.ENFORCED_AGENTS_NOTICE}\nabc", f"  {bot.ENFORCED_AGENTS_NOTICE}\nabc"),
     ],
 )
@@ -5154,6 +5163,18 @@ def test_prepend_enforced_agents_notice_cases(raw_prompt: str, expected: str):
     """验证强制规约提示语在多种输入下的拼接与跳过逻辑（覆盖 ≥10 条输入）。"""
 
     assert bot._prepend_enforced_agents_notice(raw_prompt) == expected
+
+
+def test_prepend_enforced_agents_notice_describes_telegram_html_delivery() -> None:
+    """Telegram 普通业务 prompt 应告知模型来源与 HTML 附件交付口径。"""
+
+    injected = bot._prepend_enforced_agents_notice("请画一张架构图")
+
+    assert "请求来源：vibego Telegram worker / 移动端。" in injected
+    assert "Telegram 主交付是项目内 `.html/.htm` 文件附件卡片" in injected
+    assert "不需要 PNG" in injected
+    assert "不要把 `file://` 作为 Telegram 主入口" in injected
+    assert injected.endswith("\n\n请画一张架构图")
 
 
 def test_dispatch_prompt_force_exit_plan_ui_retries_multiple_rounds(monkeypatch, tmp_path: Path):

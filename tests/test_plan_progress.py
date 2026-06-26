@@ -445,6 +445,21 @@ def test_deliver_pending_messages_sends_project_local_html_as_document_after_tex
     assert "flow.html" in (caption or "")
 
 
+def test_collect_model_response_local_documents_accepts_file_uri_link(monkeypatch, tmp_path: Path):
+    """Codex 使用 file:// Markdown 链接时，Telegram 附件收集器仍应识别项目内 HTML。"""
+
+    html_path = tmp_path / "docs" / "flow.html"
+    html_path.parent.mkdir()
+    html_path.write_text("<!doctype html><title>flow</title>", encoding="utf-8")
+    monkeypatch.setattr(bot, "PRIMARY_WORKDIR", tmp_path)
+
+    final_text = f"[打开 HTML 图]({html_path.as_uri()})"
+
+    assert bot._collect_model_response_local_documents(final_text, session_cwd=str(tmp_path)) == [
+        html_path.resolve(strict=False)
+    ]
+
+
 def test_deliver_pending_messages_ignores_local_image_outside_project(plan_test_env, monkeypatch, tmp_path: Path):
     """模型回复里的项目外本地图片路径不得自动回传，避免误发本机文件。"""
 

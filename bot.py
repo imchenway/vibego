@@ -466,6 +466,12 @@ TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS = max(_env_int("TEXT_PASTE_LEADING_FRAGMEN
 ENFORCED_AGENTS_NOTICE = (
     "以下是用户需求描述："
 )
+# Telegram worker 注入的来源上下文：让模型在生成 HTML 图时优先走移动端可用的附件卡片，
+# 避免把 Codex App 可点击的 file:// 链接当成 Telegram 主入口。
+TELEGRAM_SOURCE_CONTEXT_NOTICE = (
+    "请求来源：vibego Telegram worker / 移动端。HTML 图交付：Telegram 主交付是项目内 `.html/.htm` "
+    "文件附件卡片，不需要 PNG；不要把 `file://` 作为 Telegram 主入口。"
+)
 # 内部测试标记只允许留在测试/日志夹具中，若被误当成整条用户 prompt 推送则必须 fail-closed。
 INTERNAL_RESERVED_TEST_MARKER_RE = re.compile(r"__VIBEGO_[A-Z0-9_]*TEST[A-Z0-9_]*__")
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
@@ -3294,7 +3300,10 @@ def _prepend_enforced_agents_notice(raw_prompt: str) -> str:
         return raw_prompt
     if text.lstrip().startswith(notice):
         return raw_prompt
-    return f"{notice}\n\n{raw_prompt}"
+    # 来源上下文只进入普通业务 prompt；slash/control 命令和 Plan 固定提示已在上方跳过。
+    source_context = TELEGRAM_SOURCE_CONTEXT_NOTICE.strip()
+    prefix = f"{notice}\n{source_context}" if source_context else notice
+    return f"{prefix}\n\n{raw_prompt}"
 
 
 def _is_internal_reserved_test_prompt(raw_prompt: str) -> bool:

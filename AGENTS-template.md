@@ -34,7 +34,7 @@
 
 ## HTML 图形沟通默认协议
 
-默认协作原则：非琐碎任务默认优先使用 `html-visual-communication` skill，用单文件 HTML 图承载核心沟通；AGENTS 负责判断何时触发；`html-visual-communication` 负责具体制图约束、自动路由、视觉质量、交互和附件交付。
+默认协作原则：非琐碎任务默认优先使用 `vibe-diagram` skill，用单文件 HTML 图承载核心沟通；AGENTS 负责判断何时触发；`vibe-diagram` 负责具体制图约束、自动路由、视觉质量、交互和附件交付。
 
 必须触发的场景：
 
@@ -49,7 +49,7 @@
 - 用户明确要求不要画图、只要一句话、或任务是琐碎格式转换时，可不生成 HTML。
 - 无法写文件或平台不支持附件时，必须说明限制，并输出完整 HTML 代码块作为 fallback。
 
-边界：AGENTS 不重复定义具体画图样式；所有制图样式、路由、可访问性、弹窗、移动端和质量红线以 `html-visual-communication` skill 为准。
+边界：AGENTS 不重复定义具体画图样式；所有制图样式、路由、可访问性、弹窗、移动端和质量红线以 `vibe-diagram` skill 为准。
 
 # ExecPlans
 

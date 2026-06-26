@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTML 图 Codex 预览链接与 Telegram 来源提示｜决策图</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --ink: #102033;
+      --muted: #5a6b80;
+      --line: #c9d7e8;
+      --blue: #1f6feb;
+      --blue-soft: #e8f1ff;
+      --green: #127c56;
+      --green-soft: #e8f7f0;
+      --amber: #9a5b00;
+      --amber-soft: #fff4dd;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --shadow: 0 16px 40px rgba(16,32,51,.08);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body { margin: 0; background: var(--bg); color: var(--ink); }
+    main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 40px; }
+    header { margin-bottom: 18px; }
+    h1 { margin: 0 0 6px; font-size: clamp(20px, 3vw, 28px); line-height: 1.2; letter-spacing: -.02em; }
+    .subtitle { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .map { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); padding: 18px; }
+    .story { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+    .node { border: 1px solid var(--line); border-radius: 16px; background: #fff; padding: 14px; min-height: 132px; position: relative; overflow-wrap: anywhere; text-align: left; }
+    .node.recommend { border-color: #8ab4f8; background: linear-gradient(180deg, #fff, var(--blue-soft)); }
+    .node.problem { background: #fff; }
+    .node.good { background: var(--green-soft); border-color: #a8dfc6; }
+    .node.risk { background: var(--amber-soft); border-color: #efd08c; }
+    .node button { all: unset; display: block; cursor: pointer; width: 100%; height: 100%; }
+    .node button:focus-visible { outline: 3px solid rgba(31,111,235,.35); outline-offset: 4px; border-radius: 12px; }
+    .tag { display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #eef3f8; color: #37506a; margin-bottom: 10px; }
+    .tag.blue { background: var(--blue-soft); color: #174ea6; }
+    .tag.green { background: var(--green-soft); color: var(--green); }
+    .tag.amber { background: var(--amber-soft); color: var(--amber); }
+    .tag.red { background: var(--red-soft); color: var(--red); }
+    h2 { margin: 0 0 8px; font-size: 15px; line-height: 1.25; }
+    .node p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .arrow { display: flex; align-items: center; justify-content: center; color: var(--blue); font-weight: 800; font-size: 18px; }
+    .flow-row { display: grid; grid-template-columns: 1fr 36px 1fr 36px 1fr; gap: 8px; align-items: stretch; margin-top: 14px; }
+    .matrix { margin-top: 16px; display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+    .cell { padding: 12px; background: #fff; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+    .cell:nth-child(4n) { border-right: 0; }
+    .cell.head { background: #f0f5fb; color: #263f5a; font-weight: 800; }
+    .cell.ok { background: var(--green-soft); }
+    .cell.warn { background: var(--amber-soft); }
+    .cell.bad { background: var(--red-soft); }
+    .footer-grid { margin-top: 16px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+    .mini { border: 1px solid var(--line); background: #fff; border-radius: 16px; padding: 13px; }
+    .mini strong { display:block; font-size: 13px; margin-bottom: 6px; }
+    .mini span { color: var(--muted); font-size: 12px; line-height: 1.45; display:block; }
+    dialog { border: 0; border-radius: 18px; padding: 0; box-shadow: 0 28px 70px rgba(16,32,51,.24); width: min(560px, calc(100% - 34px)); }
+    dialog::backdrop { background: rgba(16,32,51,.28); }
+    .modal { padding: 18px; }
+    .modal h3 { margin: 0 0 8px; font-size: 18px; }
+    .modal p { color: var(--muted); line-height: 1.55; font-size: 14px; }
+    .close { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 8px 12px; cursor: pointer; }
+    .close:focus-visible { outline: 3px solid rgba(31,111,235,.35); }
+    @media (max-width: 820px) {
+      main { width: min(100% - 20px, 680px); padding-top: 18px; }
+      .story, .flow-row, .footer-grid { grid-template-columns: 1fr; }
+      .arrow { min-height: 24px; transform: rotate(90deg); }
+      .matrix { grid-template-columns: 1fr; }
+      .cell, .cell:nth-child(4n) { border-right: 0; }
+      .cell.head:not(:first-child) { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>HTML 图交付：Codex 默认可点击，Telegram 保留附件</h1>
+    <p class="subtitle">目标：一个 skill 维护图形质量规则；只在最终交付块按来源切换入口，避免 Codex 只看到裸路径。</p>
+  </header>
+
+  <section class="map" aria-labelledby="decision-heading">
+    <div class="story" id="decision-heading">
+      <article class="node problem" data-title="现象" data-detail="Telegram 侧已经有 send_document 文件卡片；Codex App 侧没有 worker 展示层，如果模型只回复 docs/xxx.html，界面只能显示一段路径文本。">
+        <button type="button"><span class="tag red">现象</span><h2>Codex 仍只显示路径</h2><p>缺的是 Codex 最终回复的可点击入口，不是 Telegram 附件链路。</p></button>
+      </article>
+      <article class="node" data-title="来源缺失" data-detail="bot.py 当前 ENFORCED_AGENTS_NOTICE 只有“以下是用户需求描述：”，没有把 Telegram / 移动端来源传给模型。">
+        <button type="button"><span class="tag">证据</span><h2>模型不知道来源</h2><p>同一 skill 不知道要偏向 Codex 链接还是 Telegram 文件卡片。</p></button>
+      </article>
+      <article class="node recommend" data-title="推荐方案" data-detail="推荐单 skill 分交付目标：默认 Codex，输出 file:// Markdown 链接；Telegram 来源则要求项目内 HTML 路径触发 send_document，并可短句附带 Codex fallback。">
+        <button type="button"><span class="tag blue">🌟 推荐</span><h2>单 skill，来源感知</h2><p>默认 Codex；Telegram 由 vibego prompt 注入来源上下文。</p></button>
+      </article>
+      <article class="node good" data-title="不新增服务" data-detail="不默认启动 localhost 预览服务，避免端口、生命周期和安全边界复杂化。file:// 链接先作为低成本方案。">
+        <button type="button"><span class="tag green">边界</span><h2>不跑预览服务</h2><p>用 Markdown file:// 链接 + 绝对路径 fallback，保持轻量。</p></button>
+      </article>
+      <article class="node risk" data-title="验证点" data-detail="需要真实 Codex App 点击 file:// 链接验证是否进入内置浏览器；若客户端限制，再评估 localhost 方案。">
+        <button type="button"><span class="tag amber">验证</span><h2>需要点击实测</h2><p>不能把“内置浏览器必开”画成已验证事实。</p></button>
+      </article>
+    </div>
+
+    <div class="flow-row" aria-label="落地流程">
+      <article class="node"><span class="tag">1</span><h2>更新 skill</h2><p>新增 Codex 默认交付块与 Telegram 来源交付块。</p></article>
+      <div class="arrow" aria-hidden="true">→</div>
+      <article class="node"><span class="tag">2</span><h2>注入来源</h2><p>Telegram 普通业务 prompt 在用户正文前带来源上下文。</p></article>
+      <div class="arrow" aria-hidden="true">→</div>
+      <article class="node"><span class="tag">3</span><h2>TDD 验证</h2><p>覆盖 skill 断言、source context、file:// HTML collector。</p></article>
+    </div>
+
+    <div class="matrix" role="table" aria-label="方案对比">
+      <div class="cell head">方案</div><div class="cell head">优点</div><div class="cell head">缺点</div><div class="cell head">结论</div>
+      <div class="cell ok">A 单 skill 来源感知</div><div class="cell ok">Codex 默认可点击；Telegram 不倒退</div><div class="cell ok">需补少量测试与提示词</div><div class="cell ok">推荐采用</div>
+      <div class="cell warn">B 永远发两种入口</div><div class="cell warn">实现最简单</div><div class="cell warn">移动端噪音高，容易变路径清单</div><div class="cell warn">可作为 fallback</div>
+      <div class="cell bad">C 本地 HTTP 服务</div><div class="cell bad">浏览器链接最稳定</div><div class="cell bad">端口、生命周期、安全成本高</div><div class="cell bad">不做默认</div>
+    </div>
+
+    <div class="footer-grid" aria-label="测试与回滚">
+      <div class="mini"><strong>测试矩阵</strong><span>skill 注入断言、Telegram prompt 来源、file:// HTML collector、现有 send_document 回归。</span></div>
+      <div class="mini"><strong>风险</strong><span>Codex 客户端可能限制 file://；保留绝对路径 fallback，不承诺已验证。</span></div>
+      <div class="mini"><strong>回滚</strong><span>删除 source context helper 与 Codex 交付块，恢复仅 Telegram 附件规则。</span></div>
+    </div>
+  </section>
+</main>
+<dialog id="detailDialog" aria-labelledby="dialogTitle">
+  <div class="modal">
+    <h3 id="dialogTitle">详情</h3>
+    <p id="dialogBody"></p>
+    <button class="close" type="button" id="closeDialog">关闭</button>
+  </div>
+</dialog>
+<script>
+  const dialog = document.getElementById('detailDialog');
+  const title = document.getElementById('dialogTitle');
+  const body = document.getElementById('dialogBody');
+  const closeBtn = document.getElementById('closeDialog');
+  let lastTrigger = null;
+  document.querySelectorAll('.node[data-title] button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.node');
+      lastTrigger = btn;
+      title.textContent = card.dataset.title || '详情';
+      body.textContent = card.dataset.detail || '';
+      dialog.showModal();
+      closeBtn.focus();
+    });
+  });
+  function closeDialog() { dialog.close(); if (lastTrigger) lastTrigger.focus(); }
+  closeBtn.addEventListener('click', closeDialog);
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && dialog.open) closeDialog(); });
+</script>
+</body>
+</html>

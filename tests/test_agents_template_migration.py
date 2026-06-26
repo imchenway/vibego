@@ -14,21 +14,22 @@ def _read_text(rel_path: str) -> str:
     return (ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def test_enforced_notice_points_to_agents_md() -> None:
-    """强制规约文案应要求读取当前根目录 AGENTS.md。"""
+def test_enforced_notice_keeps_user_requirement_header() -> None:
+    """强制规约文案应保留用户需求分隔头。"""
 
-    assert "当前根目录 AGENTS.md" in bot.ENFORCED_AGENTS_NOTICE
+    assert "以下是用户需求描述：" in bot.ENFORCED_AGENTS_NOTICE
     assert "当前根目录 AGENTS-template.md" not in bot.ENFORCED_AGENTS_NOTICE
 
 
 def test_enforced_notice_adds_user_requirement_header_before_prompt() -> None:
-    """强制规约文案应在 PLAN 提示后引出“用户需求描述”，并与正文保留一行空行。"""
+    """强制规约文案应在用户正文前标明 Telegram 来源与 HTML 附件口径。"""
 
     injected = bot._prepend_enforced_agents_notice("pwd")
     lines = injected.splitlines()
 
-    assert lines[-4] == "如未特殊指定模式，则默认进入 PLAN 模式。"
-    assert lines[-3] == "以下是用户需求描述："
+    assert lines[-4] == "以下是用户需求描述："
+    assert "请求来源：vibego Telegram worker / 移动端。" in lines[-3]
+    assert "不需要 PNG" in lines[-3]
     assert lines[-2] == ""
     assert lines[-1] == "pwd"
 
@@ -98,8 +99,8 @@ def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks
     template_text = _read_text("AGENTS-template.md")
 
     assert "## HTML 图形沟通默认协议" in template_text
-    assert "非琐碎任务默认优先使用 `html-visual-communication` skill" in template_text
-    assert "AGENTS 负责判断何时触发；`html-visual-communication` 负责具体制图约束" in template_text
+    assert "非琐碎任务默认优先使用 `vibe-diagram` skill" in template_text
+    assert "AGENTS 负责判断何时触发；`vibe-diagram` 负责具体制图约束" in template_text
     assert "功能迭代或开发设计：必须先用 HTML 图展示现状、目标方案、前后差异、影响面、测试矩阵、风险与回滚" in template_text
     assert "缺陷排查：必须用 HTML 图展示现象、影响、证据链、可疑节点、已确认根因、高亮根因节点、修法、验证与回滚" in template_text
     assert "系统/功能理解：必须用 HTML 图展示组件、依赖、中间件、DB、MQ/队列语义、关键调用链或业务规则" in template_text

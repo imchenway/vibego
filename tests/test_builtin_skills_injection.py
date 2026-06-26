@@ -9,16 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_html_visual_skill_pack_exists_and_is_packaged() -> None:
-    """HTML 图形表达 skill 必须作为 vibego 内置资源随包发布。"""
+def test_vibe_diagram_skill_pack_exists_and_is_packaged() -> None:
+    """vibe-diagram 图形表达 skill 必须作为 vibego 内置资源随包发布。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "html-visual-communication" / "SKILL.md"
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
     skill_text = skill_file.read_text(encoding="utf-8")
     pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     manifest_text = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
     frontmatter = skill_text.split("---", 2)[1]
 
-    assert "name: html-visual-communication" in skill_text
+    assert "name: vibe-diagram" in skill_text
     assert "description:" in skill_text
     assert "description: Use when" in frontmatter
     assert "单文件 HTML" in skill_text
@@ -26,6 +26,11 @@ def test_html_visual_skill_pack_exists_and_is_packaged() -> None:
     assert "必须作为文件附件发送" in skill_text
     assert "禁止只发送 Markdown 链接" in skill_text
     assert "Telegram 中必须看到文件卡片" in skill_text
+    assert "Codex 默认" in skill_text
+    assert "`file://`" in skill_text
+    assert "Telegram 来源" in skill_text
+    assert "不需要 PNG" in skill_text
+    assert "不要把 `file://` 作为 Telegram 主入口" in skill_text
     assert "系统架构图" in skill_text
     assert "BPMN-light" in skill_text
     assert "禁止把业务流程图画成密集表格" in skill_text
@@ -67,10 +72,10 @@ def test_html_visual_skill_pack_exists_and_is_packaged() -> None:
     assert "recursive-include vibego_cli/data/skills" in manifest_text
 
 
-def test_html_visual_fault_diagram_rules_prioritize_storyline() -> None:
+def test_vibe_diagram_fault_diagram_rules_prioritize_storyline() -> None:
     """故障排查图规则应把主图收敛为来龙去脉，而不是根因长文堆叠。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "html-visual-communication" / "SKILL.md"
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
     skill_text = skill_file.read_text(encoding="utf-8")
 
     assert "故障故事线" in skill_text
@@ -81,7 +86,7 @@ def test_html_visual_fault_diagram_rules_prioritize_storyline() -> None:
     assert "未验证只能标为最高可疑点" in skill_text
 
 
-def test_sync_agents_block_embeds_builtin_html_visual_skill(tmp_path: Path) -> None:
+def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> None:
     """同步全局 AGENTS 时，应把 vibego 内置 skill 注入到同一个受管块。"""
 
     target = tmp_path / "AGENTS.md"
@@ -114,7 +119,7 @@ def test_sync_agents_block_embeds_builtin_html_visual_skill(tmp_path: Path) -> N
 
     assert "<!-- vibego-agents:start -->" in synced_text
     assert "# Vibego 内置 Skills" in synced_text
-    assert "## Skill: html-visual-communication" in synced_text
+    assert "## Skill: vibe-diagram" in synced_text
     assert "当用户要求画系统架构图、业务流程图、代码时序图、故障排查图、页面设计稿" in synced_text
     assert "最终必须直接发送 `.html` 文件" in synced_text
     assert "必须作为文件附件发送" in synced_text
