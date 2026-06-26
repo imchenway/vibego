@@ -269,6 +269,12 @@ LOG_ROOT_PATH = Path(os.environ.get("LOG_ROOT", str(_DEFAULT_LOG_ROOT))).expandu
 WORKER_HEALTH_TIMEOUT = float(os.environ.get("WORKER_HEALTH_TIMEOUT", "45"))
 WORKER_HEALTH_INTERVAL = float(os.environ.get("WORKER_HEALTH_INTERVAL", "0.5"))
 WORKER_HEALTH_LOG_TAIL = int(os.environ.get("WORKER_HEALTH_LOG_TAIL", "80"))
+TELEGRAM_MESSAGE_LIMIT = 4096
+PROJECT_ACTION_FAILURE_REPLY_LIMIT = min(
+    int(os.environ.get("PROJECT_ACTION_FAILURE_REPLY_LIMIT", "3500")),
+    TELEGRAM_MESSAGE_LIMIT - 128,
+)
+WORKER_STATUS_DEGRADED = "degraded"
 HANDSHAKE_MARKERS = (
     "Telegram 连接正常",
 )
@@ -1031,6 +1037,18 @@ def _format_project_line(cfg: "ProjectConfig", state: Optional[ProjectState]) ->
     )
 
 
+def _truncate_text_for_telegram(text: str, *, limit: int = PROJECT_ACTION_FAILURE_REPLY_LIMIT) -> str:
+    """把用户侧提示限制在 Telegram 单条消息上限内，完整细节保留在日志中。"""
+
+    normalized = str(text)
+    safe_limit = max(120, min(limit, TELEGRAM_MESSAGE_LIMIT - 64))
+    if len(normalized) <= safe_limit:
+        return normalized
+    suffix = "\n…（内容过长已截断，完整原因见 master 日志）"
+    body_limit = max(1, safe_limit - len(suffix))
+    return normalized[:body_limit].rstrip() + suffix
+
+
 def _project_jump_url(cfg: "ProjectConfig", state: Optional[ProjectState]) -> str:
     """优先使用 worker 上报的实际 username 构建跳转链接。"""
 
@@ -1060,6 +1078,17 @@ def _projects_overview(manager: MasterManager) -> Tuple[str, Optional[InlineKeyb
                 InlineKeyboardButton(
                     text=f"⛔️ 停止 ({current_model_label})",
                     callback_data=f"project:stop:{cfg.project_slug}",
+                ),
+            )
+        elif status == WORKER_STATUS_DEGRADED:
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"{cfg.display_name}",
+                    url=jump_url,
+                ),
+                InlineKeyboardButton(
+                    text=f"⚠️ 修复/重启 ({current_model_label})",
+                    callback_data=f"project:run:{cfg.project_slug}",
                 ),
             )
         elif status == "starting":
@@ -2200,6 +2229,20 @@ class MasterManager:
         log_dir = LOG_ROOT_PATH / model / cfg.project_slug
         return log_dir / "bot.pid", log_dir / "run_bot.log"
 
+    @staticmethod
+    def _worker_tmux_session_name(cfg: ProjectConfig) -> str:
+        """按 shell 侧 tmux_session_for 规则计算 worker 主 tmux 会话名。"""
+
+        tmux_prefix = os.environ.get("TMUX_SESSION_PREFIX", "vibe").strip() or "vibe"
+        worker_prefix = tmux_prefix if tmux_prefix.endswith("-") else f"{tmux_prefix}-"
+        return f"{worker_prefix}{cfg.project_slug}"
+
+    def _worker_tmux_session_alive(self, cfg: ProjectConfig) -> bool:
+        """检查模型主 tmux 会话是否存在，避免 worker 存活但模型终端已丢失。"""
+
+        expected = self._worker_tmux_session_name(cfg)
+        return expected in set(_list_tmux_session_names())
+
     def _read_worker_pid(self, cfg: ProjectConfig, model: str) -> Optional[int]:
         """读取 worker pid 文件，内容缺失或非法时返回 None。"""
 
@@ -2234,7 +2277,7 @@ class MasterManager:
         return bool(pid is not None and self._pid_alive(pid))
 
     def reconcile_worker_states(self) -> None:
-        """用实际 pid 与握手日志纠正项目列表中的 stale stopped/starting 状态。"""
+        """用 worker pid、tmux 主会话与握手日志纠正项目列表中的 stale 状态。"""
 
         for cfg in self.configs:
             state = self.state_store.data.get(cfg.project_slug)
@@ -2242,6 +2285,18 @@ class MasterManager:
                 continue
             model = state.model or cfg.default_model
             if not self._worker_process_alive(cfg, model):
+                if state.status in {"running", "starting", WORKER_STATUS_DEGRADED}:
+                    # pid 已不存在时，列表必须回到可启动，不能保留旧 running/starting。
+                    self.state_store.update(cfg.project_slug, status="stopped", boot_id="")
+                continue
+            if not self._worker_tmux_session_alive(cfg):
+                if state.status != WORKER_STATUS_DEGRADED:
+                    # worker 还活但模型主 tmux 已丢失，这是可修复异常态，不应显示为正常运行。
+                    self.state_store.update(
+                        cfg.project_slug,
+                        status=WORKER_STATUS_DEGRADED,
+                        boot_id="",
+                    )
                 continue
             _, run_log = self._worker_runtime_paths(cfg, model)
             # 新版本启动会持久化 boot_id，优先按 boot_id 判断本次握手；
@@ -2378,8 +2433,14 @@ class MasterManager:
             model is None
             and state.status in {"running", "starting"}
             and self._worker_process_alive(cfg, target_model)
+            and self._worker_tmux_session_alive(cfg)
         ):
             return target_model
+        if model is None and state.status == WORKER_STATUS_DEGRADED:
+            # degraded 表示 worker 残留但模型 tmux 主会话丢失；启动前必须先清理旧 pid/lock/binder。
+            await self.stop_worker(cfg, update_state=True)
+            self.refresh_state()
+            state = self.state_store.data[cfg.project_slug]
         issues = self._collect_prerequisite_issues(cfg, target_model)
         if issues:
             message = self._format_issue_message(
@@ -2467,11 +2528,16 @@ class MasterManager:
         health_issue = await self._health_check_worker(cfg, target_model, boot_id=boot_id)
         if health_issue:
             if self._worker_process_alive(cfg, target_model):
+                next_status = (
+                    "starting"
+                    if self._worker_tmux_session_alive(cfg)
+                    else WORKER_STATUS_DEGRADED
+                )
                 self.state_store.update(
                     cfg.project_slug,
                     model=target_model,
-                    status="starting",
-                    boot_id=boot_id,
+                    status=next_status,
+                    boot_id=boot_id if next_status == "starting" else "",
                 )
             else:
                 self.state_store.update(cfg.project_slug, status="stopped", boot_id="")
@@ -4289,7 +4355,17 @@ async def on_project_action(callback: CallbackQuery, state: FSMContext) -> None:
             extra={"project": cfg.project_slug if cfg else "*"},
         )
         if callback.message:
-            await callback.message.answer(f"操作失败: {exc}")
+            try:
+                await callback.message.answer(
+                    _truncate_text_for_telegram(f"操作失败: {exc}")
+                )
+            except Exception as send_exc:
+                # 错误提示发送失败不能再阻断项目列表刷新，否则用户会停留在旧“启动中”按钮。
+                log.warning(
+                    "操作失败提示发送失败(忽略): %s",
+                    send_exc,
+                    extra={"project": cfg.project_slug if cfg else "*"},
+                )
         await _answer_callback_safely("操作失败", show_alert=True)
         if callback.message:
             await _refresh_project_overview(callback.message, manager)

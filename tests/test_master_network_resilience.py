@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import ClientError
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -100,6 +101,18 @@ class DummyCallback:
         self._answers.append((text, show_alert))
 
 
+class TelegramLimitMessage(DummyMessage):
+    """模拟 Telegram 单条消息长度限制。"""
+
+    async def answer(self, text: str, **kwargs):
+        if len(text) > 4096:
+            raise TelegramBadRequest(
+                method="sendMessage",
+                message="Bad Request: message is too long",
+            )
+        await super().answer(text, **kwargs)
+
+
 def test_run_action_ack_before_run_worker(repo: ProjectRepository, tmp_path: Path, monkeypatch):
     """
     TDD 场景：点击项目启动时应先回调应答，再执行耗时启动。
@@ -147,12 +160,20 @@ def test_run_action_refreshes_overview_when_worker_left_starting_after_failure(
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager
     master.PROJECT_REPOSITORY = repo
+    cfg = manager.require_project("sample")
+    log_root = tmp_path / "logs"
+    pid_dir = log_root / "codex" / cfg.project_slug
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
 
     async def run_worker_override(cfg: master.ProjectConfig, model: str | None = None) -> str:
         manager.state_store.update(cfg.project_slug, status="starting")
         raise RuntimeError("握手超时")
 
     monkeypatch.setattr(manager, "run_worker", AsyncMock(side_effect=run_worker_override))
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "_list_tmux_session_names", lambda: ["vibe-sample"])
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
 
     callback = DummyCallback("project:run:sample")
     _, fsm_state = _build_fsm_state()
@@ -167,6 +188,78 @@ def test_run_action_refreshes_overview_when_worker_left_starting_after_failure(
     _, kwargs = callback.message._edits[-1]
     labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
     assert any(label.startswith("⏳ 启动中") for label in labels)
+
+
+def test_run_action_truncates_long_failure_message_before_reply(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """启动失败详情很长时，用户侧错误提示必须截断并继续刷新项目列表。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    master.PROJECT_REPOSITORY = repo
+
+    async def run_worker_override(cfg: master.ProjectConfig, model: str | None = None) -> str:
+        manager.state_store.update(cfg.project_slug, status="starting")
+        raise RuntimeError("启动失败详情：" + ("x" * 10000))
+
+    monkeypatch.setattr(manager, "run_worker", AsyncMock(side_effect=run_worker_override))
+
+    callback = DummyCallback(
+        "project:run:sample",
+        message=TelegramLimitMessage(chat_id=1),
+    )
+    _, fsm_state = _build_fsm_state()
+
+    async def _invoke():
+        await master.on_project_action(callback, fsm_state)
+
+    asyncio.run(_invoke())
+
+    assert callback.message._answers, "应发送截断后的错误提示"
+    assert len(callback.message._answers[-1][0]) <= 4096
+    assert callback.message._edits, "错误提示发送成功后仍应刷新项目列表"
+
+
+def test_run_action_refreshes_overview_when_failure_notice_send_fails(
+    repo: ProjectRepository,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """即使错误提示发送失败，也不能阻断项目列表刷新。"""
+
+    manager = _build_manager(repo, tmp_path)
+    master.MANAGER = manager
+    master.PROJECT_REPOSITORY = repo
+
+    async def run_worker_override(cfg: master.ProjectConfig, model: str | None = None) -> str:
+        manager.state_store.update(cfg.project_slug, status="starting")
+        raise RuntimeError("握手超时")
+
+    class AlwaysFailMessage(DummyMessage):
+        async def answer(self, text: str, **kwargs):
+            raise TelegramBadRequest(
+                method="sendMessage",
+                message="Bad Request: retry later",
+            )
+
+    monkeypatch.setattr(manager, "run_worker", AsyncMock(side_effect=run_worker_override))
+
+    callback = DummyCallback(
+        "project:run:sample",
+        message=AlwaysFailMessage(chat_id=1),
+    )
+    _, fsm_state = _build_fsm_state()
+
+    async def _invoke():
+        await master.on_project_action(callback, fsm_state)
+
+    asyncio.run(_invoke())
+
+    assert callback.message._edits, "错误提示失败后也应刷新项目列表"
+    assert callback._answers[-1] == ("操作失败", True)
 
 
 @pytest.mark.asyncio

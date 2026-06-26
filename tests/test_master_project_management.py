@@ -1294,16 +1294,25 @@ def test_switch_to_running_project_updates_state(repo: ProjectRepository, tmp_pa
     manager = _build_manager(repo, tmp_path)
     master.MANAGER = manager
     master.PROJECT_REPOSITORY = repo
+    cfg = manager.require_project("sample")
     manager.state_store.update("sample", model="codex", status="running")
+    log_root = tmp_path / "logs"
 
     async def stop_worker_override(cfg: master.ProjectConfig, *, update_state: bool = True) -> None:
         manager.state_store.update(cfg.project_slug, status="stopped")
 
     async def run_worker_override(cfg: master.ProjectConfig, model: str | None = None) -> str:
         chosen = model or cfg.default_model
+        pid_dir = log_root / chosen / cfg.project_slug
+        pid_dir.mkdir(parents=True, exist_ok=True)
+        (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
+        (pid_dir / "run_bot.log").write_text("Telegram 连接正常\n", encoding="utf-8")
         manager.state_store.update(cfg.project_slug, model=chosen, status="running")
         return chosen
 
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "_list_tmux_session_names", lambda: ["vibe-sample"])
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
     monkeypatch.setattr(manager, "stop_worker", AsyncMock(side_effect=stop_worker_override))
     run_mock = AsyncMock(side_effect=run_worker_override)
     monkeypatch.setattr(manager, "run_worker", run_mock)

@@ -187,6 +187,7 @@ async def test_run_worker_keeps_starting_when_health_timeout_but_pid_alive(
         return DummyProcess()
 
     monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "_list_tmux_session_names", lambda: ["vibe-test"])
     monkeypatch.setattr(master, "ensure_codex_project_trust", lambda *args, **kwargs: None)
     monkeypatch.setattr(master.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(manager, "_health_check_worker", AsyncMock(return_value="握手超时"))
@@ -200,11 +201,23 @@ async def test_run_worker_keeps_starting_when_health_timeout_but_pid_alive(
     assert state.model == "codex"
 
 
-def test_projects_overview_treats_starting_worker_as_non_startable(tmp_path: Path) -> None:
+def test_projects_overview_treats_starting_worker_as_non_startable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """启动中项目应展示停止入口，避免用户重复点击启动造成会话冲突。"""
 
     manager = _build_manager(tmp_path)
+    cfg = manager.require_project("test")
     manager.state_store.update("test", status="starting")
+    log_root = tmp_path / "logs"
+    pid_dir = log_root / "codex" / cfg.project_slug
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
+
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "_list_tmux_session_names", lambda: ["vibe-test"])
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
 
     text, markup = master._projects_overview(manager)
 
@@ -213,6 +226,102 @@ def test_projects_overview_treats_starting_worker_as_non_startable(tmp_path: Pat
     labels = [button.text for row in markup.inline_keyboard for button in row]
     assert any(label.startswith("⏳ 启动中") for label in labels)
     assert not any(label.startswith("▶️ 启动 (codex)") for label in labels)
+
+
+def test_projects_overview_marks_running_worker_degraded_when_tmux_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker 仍存活但模型 tmux 主会话缺失时，应展示修复入口而不是停止按钮。"""
+
+    manager = _build_manager(tmp_path)
+    cfg = manager.require_project("test")
+    manager.state_store.update("test", status="running")
+    log_root = tmp_path / "logs"
+    pid_dir = log_root / "codex" / cfg.project_slug
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
+    (pid_dir / "run_bot.log").write_text("xxx\nTelegram 连接正常\n", encoding="utf-8")
+
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "_list_tmux_session_names", lambda: [])
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
+
+    text, markup = master._projects_overview(manager)
+
+    assert text == "请选择操作："
+    assert manager.state_store.data[cfg.project_slug].status == "degraded"
+    assert markup is not None
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert any(label.startswith("⚠️ 修复/重启") for label in labels)
+    assert not any(label.startswith("⛔️ 停止 (") for label in labels)
+
+
+def test_projects_overview_marks_stale_running_worker_stopped_when_pid_dead(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """state 仍为 running 但 pid 已不存在时，项目列表刷新应降级为可启动。"""
+
+    manager = _build_manager(tmp_path)
+    cfg = manager.require_project("test")
+    manager.state_store.update("test", status="running")
+    log_root = tmp_path / "logs"
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+
+    text, markup = master._projects_overview(manager)
+
+    assert text == "请选择操作："
+    assert manager.state_store.data[cfg.project_slug].status == "stopped"
+    assert markup is not None
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert any(label.startswith("▶️ 启动") for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_run_worker_repairs_degraded_worker_before_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """点击 degraded 项目的修复入口时，应先清理旧 worker 再重新启动。"""
+
+    manager = _build_manager(tmp_path)
+    cfg = manager.require_project("test")
+    manager.state_store.update("test", status="degraded")
+    log_root = tmp_path / "logs"
+    pid_dir = log_root / "codex" / cfg.project_slug
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
+
+    events: list[str] = []
+
+    class DummyProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_stop_worker(_cfg: master.ProjectConfig, *, update_state: bool = True):
+        events.append("stop")
+        if update_state:
+            manager.state_store.update(_cfg.project_slug, status="stopped", boot_id="")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        events.append("launch")
+        return DummyProcess()
+
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "_list_tmux_session_names", lambda: [])
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
+    monkeypatch.setattr(master, "ensure_codex_project_trust", lambda *args, **kwargs: None)
+    monkeypatch.setattr(master.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(manager, "stop_worker", fake_stop_worker)
+    monkeypatch.setattr(manager, "_health_check_worker", AsyncMock(return_value=None))
+
+    chosen = await manager.run_worker(cfg)
+
+    assert chosen == "codex"
+    assert events[:2] == ["stop", "launch"]
 
 
 def test_reconcile_worker_state_marks_healthy_alive_worker_running(
@@ -231,6 +340,7 @@ def test_reconcile_worker_state_marks_healthy_alive_worker_running(
     (pid_dir / "run_bot.log").write_text("xxx\nTelegram 连接正常\n", encoding="utf-8")
 
     monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(master, "_list_tmux_session_names", lambda: ["vibe-test"])
     monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
 
     manager.reconcile_worker_states()

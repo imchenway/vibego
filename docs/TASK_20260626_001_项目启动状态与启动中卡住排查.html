@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TASK_20260626_001 项目启动状态与启动中卡住排查图</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --bg: #f6f9fc;
+      --panel: #ffffff;
+      --line: #93a4b8;
+      --text: #172033;
+      --muted: #5b6b80;
+      --blue: #2563eb;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --green: #047857;
+      --border: #d8e1ec;
+      --shadow: 0 16px 42px rgba(27, 41, 68, .12);
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top left, #e8f1ff 0, #f6f9fc 36%, #f8fafc 100%);
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 28px 18px 40px; }
+    header { margin-bottom: 18px; }
+    h1 { font-size: clamp(20px, 3vw, 28px); line-height: 1.2; margin: 0 0 8px; letter-spacing: -.02em; }
+    .subtitle { margin: 0; color: var(--muted); font-size: 14px; }
+    .diagram {
+      background: rgba(255,255,255,.86);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .storyline {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      position: relative;
+    }
+    .node {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 16px;
+      padding: 12px;
+      min-height: 116px;
+      text-align: left;
+      color: var(--text);
+      box-shadow: 0 8px 22px rgba(34, 54, 88, .06);
+      overflow-wrap: anywhere;
+      cursor: pointer;
+      position: relative;
+    }
+    .node:focus-visible { outline: 3px solid rgba(37, 99, 235, .35); outline-offset: 3px; }
+    .node::after {
+      content: "→";
+      position: absolute;
+      right: -13px;
+      top: 46%;
+      color: var(--line);
+      font-weight: 700;
+      background: var(--bg);
+      border-radius: 999px;
+      width: 18px;
+      height: 18px;
+      text-align: center;
+      line-height: 18px;
+      z-index: 2;
+    }
+    .node:last-child::after { content: ""; display: none; }
+    .tag { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 3px 8px; font-size: 12px; font-weight: 700; margin-bottom: 8px; }
+    .tag.red { background: #fee2e2; color: var(--red); }
+    .tag.amber { background: #fef3c7; color: var(--amber); }
+    .tag.blue { background: #dbeafe; color: var(--blue); }
+    .tag.green { background: #d1fae5; color: var(--green); }
+    .node h2 { font-size: 15px; margin: 0 0 7px; line-height: 1.25; }
+    .node p { font-size: 12px; line-height: 1.45; margin: 0; color: var(--muted); }
+    .root { border-color: #fca5a5; box-shadow: 0 10px 28px rgba(185, 28, 28, .13); }
+    .sections { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 14px; margin-top: 16px; }
+    .section { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; padding: 14px; min-width: 0; }
+    .section h3 { margin: 0 0 10px; font-size: 15px; }
+    .evidence, .hypothesis, .actions { display: grid; gap: 8px; }
+    .item { border: 1px solid #e5edf6; border-radius: 12px; padding: 10px; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+    .item strong { color: var(--text); }
+    .decision { border-left: 4px solid var(--blue); background: #eff6ff; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, .36); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 20; }
+    .modal-backdrop.open { display: flex; }
+    .modal { width: min(620px, 100%); max-height: min(80vh, 680px); overflow: auto; background: #fff; border-radius: 18px; border: 1px solid var(--border); box-shadow: var(--shadow); padding: 18px; }
+    .modal h4 { margin: 0 0 8px; font-size: 18px; }
+    .modal p { margin: 0 0 10px; line-height: 1.55; color: var(--muted); font-size: 14px; }
+    .modal ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .close { border: 1px solid var(--border); background: #fff; border-radius: 10px; padding: 8px 10px; font-weight: 700; cursor: pointer; }
+    .close:focus-visible { outline: 3px solid rgba(37, 99, 235, .35); }
+    @media (max-width: 980px) {
+      .storyline { grid-template-columns: 1fr; }
+      .node::after { content: "↓"; right: 50%; top: auto; bottom: -14px; transform: translateX(50%); }
+      .sections { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>TASK_20260626_001 项目启动状态与启动中卡住排查图</h1>
+      <p class="subtitle">主结论：状态健康口径漏掉 tmux 主会话，且启动失败长错误会打断项目列表刷新。</p>
+    </header>
+
+    <section class="diagram" aria-label="故障故事线">
+      <div class="storyline">
+        <button class="node" data-title="现象 A：WMS2 假运行" data-detail="截图显示 WMS2 是停止按钮，说明 Master 认为项目 running；但误清理前 tmux ls 只有 vibe-vibego 与 vibe-wms，没有 vibe-wms2。" data-evidence="E1 截图 08:51:25；E2 tmux ls；E3 wms2 bot.pid 当时仍存活。">
+          <span class="tag red">现象 A</span>
+          <h2>WMS2 显示已启动</h2>
+          <p>worker pid 活着，但 Codex tmux 主会话不存在。</p>
+        </button>
+        <button class="node" data-title="影响：项目不可用但 UI 误导" data-detail="用户看到停止按钮，会以为项目整体可用；实际模型终端丢失，后续发送或跳转可能绑定旧 session 或失败。" data-evidence="UI 状态与 tmux 现场冲突。">
+          <span class="tag amber">影响</span>
+          <h2>运行态与真实可用性分裂</h2>
+          <p>列表状态只代表部分 worker，不代表完整项目链路。</p>
+        </button>
+        <button class="node" data-title="证据：reconcile 只上调不下调" data-detail="master.py::reconcile_worker_states 在 worker pid 不活时直接 continue；pid 活但 tmux 缺失也不处理。" data-evidence="master.py:2236-2258；master.py:2377-2382。">
+          <span class="tag blue">证据</span>
+          <h2>状态协调漏掉降级</h2>
+          <p>running / starting 的陈旧状态不会被纠正。</p>
+        </button>
+        <button class="node root" data-title="根因 R1：健康口径过窄" data-detail="当前口径是 bot.pid + 握手日志；项目实际可用至少需要 worker pid、模型 tmux 主会话、握手日志三者一致。" data-evidence="E1+E2+E3；master.py::_worker_process_alive；scripts/models/common.sh::tmux_session_for。">
+          <span class="tag red">根因 R1</span>
+          <h2>缺少 tmux 会话健康检查</h2>
+          <p>Master 把 worker 存活误判为项目可用。</p>
+        </button>
+        <button class="node" data-title="现象 B：启动中卡住" data-detail="08:51 Vibego 启动遇到 Telegram 30 秒握手超时；异常提示包含日志尾部，发送给 Telegram 时超过长度限制。" data-evidence="vibe.log 08:51:35-08:52:05；TelegramBadRequest message is too long。">
+          <span class="tag red">现象 B</span>
+          <h2>启动失败后按钮不刷新</h2>
+          <p>错误提示自身失败，后续刷新没有执行。</p>
+        </button>
+        <button class="node root" data-title="根因 R2：失败提示未限长" data-detail="on_project_action 直接发送完整 RuntimeError；当 Telegram 拒绝超长消息时，except 分支再次抛错，无法执行 callback alert 与项目列表刷新。" data-evidence="master.py:2356-2360；master.py:4283-4295。">
+          <span class="tag red">根因 R2</span>
+          <h2>超长错误阻断刷新链路</h2>
+          <p>诊断日志和用户提示没有分层。</p>
+        </button>
+        <button class="node" data-title="推荐修法" data-detail="引入 worker + tmux + handshake 三元健康；新增 degraded 状态；启动失败提示截断并把刷新放入 best-effort 收尾。" data-evidence="需要新增测试 T1-T8，先红后绿。">
+          <span class="tag green">修法</span>
+          <h2>状态机补齐 + 错误 fail-soft</h2>
+          <p>用户看到真实状态，失败也能刷新列表。</p>
+        </button>
+      </div>
+
+      <div class="sections">
+        <section class="section">
+          <h3>证据阶梯</h3>
+          <div class="evidence">
+            <div class="item"><strong>E1 截图：</strong>WMS2 显示停止按钮；Vibego 显示启动中。</div>
+            <div class="item"><strong>E2 现场：</strong>误清理前 `tmux ls` 无 `vibe-wms2`，但 wms2 bot.pid 指向进程存活。</div>
+            <div class="item"><strong>E3 日志：</strong>`vibe.log` 有 Telegram 握手超时 + `message is too long`。</div>
+            <div class="item"><strong>E4 源码：</strong>`reconcile_worker_states` 不检查 tmux，异常分支直接发送完整错误。</div>
+          </div>
+        </section>
+        <section class="section">
+          <h3>假设裁决</h3>
+          <div class="hypothesis">
+            <div class="item"><strong>成立：</strong>状态口径漏 tmux，导致 WMS2 假运行。</div>
+            <div class="item"><strong>成立：</strong>超长失败提示导致刷新链路中断。</div>
+            <div class="item"><strong>待验证：</strong>Codex 进程为何主动退出；本轮只确认 Master 没有识别该退出。</div>
+          </div>
+        </section>
+        <section class="section">
+          <h3>行动闭环</h3>
+          <div class="actions">
+            <div class="item decision"><strong>推荐 C：</strong>同时修两条根因，引入 degraded 状态。</div>
+            <div class="item"><strong>测试：</strong>补 pid 死亡、tmux 缺失、超长错误、刷新兜底回归。</div>
+            <div class="item"><strong>回滚：</strong>把 degraded 状态改回 stopped；或停止项目后重新启动。</div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+      <h4 id="modalTitle"></h4>
+      <p id="modalDetail"></p>
+      <p id="modalEvidence"></p>
+      <button class="close" id="modalClose" type="button">关闭</button>
+    </div>
+  </div>
+
+  <script>
+    const backdrop = document.getElementById('modalBackdrop');
+    const title = document.getElementById('modalTitle');
+    const detail = document.getElementById('modalDetail');
+    const evidence = document.getElementById('modalEvidence');
+    const closeBtn = document.getElementById('modalClose');
+    let lastTrigger = null;
+    function openModal(node) {
+      lastTrigger = node;
+      title.textContent = node.dataset.title || '';
+      detail.textContent = node.dataset.detail || '';
+      evidence.textContent = '证据/待确认：' + (node.dataset.evidence || '待确认');
+      backdrop.classList.add('open');
+      closeBtn.focus();
+    }
+    function closeModal() {
+      backdrop.classList.remove('open');
+      if (lastTrigger) lastTrigger.focus();
+    }
+    document.querySelectorAll('.node').forEach(node => node.addEventListener('click', () => openModal(node)));
+    closeBtn.addEventListener('click', closeModal);
+    backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && backdrop.classList.contains('open')) closeModal(); });
+  </script>
+</body>
+</html>
