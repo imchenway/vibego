@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vibe-diagram 卡片限用与流程图语法修复</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      color-scheme: light;
+      --bg-a: #eef7ff;
+      --bg-b: #fbfdff;
+      --paper: #ffffff;
+      --paper-soft: #f7fbff;
+      --ink: #172134;
+      --muted: #66758d;
+      --line: #cfe0f5;
+      --line-strong: #9fc4f5;
+      --blue: #2f7df6;
+      --blue-soft: #eaf3ff;
+      --green: #28884a;
+      --green-soft: #eaf8ef;
+      --orange: #c46818;
+      --orange-soft: #fff2e5;
+      --red: #c93232;
+      --red-soft: #fff0ef;
+      --violet: #6d55cf;
+      --violet-soft: #f1edff;
+      --shadow: 0 18px 50px rgba(35, 73, 124, .10);
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 9% 4%, #dcefff 0, transparent 30rem),
+        radial-gradient(circle at 92% 0%, #f4f9ff 0, transparent 28rem),
+        linear-gradient(180deg, var(--bg-a), var(--bg-b));
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(1560px, calc(100% - 42px)); margin: 0 auto; padding: 30px 0 48px; }
+    .hero, .diagram-shell {
+      background: rgba(255, 255, 255, .94);
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      box-shadow: var(--shadow);
+    }
+    .hero { padding: clamp(24px, 3vw, 38px); margin-bottom: 22px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      border: 1px solid #b9d6ff;
+      background: var(--blue-soft);
+      color: #1766d7;
+      border-radius: 999px;
+      padding: 7px 13px;
+      font-size: 13px;
+      font-weight: 850;
+      letter-spacing: .02em;
+    }
+    h1 { margin: 18px 0 12px; max-width: 1180px; font-size: clamp(30px, 4vw, 44px); line-height: 1.08; letter-spacing: -.045em; }
+    .hero p { margin: 0; max-width: 1120px; color: var(--muted); font-size: 17px; line-height: 1.62; font-weight: 640; }
+    .meta { display: flex; flex-wrap: wrap; gap: 14px 24px; margin-top: 22px; color: var(--muted); font-size: 14px; font-weight: 780; }
+    .diagram-shell { padding: 24px 28px 28px; }
+    .section-head { display: flex; justify-content: space-between; gap: 22px; align-items: start; margin-bottom: 14px; }
+    h2 { margin: 0 0 8px; font-size: 23px; letter-spacing: -.025em; }
+    .section-head p { margin: 0; color: var(--muted); line-height: 1.55; font-weight: 640; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; min-width: 310px; }
+    .pill { display: inline-flex; align-items: center; min-height: 32px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: #34455d; font-weight: 850; font-size: 14px; }
+    .canvas-wrap {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      overflow: hidden;
+      background:
+        linear-gradient(rgba(207, 224, 245, .28) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(207, 224, 245, .28) 1px, transparent 1px),
+        linear-gradient(180deg, #ffffff, #f9fcff);
+      background-size: 32px 32px, 32px 32px, auto;
+    }
+    .diagram-canvas { display: block; width: 100%; height: auto; }
+    .zone { fill: rgba(255, 255, 255, .76); stroke: var(--line); stroke-width: 2; }
+    .zone.before-zone { stroke-dasharray: 8 8; }
+    .zone.after-zone { stroke: #bde5cb; }
+    .connector { fill: none; stroke: #8eb8ef; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow); }
+    .connector.muted { stroke: #c2d5ed; stroke-width: 2.4; }
+    .connector.good { stroke: #74bc88; }
+    .connector.bad { stroke: #e3a06b; }
+    .shape { stroke-width: 2.3; filter: url(#softShadow); transition: stroke .16s ease, transform .16s ease; }
+    .node text { pointer-events: none; }
+    .node[role="button"] { cursor: pointer; outline: none; }
+    .node[role="button"]:hover .shape, .node[role="button"]:focus-visible .shape { stroke: var(--blue); }
+    .start-event .shape, .end-event .shape { fill: #ffffff; stroke: var(--blue); }
+    .activity .shape { fill: #ffffff; stroke: var(--line-strong); }
+    .decision-diamond .shape { fill: #fffaf3; stroke: #e7ae72; }
+    .root-cause .shape { fill: var(--red-soft); stroke: #f0aaaa; }
+    .fix-action .shape { fill: var(--green-soft); stroke: #a8dab7; }
+    .verify-loop .shape { fill: var(--violet-soft); stroke: #c6bbf2; }
+    .mini-card { fill: #f8fbff; stroke: #d5e4f6; stroke-width: 1.7; }
+    .mini-flow { fill: #ffffff; stroke: #bdd8ff; stroke-width: 1.8; }
+    .label { fill: var(--ink); font-weight: 850; font-size: 18px; letter-spacing: -.01em; }
+    .small { fill: var(--muted); font-weight: 680; font-size: 14px; }
+    .tiny { fill: #5b6d86; font-weight: 740; font-size: 12px; letter-spacing: .04em; }
+    .tag-text { font-size: 12px; font-weight: 900; letter-spacing: .06em; }
+    .tag-bg.blue { fill: var(--blue-soft); }
+    .tag-bg.red { fill: var(--red-soft); }
+    .tag-bg.green { fill: var(--green-soft); }
+    .tag-bg.orange { fill: var(--orange-soft); }
+    .tag-bg.violet { fill: var(--violet-soft); }
+    .tag-blue { fill: #1766d7; }
+    .tag-red { fill: #b91f1f; }
+    .tag-green { fill: #1c743a; }
+    .tag-orange { fill: #b3540f; }
+    .tag-violet { fill: #6247bd; }
+    .x-line { stroke: #e48888; stroke-width: 4; stroke-linecap: round; opacity: .84; }
+    .mobile-flowchart { display: none; }
+    .rule-band { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; color: var(--muted); font-size: 14px; font-weight: 720; }
+    .rule-band span { padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, .72); }
+    .mobile-flowchart {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background:
+        linear-gradient(rgba(207, 224, 245, .28) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(207, 224, 245, .28) 1px, transparent 1px),
+        linear-gradient(180deg, #ffffff, #f9fcff);
+      background-size: 28px 28px, 28px 28px, auto;
+      padding: 16px 14px 18px;
+    }
+    .mobile-note { margin: 0 0 14px; color: var(--muted); font-weight: 720; line-height: 1.5; }
+    .mobile-node {
+      position: relative;
+      width: 100%;
+      min-height: 86px;
+      margin: 0 auto 30px;
+      border: 2px solid var(--line-strong);
+      background: rgba(255, 255, 255, .94);
+      color: var(--ink);
+      border-radius: 22px;
+      padding: 14px 16px;
+      text-align: left;
+      font: inherit;
+      box-shadow: 0 10px 26px rgba(35, 73, 124, .10);
+    }
+    .mobile-node::after {
+      content: "↓";
+      position: absolute;
+      left: 50%;
+      bottom: -28px;
+      transform: translateX(-50%);
+      color: var(--blue);
+      font-size: 22px;
+      font-weight: 900;
+    }
+    .mobile-node:last-of-type::after { content: ""; }
+    .mobile-node:focus-visible { outline: 3px solid rgba(47, 125, 246, .35); outline-offset: 3px; }
+    .mobile-node b { display: block; margin-bottom: 6px; font-size: 16px; letter-spacing: -.015em; }
+    .mobile-node span { display: block; color: var(--muted); font-size: 13px; line-height: 1.45; font-weight: 680; }
+    .mobile-start-event, .mobile-end-event { text-align: center; border-radius: 999px; border-color: var(--blue); }
+    .mobile-decision-diamond {
+      padding-left: 58px;
+      border-color: #e7ae72;
+      background: #fffaf3;
+    }
+    .mobile-decision-diamond::before {
+      content: "◇";
+      position: absolute;
+      left: 18px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--orange);
+      font-size: 28px;
+      font-weight: 900;
+    }
+    .mobile-root-cause { border-color: #f0aaaa; background: var(--red-soft); }
+    .mobile-fix-action { border-color: #a8dab7; background: var(--green-soft); }
+    .mobile-verify-loop { border-color: #c6bbf2; background: var(--violet-soft); }
+    .mobile-branch {
+      margin: 0 0 16px;
+      display: grid;
+      gap: 10px;
+    }
+    .mobile-branch-item {
+      border: 1px dashed var(--line-strong);
+      border-radius: 18px;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, .76);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+    dialog { width: min(560px, calc(100vw - 28px)); border: 1px solid var(--line); border-radius: 18px; padding: 0; background: #fff; color: var(--ink); box-shadow: 0 22px 70px rgba(22, 32, 51, .20); }
+    dialog::backdrop { background: rgba(22, 32, 51, .18); }
+    .modal-head { display: flex; justify-content: space-between; gap: 14px; padding: 16px 18px 12px; border-bottom: 1px solid #edf3fb; }
+    .modal-head h2 { margin: 0; font-size: 18px; }
+    .modal-body { padding: 14px 18px 18px; color: var(--muted); line-height: 1.6; font-size: 14px; }
+    .close { min-width: 44px; min-height: 36px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper-soft); color: var(--blue); font-weight: 850; cursor: pointer; }
+    .close:focus-visible { outline: 3px solid rgba(47, 125, 246, .35); outline-offset: 2px; }
+    @media (max-width: 920px) {
+      main { width: min(100% - 22px, 1560px); padding-top: 18px; }
+      .diagram-shell { padding: 18px 14px 20px; }
+      .section-head { display: block; }
+      .legend { justify-content: flex-start; margin-top: 12px; min-width: 0; }
+    }
+    @media (max-width: 720px) {
+      .canvas-wrap { display: none; }
+      .mobile-flowchart { display: block; }
+      .rule-band { display: grid; gap: 10px; }
+      .rule-band span { border-radius: 18px; line-height: 1.45; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero" aria-labelledby="title">
+    <div class="badge">TASK_20260627_001 · 真流程图版</div>
+    <h1 id="title">vibe-diagram 不是换皮卡片：主图必须先像图</h1>
+    <p>这版不再用四列卡片网格。柔和浅色风格保留，但主画布改为一条从“用户指出问题”到“根因、修法、验证”的流程图，before 在左、after 在右，根因和修法都在路径上。</p>
+    <div class="meta"><span>外观：浅蓝白、圆角、柔和线条</span><span>图形语法：事件、活动、决策菱形、带标签箭头</span><span>不可回退：北向南、根因高亮、before 左 after 右</span></div>
+  </section>
+
+  <section class="diagram-shell" aria-labelledby="diagramTitle">
+    <div class="section-head">
+      <div>
+        <h2 id="diagramTitle">主流程：从卡片网格误用到流程图重画</h2>
+        <p>时间自上而下，旁路展示 before / after。点击节点只看补充说明，主结论可直接沿箭头阅读。</p>
+      </div>
+      <div class="legend" aria-label="图例">
+        <span class="pill">○ 开始/结束</span><span class="pill">▭ 活动</span><span class="pill">◇ 判断</span><span class="pill">R/F/V 焦点</span>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <svg class="diagram-canvas" viewBox="0 0 1320 980" role="img" aria-labelledby="svgTitle svgDesc">
+        <title id="svgTitle">vibe-diagram 卡片网格重画为流程图</title>
+        <desc id="svgDesc">从用户反馈开始，经判断、根因、修法、验证到结束；左侧是 before 卡片网格，右侧是 after 流程图语法。</desc>
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#8eb8ef"></path>
+          </marker>
+          <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%">
+            <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#26507f" flood-opacity="0.10"></feDropShadow>
+          </filter>
+        </defs>
+
+        <rect x="54" y="86" width="350" height="210" rx="22" class="zone before-zone"></rect>
+        <text x="78" y="122" class="tag-text tag-red">BEFORE 左：旧版卡片网格</text>
+        <rect x="82" y="146" width="126" height="54" rx="14" class="mini-card"></rect>
+        <rect x="224" y="146" width="126" height="54" rx="14" class="mini-card"></rect>
+        <rect x="82" y="214" width="126" height="54" rx="14" class="mini-card"></rect>
+        <rect x="224" y="214" width="126" height="54" rx="14" class="mini-card"></rect>
+        <line x1="76" y1="140" x2="356" y2="274" class="x-line"></line>
+        <line x1="356" y1="140" x2="76" y2="274" class="x-line"></line>
+        <text x="78" y="326" class="small">问题：读者只能读块状文字，关系不自解释</text>
+
+        <rect x="916" y="86" width="350" height="210" rx="22" class="zone after-zone"></rect>
+        <text x="940" y="122" class="tag-text tag-green">AFTER 右：流程图语法</text>
+        <circle cx="966" cy="176" r="18" class="mini-flow"></circle>
+        <path d="M986 176 H1038" class="connector muted"></path>
+        <rect x="1042" y="148" width="92" height="56" rx="16" class="mini-flow"></rect>
+        <path d="M1138 176 H1190" class="connector muted"></path>
+        <polygon points="1220,146 1250,176 1220,206 1190,176" class="mini-flow"></polygon>
+        <text x="940" y="248" class="small">目标：先看方向、判断和回路，再读节点文字</text>
+
+        <path d="M660 128 V188" class="connector"></path>
+        <path d="M660 308 V370" class="connector"></path>
+        <path d="M660 486 V548" class="connector"></path>
+        <path d="M660 664 V728" class="connector"></path>
+        <path d="M660 846 V910" class="connector good"></path>
+        <path d="M560 248 C470 248 470 204 410 204" class="connector bad"></path>
+        <path d="M760 248 C850 248 850 204 910 204" class="connector good"></path>
+        <path d="M805 608 C898 608 920 520 1015 505" class="connector good"></path>
+
+        <g class="node start-event" role="button" tabindex="0" data-title="开始事件" data-body="用户指出：新版示例图仍然像老卡片网格。这是重新绘制的触发点。">
+          <circle cx="660" cy="92" r="46" class="shape"></circle>
+          <text x="660" y="82" text-anchor="middle" class="tiny tag-blue">START</text>
+          <text x="660" y="106" text-anchor="middle" class="label">用户指出</text>
+        </g>
+
+        <g class="node decision-diamond" role="button" tabindex="0" data-title="判断节点" data-body="核心判断不是风格是否柔和，而是主图是否靠流程符号和箭头自解释。">
+          <polygon points="660,184 786,248 660,312 534,248" class="shape"></polygon>
+          <text x="660" y="234" text-anchor="middle" class="tiny tag-orange">DECISION</text>
+          <text x="660" y="258" text-anchor="middle" class="label">是否真是流程图？</text>
+          <text x="660" y="282" text-anchor="middle" class="small">不是只换成卡片排列</text>
+        </g>
+
+        <g class="node root-cause" role="button" tabindex="0" data-title="根因 R1" data-body="根因：上一版主画布仍是等权重卡片网格，箭头只是装饰，读图方式没有从文字块变成流程关系。">
+          <rect x="480" y="370" width="360" height="116" rx="24" class="shape"></rect>
+          <rect x="506" y="394" width="84" height="28" rx="14" class="tag-bg red"></rect>
+          <text x="548" y="413" text-anchor="middle" class="tag-text tag-red">ROOT R1</text>
+          <text x="660" y="438" text-anchor="middle" class="label">主图形态没有变</text>
+          <text x="660" y="464" text-anchor="middle" class="small">仍像四列卡片说明表</text>
+        </g>
+
+        <g class="node fix-action" role="button" tabindex="0" data-title="修法 F1" data-body="修法：删除旧卡片网格，用 SVG 主流程表达事件、活动、判断、根因、修法、验证和结束。">
+          <rect x="480" y="548" width="360" height="116" rx="24" class="shape"></rect>
+          <rect x="506" y="572" width="74" height="28" rx="14" class="tag-bg green"></rect>
+          <text x="543" y="591" text-anchor="middle" class="tag-text tag-green">FIX F1</text>
+          <text x="660" y="616" text-anchor="middle" class="label">用流程图语法重画</text>
+          <text x="660" y="642" text-anchor="middle" class="small">事件、活动、判断、箭头都在主路径</text>
+        </g>
+
+        <g class="node decision-diamond" role="button" tabindex="0" data-title="对照规则" data-body="大改动必须 before / after，对照方向固定：before 在左或上，after 在右或下。">
+          <polygon points="660,728 794,794 660,860 526,794" class="shape"></polygon>
+          <text x="660" y="780" text-anchor="middle" class="tiny tag-orange">RULE</text>
+          <text x="660" y="804" text-anchor="middle" class="label">改动是否影响主图？</text>
+          <text x="660" y="828" text-anchor="middle" class="small">大改动 before 左，after 右</text>
+        </g>
+
+        <g class="node verify-loop" role="button" tabindex="0" data-title="验证 V1" data-body="验证：静态检查必须看到 SVG、marker-end、start/end event、decision diamond、root/fix/verify 节点，并且不再出现旧卡片网格。">
+          <rect x="900" y="452" width="332" height="106" rx="24" class="shape"></rect>
+          <rect x="926" y="476" width="88" height="28" rx="14" class="tag-bg violet"></rect>
+          <text x="970" y="495" text-anchor="middle" class="tag-text tag-violet">VERIFY V1</text>
+          <text x="1066" y="520" text-anchor="middle" class="label">反向检查旧结构</text>
+          <text x="1066" y="544" text-anchor="middle" class="small">无旧卡片网格，无表格化主图</text>
+        </g>
+
+        <g class="node end-event" role="button" tabindex="0" data-title="结束事件" data-body="输出标准：截图第一眼能沿箭头理解原因、修法和验证，而不是先读一堆卡片。">
+          <circle cx="660" cy="936" r="44" class="shape"></circle>
+          <text x="660" y="926" text-anchor="middle" class="tiny tag-green">END</text>
+          <text x="660" y="950" text-anchor="middle" class="label">一图胜千言</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="mobile-flowchart" aria-label="移动端纵向流程图">
+      <p class="mobile-note">移动端不把整张 SVG 缩成缩略图，而是改为纵向流程：先看方向、根因、修法、验证，再看补充说明。</p>
+      <button class="mobile-node mobile-start-event" type="button" data-title="开始事件" data-body="移动端同样从用户反馈开始，而不是展示缩小到不可读的整张桌面 SVG。">
+        <b>START 用户指出</b>
+        <span>问题不是风格，而是主图仍像卡片网格。</span>
+      </button>
+      <button class="mobile-node mobile-decision-diamond" type="button" data-title="判断节点" data-body="移动端仍保留决策菱形语义，只是换成竖向阅读。">
+        <b>DECISION 是否真是流程图？</b>
+        <span>先看判断，再读说明。</span>
+      </button>
+      <div class="mobile-branch" aria-label="前后对照">
+        <div class="mobile-branch-item"><strong>BEFORE 上：</strong>旧卡片网格，读者只能读文字块。</div>
+        <div class="mobile-branch-item"><strong>AFTER 下：</strong>流程图语法，先读方向、判断和回路。</div>
+      </div>
+      <button class="mobile-node mobile-root-cause" type="button" data-title="根因 R1" data-body="根因节点必须在主路径上，不能漂浮成说明卡片。">
+        <b>ROOT R1 主图形态没有变</b>
+        <span>等权重卡片网格掩盖了因果关系。</span>
+      </button>
+      <button class="mobile-node mobile-fix-action" type="button" data-title="修法 F1" data-body="修法节点同样落在主路径上，明确从根因走向重画动作。">
+        <b>FIX F1 用流程图语法重画</b>
+        <span>事件、活动、判断、箭头都在主路径。</span>
+      </button>
+      <button class="mobile-node mobile-verify-loop" type="button" data-title="验证 V1" data-body="验证节点检查是否仍有旧卡片网格，并确认移动端可读。">
+        <b>VERIFY V1 反向检查旧结构</b>
+        <span>无旧卡片网格，无表格化主图。</span>
+      </button>
+      <button class="mobile-node mobile-end-event" type="button" data-title="结束事件" data-body="手机端也应能按纵向箭头读懂，而不是靠缩放查看桌面图。">
+        <b>END 一图胜千言</b>
+        <span>移动端用长度承载推理。</span>
+      </button>
+    </div>
+
+    <div class="rule-band" aria-label="保留规则">
+      <span>卡片可做节点，不可做整张图</span>
+      <span>根因、修法、验证必须落在路径上</span>
+      <span>before 固定左/上，after 固定右/下</span>
+      <span>长流程优先北向南，长度承载推理</span>
+    </div>
+  </section>
+</main>
+
+<dialog id="detailDialog" aria-labelledby="dialogTitle">
+  <div class="modal-head"><h2 id="dialogTitle">节点详情</h2><button class="close" type="button">关闭</button></div>
+  <div class="modal-body" id="dialogBody"></div>
+</dialog>
+
+<script>
+  const dialog = document.getElementById('detailDialog');
+  const title = document.getElementById('dialogTitle');
+  const body = document.getElementById('dialogBody');
+  const closeButton = dialog.querySelector('.close');
+  let lastTrigger = null;
+  document.querySelectorAll('.node[role="button"], .mobile-node[data-title]').forEach((node) => {
+    node.addEventListener('click', () => openNode(node));
+    if (node.matches('.node[role="button"]')) {
+      node.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openNode(node);
+        }
+      });
+    }
+  });
+  function openNode(node) {
+    lastTrigger = node;
+    title.textContent = node.dataset.title || '节点详情';
+    body.textContent = node.dataset.body || '';
+    dialog.showModal();
+    closeButton.focus();
+  }
+  function closeDialog() { dialog.close(); if (lastTrigger) lastTrigger.focus(); }
+  closeButton.addEventListener('click', closeDialog);
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(); });
+  dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
+</script>
+</body>
+</html>
