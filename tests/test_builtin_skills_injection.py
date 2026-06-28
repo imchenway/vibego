@@ -260,6 +260,24 @@ def test_vibe_diagram_sample_html_has_mobile_readable_vertical_flowchart() -> No
     assert "@media (max-width: 720px)" in html_text
 
 
+def test_vibe_diagram_title_must_start_with_generated_diagram_type() -> None:
+    """所有 HTML 图顶部标题必须先显示本次触发的生图类型，而不是 skill 名。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+    html_file = ROOT / "docs" / "TASK_20260627_001_vibe-diagram卡片堆叠故障排查.html"
+    html_text = html_file.read_text(encoding="utf-8")
+
+    assert "顶部标题必须以触发的生图类型开头" in skill_text
+    assert "标题格式：`生图类型：主题结论`" in skill_text
+    assert "不要把 skill 名称写成页面主标题" in skill_text
+    assert "故障排查：" in skill_text
+    assert "系统架构：" in skill_text
+    assert "技术设计：" in skill_text
+    assert '<h1 id="title">故障排查：不是换皮卡片：主图必须先像图</h1>' in html_text
+    assert "vibe-diagram 不是换皮卡片" not in html_text
+
+
 def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> None:
     """同步全局 AGENTS 时，应把 vibego 内置 skill 注入到同一个受管块。"""
 
@@ -309,6 +327,8 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "默认优先北向南" in synced_text
     assert "移动端不能把整张 SVG 等比缩成缩略图" in synced_text
     assert "移动端必须改为纵向流程" in synced_text
+    assert "顶部标题必须以触发的生图类型开头" in synced_text
+    assert "不要把 skill 名称写成页面主标题" in synced_text
     assert "默认使用单图高亮根因与修法" in synced_text
     assert "before 固定在左侧或上方" in synced_text
     assert "前后对照只是容器，不是图形语法本身" in synced_text

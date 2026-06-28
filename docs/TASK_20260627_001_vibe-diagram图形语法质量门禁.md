@@ -739,3 +739,57 @@
 | `docs/TASK_20260627_001_vibe-diagram卡片堆叠故障排查.html` | 是 | 桌面保留 SVG 主图，移动端切换为纵向流程节点。 |
 | `tests/test_builtin_skills_injection.py` | 是 | 新增移动端可读流程回归，并同步检查 AGENTS 注入。 |
 | `AGENTS.md` | 是 | Facts Table 同步移动端可读规则与测试锚点。 |
+
+## 23. 第 16 轮改进：顶部标题必须显示触发的生图类型
+
+### 23.1 用户新增反馈
+
+用户指出：所有 HTML 图顶部都需要展示本次触发的生图类型，例如故障排查图应以“故障排查：...”开头，而不是把 `vibe-diagram` 这个 skill 名称写进页面主标题。
+
+结论：标题不是装饰文案，它是读者进入图之前的第一层分类。若标题写 skill 名称，读者先看到的是工具名，而不是图的语义类型，会削弱“一图胜千言”的识别效率。
+
+### 23.2 契约变更
+
+1. `vibe-diagram` 新增“标题与生图类型规则”。
+2. 顶部标题格式固定为：`生图类型：主题结论`。
+3. 生图类型来自自动路由结果或用户明确点名的图型，例如：`故障排查：`、`技术设计：`、`系统架构：`、`业务流程：`、`代码时序：`。
+4. 禁止把 skill 名称写成页面主标题，例如不再使用 `vibe-diagram 不是换皮卡片：...`。
+5. 输出前自检增加标题前缀检查。
+
+### 23.3 受影响目录
+
+| 路径 | 是否影响 | 说明 |
+| --- | --- | --- |
+| `vibego_cli/data/skills/vibe-diagram/SKILL.md` | 是 | 新增所有图型通用的标题与生图类型规则。 |
+| `docs/TASK_20260627_001_vibe-diagram卡片堆叠故障排查.html` | 是 | 示例图标题从 skill 名改为 `故障排查：不是换皮卡片：主图必须先像图`。 |
+| `tests/test_builtin_skills_injection.py` | 是 | 新增回归测试，锁定 skill 规则、示例 HTML 标题和 AGENTS 注入内容。 |
+| `AGENTS.md` | 是 | Facts Table 同步标题契约和测试证据。 |
+| 前后端业务接口 / DB / 中间件 | 否 | 本轮只修改制图协议、示例 HTML 和测试，不涉及运行时业务契约。 |
+
+### 23.4 测试矩阵
+
+| 阶段 | 命令 | 预期 | 说明 |
+| --- | --- | --- | --- |
+| RED | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k generated_diagram_type` | `1 failed` | 旧 skill 和示例 HTML 缺少生图类型标题规则。 |
+| GREEN | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k generated_diagram_type` | `1 passed, 13 deselected` | 新规则和示例标题落地后通过。 |
+| 回归 | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py` | `14 passed` | 覆盖内置 skill、示例 HTML、标题生图类型与 AGENTS 同步注入。 |
+| 模板协议 | `BOT_TOKEN=123:ABC /opt/homebrew/bin/python3.11 -m pytest -q tests/test_agents_template_migration.py -k html_visual` | `1 passed, 7 deselected` | 确认 AGENTS 模板触发协议仍有效。 |
+| skill 校验 | `/opt/homebrew/bin/python3.11 /Users/david/.codex/skills/.system/skill-creator/scripts/quick_validate.py vibego_cli/data/skills/vibe-diagram` | `Skill is valid!` | 确认 skill 结构有效。 |
+| HTML 静态检查 | 一次性 Python 检查 | `HTML generated-diagram-type title check passed` | 确认单文件无外链，h1 以 `故障排查：` 开头，旧标题不再出现。 |
+| 浏览器度量 | Playwright + 本机 Google Chrome，`1440x1200` 与 `390x844` | 两端 `hasHorizontalOverflow: false` | 标题均为 `故障排查：不是换皮卡片：主图必须先像图`；桌面显示 SVG，移动端显示纵向流程。 |
+
+### 23.5 实施顺序
+
+1. 先新增失败测试，锁定“标题必须以生图类型开头”。
+2. 更新 skill 的通用标题规则和输出前自检。
+3. 更新当前故障排查示例 HTML 的 `<title>`、顶部徽标、`<h1>` 和 SVG 标题。
+4. 同步 AGENTS Facts Table 和任务文档。
+5. 执行聚焦测试、回归测试、skill 校验、HTML 静态检查和浏览器渲染自检。
+
+### 23.6 风险与回滚
+
+| 风险 | 影响 | 回滚方式 |
+| --- | --- | --- |
+| 标题过长导致首屏挤压主图 | 低，已有标题字号约束和移动端布局 | 保留生图类型前缀，压缩主题结论文案。 |
+| 图型命名不一致 | 中，可能出现“需求 / 决策沟通图”等长前缀 | 统一用短前缀，如 `需求决策：`、`状态/数据模型：`。 |
+| 旧示例仍引用 skill 名 | 低，本轮测试已反向搜索 `vibe-diagram 不是换皮卡片` | 继续保留反向测试，发现即阻断。 |

@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vibego 系统架构图｜分层拓扑重绘版</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #162238;
+      --muted: #596a82;
+      --hair: #c8d8ec;
+      --hair-2: #dce7f5;
+      --blue: #2369d8;
+      --teal: #078184;
+      --violet: #6a55c8;
+      --green: #2d7c57;
+      --amber: #a86600;
+      --red: #b7463e;
+      --paper: #fcfeff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at 12% 7%, rgba(221, 236, 255, .9), transparent 26rem),
+        radial-gradient(circle at 88% 16%, rgba(235, 247, 255, .8), transparent 24rem),
+        linear-gradient(rgba(110, 143, 184, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(110, 143, 184, .035) 1px, transparent 1px),
+        var(--paper);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+      overflow-wrap: anywhere;
+    }
+    .page {
+      width: min(1180px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding: 20px 0 42px;
+    }
+    header {
+      padding: 8px 2px 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: end;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(21px, 3vw, 28px);
+      line-height: 1.16;
+      letter-spacing: -.035em;
+    }
+    .lede {
+      margin: 7px 0 0;
+      color: var(--muted);
+      max-width: 84ch;
+    }
+    .tags { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .tag {
+      min-height: 27px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--hair);
+      background: rgba(255,255,255,.78);
+      color: #32455e;
+      font-size: 12px;
+      font-weight: 720;
+    }
+    .map-shell {
+      border: 1px solid rgba(128, 157, 194, .34);
+      border-radius: 28px;
+      background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(249,252,255,.90));
+      box-shadow: 0 18px 60px rgba(34, 64, 102, .11);
+      padding: clamp(10px, 2.2vw, 22px);
+      position: relative;
+      overflow: hidden;
+    }
+    .map-shell::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(119, 149, 189, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(119, 149, 189, .035) 1px, transparent 1px);
+      background-size: 24px 24px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.50), rgba(0,0,0,.16));
+    }
+    .map-shell > * { position: relative; }
+    .map-head {
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      align-items: center;
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .legend { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .desktop-map, .mobile-map { width: 100%; height: auto; display: block; }
+    .mobile-map { display: none; }
+    svg text { font-family: inherit; }
+    .band { fill: rgba(255,255,255,.38); stroke: rgba(115,145,184,.20); stroke-width: 1; }
+    .band-alt { fill: rgba(239, 247, 255, .36); }
+    .layer-title { font-weight: 820; font-size: 16px; fill: #365170; letter-spacing: .04em; }
+    .layer-sub { font-size: 11px; fill: #708094; letter-spacing: .08em; }
+    .symbol { fill: #fff; stroke: #7f98bb; stroke-width: 1.6; filter: url(#softShadow); }
+    .symbol.blue { stroke: var(--blue); fill: #eef5ff; }
+    .symbol.teal { stroke: var(--teal); fill: #e9f8f7; }
+    .symbol.violet { stroke: var(--violet); fill: #f3f0ff; }
+    .symbol.green { stroke: var(--green); fill: #ecf8ef; }
+    .symbol.amber { stroke: var(--amber); fill: #fff5e2; }
+    .symbol.red { stroke: var(--red); fill: #fff0ef; }
+    .symbol.none { filter: none; }
+    .symbol-title { font-weight: 820; font-size: 15px; fill: #172238; text-anchor: middle; }
+    .symbol-sub { font-size: 11.5px; fill: #51647f; text-anchor: middle; }
+    .small-title { font-weight: 780; font-size: 13px; fill: #172238; text-anchor: middle; }
+    .small-sub { font-size: 10.5px; fill: #5f7088; text-anchor: middle; }
+    .edge { fill: none; stroke: #6481aa; stroke-width: 1.7; marker-end: url(#arrow); }
+    .edge.main { stroke: var(--blue); stroke-width: 2.8; marker-end: url(#arrowBlue); }
+    .edge.dashed { stroke-dasharray: 6 6; marker-end: none; opacity: .86; }
+    .edge.warn { stroke: var(--amber); marker-end: url(#arrowAmber); }
+    .edge-label { font-size: 11px; fill: #39526f; font-weight: 720; }
+    .spine { stroke: rgba(35,105,216,.20); stroke-width: 14; stroke-linecap: round; }
+    .spine-core { stroke: var(--blue); stroke-width: 2.6; stroke-linecap: round; marker-end: url(#arrowBlue); }
+    .hotspot { cursor: pointer; outline: none; }
+    .hotspot:hover .symbol, .hotspot:focus-visible .symbol { stroke-width: 2.8; }
+    .hotspot:focus-visible .focus-ring { opacity: 1; }
+    .focus-ring { fill: none; stroke: rgba(35,105,216,.45); stroke-width: 5; opacity: 0; pointer-events: none; }
+    .note-text { font-size: 12px; fill: #445a76; }
+    .data-text { font-size: 12px; fill: #375174; font-weight: 730; }
+    .below {
+      margin-top: 15px;
+      display: grid;
+      grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr);
+      gap: 14px;
+    }
+    .brief, .evidence {
+      background: rgba(255,255,255,.72);
+      border: 1px solid rgba(128,157,194,.24);
+      border-radius: 20px;
+      padding: 14px 16px;
+    }
+    .brief h2, .evidence h2 { margin: 0 0 8px; font-size: 16px; }
+    .brief ul { margin: 0; padding-left: 18px; }
+    .brief li + li { margin-top: 6px; }
+    .evidence table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .evidence th, .evidence td { text-align: left; vertical-align: top; border-top: 1px solid rgba(128,157,194,.22); padding: 7px 4px; }
+    .evidence tr:first-child th, .evidence tr:first-child td { border-top: 0; }
+    code { font: .92em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: rgba(225,236,250,.62); border: 1px solid rgba(128,157,194,.18); border-radius: 6px; padding: 1px 4px; }
+    dialog {
+      width: min(640px, calc(100vw - 26px));
+      border: 1px solid rgba(128,157,194,.40);
+      border-radius: 22px;
+      padding: 0;
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 34px 90px rgba(18,42,76,.22);
+    }
+    dialog::backdrop { background: rgba(26,45,72,.32); backdrop-filter: blur(3px); }
+    .modal-head { display: flex; justify-content: space-between; gap: 14px; padding: 17px 18px 9px; border-bottom: 1px solid rgba(128,157,194,.20); }
+    .modal-head h2 { margin: 0; font-size: 18px; }
+    .modal-type { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .close { appearance: none; min-width: 34px; min-height: 34px; border: 1px solid rgba(128,157,194,.36); border-radius: 999px; background: #fff; cursor: pointer; font-size: 18px; color: #273c58; }
+    .close:focus-visible { outline: 3px solid rgba(35,105,216,.32); outline-offset: 2px; }
+    .modal-body { padding: 14px 18px 18px; }
+    .modal-body dl { margin: 0; display: grid; gap: 10px; }
+    .modal-body dt { font-weight: 820; color: #293e5b; }
+    .modal-body dd { margin: 3px 0 0; color: var(--muted); }
+    @media (max-width: 760px) {
+      .page { width: min(390px, calc(100vw - 20px)); padding-top: 12px; }
+      header { grid-template-columns: 1fr; align-items: start; }
+      .tags, .legend { justify-content: flex-start; }
+      .map-head { align-items: flex-start; flex-direction: column; }
+      .desktop-map { display: none; }
+      .mobile-map { display: block; }
+      .below { grid-template-columns: 1fr; }
+      .brief, .evidence { padding: 12px; }
+      .evidence table { font-size: 12.5px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <h1>vibego 系统架构图</h1>
+        <p class="lede">北向南分层拓扑：Telegram/CLI → Master/Worker → tmux 模型 CLI → JSONL/SQLite/日志。</p>
+      </div>
+      <div class="tags" aria-label="交付属性">
+        <span class="tag">分层拓扑</span>
+        <span class="tag">SVG 主图</span>
+        <span class="tag">无 PNG</span>
+      </div>
+    </header>
+
+    <section class="map-shell" aria-label="vibego 分层系统架构主图">
+      <div class="map-head">
+        <span>主谓宾：Telegram/CLI 指令 → Master/Worker 编排 → tmux 模型 CLI → JSONL/SQLite/日志沉淀。</span>
+        <div class="legend" aria-label="图例">
+          <span><i style="background:var(--blue)"></i>控制/主链路</span>
+          <span><i style="background:var(--teal)"></i>工作服务</span>
+          <span><i style="background:var(--violet)"></i>运行时</span>
+          <span><i style="background:var(--green)"></i>状态证据</span>
+          <span><i style="background:var(--amber)"></i>边界</span>
+        </div>
+      </div>
+
+      <svg class="desktop-map" viewBox="0 0 1120 1560" role="img" aria-labelledby="title desc">
+        <title id="title">vibego 系统架构图：北向南分层拓扑</title>
+        <desc id="desc">展示外部入口、控制面、工作面、运行与中间件、状态与证据面的组件和主流向。</desc>
+        <defs>
+          <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#24466f" flood-opacity="0.12"/>
+          </filter>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#6481aa"/></marker>
+          <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#2369d8"/></marker>
+          <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#a86600"/></marker>
+        </defs>
+
+        <rect class="band" x="24" y="44" width="1072" height="210" rx="26"/>
+        <rect class="band band-alt" x="24" y="284" width="1072" height="285" rx="26"/>
+        <rect class="band" x="24" y="600" width="1072" height="280" rx="26"/>
+        <rect class="band band-alt" x="24" y="910" width="1072" height="285" rx="26"/>
+        <rect class="band" x="24" y="1226" width="1072" height="260" rx="26"/>
+
+        <text class="layer-title" x="54" y="86">1 外部入口</text><text class="layer-sub" x="54" y="106">EXTERNAL</text>
+        <text class="layer-title" x="54" y="326">2 控制面</text><text class="layer-sub" x="54" y="346">CONTROL PLANE</text>
+        <text class="layer-title" x="54" y="642">3 工作面</text><text class="layer-sub" x="54" y="662">PROJECT WORKER</text>
+        <text class="layer-title" x="54" y="952">4 运行与中间件</text><text class="layer-sub" x="54" y="972">RUNTIME</text>
+        <text class="layer-title" x="54" y="1268">5 状态与证据面</text><text class="layer-sub" x="54" y="1288">DATA / EVIDENCE</text>
+
+        <path class="spine" d="M560 138 L560 1430"/>
+        <path class="spine-core" d="M560 138 L560 1430"/>
+
+        <!-- External -->
+        <g class="hotspot" tabindex="0" role="button" aria-label="Telegram 移动端与 Bot API" data-title="Telegram 移动端 / Bot API" data-type="外部入口" data-detail="用户通过 Telegram 客户端与 master bot 或项目 worker bot 交互；README 明确通过 Telegram Bot API HTTPS 通道传输指令。" data-input="移动端文本、附件、命令、按钮回调。" data-output="aiogram 事件进入 master.py 或 bot.py。" data-evidence="README.md：功能介绍、Telegram Bot API 的 HTTPS 请求通道；bot.py：Telegram worker handlers。">
+          <path class="focus-ring" d="M364 146 C364 116 388 94 420 94 L487 94 C510 94 530 112 535 134 C562 139 582 160 582 186 C582 219 556 242 523 242 L404 242 C366 242 338 218 338 184 C338 166 348 153 364 146 Z"/>
+          <path class="symbol blue" d="M370 150 C370 122 393 102 423 102 L486 102 C508 102 526 119 530 140 C556 143 574 163 574 187 C574 216 550 234 522 234 L406 234 C372 234 346 214 346 185 C346 168 356 155 370 150 Z"/>
+          <text class="symbol-title" x="460" y="168">Telegram</text><text class="symbol-sub" x="460" y="190">移动端 / Bot API</text><text class="symbol-sub" x="460" y="211">HTTPS 指令通道</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="vibego CLI" data-title="vibego CLI" data-type="本地入口" data-detail="本地命令用于初始化配置、启动/停止 master、查看状态与诊断。" data-input="vibego init/start/stop/status/doctor/commands-seed。" data-output="写入配置根目录，拉起 master 进程。" data-evidence="pyproject.toml：[project.scripts]；vibego_cli/main.py：subparsers.add_parser。">
+          <rect class="focus-ring" x="690" y="98" width="178" height="116" rx="12"/>
+          <rect class="symbol" x="700" y="106" width="158" height="96" rx="10"/>
+          <path d="M700 132 L858 132" stroke="#7f98bb" stroke-width="1.3"/>
+          <text class="symbol-title" x="779" y="160">vibego CLI</text><text class="symbol-sub" x="779" y="181">init / start / doctor</text>
+        </g>
+        <path class="edge" d="M520 234 C520 270 540 292 552 318"/><text class="edge-label" x="458" y="277">消息/回调</text>
+        <path class="edge" d="M778 202 C760 258 640 290 585 326"/><text class="edge-label" x="694" y="266">本地启动</text>
+
+        <!-- Control -->
+        <g class="hotspot" tabindex="0" role="button" aria-label="master.py 控制器" data-title="master.py" data-type="Master 控制器" data-detail="Master bot controller 负责多项目 worker 生命周期、项目列表、菜单与升级流程。" data-input="Telegram master 命令、CLI 启动环境、项目配置。" data-output="调用 run_bot.sh / stop_bot.sh 管理项目 worker。" data-evidence="master.py：Master bot controller、RUN_SCRIPT、STOP_SCRIPT、_projects_overview、_notify_upgrade_report。">
+          <polygon class="focus-ring" points="560,318 658,374 658,486 560,542 462,486 462,374"/>
+          <polygon class="symbol blue" points="560,330 646,380 646,480 560,530 474,480 474,380"/>
+          <text class="symbol-title" x="560" y="413">Master</text><text class="symbol-sub" x="560" y="436">master.py</text><text class="symbol-sub" x="560" y="457">项目编排 / worker 生命周期</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="ProjectRepository 配置仓储" data-title="ProjectRepository" data-type="配置仓储" data-detail="管理 projects 表与 JSON 镜像，维护 bot_name、bot_token、project_slug、default_model 等项目元数据。" data-input="项目新增/编辑/修复、配置迁移。" data-output="项目配置记录、slug 迁移映射。" data-evidence="project_repository.py：class ProjectRepository、CREATE TABLE IF NOT EXISTS projects、project_slug。">
+          <ellipse class="symbol green" cx="300" cy="360" rx="76" ry="22"/><rect class="symbol green none" x="224" y="360" width="152" height="94"/><ellipse class="symbol green" cx="300" cy="454" rx="76" ry="22"/>
+          <text class="small-title" x="300" y="392">ProjectRepository</text><text class="small-sub" x="300" y="414">projects / slug</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="StateStore 状态仓储" data-title="StateStore" data-type="状态仓储" data-detail="持久化 worker 运行状态，辅助 Master 判断 running/starting/degraded/stopped。" data-input="worker 启停与健康检查结果。" data-output="master_state.json 状态快照。" data-evidence="master.py：class StateStore；vibego_cli/config.py：MASTER_STATE。">
+          <ellipse class="symbol green" cx="820" cy="360" rx="70" ry="20"/><rect class="symbol green none" x="750" y="360" width="140" height="84"/><ellipse class="symbol green" cx="820" cy="444" rx="70" ry="20"/>
+          <text class="small-title" x="820" y="392">StateStore</text><text class="small-sub" x="820" y="414">running / starting</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="run_bot 和 stop_bot 脚本" data-title="run_bot.sh / stop_bot.sh" data-type="生命周期脚本" data-detail="run_bot.sh 启动 worker、tmux 和模型 CLI；stop_bot.sh 负责幂等终止 worker 与 tmux。" data-input="项目名、模型名、环境变量。" data-output="worker 进程、tmux 模型会话、日志目录。" data-evidence="README.md：目录结构；scripts/run_bot.sh：sync_agents_block、tmux_session_for、start_tmux_codex.sh。">
+          <path class="symbol blue" d="M483 560 L638 560 L670 610 L638 660 L483 660 L515 610 Z"/>
+          <text class="symbol-title" x="576" y="606">run / stop</text><text class="symbol-sub" x="576" y="628">scripts lifecycle</text>
+        </g>
+        <path class="edge dashed" d="M376 407 L474 414"/><text class="edge-label" x="386" y="396">读写项目配置</text>
+        <path class="edge dashed" d="M750 407 L646 414"/><text class="edge-label" x="668" y="396">记录状态</text>
+        <path class="edge main" d="M560 530 L560 560"/><text class="edge-label" x="582" y="548">启动/停止</text>
+
+        <!-- Worker -->
+        <g class="hotspot" tabindex="0" role="button" aria-label="bot.py Telegram Worker" data-title="bot.py Telegram Worker" data-type="项目 worker" data-detail="项目 worker 负责 Telegram 消息收发、任务流程、命令中心、附件聚合、按钮回调与模型会话桥接。" data-input="用户文本、附件、命令、Plan/Goal/Session 回调。" data-output="业务 prompt、任务/命令数据、模型回传消息。" data-evidence="bot.py 文件头：Telegram 提示词 → Mac 执行 → 回推；_dispatch_prompt_to_model；_deliver_pending_messages。">
+          <rect class="focus-ring" x="437" y="684" width="246" height="114" rx="57"/>
+          <rect class="symbol teal" x="450" y="696" width="220" height="90" rx="45"/>
+          <text class="symbol-title" x="560" y="734">Telegram Worker</text><text class="symbol-sub" x="560" y="756">bot.py / 项目内业务入口</text>
+        </g>
+        <path class="edge main" d="M576 660 L572 696"/><text class="edge-label" x="590" y="682">项目 worker</text>
+        <g class="hotspot" tabindex="0" role="button" aria-label="TaskService" data-title="TaskService" data-type="任务服务" data-detail="提供任务、笔记、附件、历史与任务序列的 SQLite 持久化能力。" data-input="Telegram 任务创建、查询、状态更新。" data-output="tasks/task_notes/task_attachments/task_history/task_sequences。" data-evidence="tasks/service.py：class TaskService、CREATE TABLE IF NOT EXISTS tasks。">
+          <circle class="symbol teal" cx="288" cy="704" r="46"/><text class="small-title" x="288" y="701">Task</text><text class="small-sub" x="288" y="720">Service</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="CommandService" data-title="CommandService" data-type="命令中心" data-detail="管理通用命令、别名与执行历史，支持微信预览/上传等项目命令。" data-input="命令定义、Telegram 命令选择、参数。" data-output="commands/command_aliases/command_history。" data-evidence="command_center/service.py：class CommandService、CREATE TABLE IF NOT EXISTS commands。">
+          <circle class="symbol teal" cx="832" cy="704" r="46"/><text class="small-title" x="832" y="701">Command</text><text class="small-sub" x="832" y="720">Service</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="ParallelSessionStore" data-title="ParallelSessionStore" data-type="并行会话服务" data-detail="维护任务级并行会话、工作区与 tmux 会话元数据。" data-input="并行任务、工作区准备、模型会话绑定。" data-output="parallel_sessions、parallel_session_repos。" data-evidence="parallel_runtime.py：class ParallelSessionStore、CREATE TABLE IF NOT EXISTS parallel_sessions。">
+          <path class="symbol teal" d="M494 822 A66 32 0 1 1 626 822 A66 32 0 1 1 494 822 M494 822 L494 850 A66 32 0 1 0 626 850 L626 822"/>
+          <text class="small-title" x="560" y="830">Parallel</text><text class="small-sub" x="560" y="849">Session Store</text>
+        </g>
+        <path class="edge dashed" d="M450 728 L334 711"/><path class="edge dashed" d="M670 728 L786 711"/><path class="edge dashed" d="M560 786 L560 818"/>
+
+        <!-- Runtime -->
+        <g class="hotspot" tabindex="0" role="button" aria-label="tmux 投递层" data-title="tmux 投递层" data-type="运行时通道" data-detail="worker 通过 tmux_send_line / tmux_queue_line 向目标 tmux session 投递；queued/immediate 是 TUI 输入语义，不是独立消息队列。" data-input="dispatch_text、target_session、send_mode。" data-output="模型 TUI 输入。" data-evidence="bot.py：tmux_send_line、tmux_queue_line、_dispatch_prompt_to_model。">
+          <path class="symbol violet" d="M238 1010 L378 1010 L378 1100 L238 1100 Z M252 1028 L364 1028 M252 1048 L364 1048 M252 1068 L340 1068"/>
+          <text class="symbol-title" x="308" y="1130">tmux</text><text class="symbol-sub" x="308" y="1150">send / queue line</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="模型 CLI 会话" data-title="模型 CLI 会话" data-type="AI CLI 运行面" data-detail="start_tmux_codex.sh 在 tmux 内启动模型 CLI；Codex 支持 resume/session 指令文件，其他模型按脚本分支处理。" data-input="模型命令、工作目录、AGENTS 指令。" data-output="模型终端输出、session JSONL。" data-evidence="scripts/start_tmux_codex.sh：CODEX_BASE_CMD、run_tmux、wait_for_tmux_ready。">
+          <rect class="symbol violet" x="454" y="1008" width="212" height="112" rx="12"/><path d="M454 1038 L666 1038" stroke="#8a7ad2" stroke-width="1.4"/><text class="symbol-title" x="560" y="1074">模型 CLI</text><text class="symbol-sub" x="560" y="1096">Codex / Claude / Gemini</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="session_binder.py" data-title="session_binder.py" data-type="会话绑定器" data-detail="绑定当前模型 JSONL 指针 current_session.txt，并维护最近会话索引 recent_sessions.json。" data-input="session root、required marker、target cwd。" data-output="current_session.txt、recent_sessions.json。" data-evidence="scripts/session_binder.py：--pointer、_update_recent_sessions_index；scripts/start_tmux_codex.sh：SESSION_POINTER_FILE、RECENT_SESSIONS_FILE。">
+          <polygon class="symbol violet" points="820,998 902,1060 820,1122 738,1060"/><text class="small-title" x="820" y="1055">session</text><text class="small-sub" x="820" y="1074">binder</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="无独立 MQ Broker" data-title="无独立 MQ / Broker" data-type="队列边界" data-detail="仓库证据未发现独立 RabbitMQ/Redis/Kafka 队列；当前队列语义来自 Telegram worker 决策、tmux/TUI queued 输入和模型会话消费。" data-input="queued send mode、TUI 队列、JSONL 消费确认。" data-output="无独立 broker；失败时按现有 fail-closed/重试规则处理。" data-evidence="AGENTS.md：Telegram 业务提示统一排队约束；bot.py：_resolve_business_prompt_send_mode、tmux_queue_line；未发现独立 MQ 配置。">
+          <polygon class="symbol amber" points="966,1020 1035,1060 966,1100 897,1060"/><text class="small-title" x="966" y="1055">无 MQ</text><text class="small-sub" x="966" y="1074">worker+tmux</text>
+        </g>
+        <path class="edge main" d="M560 874 L560 1008"/><text class="edge-label" x="580" y="942">_dispatch_prompt_to_model</text>
+        <path class="edge" d="M450 1058 L378 1058"/><text class="edge-label" x="390" y="1048">TUI 输入</text>
+        <path class="edge" d="M666 1060 L738 1060"/><text class="edge-label" x="681" y="1048">会话指针</text>
+        <path class="edge warn" d="M670 730 C938 780 966 948 966 1020"/><text class="edge-label" x="916" y="868">不是独立 broker</text>
+
+        <!-- Data -->
+        <g class="hotspot" tabindex="0" role="button" aria-label="配置根目录" data-title="~/.config/vibego" data-type="运行期目录" data-detail="运行期日志、状态与配置默认写入 ~/.config/vibego，也可由 VIBEGO_CONFIG_DIR / MASTER_CONFIG_ROOT 覆盖。" data-input="env、projects、logs、state、data。" data-output="本机长期运行状态，不落仓库。" data-evidence="README.md：运行期日志和状态文件统一写入本机 ~/.config/vibego/；vibego_cli/config.py：_default_config_root。">
+          <ellipse class="symbol green" cx="252" cy="1320" rx="72" ry="22"/><rect class="symbol green none" x="180" y="1320" width="144" height="86"/><ellipse class="symbol green" cx="252" cy="1406" rx="72" ry="22"/>
+          <text class="small-title" x="252" y="1355">config root</text><text class="small-sub" x="252" y="1375">~/.config/vibego</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="SQLite 数据库" data-title="SQLite 数据库" data-type="SQLite" data-detail="Master 配置和项目任务/命令数据使用 SQLite；写路径可见 BEGIN IMMEDIATE 事务边界。" data-input="projects、tasks、commands、parallel_sessions。" data-output="master.db 与项目 runtime DB。" data-evidence="project_repository.py：sqlite3.connect、projects；tasks/service.py：aiosqlite.connect、tasks；command_center/service.py：commands。">
+          <ellipse class="symbol green" cx="456" cy="1320" rx="72" ry="22"/><rect class="symbol green none" x="384" y="1320" width="144" height="86"/><ellipse class="symbol green" cx="456" cy="1406" rx="72" ry="22"/>
+          <text class="small-title" x="456" y="1355">SQLite</text><text class="small-sub" x="456" y="1375">projects / tasks</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="session JSONL" data-title="session JSONL" data-type="会话证据" data-detail="Codex session JSONL、current_session.txt、recent_sessions.json 是模型输入消费与回传监听的重要证据。" data-input="模型 CLI 运行事件。" data-output="watcher 增量读取、/status、resume 最近会话列表。" data-evidence="scripts/start_tmux_codex.sh：MODEL_SESSION_ROOT、SESSION_POINTER_FILE；bot.py：_deliver_pending_messages。">
+          <path class="symbol green" d="M612 1310 L742 1310 L770 1338 L770 1428 L612 1428 Z M742 1310 L742 1338 L770 1338"/>
+          <text class="small-title" x="691" y="1362">session JSONL</text><text class="small-sub" x="691" y="1382">current / recent</text>
+        </g>
+        <g class="hotspot" tabindex="0" role="button" aria-label="日志与 HTML 文档" data-title="logs / docs / HTML" data-type="日志与文档" data-detail="run_bot.log、model.log、session_binder.log 与 docs/HTML 图共同构成排障与沟通证据。" data-input="tmux pipe-pane、worker 日志、任务文档。" data-output="排障现场、HTML 附件、任务文档。" data-evidence="README.md：model.log；logging_setup.py：LOG_FORMAT；docs/TASK_*.md。">
+          <path class="symbol green" d="M832 1314 L960 1314 L988 1342 L988 1428 L832 1428 Z M960 1314 L960 1342 L988 1342"/>
+          <text class="small-title" x="910" y="1362">logs / docs</text><text class="small-sub" x="910" y="1382">model.log / HTML</text>
+        </g>
+        <path class="edge" d="M308 1100 C306 1212 260 1248 252 1320"/>
+        <path class="edge" d="M560 1120 C536 1212 480 1248 456 1320"/>
+        <path class="edge main" d="M820 1122 C802 1212 720 1246 692 1310"/><text class="edge-label" x="725" y="1230">watcher 回传</text>
+        <path class="edge" d="M560 1120 C674 1210 842 1256 910 1314"/>
+
+        <text class="note-text" x="70" y="1510">证据来源：README.md、pyproject.toml、master.py、bot.py、scripts/run_bot.sh、scripts/start_tmux_codex.sh、scripts/session_binder.py、tasks/service.py、command_center/service.py、parallel_runtime.py。</text>
+      </svg>
+
+      <svg class="mobile-map" viewBox="0 0 390 1740" role="img" aria-labelledby="mtitle mdesc">
+        <title id="mtitle">vibego 系统架构图移动版</title>
+        <desc id="mdesc">移动端可读的纵向系统架构主路径。</desc>
+        <defs>
+          <marker id="mArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#2369d8"/></marker>
+        </defs>
+        <style>
+          .m-band{fill:rgba(255,255,255,.42);stroke:rgba(115,145,184,.22)}.m-title{font:700 13px system-ui;fill:#365170}.m-node{fill:#fff;stroke:#7f98bb;stroke-width:1.4}.m-blue{fill:#eef5ff;stroke:#2369d8}.m-teal{fill:#e9f8f7;stroke:#078184}.m-violet{fill:#f3f0ff;stroke:#6a55c8}.m-green{fill:#ecf8ef;stroke:#2d7c57}.m-amber{fill:#fff5e2;stroke:#a86600}.m-text{font:800 14px system-ui;fill:#172238;text-anchor:middle}.m-sub{font:11.5px system-ui;fill:#53657c;text-anchor:middle}.m-edge{fill:none;stroke:#2369d8;stroke-width:2;marker-end:url(#mArrow)}.m-dash{fill:none;stroke:#6f86a8;stroke-width:1.3;stroke-dasharray:5 5}
+        </style>
+        <path class="m-edge" d="M195 105 L195 1585"/>
+        <rect class="m-band" x="12" y="32" width="366" height="230" rx="22"/><text class="m-title" x="24" y="62">1 外部入口</text>
+        <path class="m-node m-blue" d="M110 92 C110 70 128 55 152 55 L212 55 C232 55 248 70 252 88 C274 92 288 108 288 128 C288 153 267 170 240 170 L150 170 C121 170 100 153 100 130 C100 114 103 101 110 92 Z"/>
+        <text class="m-text" x="195" y="112">Telegram</text><text class="m-sub" x="195" y="132">移动端 / Bot API</text>
+        <rect class="m-node" x="118" y="188" width="154" height="48" rx="10"/><text class="m-text" x="195" y="207">vibego CLI</text><text class="m-sub" x="195" y="225">本地启动与诊断</text>
+
+        <rect class="m-band" x="12" y="300" width="366" height="285" rx="22"/><text class="m-title" x="24" y="330">2 控制面</text>
+        <polygon class="m-node m-blue" points="195,352 276,399 276,493 195,540 114,493 114,399"/>
+        <text class="m-text" x="195" y="430">Master</text><text class="m-sub" x="195" y="450">master.py</text><text class="m-sub" x="195" y="469">项目编排 / worker 生命周期</text>
+        <ellipse class="m-node m-green" cx="92" cy="528" rx="54" ry="17"/><text class="m-sub" x="92" y="531">ProjectRepo</text>
+        <ellipse class="m-node m-green" cx="298" cy="528" rx="54" ry="17"/><text class="m-sub" x="298" y="531">StateStore</text>
+        <path class="m-dash" d="M146 528 L114 493 M244 528 L276 493"/>
+
+        <rect class="m-band" x="12" y="625" width="366" height="295" rx="22"/><text class="m-title" x="24" y="655">3 工作面</text>
+        <rect class="m-node m-teal" x="88" y="694" width="214" height="74" rx="37"/><text class="m-text" x="195" y="725">Telegram Worker</text><text class="m-sub" x="195" y="745">bot.py</text>
+        <circle class="m-node m-teal" cx="86" cy="820" r="34"/><text class="m-sub" x="86" y="817">Task</text><text class="m-sub" x="86" y="834">Service</text>
+        <circle class="m-node m-teal" cx="195" cy="840" r="38"/><text class="m-sub" x="195" y="837">Parallel</text><text class="m-sub" x="195" y="854">Store</text>
+        <circle class="m-node m-teal" cx="304" cy="820" r="34"/><text class="m-sub" x="304" y="817">Command</text><text class="m-sub" x="304" y="834">Service</text>
+        <path class="m-dash" d="M142 755 L102 790 M195 768 L195 802 M248 755 L288 790"/>
+
+        <rect class="m-band" x="12" y="960" width="366" height="325" rx="22"/><text class="m-title" x="24" y="990">4 运行与中间件</text>
+        <rect class="m-node m-violet" x="70" y="1036" width="116" height="66" rx="8"/><text class="m-text" x="128" y="1061">tmux</text><text class="m-sub" x="128" y="1080">send / queue</text>
+        <rect class="m-node m-violet" x="204" y="1036" width="132" height="66" rx="8"/><text class="m-text" x="270" y="1061">模型 CLI</text><text class="m-sub" x="270" y="1080">Codex / Claude</text>
+        <polygon class="m-node m-violet" points="195,1138 266,1192 195,1246 124,1192"/><text class="m-text" x="195" y="1188">session</text><text class="m-sub" x="195" y="1206">binder</text>
+        <polygon class="m-node m-amber" points="306,1150 350,1192 306,1234 262,1192"/><text class="m-sub" x="306" y="1189">无独立</text><text class="m-sub" x="306" y="1206">MQ</text>
+        <path class="m-dash" d="M186 1069 L204 1069 M266 1192 L350 1192"/>
+
+        <rect class="m-band" x="12" y="1325" width="366" height="360" rx="22"/><text class="m-title" x="24" y="1355">5 状态与证据面</text>
+        <ellipse class="m-node m-green" cx="101" cy="1424" rx="58" ry="18"/><rect class="m-node m-green" x="43" y="1424" width="116" height="58"/><ellipse class="m-node m-green" cx="101" cy="1482" rx="58" ry="18"/><text class="m-sub" x="101" y="1452">config root</text><text class="m-sub" x="101" y="1469">~/.config</text>
+        <ellipse class="m-node m-green" cx="285" cy="1424" rx="58" ry="18"/><rect class="m-node m-green" x="227" y="1424" width="116" height="58"/><ellipse class="m-node m-green" cx="285" cy="1482" rx="58" ry="18"/><text class="m-sub" x="285" y="1452">SQLite</text><text class="m-sub" x="285" y="1469">tasks / commands</text>
+        <path class="m-node m-green" d="M58 1530 L168 1530 L190 1552 L190 1614 L58 1614 Z M168 1530 L168 1552 L190 1552"/><text class="m-sub" x="124" y="1572">session JSONL</text><text class="m-sub" x="124" y="1589">current / recent</text>
+        <path class="m-node m-green" d="M216 1530 L326 1530 L348 1552 L348 1614 L216 1614 Z M326 1530 L326 1552 L348 1552"/><text class="m-sub" x="282" y="1572">logs / docs</text><text class="m-sub" x="282" y="1589">HTML evidence</text>
+        <text class="m-sub" x="195" y="1708">主图只表达系统关系；详细证据见下方表格。</text>
+      </svg>
+    </section>
+
+    <section class="below" aria-label="架构边界和证据锚点">
+      <div class="brief">
+        <h2>这次重绘修正了什么</h2>
+        <ul>
+          <li>主画布改成一张分层拓扑图，不再用等权重按钮网格承载主信息。</li>
+          <li>组件用云、六边形、圆柱、终端、文档、菱形等架构符号区分，不靠卡片外观区分。</li>
+          <li>主链路、旁路、状态写入和“无独立 MQ”边界都落在线上，证据只放下方轻量表格。</li>
+        </ul>
+      </div>
+      <div class="evidence">
+        <h2>证据锚点</h2>
+        <table>
+          <tbody>
+            <tr><th>入口/定位</th><td><code>README.md</code>：功能介绍、Telegram Bot API、运行期目录、模型切换。</td></tr>
+            <tr><th>构建/CLI</th><td><code>pyproject.toml</code>：[build-system]、[project.scripts]；<code>vibego_cli/main.py</code>：subparsers。</td></tr>
+            <tr><th>控制面</th><td><code>master.py</code>：Master bot controller、RUN_SCRIPT、STOP_SCRIPT、StateStore。</td></tr>
+            <tr><th>工作面</th><td><code>bot.py</code>：Telegram 提示词 → Mac 执行 → 回推、_dispatch_prompt_to_model、_deliver_pending_messages。</td></tr>
+            <tr><th>运行面</th><td><code>scripts/run_bot.sh</code>、<code>scripts/start_tmux_codex.sh</code>、<code>scripts/session_binder.py</code>。</td></tr>
+            <tr><th>数据面</th><td><code>project_repository.py</code>、<code>tasks/service.py</code>、<code>command_center/service.py</code>、<code>parallel_runtime.py</code>。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="detailDialog" aria-labelledby="dialogTitle">
+    <div class="modal-head">
+      <div><h2 id="dialogTitle">节点详情</h2><div class="modal-type" id="dialogType"></div></div>
+      <button class="close" id="dialogClose" type="button" aria-label="关闭详情">×</button>
+    </div>
+    <div class="modal-body">
+      <dl>
+        <div><dt>职责</dt><dd id="dialogDetail"></dd></div>
+        <div><dt>输入</dt><dd id="dialogInput"></dd></div>
+        <div><dt>输出</dt><dd id="dialogOutput"></dd></div>
+        <div><dt>证据</dt><dd id="dialogEvidence"></dd></div>
+      </dl>
+    </div>
+  </dialog>
+
+  <script>
+    (() => {
+      const dialog = document.getElementById('detailDialog');
+      const closeButton = document.getElementById('dialogClose');
+      let lastTrigger = null;
+      const fill = (id, value) => { document.getElementById(id).textContent = value || 'TODO'; };
+      const openDetail = (target) => {
+        lastTrigger = target;
+        fill('dialogTitle', target.dataset.title);
+        fill('dialogType', target.dataset.type);
+        fill('dialogDetail', target.dataset.detail);
+        fill('dialogInput', target.dataset.input);
+        fill('dialogOutput', target.dataset.output);
+        fill('dialogEvidence', target.dataset.evidence);
+        if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
+      };
+      document.querySelectorAll('.hotspot').forEach((node) => {
+        node.addEventListener('click', () => openDetail(node));
+        node.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDetail(node); }
+        });
+      });
+      const close = () => { if (dialog.open) dialog.close(); if (lastTrigger) lastTrigger.focus(); };
+      closeButton.addEventListener('click', close);
+      dialog.addEventListener('click', (event) => {
+        const rect = dialog.getBoundingClientRect();
+        const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+        if (!inside) close();
+      });
+      dialog.addEventListener('close', () => { if (lastTrigger) lastTrigger.focus(); });
+    })();
+  </script>
+</body>
+</html>
