@@ -328,6 +328,53 @@ def test_vibe_diagram_sample_html_has_mobile_readable_vertical_flowchart() -> No
     assert "@media (max-width: 720px)" in html_text
 
 
+def test_vibe_diagram_page_mockup_rules_offer_selectable_candidates() -> None:
+    """页面设计稿应默认提供可选择的多候选方向，并明确桌面/移动候选排版。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "页面设计稿用于方向评审时，默认在一个单文件 HTML 内提供 3 个候选设计稿" in skill_text
+    assert "当用户明确要求多方案、视觉方向开放、或需要覆盖明显不同的信息架构时，可扩展到 4-5 个" in skill_text
+    assert "候选以 A/B/C/D/E artboard" in skill_text
+    assert "Web 端候选稿优先纵向排列" in skill_text
+    assert "移动端设计稿可以在桌面宽度下用横向手机稿 filmstrip 对比" in skill_text
+    assert "真实移动端查看时不得依赖横向溢出理解候选" in skill_text
+    assert "必须提供可访问的上一稿/下一稿、scroll-snap 或纵向降级" in skill_text
+    assert "visual thesis" in skill_text
+    assert "content plan" in skill_text
+    assert "interaction thesis" in skill_text
+    assert "候选对比矩阵" in skill_text
+    assert "推荐项" in skill_text
+    assert "禁止只换颜色、阴影、圆角凑数量" in skill_text
+    assert "用户明确指定只要一个最终稿" in skill_text
+    assert "已有方向已确认" in skill_text
+    assert "缺陷修复或最终交付" in skill_text
+
+
+def test_vibe_diagram_multi_candidate_rules_cover_all_diagram_types() -> None:
+    """多方案/多候选表达应逐图型声明适用边界，避免把页面设计稿规则误套到所有图。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "## 多方案 / 多候选表达规则" in skill_text
+    assert "多候选不是页面设计稿的专属排版问题，但 3-5 个默认候选只适用于页面设计稿方向评审" in skill_text
+    assert "系统架构图：默认单架构；只有用户要求架构方案对比时才输出 2-3 个候选架构" in skill_text
+    assert "业务架构图 / 领域地图：默认单领域地图；多候选只用于领域边界、能力分层或角色协作方案选择" in skill_text
+    assert "业务流程图：默认单主流程；多候选流程必须用流程方案 A/B/C、泳道或阶段对照表达" in skill_text
+    assert "代码时序图：默认单调用链；多候选只用于替代调用策略、事务边界、重试/异步策略对比" in skill_text
+    assert "状态 / 数据模型图：默认单模型；多候选只用于状态机、实体边界、索引或迁移策略对比" in skill_text
+    assert "故障排查图：不生成 3-5 个修法设计稿；多假设必须进入假设裁决" in skill_text
+    assert "页面设计稿：方向评审默认 3 个候选，可扩展到 4-5 个" in skill_text
+    assert "技术设计图：方案对比保持 2-4 个" in skill_text
+    assert "需求 / 决策沟通图：方案对比保持 2-4 个" in skill_text
+    assert "Web 端多候选优先纵向展开" in skill_text
+    assert "窄移动稿可在桌面视口横向 filmstrip 对比" in skill_text
+    assert "真实移动端不得把横向滚动作为唯一阅读路径" in skill_text
+    assert "每个候选必须有明确差异维度、适用边界、推荐理由和回滚或调整成本" in skill_text
+
+
 def test_worker_start_failure_diagram_uses_wrapping_html_nodes() -> None:
     """当前 worker 启动失败图应使用可换行 HTML 节点，避免 SVG text 溢出。"""
 
@@ -428,6 +475,9 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "白色背景不能是扁平纯白" in synced_text
     assert "允许使用极轻白底工程网格、点阵或坐标纸肌理" in synced_text
     assert "背景纹理必须全局统一" in synced_text
+    assert "## 多方案 / 多候选表达规则" in synced_text
+    assert "3-5 个默认候选只适用于页面设计稿方向评审" in synced_text
+    assert "真实移动端不得把横向滚动作为唯一阅读路径" in synced_text
     assert "视觉风格可以调整，但不得覆盖制图硬规则" in synced_text
     assert "前序用户约束必须同时满足" in synced_text
     assert "避免蓝色底、灰色底、米黄纸张感背景" in synced_text

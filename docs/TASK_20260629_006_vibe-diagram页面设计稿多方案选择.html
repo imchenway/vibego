@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>需求决策：页面设计稿应默认给 3-5 个候选方向</title>
+  <style>
+    *{box-sizing:border-box}html{background:#fbfdff}body{margin:0;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",system-ui,sans-serif;line-height:1.55;background:radial-gradient(circle at 8% 5%,rgba(219,234,254,.68),transparent 28rem),radial-gradient(circle at 90% 2%,rgba(224,242,254,.45),transparent 26rem),linear-gradient(rgba(37,99,235,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(37,99,235,.045) 1px,transparent 1px),#fbfdff;background-size:auto,auto,28px 28px,28px 28px,auto}main{width:min(1160px,calc(100vw - 28px));margin:auto;padding:30px 0 56px}h1{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;margin:0 0 8px}.lead{margin:0 0 18px;color:#596579}.legend{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 20px}.tag{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(37,99,235,.18);background:rgba(255,255,255,.72);border-radius:999px;padding:6px 10px;font-size:12px;color:#33506f;font-weight:700}.canvas{border:1px solid rgba(37,99,235,.16);background:rgba(255,255,255,.78);border-radius:28px;box-shadow:0 20px 60px rgba(30,64,175,.10);padding:18px;overflow:hidden}.decision-map{display:grid;grid-template-columns:1fr 92px 1fr;gap:16px;align-items:stretch}.lane{border:1px solid rgba(148,163,184,.28);border-radius:24px;background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(248,251,255,.9));padding:16px;min-width:0}.lane h2{margin:0 0 14px;font-size:16px;color:#1d4ed8}.flow{display:grid;gap:12px}.event,.action,.gateway,.end{position:relative;min-width:0;border:1px solid rgba(148,163,184,.32);background:#fff;padding:13px 14px;overflow-wrap:anywhere;word-break:break-word}.event,.end{border-radius:999px;text-align:center}.action{border-radius:18px}.gateway{width:min(100%,230px);min-height:112px;margin:2px auto;display:grid;place-items:center;text-align:center;transform:rotate(45deg);border-color:rgba(180,83,9,.28);background:linear-gradient(180deg,#fff7ed,#fff)}.gateway>div{transform:rotate(-45deg);padding:8px}.node-title{display:block;font-size:14px;font-weight:850;margin-bottom:4px}.node-body{display:block;color:#5f6d7d;font-size:12px}.arrow{height:26px;position:relative}.arrow::before{content:"";position:absolute;left:50%;top:1px;width:2px;height:20px;background:#9bb4d6}.arrow::after{content:"";position:absolute;left:calc(50% - 4px);top:18px;border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid #9bb4d6}.connector{display:grid;place-items:center;color:#3b5f91;font-weight:850;font-size:12px;text-align:center}.connector .pill{border:1px solid rgba(37,99,235,.18);background:#eff6ff;border-radius:999px;padding:8px 10px}.after .action,.after .end{border-color:rgba(22,163,74,.28);background:linear-gradient(180deg,#f0fdf4,#fff)}.risk{border-color:rgba(220,38,38,.24)!important;background:linear-gradient(180deg,#fff1f2,#fff)!important}.recommend{outline:2px solid rgba(22,163,74,.22)}.matrix{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}.cell{border:1px solid rgba(148,163,184,.28);background:rgba(255,255,255,.88);border-radius:18px;padding:13px 14px;min-width:0;overflow-wrap:anywhere}.cell b{display:block;margin-bottom:5px;font-size:14px}.cell p{margin:0;color:#64748b;font-size:12px}.option{display:grid;grid-template-columns:64px minmax(0,1fr);gap:10px;align-items:start}.badge{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;font-weight:900;background:#eff6ff;color:#1d4ed8;border:1px solid rgba(37,99,235,.18)}.choice{margin-top:18px;border:1px solid rgba(22,163,74,.24);background:linear-gradient(180deg,rgba(240,253,244,.86),rgba(255,255,255,.9));border-radius:22px;padding:16px}.choice h2{font-size:17px;margin:0 0 8px;color:#166534}.choice p{margin:0;color:#3f5e4b}@media(max-width:860px){main{width:min(100vw - 18px,430px);padding-top:20px}.decision-map{grid-template-columns:1fr}.connector{min-height:42px}.matrix{grid-template-columns:1fr}.gateway{transform:none;width:100%;min-height:auto}.gateway>div{transform:none}.option{grid-template-columns:48px minmax(0,1fr)}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>需求决策：页面设计稿应默认给 3-5 个候选方向</h1>
+    <p class="lead">结论建议：首次方向评审默认 3 个候选；需求开放时扩到 4-5 个；已定方向、缺陷修复或最终交付允许单稿。</p>
+    <div class="legend" aria-label="图例">
+      <span class="tag">单 HTML</span><span class="tag">A/B/C artboard</span><span class="tag">候选对比矩阵</span><span class="tag">推荐项外显</span>
+    </div>
+  </header>
+
+  <section class="canvas" aria-label="页面设计稿多候选决策流程">
+    <div class="decision-map">
+      <div class="lane before" aria-label="当前规则">
+        <h2>当前：单稿倾向，选择空间不足</h2>
+        <div class="flow">
+          <div class="event"><span class="node-title">开始：用户要页面/设计稿</span><span class="node-body">自动路由到“页面设计稿”。</span></div>
+          <div class="arrow"></div>
+          <div class="action"><span class="node-title">S1 只做 5 个判断</span><span class="node-body">目标、动作、首层、收纳、是否卡片堆叠。</span></div>
+          <div class="arrow"></div>
+          <div class="gateway"><div><span class="node-title">D1 是否需要选择方向？</span><span class="node-body">当前规则未显式要求多候选。</span></div></div>
+          <div class="arrow"></div>
+          <div class="action risk"><span class="node-title">风险 R1：默认只出一个稿</span><span class="node-body">用户无法比较视觉方向、信息架构与交互递进。</span></div>
+          <div class="arrow"></div>
+          <div class="end"><span class="node-title">输出：单一页面线框</span><span class="node-body">可能需要返工才能补方案选择。</span></div>
+        </div>
+      </div>
+
+      <div class="connector" aria-hidden="true"><div class="pill">修法 F1<br>把“页面设计稿”定义为选择型交付</div></div>
+
+      <div class="lane after" aria-label="推荐规则">
+        <h2>推荐：一个 HTML 内提供 3-5 个候选</h2>
+        <div class="flow">
+          <div class="event"><span class="node-title">开始：页面设计方向评审</span><span class="node-body">标题仍为“页面设计稿：主题结论”。</span></div>
+          <div class="arrow"></div>
+          <div class="action recommend"><span class="node-title">F1 默认给 3 个候选</span><span class="node-body">同一目标、同一主路径，A/B/C 三个 artboard。</span></div>
+          <div class="arrow"></div>
+          <div class="gateway"><div><span class="node-title">D2 方向是否足够开放？</span><span class="node-body">开放或用户明确要多方案时扩到 4-5 个。</span></div></div>
+          <div class="arrow"></div>
+          <div class="action"><span class="node-title">F2 每稿必须有本质差异</span><span class="node-body">信息架构、首屏锚点、交互递进或响应式结构至少一项不同。</span></div>
+          <div class="arrow"></div>
+          <div class="end"><span class="node-title">输出：对比矩阵 + 推荐项</span><span class="node-body">用户可直接选方向；已定方向场景允许单稿并说明原因。</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="matrix" aria-label="候选方案对比">
+    <div class="cell option"><div class="badge">A</div><div><b>无条件 3-5 个</b><p>选择感最强，但已定稿或小修场景容易凑数。</p></div></div>
+    <div class="cell option"><div class="badge">B</div><div><b>推荐：默认 3，开放到 5</b><p>把多稿绑定到方向评审，兼容单主路径和单 HTML。</p></div></div>
+    <div class="cell option"><div class="badge">C</div><div><b>每次先问数量</b><p>最尊重选择，但会打断工作流，尤其不利于 Telegram。</p></div></div>
+  </section>
+
+  <section class="matrix" aria-label="验收口径">
+    <div class="cell"><b>每个候选必须包含</b><p>visual thesis、content plan、interaction thesis、首屏线框、状态、响应式与可访问性旁注。</p></div>
+    <div class="cell"><b>禁止伪差异</b><p>不得只换颜色、阴影、圆角凑数量；必须有信息架构或交互层级差异。</p></div>
+    <div class="cell"><b>单稿例外</b><p>用户明确只要最终稿、方向已确认、缺陷修复或最终交付时可单稿。</p></div>
+  </section>
+
+  <section class="choice" aria-label="推荐决策">
+    <h2>推荐决策：选 B</h2>
+    <p>将页面设计稿升级为“选择型交付”：首次方向评审默认 3 个候选，开放场景最多 5 个；仍保持一个单文件 HTML、一种生图类型、同一用户主路径。</p>
+  </section>
+</main>
+</body>
+</html>

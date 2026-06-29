@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：vibe-diagram 全类型多候选规则审计</title>
+  <style>
+    *{box-sizing:border-box}html{background:#fbfdff}body{margin:0;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",system-ui,sans-serif;line-height:1.55;background:radial-gradient(circle at 8% 4%,rgba(219,234,254,.72),transparent 28rem),radial-gradient(circle at 92% 0%,rgba(240,253,250,.58),transparent 24rem),linear-gradient(rgba(37,99,235,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(37,99,235,.045) 1px,transparent 1px),#fbfdff;background-size:auto,auto,28px 28px,28px 28px,auto}main{width:min(1160px,calc(100vw - 28px));margin:auto;padding:30px 0 56px}h1{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;margin:0 0 8px}.lead{margin:0 0 18px;color:#5f6d7d}.legend{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 20px}.tag{border:1px solid rgba(37,99,235,.16);background:rgba(255,255,255,.76);border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800;color:#315175}.canvas{border:1px solid rgba(37,99,235,.16);border-radius:28px;background:rgba(255,255,255,.80);box-shadow:0 20px 60px rgba(30,64,175,.10);padding:18px;overflow:hidden}.flow{display:grid;grid-template-columns:1fr 56px 1fr 56px 1fr;align-items:center;gap:10px}.node{min-width:0;border:1px solid rgba(148,163,184,.3);background:#fff;border-radius:20px;padding:14px;overflow-wrap:anywhere}.node b{display:block;margin-bottom:5px}.node p{margin:0;color:#667085;font-size:12px}.node.ok{border-color:rgba(22,163,74,.28);background:linear-gradient(180deg,#f0fdf4,#fff)}.node.warn{border-color:rgba(180,83,9,.28);background:linear-gradient(180deg,#fff7ed,#fff)}.arrow{height:2px;background:#9bb4d6;position:relative}.arrow:after{content:"";position:absolute;right:-1px;top:-4px;border-left:8px solid #9bb4d6;border-top:5px solid transparent;border-bottom:5px solid transparent}.matrix{margin-top:18px;border:1px solid rgba(148,163,184,.26);border-radius:22px;overflow:hidden;background:#fff}.row{display:grid;grid-template-columns:170px 120px minmax(0,1fr);border-top:1px solid rgba(148,163,184,.2);min-width:0}.row:first-child{border-top:0;background:#eff6ff;color:#1d4ed8;font-weight:900}.cell{padding:11px 12px;min-width:0;overflow-wrap:anywhere;border-left:1px solid rgba(148,163,184,.18);font-size:13px}.cell:first-child{border-left:0;font-weight:800}.status{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:800}.no{background:#f1f5f9;color:#475569}.yes{background:#dcfce7;color:#166534}.maybe{background:#fef3c7;color:#92400e}.rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}.rule{border:1px solid rgba(148,163,184,.28);background:rgba(255,255,255,.9);border-radius:18px;padding:13px;overflow-wrap:anywhere}.rule b{display:block;margin-bottom:5px}.rule p{margin:0;color:#64748b;font-size:12px}.verify{margin-top:18px;border:1px solid rgba(22,163,74,.22);border-radius:22px;background:linear-gradient(180deg,rgba(240,253,244,.86),rgba(255,255,255,.9));padding:14px}.verify b{color:#166534}@media(max-width:820px){main{width:min(100vw - 18px,430px)}.flow{grid-template-columns:1fr}.arrow{width:2px;height:28px;margin:auto}.arrow:after{right:-4px;top:22px;border-top:8px solid #9bb4d6;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:0}.row{grid-template-columns:1fr}.cell{border-left:0;border-top:1px solid rgba(148,163,184,.14)}.row:first-child{display:none}.rules{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>交付验收：vibe-diagram 全类型多候选规则审计</h1>
+    <p class="lead">结论：3-5 候选只属于页面设计稿方向评审；“多候选怎么排版与如何控制质量”已提升为全类型通用边界。</p>
+    <div class="legend"><span class="tag">单主图优先</span><span class="tag">按图型控制候选数</span><span class="tag">移动端不依赖横向滚动</span></div>
+  </header>
+
+  <section class="canvas" aria-label="全类型审计流程">
+    <div class="flow">
+      <div class="node warn"><b>输入：今日新增规则</b><p>页面设计稿 3-5 候选、Web 纵向、移动稿 filmstrip、HTML 交付/细节外显/换行。</p></div>
+      <div class="arrow" aria-hidden="true"></div>
+      <div class="node"><b>审计：逐图型裁决</b><p>判断哪些规则是全局边界，哪些只属于页面设计稿或方案选择场景。</p></div>
+      <div class="arrow" aria-hidden="true"></div>
+      <div class="node ok"><b>输出：多方案 / 多候选表达规则</b><p>全类型共用排版质量门禁；各类型保留自己的默认单主图和候选数量。</p></div>
+    </div>
+
+    <div class="matrix" aria-label="逐类型适用矩阵">
+      <div class="row"><div class="cell">生图类型</div><div class="cell">默认多候选</div><div class="cell">多候选边界</div></div>
+      <div class="row"><div class="cell">系统架构图</div><div class="cell"><span class="status no">否</span></div><div class="cell">仅用户要求架构方案对比时输出 2-3 个候选架构。</div></div>
+      <div class="row"><div class="cell">业务架构图 / 领域地图</div><div class="cell"><span class="status no">否</span></div><div class="cell">仅用于领域边界、能力分层或角色协作选择。</div></div>
+      <div class="row"><div class="cell">业务流程图</div><div class="cell"><span class="status no">否</span></div><div class="cell">多候选流程用 A/B/C、泳道或阶段对照，不做说明卡堆叠。</div></div>
+      <div class="row"><div class="cell">代码时序图</div><div class="cell"><span class="status no">否</span></div><div class="cell">仅用于调用策略、事务边界、重试/异步策略对比。</div></div>
+      <div class="row"><div class="cell">状态 / 数据模型图</div><div class="cell"><span class="status no">否</span></div><div class="cell">仅用于状态机、实体边界、索引或迁移策略对比。</div></div>
+      <div class="row"><div class="cell">故障排查图</div><div class="cell"><span class="status no">否</span></div><div class="cell">不生成 3-5 个修法设计稿；多假设进入假设裁决。</div></div>
+      <div class="row"><div class="cell">页面设计稿</div><div class="cell"><span class="status yes">是</span></div><div class="cell">方向评审默认 3 个，可扩展到 4-5 个。</div></div>
+      <div class="row"><div class="cell">技术设计图</div><div class="cell"><span class="status maybe">视场景</span></div><div class="cell">方案对比 2-4 个，覆盖最小、推荐、行业最佳或保守回滚。</div></div>
+      <div class="row"><div class="cell">需求 / 决策沟通图</div><div class="cell"><span class="status maybe">视场景</span></div><div class="cell">方案对比 2-4 个，必须展示推荐项、反例、AC 与未决问题。</div></div>
+    </div>
+
+    <div class="rules" aria-label="全局排版质量门禁">
+      <div class="rule"><b>Web 多候选</b><p>优先纵向展开，保留可读比例、关键路径和状态外显。</p></div>
+      <div class="rule"><b>移动稿对比</b><p>桌面可横向 filmstrip；真实移动端必须提供摘要、上一项/下一项、snap 或纵向降级。</p></div>
+      <div class="rule"><b>候选质量</b><p>必须有差异维度、适用边界、推荐理由和回滚/调整成本；低质量候选直接删除。</p></div>
+    </div>
+  </section>
+
+  <section class="verify" aria-label="验证结果">
+    <b>验证闭环：</b>RED 已确认缺少全类型规则；GREEN 聚焦 2 passed；完整内置 skill 回归 22 passed；skill validator 返回 Skill is valid。
+  </section>
+</main>
+</body>
+</html>
