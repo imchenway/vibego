@@ -793,3 +793,75 @@
 | 标题过长导致首屏挤压主图 | 低，已有标题字号约束和移动端布局 | 保留生图类型前缀，压缩主题结论文案。 |
 | 图型命名不一致 | 中，可能出现“需求 / 决策沟通图”等长前缀 | 统一用短前缀，如 `需求决策：`、`状态/数据模型：`。 |
 | 旧示例仍引用 skill 名 | 低，本轮测试已反向搜索 `vibe-diagram 不是换皮卡片` | 继续保留反向测试，发现即阻断。 |
+
+## 24. 第 17 轮修复：故障排查图禁止竖向卡片时间线逃逸
+
+### 24.1 用户新增反馈
+
+用户拿实际生成物指出：当前故障排查 HTML 虽然有竖向故事线、步骤图标和箭头标签，但视觉主体仍是一列圆角卡片，本质还是卡片堆积。
+
+结论：该反馈成立。上一轮规则允许“卡片承载节点”，模型仍可把 `竖向故事线 + 圆角卡片列表` 当作流程图交付，形成新的逃逸口。
+
+### 24.2 根因
+
+1. `vibe-diagram` 规则虽然写了“卡片不是全局禁用，但必须限用”，但没有点名禁止“同形卡片竖向时间线”。
+2. 旧测试只检查规则文本和仓库示例 HTML，没有覆盖真实生成物里出现的 `.storyline + .step + .node` 结构。
+3. “左侧竖线、步骤图标、箭头标签”被模型误当成图形语法主体；实际上它们只能作为辅助连接，不能替代因果线、流程符号、泳道、时序轴或状态转换。
+
+### 24.3 契约变更
+
+新增故障排查图门禁：
+
+1. 故障排查图主路径不得由一列同形圆角卡片承担。
+2. 左侧竖线、步骤图标、箭头标签只能作为辅助连接。
+3. 不能把“竖向故事线 + 圆角卡片列表”包装成流程图。
+4. 如果隐藏节点正文后只剩一列卡片和弱连接线，或读者必须逐张读卡片才能理解因果，必须重画为流程图、因果链、泳道、时序轴或状态转换图。
+5. 证据、假设、修法仍必须锚定到主路径，不得另起等权重卡片区。
+
+### 24.4 受影响目录
+
+| 路径 | 是否影响 | 说明 |
+| --- | --- | --- |
+| `vibego_cli/data/skills/vibe-diagram/SKILL.md` | 是 | 在图形语法硬约束和故障排查图规则中补充竖向卡片时间线逃逸门禁。 |
+| `tests/test_builtin_skills_injection.py` | 是 | 新增 `test_vibe_diagram_fault_diagram_rejects_vertical_card_timeline_escape_hatch`，并同步检查 AGENTS 注入内容。 |
+| `AGENTS.md` | 是 | Facts Table 新增故障排查图竖向卡片时间线逃逸门禁。 |
+| `docs/TASK_20260627_001_vibe-diagram图形语法质量门禁.md` | 是 | 记录本轮问题、根因、契约、验证与风险。 |
+| 运行链路 / Telegram 发送链路 | 否 | 本轮只改制图协议与测试，不改变 HTML 文件收集、发送、附件回传逻辑。 |
+| DB / 配置 / 构建依赖 | 否 | 无数据结构、配置项或依赖变更。 |
+
+### 24.5 测试矩阵
+
+| 阶段 | 命令 | 结果 | 说明 |
+| --- | --- | --- | --- |
+| Baseline | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py` | `14 passed` | 修改前受影响测试基线通过。 |
+| RED | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k vertical_card_timeline` | `1 failed` | 新测试确认旧规则缺少“竖向卡片时间线逃逸门禁”。 |
+| GREEN | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k vertical_card_timeline` | `1 passed, 14 deselected` | 写入新规则后聚焦测试通过。 |
+| 回归 | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py` | `15 passed` | 覆盖内置 skill、示例 HTML 与 AGENTS 同步注入。 |
+| 模板协议 | `BOT_TOKEN=123:ABC /opt/homebrew/bin/python3.11 -m pytest -q tests/test_agents_template_migration.py -k html_visual` | `1 passed, 7 deselected` | 确认 AGENTS 模板触发协议仍有效。 |
+| skill 校验 | `/opt/homebrew/bin/python3.11 /Users/david/.codex/skills/.system/skill-creator/scripts/quick_validate.py vibego_cli/data/skills/vibe-diagram` | `Skill is valid!` | 确认 skill 结构有效。 |
+| Python 编译 | `/opt/homebrew/bin/python3.11 -m py_compile tests/test_builtin_skills_injection.py` | 通过，无输出 | 测试文件语法有效。 |
+| Diff 空白检查 | `git diff --check` | 通过，无输出 | 确认无尾随空格或空白错误。 |
+
+### 24.6 实施顺序
+
+1. 先跑受影响测试基线。
+2. 新增失败测试，锁定“竖向故事线 + 圆角卡片列表”不能算故障排查图。
+3. 更新 `vibe-diagram` 图形语法硬约束和故障排查图规则。
+4. 更新 AGENTS Facts Table 和任务文档。
+5. 执行聚焦测试、回归测试、skill 校验和空白检查。
+
+### 24.7 风险与回滚
+
+| 风险 | 影响 | 回滚方式 |
+| --- | --- | --- |
+| 规则过严导致简单排查图也被要求重画 | 中 | 保留“卡片可限用”，但要求主路径关系由流程/因果/泳道/时序/状态语法承担。 |
+| 旧 worker 仍使用旧 skill | 中 | 重启 worker 或重新同步 AGENTS 后生效。 |
+| 模型仍用卡片但换类名逃逸 | 中 | 后续继续按“隐藏正文后是否只剩卡片和弱连接线”这个语义门禁补强。 |
+
+### 24.8 Checklist
+
+- [x] 已确认用户指出的实际 HTML 本质是竖向卡片列表。
+- [x] 已补 RED 测试并看到预期失败。
+- [x] 已完成 `SKILL.md` 最小契约修正。
+- [x] 已更新 AGENTS Facts Table。
+- [x] 已执行最终回归、skill 校验、语法检查和空白检查。

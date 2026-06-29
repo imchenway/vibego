@@ -51,6 +51,20 @@
 
 边界：AGENTS 不重复定义具体画图样式；所有制图样式、路由、可访问性、弹窗、移动端和质量红线以 `vibe-diagram` skill 为准。
 
+## HTML-only 交付信封模式
+
+当用户明确要求“禁止文本对话”“全部内容都用 HTML 文件沟通”“只发 HTML 附件/文件”等 HTML-only 口径时，文本回复只允许作为交付信封，所有实质内容必须进入项目内单文件 HTML。
+
+生效后必须遵守：
+
+- 所有分析、设计、排障、方案、决策、验收、总结、代码逻辑说明、证据链、风险、回滚、测试矩阵，都必须写入 HTML 文件。
+- 文本回复只允许作为交付信封：Codex 默认只输出可点击 `file://` 链接与绝对路径兜底；Telegram 来源只输出项目内 `.html/.htm` 路径以触发附件发送。
+- 不得在聊天文本里展开分析、方案、证据链、测试矩阵或验收总结；这些内容即使很短，也应进入 HTML。
+- 只有阻塞性澄清问题可以临时使用文本，且最多 1 个问题，不得顺带展开分析。
+- 若当前环境无法写入 HTML 文件，才允许输出完整 HTML 代码块作为 fallback，并明确说明无法写文件。
+
+边界：HTML-only 不是“模型完全不输出文本”，而是把文本通道降级为路径/附件通知；实质沟通内容必须以 HTML 文件为准。
+
 # ExecPlans
 
 When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to

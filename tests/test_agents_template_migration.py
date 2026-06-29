@@ -105,3 +105,9 @@ def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks
     assert "缺陷排查：必须用 HTML 图展示现象、影响、证据链、可疑节点、已确认根因、高亮根因节点、修法、验证与回滚" in template_text
     assert "系统/功能理解：必须用 HTML 图展示组件、依赖、中间件、DB、MQ/队列语义、关键调用链或业务规则" in template_text
     assert "用户明确要求不要画图、只要一句话、或任务是琐碎格式转换时，可不生成 HTML" in template_text
+    assert "## HTML-only 交付信封模式" in template_text
+    assert "所有实质内容必须进入项目内单文件 HTML" in template_text
+    assert "文本回复只允许作为交付信封" in template_text
+    assert "不得在聊天文本里展开分析、方案、证据链、测试矩阵或验收总结" in template_text
+    assert "Codex 默认只输出可点击 `file://` 链接与绝对路径兜底" in template_text
+    assert "Telegram 来源只输出项目内 `.html/.htm` 路径" in template_text

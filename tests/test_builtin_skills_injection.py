@@ -72,6 +72,23 @@ def test_vibe_diagram_skill_pack_exists_and_is_packaged() -> None:
     assert "recursive-include vibego_cli/data/skills" in manifest_text
 
 
+def test_vibe_diagram_html_only_delivery_envelope_contract() -> None:
+    """vibe-diagram 应支持 HTML-only 信封模式，避免文本通道承载实质内容。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "## HTML-only 交付信封模式" in skill_text
+    assert "文本通道只做交付信封" in skill_text
+    assert "所有实质内容必须写入项目内单文件自包含 HTML" in skill_text
+    assert "禁止在普通文本回复中展开分析、方案、证据链、测试矩阵、风险回滚或验收总结" in skill_text
+    assert "阻塞性澄清问题" in skill_text
+    assert "HTML 交付信封" in skill_text
+    assert "[打开 HTML](file:///绝对路径/xxx.html)" in skill_text
+    assert "只输出项目内 `.html/.htm` 文件路径" in skill_text
+    assert "若无法写入 HTML 文件，才允许输出完整 HTML 代码块" in skill_text
+
+
 def test_vibe_diagram_fault_diagram_rules_prioritize_storyline() -> None:
     """故障排查图规则应把主图收敛为来龙去脉，而不是根因长文堆叠。"""
 
@@ -163,6 +180,19 @@ def test_vibe_diagram_flowchart_grammar_required_for_fault_and_iteration() -> No
     assert "禁止把 before/after 列画成普通说明卡片列表" in skill_text
     assert "根因节点和修法节点必须落在流程路径上" in skill_text
     assert "辅助证据只能作为流程节点的证据锚点" in skill_text
+
+
+def test_vibe_diagram_fault_diagram_rejects_vertical_card_timeline_escape_hatch() -> None:
+    """故障排查图不能用竖向故事线加同形圆角卡片逃逸流程图门禁。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "故障排查图主路径不得由一列同形圆角卡片承担" in skill_text
+    assert "左侧竖线、步骤图标、箭头标签只能作为辅助连接" in skill_text
+    assert "隐藏节点正文后只剩一列卡片和弱连接线" in skill_text
+    assert "竖向故事线 + 圆角卡片列表" in skill_text
+    assert "必须重画为流程图、因果链、泳道、时序轴或状态转换图" in skill_text
 
 
 def test_vibe_diagram_visual_quality_rejects_raw_utilitarian_svg() -> None:
@@ -320,6 +350,9 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "状态 / 数据模型图" in synced_text
     assert "技术设计图" in synced_text
     assert "## AGENTS 配合协议" in synced_text
+    assert "## HTML-only 交付信封模式" in synced_text
+    assert "文本通道只做交付信封" in synced_text
+    assert "所有实质内容必须写入项目内单文件自包含 HTML" in synced_text
     assert "高亮根因节点" in synced_text
     assert "卡片堆积不是图" in synced_text
     assert "卡片不是全局禁用，但必须限用" in synced_text
@@ -332,6 +365,8 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "默认使用单图高亮根因与修法" in synced_text
     assert "before 固定在左侧或上方" in synced_text
     assert "前后对照只是容器，不是图形语法本身" in synced_text
+    assert "故障排查图主路径不得由一列同形圆角卡片承担" in synced_text
+    assert "隐藏节点正文后只剩一列卡片和弱连接线" in synced_text
     assert "禁止交付原始工程草图感的 SVG" in synced_text
     assert "浅色背景默认以白色为主色" in synced_text
     assert "白色背景不能是扁平纯白" in synced_text
