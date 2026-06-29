@@ -152,3 +152,30 @@
 - 该命令不会联网拉取远端仓库；“最新”来自显式 `--source-root`、环境变量或上次成功记录的本地源目录。
 - 若要让 Telegram 按钮始终使用本地源码目录，应先执行一次：
   `vibego agents-sync --source-root /Users/david/hypha/tools/vibego`，或在 master 环境中配置 `MASTER_AGENTS_SOURCE_ROOT=/Users/david/hypha/tools/vibego`。
+
+## 追加修正（命令管理入口）
+
+### 用户反馈
+
+用户在 Telegram 的“命令管理”页未看到新增按钮。截图显示的是项目命令中心列表，而不是 Master 的“系统设置”页。
+
+### 根因
+
+- 第一版实现新增了 Master slash command `/agents_sync` 与系统设置按钮，但没有把它加入 `command_center.defaults.DEFAULT_GLOBAL_COMMANDS`，因此不会出现在项目命令管理列表中。
+- 当前 Telegram 已渲染的旧消息不会自动刷新，需要重新打开命令管理页。
+
+### 修正
+
+- 已新增默认通用命令 `agents-sync`：
+  - 标题：`同步 AGENTS/Skills 到本机`
+  - 命令：优先使用 `VIBEGO_AGENTS_SOURCE_ROOT` / `MASTER_AGENTS_SOURCE_ROOT`；若当前项目目录本身是 vibego 源码，则使用 `MODEL_WORKDIR`；否则回退 `ROOT_DIR`。
+  - 执行时设置 `PYTHONPATH=$SRC`，确保在源码项目内点击时可以直接使用未发布的新实现。
+- 已执行 `python3.11 -m vibego_cli commands-seed` 注入本机命令库，当前 `master_commands.db` 中已存在并启用 `agents-sync`。
+
+### 追加验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `BOT_TOKEN=123456:ABC python3.11 -m pytest -q tests/test_agents_sync.py::test_default_global_commands_include_agents_sync_button` | 1 passed |
+| `python3.11 -m vibego_cli commands-seed` | 已注入通用命令：agents-sync |
+| `BOT_TOKEN=123456:ABC MODEL_WORKDIR=/Users/david/hypha/tools/vibego python3.11 -m pytest -q tests/test_agents_sync.py tests/test_master_update_notifications.py tests/test_chat_menu_buttons.py tests/test_start_tmux_model_cmd.py` | 94 passed |

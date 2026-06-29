@@ -87,6 +87,15 @@
       <div class="note ok"><b>启动防覆盖</b><p>run_bot/start_tmux 检测 manifest；override 损坏时阻断启动，不回退旧包。</p></div>
     </div>
   </section>
+
+  <section>
+    <h2>追加修正：命令管理也可见</h2>
+    <div class="matrix">
+      <div class="note ok"><b>新增通用命令</b><p><code>agents-sync</code> 已加入默认通用命令，并已种到本机命令库。</p></div>
+      <div class="note ok"><b>刷新方式</b><p>Telegram 旧消息不会自动变；重新打开“命令管理”即可看到“同步 AGENTS/Skills 到本机”。</p></div>
+      <div class="note"><b>源码优先</b><p>在 vibego 项目中点击时优先使用 <code>MODEL_WORKDIR</code> 源码，并设置 <code>PYTHONPATH</code>。</p></div>
+    </div>
+  </section>
 </main>
 </body>
 </html>

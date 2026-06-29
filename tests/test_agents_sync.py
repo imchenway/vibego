@@ -151,3 +151,18 @@ def test_agents_sync_cli_json_uses_env_targets(tmp_path: Path) -> None:
     assert payload["ok"] is True
     assert payload["override_root"] == str(config_root / "agents" / "current")
     assert (home / ".codex" / "AGENTS.md").exists()
+
+
+def test_default_global_commands_include_agents_sync_button() -> None:
+    """AGENTS 同步也应出现在项目命令管理的通用命令列表里。"""
+
+    from command_center.defaults import DEFAULT_GLOBAL_COMMANDS
+
+    command = next((item for item in DEFAULT_GLOBAL_COMMANDS if item["name"] == "agents-sync"), None)
+
+    assert command is not None
+    command_text = str(command["command"])
+    assert "vibego_cli agents-sync" in command_text
+    assert "PYTHONPATH" in command_text
+    assert "MODEL_WORKDIR" in command_text
+    assert command["timeout"] >= 60

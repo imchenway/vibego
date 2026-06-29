@@ -61,6 +61,15 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
         "aliases": (),
         "timeout": 600,
     },
+
+    {
+        "name": "agents-sync",
+        "title": "同步 AGENTS/Skills 到本机",
+        "command": 'SRC="${VIBEGO_AGENTS_SOURCE_ROOT:-${MASTER_AGENTS_SOURCE_ROOT:-}}"; if [[ -z "$SRC" && -f "$MODEL_WORKDIR/AGENTS-template.md" && -d "$MODEL_WORKDIR/vibego_cli/data/skills" ]]; then SRC="$MODEL_WORKDIR"; fi; SRC="${SRC:-$ROOT_DIR}"; PYTHONPATH="$SRC${PYTHONPATH:+:$PYTHONPATH}" python3.11 -m vibego_cli agents-sync --source-root "$SRC"',
+        "description": "把最新 AGENTS-template.md 与 Vibego 内置 skills 同步到本机 Codex/Claude/Gemini/统一 AGENTS；在 vibego 项目内点击时优先使用当前项目源码，避免等待发布升级。",
+        "aliases": ("agents_sync", "sync-agents"),
+        "timeout": 120,
+    },
 )
 
 
