@@ -396,6 +396,7 @@ def _env_float(name: str, default: float) -> float:
 MASTER_FORCE_MENU_RESYNC = _env_flag("MASTER_FORCE_MENU_RESYNC", True)
 MASTER_FORCE_COMMAND_RESYNC = _env_flag("MASTER_FORCE_COMMAND_RESYNC", True)
 MASTER_STARTUP_UI_SYNC_TIMEOUT = _env_float("MASTER_STARTUP_UI_SYNC_TIMEOUT", 5.0)
+MASTER_POLLING_RETRY_DELAY = _env_float("MASTER_POLLING_RETRY_DELAY", 10.0)
 
 
 def _is_projects_menu_trigger(text: Optional[str]) -> bool:
@@ -1044,9 +1045,18 @@ def _truncate_text_for_telegram(text: str, *, limit: int = PROJECT_ACTION_FAILUR
     safe_limit = max(120, min(limit, TELEGRAM_MESSAGE_LIMIT - 64))
     if len(normalized) <= safe_limit:
         return normalized
-    suffix = "\n…（内容过长已截断，完整原因见 master 日志）"
-    body_limit = max(1, safe_limit - len(suffix))
-    return normalized[:body_limit].rstrip() + suffix
+    suffix = "\n…（内容过长已截断，已保留开头和结尾，完整原因见 master 日志）"
+    omitted = "\n…（中间内容已省略）\n"
+    body_limit = max(1, safe_limit - len(suffix) - len(omitted))
+    # 启动失败的真正根因通常在日志尾部；截断时同时保留开头上下文与尾部根因。
+    head_limit = max(1, body_limit // 2)
+    tail_limit = max(1, body_limit - head_limit)
+    return (
+        normalized[:head_limit].rstrip()
+        + omitted
+        + normalized[-tail_limit:].lstrip()
+        + suffix
+    )
 
 
 def _project_jump_url(cfg: "ProjectConfig", state: Optional[ProjectState]) -> str:
@@ -2312,7 +2322,13 @@ class MasterManager:
             elif state.status == "stopped":
                 self.state_store.update(cfg.project_slug, status="starting")
 
-    def _log_tail(self, path: Path, *, lines: int = WORKER_HEALTH_LOG_TAIL) -> str:
+    def _log_tail(
+        self,
+        path: Path,
+        *,
+        lines: int = WORKER_HEALTH_LOG_TAIL,
+        since_token: Optional[str] = None,
+    ) -> str:
         """读取日志文件尾部，协助诊断启动失败原因。"""
 
         if not path.exists():
@@ -2329,6 +2345,12 @@ class MasterManager:
             return ""
         if not data:
             return ""
+        if since_token:
+            # run_bot.log 是追加写入；启动失败诊断必须从本次 boot marker 起算，避免旧会话日志抢占用户侧提示。
+            for idx in range(len(data) - 1, -1, -1):
+                if since_token in data[idx]:
+                    data = data[idx:]
+                    break
         tail = data[-lines:]
         return "".join(tail).rstrip()
 
@@ -2408,7 +2430,10 @@ class MasterManager:
             else:
                 issues.append(f"worker 进程 {last_seen_pid} 已退出")
 
-        log_tail = self._log_tail(run_log)
+        log_tail = self._log_tail(
+            run_log,
+            since_token=f"{WORKER_BOOT_ID_LOG_PREFIX}{boot_id}" if boot_id else None,
+        )
         if log_tail:
             issues.append(
                 "最近日志:\n" + textwrap.indent(log_tail, prefix="  ")
@@ -5345,7 +5370,25 @@ async def main() -> None:
     await _ensure_master_commands(bot)
     await _broadcast_master_keyboard(bot, manager)
     asyncio.create_task(_periodic_update_check(bot))
-    await dp.start_polling(bot)
+    await _run_master_polling(dp, bot)
+
+
+async def _run_master_polling(dp: Dispatcher, bot: Bot) -> None:
+    """运行 master polling；Telegram 网络启动超时时保留进程并延迟重试。"""
+
+    while True:
+        try:
+            await dp.start_polling(bot)
+            return
+        except TelegramNetworkError as exc:
+            # bot.me()/getUpdates 在代理或 Telegram 瞬时不可达时可能于启动阶段抛出；
+            # master 进程应保持存活并重试，而不是让 `vibego start` 后直接退出。
+            log.warning(
+                "Master Telegram polling 网络异常，%.1f 秒后重试: %s",
+                MASTER_POLLING_RETRY_DELAY,
+                exc,
+            )
+            await asyncio.sleep(MASTER_POLLING_RETRY_DELAY)
 
 
 if __name__ == "__main__":

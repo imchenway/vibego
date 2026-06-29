@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import ClientError
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -111,6 +111,39 @@ class TelegramLimitMessage(DummyMessage):
                 message="Bad Request: message is too long",
             )
         await super().answer(text, **kwargs)
+
+
+def test_master_polling_retries_after_startup_network_timeout(monkeypatch):
+    """Master polling 启动阶段遇到 Telegram 网络超时不应直接退出进程。"""
+
+    class DummyDispatcher:
+        """第一次 polling 超时，第二次成功退出，验证重试闭环。"""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def start_polling(self, bot):
+            self.calls += 1
+            if self.calls == 1:
+                raise TelegramNetworkError(
+                    method="getMe",
+                    message="Request timeout error",
+                )
+            return None
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(master, "MASTER_POLLING_RETRY_DELAY", 0.01)
+    monkeypatch.setattr(master.asyncio, "sleep", fake_sleep)
+    dispatcher = DummyDispatcher()
+
+    asyncio.run(master._run_master_polling(dispatcher, object()))
+
+    assert dispatcher.calls == 2
+    assert sleep_calls == [0.01]
 
 
 def test_run_action_ack_before_run_worker(repo: ProjectRepository, tmp_path: Path, monkeypatch):
@@ -221,6 +254,23 @@ def test_run_action_truncates_long_failure_message_before_reply(
     assert callback.message._answers, "应发送截断后的错误提示"
     assert len(callback.message._answers[-1][0]) <= 4096
     assert callback.message._edits, "错误提示发送成功后仍应刷新项目列表"
+
+
+def test_truncate_text_for_telegram_keeps_diagnostic_tail() -> None:
+    """截断启动失败提示时必须保留尾部根因，避免用户只看到旧日志前半段。"""
+
+    text = (
+        "操作失败: Vibego 启动失败\n"
+        + ("old-stale-log\n" * 200)
+        + "2026-06-29 14:09:59 Telegram 连通性检查失败：在 30.0 秒内未能与 Telegram 成功握手"
+    )
+
+    result = master._truncate_text_for_telegram(text, limit=500)
+
+    assert len(result) <= 500
+    assert result.startswith("操作失败: Vibego 启动失败")
+    assert "内容过长已截断" in result
+    assert "Telegram 连通性检查失败" in result
 
 
 def test_run_action_refreshes_overview_when_failure_notice_send_fails(

@@ -111,3 +111,15 @@ def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks
     assert "不得在聊天文本里展开分析、方案、证据链、测试矩阵或验收总结" in template_text
     assert "Codex 默认只输出可点击 `file://` 链接与绝对路径兜底" in template_text
     assert "Telegram 来源只输出项目内 `.html/.htm` 路径" in template_text
+
+
+def test_agents_template_compresses_text_after_html_delivery() -> None:
+    """生成 HTML 图后，AGENTS 应要求聊天回复只保留交付信封和必要摘要。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "## HTML 图交付后的文本压缩规则" in template_text
+    assert "生成或修改 HTML 图后，聊天回复只保留交付信封、验证摘要和待执行动作" in template_text
+    assert "不得重复展开 HTML 内已有的分析、证据链、测试矩阵和风险回滚" in template_text
+    assert "需要完整总结时写入 HTML 或 docs" in template_text
+    assert "不要通过大幅删除 AGENTS 约束来降噪" in template_text

@@ -89,6 +89,31 @@ def test_vibe_diagram_html_only_delivery_envelope_contract() -> None:
     assert "若无法写入 HTML 文件，才允许输出完整 HTML 代码块" in skill_text
 
 
+def test_vibe_diagram_delivery_reply_must_stay_concise() -> None:
+    """普通 HTML 图交付也应压缩聊天文本，避免 HTML 与聊天双重长文。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "## HTML 图交付后的文本压缩规则" in skill_text
+    assert "生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接、验证摘要、待执行动作" in skill_text
+    assert "不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚" in skill_text
+    assert "HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复" in skill_text
+
+
+def test_vibe_diagram_svg_text_wrapping_rules() -> None:
+    """vibe-diagram 必须禁止把长句直接放进单个 SVG text，避免文字溢出节点。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "SVG 节点文字规则" in skill_text
+    assert "优先使用 HTML/CSS 节点承载可换行正文" in skill_text
+    assert "若使用 SVG `<text>`，必须使用 `<tspan>` 分行、`foreignObject` 或缩短为编号标签" in skill_text
+    assert "禁止把长句直接放进单个 SVG `<text>` 节点" in skill_text
+    assert "交付前必须用 390px 与桌面宽度检查节点正文不溢出" in skill_text
+
+
 def test_vibe_diagram_fault_diagram_rules_prioritize_storyline() -> None:
     """故障排查图规则应把主图收敛为来龙去脉，而不是根因长文堆叠。"""
 
@@ -303,6 +328,20 @@ def test_vibe_diagram_sample_html_has_mobile_readable_vertical_flowchart() -> No
     assert "@media (max-width: 720px)" in html_text
 
 
+def test_worker_start_failure_diagram_uses_wrapping_html_nodes() -> None:
+    """当前 worker 启动失败图应使用可换行 HTML 节点，避免 SVG text 溢出。"""
+
+    html_file = ROOT / "docs" / "TASK_20260629_003_worker启动失败日志截断.html"
+    html_text = html_file.read_text(encoding="utf-8")
+
+    assert "<!doctype html>" in html_text
+    assert "flow-node" in html_text
+    assert "decision-node" in html_text
+    assert "overflow-wrap: anywhere" in html_text
+    assert "<text" not in html_text
+    assert "white-space: nowrap" not in html_text
+
+
 def test_vibe_diagram_title_must_start_with_generated_diagram_type() -> None:
     """所有 HTML 图顶部标题必须先显示本次触发的生图类型，而不是 skill 名。"""
 
@@ -382,6 +421,8 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "隐藏节点正文后只剩一列卡片和弱连接线" in synced_text
     assert "关键细节必须直接呈现在主图或紧邻主图的可见区域" in synced_text
     assert "弹窗不得承载唯一信息源" in synced_text
+    assert "HTML 图交付后的文本压缩规则" in synced_text
+    assert "SVG 节点文字规则" in synced_text
     assert "禁止交付原始工程草图感的 SVG" in synced_text
     assert "浅色背景默认以白色为主色" in synced_text
     assert "白色背景不能是扁平纯白" in synced_text

@@ -410,3 +410,43 @@ def test_log_contains_handshake_ignores_previous_boot_id(tmp_path: Path) -> None
         encoding="utf-8",
     )
     assert manager._log_contains_handshake(log_path, boot_id="new") is True
+
+
+@pytest.mark.asyncio
+async def test_health_failure_log_tail_scoped_to_current_boot_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """启动失败提示只能展示本次 boot 日志，不能把追加日志里的旧会话噪音顶到最前面。"""
+
+    manager = _build_manager(tmp_path)
+    cfg = manager.require_project("test")
+    log_root = tmp_path / "logs"
+    pid_dir = log_root / "codex" / cfg.project_slug
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "bot.pid").write_text("12345\n", encoding="utf-8")
+
+    boot_id = "current-boot"
+    boot_token = f"{master.WORKER_BOOT_ID_LOG_PREFIX}{boot_id}"
+    stale_lines = "\n".join(f"old-stale-line-{index}" for index in range(120))
+    (pid_dir / "run_bot.log").write_text(
+        "\n".join(
+            [
+                stale_lines,
+                boot_token,
+                "2026-06-29 14:09:29 [INFO] [worker] [test] : 使用代理(https_proxy): http://127.0.0.1:6152",
+                "2026-06-29 14:09:59 [ERROR] [worker] [test] : Telegram 连通性检查失败：在 30.0 秒内未能与 Telegram 成功握手",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(master, "LOG_ROOT_PATH", log_root)
+    monkeypatch.setattr(manager, "_pid_alive", lambda pid: False)
+
+    issue = await manager._health_check_worker(cfg, "codex", boot_id=boot_id)
+
+    assert issue is not None
+    assert boot_token in issue
+    assert "Telegram 连通性检查失败" in issue
+    assert "old-stale-line" not in issue

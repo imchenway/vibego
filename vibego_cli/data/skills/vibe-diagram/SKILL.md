@@ -38,6 +38,15 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 10. 主内容必须 static-first：核心节点、层级、关系、结论直接写在 HTML DOM 中；禁止首屏主内容依赖 JS 动态渲染。
 11. JavaScript 只能做 progressive enhancement：选中态、复制、打印、可选弹窗；点击详情只能用于补充、放大或复制主图已可见的信息，弹窗不得承载唯一信息源。
 
+## HTML 图交付后的文本压缩规则
+
+HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复，避免“HTML 一份、聊天再复制一份”的双重长文。
+
+1. 生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接、验证摘要、待执行动作；不要输出完整排查过程、完整方案、完整测试矩阵或长文件清单。
+2. 不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚；这些内容应留在 HTML 或 docs 中。
+3. 如果同时完成代码修复，聊天只给 1 到 3 条验证结果和用户下一步动作；完整影响面、契约变化、风险与回滚写入 HTML 或 docs。
+4. 如果用户明确要求完整文本总结，可以把完整总结写入 HTML 或 docs，再在聊天中提供路径；不要把 HTML 内容原样复制到聊天。
+
 ## HTML-only 交付信封模式
 
 当用户要求“禁止文本对话”“全部内容都用 HTML 文件沟通”“只发 HTML 附件/文件”或同义表达时，文本通道只做交付信封，所有实质内容必须写入项目内单文件自包含 HTML。
@@ -336,6 +345,8 @@ HTML 的宽度不友好，但长度可以承载推理。宽度服务阅读，长
 - `box-sizing: border-box`。
 - `overflow-wrap: anywhere`。
 - 节点文字允许换行，禁止节点正文使用 `white-space: nowrap`。
+- SVG 节点文字规则：优先使用 HTML/CSS 节点承载可换行正文；若使用 SVG `<text>`，必须使用 `<tspan>` 分行、`foreignObject`
+  或缩短为编号标签；禁止把长句直接放进单个 SVG `<text>` 节点；交付前必须用 390px 与桌面宽度检查节点正文不溢出。
 - 正文字号不小于 12px，主节点标题建议 14px 以上。
 - 交互元素必须有 `:focus-visible`。
 - 支持 `prefers-reduced-motion` 降级。
