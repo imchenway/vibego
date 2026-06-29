@@ -135,18 +135,57 @@ def resolve_source_root(
     return package_root
 
 
+def _candidate_template_files(source_root: Path) -> list[Path]:
+    """返回 AGENTS 模板候选路径，兼容源码目录与 pipx data-files 安装形态。"""
+
+    candidates = [source_root / "AGENTS-template.md"]
+    # pipx/setuptools data-files 会把 AGENTS-template.md 放在 venv 根目录，
+    # 但 Python 包根目录是 venv/lib/pythonX.Y/site-packages。这里复用旧 shell 脚本的 ../../.. 兜底语义。
+    if source_root.name == "site-packages" and len(source_root.parents) >= 3:
+        candidates.append(source_root.parents[2] / "AGENTS-template.md")
+    if virtual_env := os.environ.get("VIRTUAL_ENV"):
+        candidates.append(Path(virtual_env).expanduser() / "AGENTS-template.md")
+    return candidates
+
+
+def _candidate_skills_dirs(source_root: Path) -> list[Path]:
+    """返回内置 skills 候选目录，兼容源码目录、site-packages 与 venv 根目录。"""
+
+    candidates = [source_root / "vibego_cli" / "data" / "skills"]
+    for site_packages in sorted((source_root / "lib").glob("python*/site-packages")):
+        candidates.append(site_packages / "vibego_cli" / "data" / "skills")
+    return candidates
+
+
+def _first_existing_file(candidates: list[Path], label: str) -> Path:
+    """从候选路径中选择第一个存在的文件，否则给出包含全部候选的错误。"""
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    joined = "；".join(str(path) for path in candidates)
+    raise AgentsSyncError(f"{label}不存在，已检查：{joined}")
+
+
+def _first_existing_skills_dir(candidates: list[Path]) -> tuple[Path, list[Path]]:
+    """从候选路径中选择第一个包含 SKILL.md 的 skills 目录。"""
+
+    checked: list[str] = []
+    for candidate in candidates:
+        checked.append(str(candidate))
+        if not candidate.is_dir():
+            continue
+        skill_files = sorted(candidate.glob("*/SKILL.md"))
+        if skill_files:
+            return candidate, skill_files
+    raise AgentsSyncError(f"skills 目录不存在或未发现 SKILL.md，已检查：{'；'.join(checked)}")
+
+
 def _validate_source_root(source_root: Path) -> tuple[Path, Path, list[Path]]:
     """校验源目录必须同时包含模板与至少一个内置 skill。"""
 
-    template_file = source_root / "AGENTS-template.md"
-    skills_dir = source_root / "vibego_cli" / "data" / "skills"
-    if not template_file.is_file():
-        raise AgentsSyncError(f"AGENTS 模板不存在：{template_file}")
-    if not skills_dir.is_dir():
-        raise AgentsSyncError(f"skills 目录不存在：{skills_dir}")
-    skill_files = sorted(skills_dir.glob("*/SKILL.md"))
-    if not skill_files:
-        raise AgentsSyncError(f"skills 目录未发现 SKILL.md：{skills_dir}")
+    template_file = _first_existing_file(_candidate_template_files(source_root), "AGENTS 模板")
+    skills_dir, skill_files = _first_existing_skills_dir(_candidate_skills_dirs(source_root))
     return template_file, skills_dir, skill_files
 
 

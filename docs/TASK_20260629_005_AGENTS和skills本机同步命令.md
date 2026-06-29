@@ -179,3 +179,54 @@
 | `BOT_TOKEN=123456:ABC python3.11 -m pytest -q tests/test_agents_sync.py::test_default_global_commands_include_agents_sync_button` | 1 passed |
 | `python3.11 -m vibego_cli commands-seed` | 已注入通用命令：agents-sync |
 | `BOT_TOKEN=123456:ABC MODEL_WORKDIR=/Users/david/hypha/tools/vibego python3.11 -m pytest -q tests/test_agents_sync.py tests/test_master_update_notifications.py tests/test_chat_menu_buttons.py tests/test_start_tmux_model_cmd.py` | 94 passed |
+
+## 追加修正（pipx 安装路径下模板兜底）
+
+### 用户反馈
+
+执行 `/agents_sync` 后 Telegram 返回：
+
+```text
+AGENTS/Skills 同步失败 ❌
+原因：AGENTS 模板不存在：/Users/david/.local/pipx/venvs/vibego/lib/python3.11/site-packages/AGENTS-template.md
+已 fail-closed：不会回退覆盖到旧模板。
+```
+
+### 根因
+
+- 当前运行中的 master 来自 pipx venv：`/Users/david/.local/pipx/venvs/vibego/lib/python3.11/site-packages`。
+- setuptools `data-files` 会把 `AGENTS-template.md` 安装到 venv 根目录：`/Users/david/.local/pipx/venvs/vibego/AGENTS-template.md`。
+- 旧 shell 启动脚本已有 `site-packages/../../..` 兜底；新增的 Python 同步服务第一版只检查 `source_root/AGENTS-template.md`，漏了 pipx data-files 形态。
+
+### 修正
+
+- `vibego_cli/agents_sync.py` 新增模板候选路径：
+  1. `source_root/AGENTS-template.md`
+  2. 当 `source_root` 是 `site-packages` 时，检查 `source_root/../../.. / AGENTS-template.md`
+  3. `VIRTUAL_ENV/AGENTS-template.md`
+- skills 目录也补充 venv 根目录下 `lib/python*/site-packages/vibego_cli/data/skills` 的候选。
+- 新增回归测试：`test_sync_agents_reads_template_from_pipx_venv_root_when_package_root_lacks_data_file`。
+
+### 现场恢复
+
+已执行：
+
+```bash
+python3.11 -m vibego_cli agents-sync --source-root /Users/david/hypha/tools/vibego --json
+/Users/david/.local/pipx/venvs/vibego/bin/python -m vibego_cli agents-sync --json
+```
+
+结果：
+
+- `source_root` 已记录为 `/Users/david/hypha/tools/vibego`
+- override 已写入 `/Users/david/.config/vibego/agents/current`
+- pipx venv 中的无参数 `agents-sync` 已验证成功，不再回退到缺失的 `site-packages/AGENTS-template.md`
+
+### 追加验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `BOT_TOKEN=123456:ABC python3.11 -m pytest -q tests/test_agents_sync.py::test_sync_agents_reads_template_from_pipx_venv_root_when_package_root_lacks_data_file` | 1 passed |
+| `BOT_TOKEN=123456:ABC MODEL_WORKDIR=/Users/david/hypha/tools/vibego python3.11 -m pytest -q tests/test_agents_sync.py tests/test_master_update_notifications.py tests/test_chat_menu_buttons.py tests/test_start_tmux_model_cmd.py` | 95 passed |
+| `python3.11 -m py_compile vibego_cli/agents_sync.py` | 通过 |
+| `/Users/david/.local/pipx/venvs/vibego/bin/python -m vibego_cli agents-sync --json` | `ok=True`，source_root 为本地源码目录 |

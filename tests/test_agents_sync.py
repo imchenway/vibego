@@ -166,3 +166,24 @@ def test_default_global_commands_include_agents_sync_button() -> None:
     assert "PYTHONPATH" in command_text
     assert "MODEL_WORKDIR" in command_text
     assert command["timeout"] >= 60
+
+
+def test_sync_agents_reads_template_from_pipx_venv_root_when_package_root_lacks_data_file(tmp_path: Path) -> None:
+    """pipx 安装形态下，模板在 venv 根目录，skills 在 site-packages，应按脚本旧兜底成功同步。"""
+
+    venv_root = tmp_path / "pipx" / "venvs" / "vibego"
+    package_root = venv_root / "lib" / "python3.11" / "site-packages"
+    skills_dir = package_root / "vibego_cli" / "data" / "skills" / "vibe-diagram"
+    skills_dir.mkdir(parents=True)
+    (venv_root / "AGENTS-template.md").write_text("# pipx venv 模板\n", encoding="utf-8")
+    (skills_dir / "SKILL.md").write_text(
+        "---\nname: vibe-diagram\ndescription: draw\n---\n\n# skill\n",
+        encoding="utf-8",
+    )
+    targets = {"vibego": tmp_path / "config" / "AGENTS.md"}
+
+    result = sync_agents(source_root=package_root, config_root=tmp_path / "config", targets=targets)
+
+    assert result.source_root == package_root.resolve()
+    assert "pipx venv 模板" in targets["vibego"].read_text(encoding="utf-8")
+    assert (result.override_root / "AGENTS-template.md").read_text(encoding="utf-8") == "# pipx venv 模板\n"

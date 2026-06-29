@@ -96,6 +96,15 @@
       <div class="note"><b>源码优先</b><p>在 vibego 项目中点击时优先使用 <code>MODEL_WORKDIR</code> 源码，并设置 <code>PYTHONPATH</code>。</p></div>
     </div>
   </section>
+
+  <section>
+    <h2>追加修正：pipx 模板路径兜底</h2>
+    <div class="matrix">
+      <div class="note bad"><b>现场失败</b><p>pipx 运行时从 <code>site-packages</code> 找模板，但 data-files 实际放在 venv 根目录。</p></div>
+      <div class="note ok"><b>源码修复</b><p>同步服务已补 <code>site-packages/../../..</code> 与 <code>VIRTUAL_ENV</code> 模板候选。</p></div>
+      <div class="note ok"><b>现场恢复</b><p>已写入 <code>source_root.json</code> 指向当前源码；pipx 无参数同步已验证 <code>ok=True</code>。</p></div>
+    </div>
+  </section>
 </main>
 </body>
 </html>
