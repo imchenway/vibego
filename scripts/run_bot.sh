@@ -138,6 +138,32 @@ expand_model_workdir() {
 
 MODEL_WORKDIR="$(expand_model_workdir "$MODEL_WORKDIR")"
 
+
+select_agents_template_file() {
+  local fallback_template="$1"
+  local prefix="$2"
+  local override_root="${VIBEGO_AGENTS_OVERRIDE_ROOT:-$CONFIG_ROOT/agents/current}"
+  local override_manifest="$override_root/manifest.json"
+  local override_template="$override_root/AGENTS-template.md"
+  local override_skills_dir="$override_root/vibego_cli/data/skills"
+  if [[ -f "$override_manifest" ]]; then
+    if [[ ! -f "$override_template" || ! -d "$override_skills_dir" ]]; then
+      echo "[$prefix] AGENTS override 损坏: $override_root" >&2
+      exit 1
+    fi
+    local skill_probe=""
+    skill_probe="$(find "$override_skills_dir" -mindepth 2 -maxdepth 2 -name SKILL.md -print -quit 2>/dev/null || true)"
+    if [[ -z "$skill_probe" ]]; then
+      echo "[$prefix] AGENTS override 损坏: $override_skills_dir 缺少 SKILL.md" >&2
+      exit 1
+    fi
+    export VIBEGO_BUILTIN_SKILLS_DIR="$override_skills_dir"
+    printf '%s' "$override_template"
+    return 0
+  fi
+  printf '%s' "$fallback_template"
+}
+
 if [[ -z "$MODEL_WORKDIR" ]]; then
   echo "[run-bot] 配置缺少 MODEL_WORKDIR，请检查 config/projects.json" >&2
   exit 1
@@ -159,6 +185,7 @@ if [[ ! -f "$DEFAULT_AGENTS_TEMPLATE" ]]; then
     DEFAULT_AGENTS_TEMPLATE="$VIRTUAL_ENV/AGENTS-template.md"
   fi
 fi
+DEFAULT_AGENTS_TEMPLATE="$(select_agents_template_file "$DEFAULT_AGENTS_TEMPLATE" "run-bot")"
 AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$DEFAULT_AGENTS_TEMPLATE}"
 if [[ ! -f "$AGENTS_TEMPLATE_FILE" ]]; then
   echo "[run-bot] 未找到 AGENTS 模板文件: $AGENTS_TEMPLATE_FILE" >&2
@@ -168,8 +195,8 @@ if ! sync_vibego_agents_for_model "$MODEL" "$AGENTS_TEMPLATE_FILE"; then
   echo "[run-bot] 同步 AGENTS 模板失败，已终止启动。" >&2
   exit 1
 fi
-# 额外同步一份到 ~/.config/vibego/AGENTS.md，供所有模型/提示语统一引用（避免写死用户名路径）
-ENFORCED_AGENTS_FILE="$HOME/.config/vibego/AGENTS.md"
+# 额外同步一份到配置根目录 AGENTS.md，供所有模型/提示语统一引用（避免写死用户名路径）
+ENFORCED_AGENTS_FILE="${VIBEGO_AGENTS_FILE:-$CONFIG_ROOT/AGENTS.md}"
 if ! sync_agents_block "$ENFORCED_AGENTS_FILE" "$AGENTS_TEMPLATE_FILE"; then
   echo "[run-bot] 同步统一 AGENTS 文件失败: $ENFORCED_AGENTS_FILE" >&2
   exit 1

@@ -198,3 +198,25 @@ def test_copilot_model_script_defaults_to_yolo() -> None:
     )
 
     assert result.stdout.strip() == "copilot --yolo"
+
+
+def test_start_tmux_prefers_agents_override_when_manifest_exists() -> None:
+    """Codex tmux 启动入口应优先使用本机同步后的 override，避免旧包覆盖。"""
+
+    script_text = SCRIPT.read_text(encoding="utf-8")
+
+    assert "agents/current" in script_text
+    assert "manifest.json" in script_text
+    assert "VIBEGO_BUILTIN_SKILLS_DIR" in script_text
+    assert "AGENTS override 损坏" in script_text
+
+
+def test_run_bot_prefers_agents_override_when_manifest_exists() -> None:
+    """worker 启动入口同样应优先使用 override，并在损坏时阻断启动。"""
+
+    run_bot_text = (ROOT / "scripts" / "run_bot.sh").read_text(encoding="utf-8")
+
+    assert "agents/current" in run_bot_text
+    assert "manifest.json" in run_bot_text
+    assert "VIBEGO_BUILTIN_SKILLS_DIR" in run_bot_text
+    assert "AGENTS override 损坏" in run_bot_text

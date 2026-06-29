@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import config
+from .agents_sync import AgentsSyncError, sync_agents
 from .deps import check_cli_dependencies, install_requirements, python_version_ok
 from command_center import (
     CommandAliasConflictError,
@@ -671,6 +672,30 @@ def command_seed_commands(args: argparse.Namespace) -> None:
     print("默认通用命令注入完成。")
 
 
+def command_agents_sync(args: argparse.Namespace) -> None:
+    """实现 `vibego agents-sync`，同步本机 AGENTS 与内置 skills。"""
+
+    try:
+        result = sync_agents(source_root=args.source_root, config_root=config.CONFIG_ROOT)
+    except AgentsSyncError:
+        raise
+    except OSError as exc:
+        raise AgentsSyncError(f"文件写入失败：{exc}") from exc
+
+    if args.json:
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        return
+
+    print("AGENTS/Skills 同步完成。")
+    print("来源目录：", result.source_root)
+    print("override：", result.override_root)
+    print("skills 数量：", result.skill_count)
+    print("目标文件：")
+    for key, status in result.target_statuses.items():
+        backup_note = f"，备份：{status.backup_path}" if status.backup_path else ""
+        print(f"  - {key}: {status.status} {status.path}{backup_note}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建最外层 argparse 解析器。"""
 
@@ -701,6 +726,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     seed_parser = subparsers.add_parser("commands-seed", help="注入默认通用命令（可重复执行）")
     seed_parser.set_defaults(func=command_seed_commands)
+
+
+    agents_sync_parser = subparsers.add_parser("agents-sync", help="同步 AGENTS.md 与内置 skills 到本机")
+    agents_sync_parser.add_argument("--source-root", help="指定最新 AGENTS-template.md 与 vibego_cli/data/skills 所在目录")
+    agents_sync_parser.add_argument("--json", action="store_true", help="以 JSON 输出同步结果")
+    agents_sync_parser.set_defaults(func=command_agents_sync)
 
     return parser
 

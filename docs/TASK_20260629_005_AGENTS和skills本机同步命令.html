@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：AGENTS 和 skills 本机同步命令</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;color:#182033;background:radial-gradient(circle at 12% 8%,rgba(219,234,254,.7),transparent 28rem),linear-gradient(rgba(37,99,235,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(37,99,235,.055) 1px,transparent 1px),#fbfdff;background-size:auto,28px 28px,28px 28px,auto;line-height:1.55} main{width:min(1120px,calc(100vw - 28px));margin:auto;padding:28px 0 54px} h1{font-size:clamp(22px,3vw,30px);margin:0 0 8px;letter-spacing:-.02em}.lead{margin:0 0 20px;color:#667085}.canvas{border:1px solid rgba(37,99,235,.18);border-radius:26px;background:rgba(255,255,255,.78);box-shadow:0 18px 54px rgba(30,64,175,.10);padding:18px;overflow:hidden}.flow{display:grid;grid-template-columns:1fr;gap:12px}.stage{display:grid;grid-template-columns:180px minmax(0,1fr);gap:14px;align-items:stretch}.label{border-radius:18px;background:#eff6ff;border:1px solid rgba(37,99,235,.2);display:grid;place-items:center;text-align:center;padding:12px;font-weight:800;color:#1d4ed8}.nodes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.node,.decision,.note{min-width:0;border:1px solid rgba(148,163,184,.32);border-radius:18px;background:#fff;padding:13px 14px;overflow-wrap:anywhere;word-break:break-word}.node b,.decision b,.note b{display:block;margin-bottom:6px;font-size:14px}.node p,.decision p,.note p{margin:0;color:#667085;font-size:12px}.decision{background:linear-gradient(180deg,#fff7ed,#fff);border-color:rgba(180,83,9,.25)}.ok{background:linear-gradient(180deg,#ecfdf3,#fff);border-color:rgba(6,118,71,.25)}.bad{background:linear-gradient(180deg,#fff1f0,#fff);border-color:rgba(180,35,24,.25)}.arrow{height:24px;position:relative}.arrow:before{content:"";position:absolute;left:calc(90px + 50%);top:0;width:2px;height:22px;background:#9bb4d6}.matrix{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}.tag{display:inline-block;border-radius:999px;padding:2px 8px;background:#eef6ff;color:#1d4ed8;font-size:12px;font-weight:700} h2{font-size:18px;margin:24px 0 10px}@media(max-width:760px){main{width:min(100vw - 18px,430px)}.stage{grid-template-columns:1fr}.nodes,.matrix{grid-template-columns:1fr}.arrow:before{left:50%}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>交付验收：AGENTS 和 skills 本机同步命令</h1>
+    <p class="lead">已落地：新增 /agents_sync + 系统设置按钮 + CLI，同步到配置覆盖目录，后续启动优先使用 override。</p>
+  </header>
+  <section class="canvas" aria-label="技术设计主流程">
+    <div class="flow">
+      <div class="stage">
+        <div class="label">入口</div>
+        <div class="nodes">
+          <div class="node"><b>/agents_sync</b><p>Telegram 命令菜单可点击；只允许管理员执行。</p></div>
+          <div class="node"><b>系统设置按钮</b><p>新增“🧩 同步 AGENTS/Skills”，与 slash 命令走同一服务。</p></div>
+          <div class="node"><b>CLI 兜底</b><p><code>vibego agents-sync --source-root PATH</code> 支持终端手动执行。</p></div>
+        </div>
+      </div>
+      <div class="arrow"></div>
+      <div class="stage">
+        <div class="label">源解析</div>
+        <div class="nodes">
+          <div class="decision"><b>D1 指定 source-root？</b><p>优先使用 MASTER/VIBEGO_AGENTS_SOURCE_ROOT。</p></div>
+          <div class="decision"><b>D2 有上次成功源？</b><p>读取 CONFIG_ROOT/agents/source_root.json。</p></div>
+          <div class="decision"><b>D3 兜底安装包</b><p>使用 pipx 包内 AGENTS-template 与 data/skills。</p></div>
+        </div>
+      </div>
+      <div class="arrow"></div>
+      <div class="stage">
+        <div class="label">覆盖目录</div>
+        <div class="nodes">
+          <div class="node ok"><b>原子写入 current</b><p>先写临时目录，再替换 CONFIG_ROOT/agents/current。</p></div>
+          <div class="node ok"><b>复制模板</b><p>AGENTS-template.md 成为后续自动同步优先源。</p></div>
+          <div class="node ok"><b>复制 skills</b><p>保留 SKILL.md 与 agents/*.yaml。</p></div>
+        </div>
+      </div>
+      <div class="arrow"></div>
+      <div class="stage">
+        <div class="label">同步目标</div>
+        <div class="nodes">
+          <div class="node"><b>Codex</b><p>~/.codex/AGENTS.md，仅替换 vibego managed block。</p></div>
+          <div class="node"><b>Claude/Gemini</b><p>~/.claude/CLAUDE.md 与 ~/.gemini/GEMINI.md。</p></div>
+          <div class="node"><b>统一规约</b><p>CONFIG_ROOT/AGENTS.md 供 worker 注入提示引用。</p></div>
+        </div>
+      </div>
+      <div class="arrow"></div>
+      <div class="stage">
+        <div class="label">启动保护</div>
+        <div class="nodes">
+          <div class="node ok"><b>run_bot.sh</b><p>优先读取覆盖目录，防止下次启动回退到 pipx 旧模板。</p></div>
+          <div class="node ok"><b>start_tmux_codex.sh</b><p>恢复/新建 Codex 会话时同样优先覆盖目录。</p></div>
+          <div class="node bad"><b>Fail-closed</b><p>源不完整或目标写入失败时列出失败项，不伪装成功。</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section>
+    <h2>方案对比</h2>
+    <div class="matrix">
+      <div class="note ok"><b><span class="tag">推荐 A</span> 配置覆盖目录</b><p>真正支持不发版同步最新提示词/skills；后续启动不会被旧包覆盖。</p></div>
+      <div class="note"><b>B 只改目标 AGENTS</b><p>改动小，但下一次 worker 启动可能又被 pipx 旧模板覆盖。</p></div>
+      <div class="note bad"><b>C 远端 raw 拉取</b><p>依赖网络/认证/私有仓库策略，不适合作为默认入口。</p></div>
+    </div>
+  </section>
+  <section>
+    <h2>验收口径</h2>
+    <div class="matrix">
+      <div class="note"><b>功能</b><p>点击后四个本机目标文件都更新；显示源路径、skill 数量和目标写入结果。</p></div>
+      <div class="note"><b>安全</b><p>保留用户自定义内容；缺失模板/skills 或写入失败时 fail-closed。</p></div>
+      <div class="note"><b>回归</b><p>run_bot/start_tmux 后仍使用覆盖目录，不被 pipx 旧包覆盖。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>本轮交付验证</h2>
+    <div class="matrix">
+      <div class="note ok"><b>同步服务 + CLI</b><p><code>tests/test_agents_sync.py</code>：5 passed；覆盖 override、目标文件、历史源和 JSON 输出。</p></div>
+      <div class="note ok"><b>Master 入口</b><p><code>/agents_sync</code> 与“🧩 同步 AGENTS/Skills”按钮已加任务锁和权限校验。</p></div>
+      <div class="note ok"><b>启动防覆盖</b><p>run_bot/start_tmux 检测 manifest；override 损坏时阻断启动，不回退旧包。</p></div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

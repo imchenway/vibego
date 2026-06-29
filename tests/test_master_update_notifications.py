@@ -519,3 +519,75 @@ async def test_notify_upgrade_report_warns_when_restart_log_missing_start_marker
     assert "⚠️ 升级 pipx 阶段完成，但重启日志未确认 master 已启动" in bot.messages[0][1]
     assert "正在启动 master 服务" in bot.messages[0][1]
     assert not upgrade_report_path.exists()
+
+
+@pytest.fixture(autouse=True)
+def reset_agents_sync_state():
+    """隔离 AGENTS 同步后台任务，避免用例互相影响。"""
+
+    master._AGENTS_SYNC_TASK = None
+    master._AGENTS_SYNC_STATE_LOCK = asyncio.Lock()
+    yield
+    task = master._AGENTS_SYNC_TASK
+    if task and not task.done():
+        task.cancel()
+    master._AGENTS_SYNC_TASK = None
+    master._AGENTS_SYNC_STATE_LOCK = asyncio.Lock()
+
+
+@pytest.mark.asyncio
+async def test_cmd_agents_sync_authorized(monkeypatch: pytest.MonkeyPatch):
+    """授权用户执行 /agents_sync 时会启动后台同步流水线。"""
+
+    message = DummyMessage(chat_id=999)
+    message.text = "/agents_sync"
+    triggered = asyncio.Event()
+
+    async def fake_pipeline(bot, chat_id, message_id):
+        triggered.set()
+
+    monkeypatch.setattr(master, "_run_agents_sync_pipeline", fake_pipeline)
+    master.MANAGER = SimpleNamespace(is_authorized=lambda _: True)
+    await master.cmd_agents_sync(message)
+    await asyncio.wait_for(triggered.wait(), timeout=1)
+    assert message.replies
+    assert "AGENTS/Skills 同步" in message.replies[0][0]
+
+
+@pytest.mark.asyncio
+async def test_cmd_agents_sync_unauthorized(monkeypatch: pytest.MonkeyPatch):
+    """未授权用户无法执行 /agents_sync。"""
+
+    message = DummyMessage(chat_id=321)
+    message.text = "/agents_sync"
+    master.MANAGER = SimpleNamespace(is_authorized=lambda _: False)
+    await master.cmd_agents_sync(message)
+    assert message.replies[0][0] == "未授权。"
+
+
+@pytest.mark.asyncio
+async def test_cmd_agents_sync_rejects_parallel_requests(monkeypatch: pytest.MonkeyPatch):
+    """并发触发时只有第一个 AGENTS 同步请求会被受理。"""
+
+    message = DummyMessage(chat_id=1)
+    message.text = "/agents_sync"
+    start_event = asyncio.Event()
+    finish_event = asyncio.Event()
+
+    async def fake_pipeline(bot, chat_id, message_id):
+        start_event.set()
+        await finish_event.wait()
+
+    monkeypatch.setattr(master, "_run_agents_sync_pipeline", fake_pipeline)
+    master.MANAGER = SimpleNamespace(is_authorized=lambda _: True)
+
+    await master.cmd_agents_sync(message)
+    await asyncio.wait_for(start_event.wait(), timeout=1)
+
+    second = DummyMessage(chat_id=1)
+    second.text = "/agents_sync"
+    await master.cmd_agents_sync(second)
+    assert "已有 AGENTS/Skills 同步任务" in second.replies[-1][0]
+
+    finish_event.set()
+    await asyncio.sleep(0)

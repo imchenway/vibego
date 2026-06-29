@@ -856,3 +856,16 @@ def test_worker_identity_record_updates_state(tmp_path, monkeypatch):
     assert updated[slug]["actual_username"] == "ActualTelegramBot"
     assert updated[slug]["telegram_user_id"] == 123456789
     monkeypatch.delenv("STATE_FILE", raising=False)
+
+
+def test_master_system_settings_menu_includes_agents_sync():
+    """系统设置里应提供一键同步 AGENTS/Skills 的按钮入口。"""
+
+    text, markup = master._build_system_settings_menu()
+    assert "系统设置" in text
+    button_pairs = [
+        (button.text, button.callback_data)
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    assert ("🧩 同步 AGENTS/Skills", master.AGENTS_SYNC_CALLBACK) in button_pairs

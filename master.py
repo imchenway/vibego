@@ -85,6 +85,7 @@ from command_center import (
 )
 from command_center.prompts import build_field_prompt_text
 from vibego_cli import __version__
+from vibego_cli.agents_sync import AgentsSyncError, sync_agents
 
 try:
     from packaging.version import Version, InvalidVersion
@@ -302,6 +303,7 @@ MASTER_BOT_COMMANDS: List[Tuple[str, str]] = [
     ("projects", "查看项目列表"),
     ("restart", "重启 master"),
     ("upgrade", "升级 vibego 至最新版"),
+    ("agents_sync", "同步 AGENTS/Skills 到本机"),
 ]
 MASTER_BROADCAST_MESSAGE = os.environ.get("MASTER_BROADCAST_MESSAGE", "")
 SWITCHABLE_MODELS: Tuple[Tuple[str, str], ...] = (
@@ -315,6 +317,7 @@ SYSTEM_SETTINGS_BACK_CALLBACK = "system:back"
 GLOBAL_COMMAND_MENU_CALLBACK = "system:commands:menu"
 GLOBAL_COMMAND_REFRESH_CALLBACK = "system:commands:refresh"
 GLOBAL_COMMAND_NEW_CALLBACK = "system:commands:new"
+AGENTS_SYNC_CALLBACK = "system:agents_sync"
 
 _UPGRADE_COMMANDS: Tuple[Tuple[str, str], ...] = (
     ("pipx upgrade vibego", "升级 vibego 包"),
@@ -325,6 +328,8 @@ _UPGRADE_LOG_BUFFER_LIMIT = int(os.environ.get("MASTER_UPGRADE_LOG_BUFFER_LIMIT"
 _UPGRADE_LINE_LIMIT = int(os.environ.get("MASTER_UPGRADE_LINE_LIMIT", "160"))
 _UPGRADE_STATE_LOCK = asyncio.Lock()
 _UPGRADE_TASK: Optional[asyncio.Task[None]] = None
+_AGENTS_SYNC_STATE_LOCK = asyncio.Lock()
+_AGENTS_SYNC_TASK: Optional[asyncio.Task[None]] = None
 _UPGRADE_RESTART_COMMAND = os.environ.get(
     "MASTER_UPGRADE_RESTART_COMMAND",
     "vibego stop && vibego start",
@@ -437,6 +442,7 @@ def _build_system_settings_menu() -> Tuple[str, InlineKeyboardMarkup]:
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📟 通用命令配置", callback_data=GLOBAL_COMMAND_MENU_CALLBACK))
+    builder.row(InlineKeyboardButton(text="🧩 同步 AGENTS/Skills", callback_data=AGENTS_SYNC_CALLBACK))
     builder.row(InlineKeyboardButton(text="📂 返回项目列表", callback_data="project:refresh:*"))
     markup = _ensure_numbered_markup(builder.as_markup())
     text = "请选择需要调整的系统设置："
@@ -1672,6 +1678,82 @@ async def _run_upgrade_pipeline(bot: Bot, chat_id: int, message_id: int) -> None
         last_lines = lines
 
     await _announce_upgrade_completion(bot, chat_id, message_id, last_lines, started_at)
+
+
+async def _safe_edit_agents_sync_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+) -> None:
+    """安全更新 AGENTS 同步状态消息，避免后台任务因消息不可编辑而中断。"""
+
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            disable_web_page_preview=True,
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            log.warning("AGENTS 同步状态消息更新失败: %s", exc)
+    except TelegramForbiddenError as exc:
+        log.warning("AGENTS 同步状态消息已无法访问(chat=%s): %s", chat_id, exc)
+    except Exception as exc:  # pragma: no cover - 捕获不可预期错误，避免任务崩溃
+        log.error("AGENTS 同步状态消息更新遇到异常: %s", exc)
+
+
+async def _run_agents_sync_pipeline(bot: Bot, chat_id: int, message_id: int) -> None:
+    """执行本机 AGENTS/Skills 同步，并把结果回写到 Telegram 状态消息。"""
+
+    await _safe_edit_agents_sync_message(
+        bot,
+        chat_id,
+        message_id,
+        "AGENTS/Skills 同步进行中…\n正在写入本机 override 与模型 AGENTS 目标。",
+    )
+    started_at = time.monotonic()
+    try:
+        result = await asyncio.to_thread(sync_agents, config_root=CONFIG_ROOT)
+    except AgentsSyncError as exc:
+        await _safe_edit_agents_sync_message(
+            bot,
+            chat_id,
+            message_id,
+            f"AGENTS/Skills 同步失败 ❌\n原因：{exc}\n已 fail-closed：不会回退覆盖到旧模板。",
+        )
+        return
+    except Exception as exc:  # pragma: no cover - 兜底保护
+        log.exception("AGENTS/Skills 同步异常")
+        await _safe_edit_agents_sync_message(
+            bot,
+            chat_id,
+            message_id,
+            f"AGENTS/Skills 同步失败 ❌\n异常：{exc}",
+        )
+        return
+
+    elapsed = time.monotonic() - started_at
+    target_lines = [
+        f"- {key}: {status.status} {status.path}"
+        for key, status in result.target_statuses.items()
+    ]
+    target_preview = "\n".join(target_lines[:6])
+    await _safe_edit_agents_sync_message(
+        bot,
+        chat_id,
+        message_id,
+        (
+            "AGENTS/Skills 同步完成 ✅\n"
+            f"来源：{result.source_root}\n"
+            f"override：{result.override_root}\n"
+            f"skills：{result.skill_count} 个\n"
+            f"耗时：{elapsed:.1f} 秒\n"
+            "后续 worker 启动将优先使用 override；override 损坏时会阻断启动，避免旧包覆盖。\n\n"
+            f"目标：\n{target_preview}"
+        ),
+    )
 
 
 async def _periodic_update_check(bot: Bot) -> None:
@@ -3996,6 +4078,61 @@ async def cmd_upgrade(message: Message) -> None:
         task.add_done_callback(_on_done)
 
 
+@router.message(Command("agents_sync"))
+async def cmd_agents_sync(message: Message) -> None:
+    """处理 /agents_sync 命令，触发本机 AGENTS/Skills 同步。"""
+
+    _log_update(message)
+    manager = await _ensure_manager()
+    if not manager.is_authorized(message.chat.id):
+        await message.answer("未授权。")
+        return
+
+    bot = message.bot
+    if bot is None:
+        await message.answer("Bot 实例未就绪，请稍后重试。")
+        return
+
+    async with _AGENTS_SYNC_STATE_LOCK:
+        global _AGENTS_SYNC_TASK
+        if _AGENTS_SYNC_TASK is not None and _AGENTS_SYNC_TASK.done():
+            _AGENTS_SYNC_TASK = None
+        if _AGENTS_SYNC_TASK is not None:
+            await message.answer("已有 AGENTS/Skills 同步任务在执行，请等待其完成后再试。")
+            return
+
+        status_message = await message.answer(
+            "已收到 AGENTS/Skills 同步指令，将写入本机 override 与模型 AGENTS 目标，请勿重复点击。",
+            disable_web_page_preview=True,
+        )
+        message_id = getattr(status_message, "message_id", None)
+        if message_id is None:
+            await message.answer("无法追踪状态消息，同步已取消。")
+            return
+
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            _run_agents_sync_pipeline(bot, message.chat.id, message_id),
+            name="master-agents-sync-pipeline",
+        )
+        _AGENTS_SYNC_TASK = task
+
+        async def _clear_reference() -> None:
+            async with _AGENTS_SYNC_STATE_LOCK:
+                global _AGENTS_SYNC_TASK
+                if _AGENTS_SYNC_TASK is task:
+                    _AGENTS_SYNC_TASK = None
+
+        def _on_done(completed: asyncio.Task) -> None:
+            try:
+                completed.result()
+            except Exception as exc:  # pragma: no cover - 记录后台异常
+                log.error("AGENTS 同步流水线执行失败: %s", exc)
+            loop.create_task(_clear_reference())
+
+        task.add_done_callback(_on_done)
+
+
 async def _run_and_reply(message: Message, action: str, coro) -> None:
     """执行异步操作并统一回复成功或失败提示。"""
 
@@ -4644,6 +4781,21 @@ async def on_system_settings_menu_callback(callback: CallbackQuery) -> None:
     except TelegramBadRequest:
         await callback.message.answer(text, reply_markup=markup)
     await callback.answer("已返回系统设置")
+
+
+@router.callback_query(F.data == AGENTS_SYNC_CALLBACK)
+async def on_agents_sync_callback(callback: CallbackQuery) -> None:
+    """处理系统设置中的一键同步 AGENTS/Skills 按钮。"""
+
+    if not await _ensure_authorized_callback(callback):
+        return
+    if callback.message is None:
+        await callback.answer("无法更新此消息", show_alert=True)
+        return
+
+    await callback.answer("已开始同步")
+    pseudo_message = callback.message
+    await cmd_agents_sync(pseudo_message)
 
 
 @router.callback_query(F.data == GLOBAL_COMMAND_MENU_CALLBACK)

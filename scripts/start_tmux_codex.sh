@@ -106,8 +106,35 @@ if [[ -n "$SESSION_READY_FILE" ]]; then
   ensure_dir "$(dirname "$SESSION_READY_FILE")"
 fi
 
+
+select_agents_template_file() {
+  local fallback_template="$1"
+  local prefix="$2"
+  local override_root="${VIBEGO_AGENTS_OVERRIDE_ROOT:-$CONFIG_ROOT/agents/current}"
+  local override_manifest="$override_root/manifest.json"
+  local override_template="$override_root/AGENTS-template.md"
+  local override_skills_dir="$override_root/vibego_cli/data/skills"
+  if [[ -f "$override_manifest" ]]; then
+    if [[ ! -f "$override_template" || ! -d "$override_skills_dir" ]]; then
+      echo "[$prefix] AGENTS override 损坏: $override_root" >&2
+      exit 1
+    fi
+    local skill_probe=""
+    skill_probe="$(find "$override_skills_dir" -mindepth 2 -maxdepth 2 -name SKILL.md -print -quit 2>/dev/null || true)"
+    if [[ -z "$skill_probe" ]]; then
+      echo "[$prefix] AGENTS override 损坏: $override_skills_dir 缺少 SKILL.md" >&2
+      exit 1
+    fi
+    export VIBEGO_BUILTIN_SKILLS_DIR="$override_skills_dir"
+    printf '%s' "$override_template"
+    return 0
+  fi
+  printf '%s' "$fallback_template"
+}
+
 if [[ "${VIBEGO_AGENTS_SYNCED:-0}" != "1" ]]; then
-  AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$ROOT_DIR/AGENTS-template.md}"
+  DEFAULT_AGENTS_TEMPLATE="$(select_agents_template_file "$ROOT_DIR/AGENTS-template.md" "start-tmux")"
+  AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$DEFAULT_AGENTS_TEMPLATE}"
   if [[ ! -f "$AGENTS_TEMPLATE_FILE" ]]; then
     echo "[start-tmux] 未找到 AGENTS 模板文件: $AGENTS_TEMPLATE_FILE" >&2
     exit 1
