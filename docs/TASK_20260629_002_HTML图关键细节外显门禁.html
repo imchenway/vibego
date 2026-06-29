@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：HTML图关键细节不再藏进点击详情</title>
+  <style>
+    :root {
+      --ink: #162033;
+      --muted: #5d6b82;
+      --line: #b9c8dc;
+      --line-strong: #6f89ad;
+      --paper: #fbfdff;
+      --paper-2: #f6f9fd;
+      --blue: #2f6fed;
+      --green: #15845d;
+      --amber: #b56a12;
+      --red: #b23a48;
+      --shadow: 0 18px 45px rgba(34, 54, 84, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      background:
+        linear-gradient(90deg, rgba(45, 95, 160, .035) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(45, 95, 160, .03) 1px, transparent 1px),
+        radial-gradient(circle at 15% 10%, rgba(92, 142, 210, .08), transparent 36%),
+        linear-gradient(180deg, #ffffff 0%, var(--paper-2) 100%);
+      background-size: 28px 28px, 28px 28px, auto, auto;
+    }
+    main { width: min(1180px, calc(100% - 36px)); margin: 0 auto; padding: 26px 0 42px; }
+    header { padding: 12px 2px 18px; }
+    h1 { margin: 0 0 6px; font-size: clamp(22px, 3vw, 30px); letter-spacing: -.03em; }
+    .subtitle { margin: 0; color: var(--muted); max-width: 980px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; color: var(--muted); font-size: 13px; }
+    .pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid #dbe6f4; border-radius: 999px; background: rgba(255,255,255,.82); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); display: inline-block; }
+    .dot.red { background: var(--red); } .dot.green { background: var(--green); } .dot.amber { background: var(--amber); }
+
+    .diagram-wrap { background: rgba(255,255,255,.78); border: 1px solid #e4edf8; border-radius: 24px; box-shadow: var(--shadow); padding: clamp(14px, 2vw, 24px); }
+    .diagram-title { margin: 0 0 10px; font-size: 18px; }
+    svg { display: block; width: 100%; height: auto; overflow: visible; }
+    .zone-label { font-size: 16px; font-weight: 800; fill: var(--ink); }
+    .zone-sub { font-size: 12px; fill: var(--muted); }
+    .shape { fill: #fff; stroke: var(--line); stroke-width: 1.6; }
+    .shape.bad { fill: #fff7f7; stroke: #e4a2aa; }
+    .shape.good { fill: #f3fff9; stroke: #8ccdb2; }
+    .shape.warn { fill: #fffaf0; stroke: #dfbc75; }
+    .event { fill: #172033; }
+    .end { fill: #155f46; }
+    .txt-title { fill: var(--ink); font-size: 14px; font-weight: 800; }
+    .txt { fill: var(--muted); font-size: 12.5px; }
+    .small { fill: var(--muted); font-size: 11.5px; }
+    .tag { fill: #eef4fb; stroke: #d9e5f4; }
+    .tag-text { font-size: 11px; fill: #3e5574; font-weight: 700; }
+    .arrow { fill: none; stroke: var(--line-strong); stroke-width: 2; marker-end: url(#arrow); }
+    .arrow.bad { stroke: var(--red); } .arrow.good { stroke: var(--green); }
+    .divider { stroke: #dce7f5; stroke-width: 1.2; stroke-dasharray: 5 7; }
+
+    .visible-section { margin-top: 18px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 16px; align-items: start; }
+    .panel { background: rgba(255,255,255,.78); border: 1px solid #e4edf8; border-radius: 18px; padding: 16px; box-shadow: 0 10px 30px rgba(34,54,84,.05); }
+    .panel h2 { margin: 0 0 9px; font-size: 17px; letter-spacing: -.01em; }
+    .matrix { width: 100%; border-collapse: collapse; overflow-wrap: anywhere; }
+    .matrix th, .matrix td { text-align: left; vertical-align: top; border-top: 1px solid #e5edf7; padding: 9px 8px; }
+    .matrix th { color: #314866; font-size: 12px; background: #f7faff; }
+    .matrix td { color: var(--muted); font-size: 13px; }
+    .matrix td:first-child { color: var(--ink); font-weight: 700; width: 29%; }
+    .checklist { margin: 0; padding-left: 18px; color: var(--muted); }
+    .checklist li { margin: 6px 0; }
+    .callout { margin-top: 14px; border-left: 4px solid var(--blue); background: #f5f9ff; padding: 11px 13px; border-radius: 12px; color: var(--muted); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eef4fb; border-radius: 6px; padding: 1px 5px; color: #24415f; }
+
+    @media (max-width: 760px) {
+      main { width: min(100% - 22px, 680px); padding-top: 18px; }
+      .desktop-svg { display: none; }
+      .mobile-flow { display: grid; gap: 10px; }
+      .step { border: 1px solid #dce7f5; background: rgba(255,255,255,.82); border-radius: 16px; padding: 12px; }
+      .step strong { display: block; margin-bottom: 4px; }
+      .step.bad { border-color: #e9aab1; background: #fff8f8; }
+      .step.good { border-color: #95d3b8; background: #f5fff9; }
+      .step.warn { border-color: #dfbc75; background: #fffaf0; }
+      .connector { text-align: center; color: var(--line-strong); font-weight: 800; }
+      .visible-section { grid-template-columns: 1fr; }
+      .matrix th:nth-child(3), .matrix td:nth-child(3) { display: none; }
+    }
+    @media (min-width: 761px) { .mobile-flow { display: none; } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>交付验收：HTML图关键细节不再藏进点击详情</h1>
+    <p class="subtitle">本图静态展示现象、根因、修法、验证和回滚；没有点击弹窗，关闭 JavaScript 也能读懂。</p>
+    <div class="legend" aria-label="图例">
+      <span class="pill"><span class="dot red"></span>故障口径</span>
+      <span class="pill"><span class="dot green"></span>修正规则</span>
+      <span class="pill"><span class="dot amber"></span>验证门禁</span>
+    </div>
+  </header>
+
+  <section class="diagram-wrap" aria-labelledby="flowTitle">
+    <h2 class="diagram-title" id="flowTitle">前后对照流程：从“点击后才知道”改为“静态可读，点击仅补充”</h2>
+    <svg class="desktop-svg" viewBox="0 0 1120 760" role="img" aria-labelledby="svgTitle svgDesc">
+      <title id="svgTitle">HTML 图关键细节外显门禁</title>
+      <desc id="svgDesc">左侧是旧问题流程，右侧是修复后流程；所有关键细节在图中可见。</desc>
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#6f89ad" /></marker>
+      </defs>
+      <line class="divider" x1="560" y1="56" x2="560" y2="708" />
+      <text class="zone-label" x="58" y="42">Before：旧逃逸口</text>
+      <text class="zone-sub" x="58" y="62">点击弹窗承载关键细节，截图和静态阅读不完整</text>
+      <text class="zone-label" x="622" y="42">After：新门禁</text>
+      <text class="zone-sub" x="622" y="62">关键细节外显，弹窗仅补充原始长材料</text>
+
+      <circle class="event" cx="100" cy="112" r="13" />
+      <text class="txt-title" x="128" y="107">S1 用户看到 HTML</text>
+      <text class="txt" x="128" y="127">主图只有标题/卡片摘要</text>
+      <path class="arrow bad" d="M100 132 V182" />
+
+      <rect class="shape bad" x="56" y="190" rx="18" ry="18" width="410" height="86" />
+      <text class="txt-title" x="80" y="218">A1 关键规则被放进 data-body / 弹窗</text>
+      <text class="txt" x="80" y="241">例如：业务链路复现条件、接口口径、风险回滚</text>
+      <text class="small" x="80" y="261">问题：不点击就不知道判断依据</text>
+      <path class="arrow bad" d="M261 276 V326" />
+
+      <polygon class="shape bad" points="261,332 338,382 261,432 184,382" />
+      <text class="txt-title" x="229" y="375">是否点击？</text>
+      <text class="txt" x="220" y="397">否 = 信息缺失</text>
+      <path class="arrow bad" d="M261 432 V486" />
+
+      <rect class="shape bad" x="56" y="494" rx="18" ry="18" width="410" height="98" />
+      <text class="txt-title" x="80" y="523">R1 根因：规则允许“详情承载细节”</text>
+      <text class="txt" x="80" y="546">旧文案：长解释、证据、输入输出、风险进入点击弹窗</text>
+      <text class="small" x="80" y="568">结果：弹窗变成唯一信息源</text>
+      <path class="arrow bad" d="M261 592 V646" />
+      <circle class="event" cx="261" cy="674" r="16" fill="#b23a48" />
+      <text class="txt-title" x="292" y="670">E1 静态图不完整</text>
+      <text class="txt" x="292" y="690">截图、移动端预览、无 JS 均读不全</text>
+
+      <circle class="event" cx="660" cy="112" r="13" />
+      <text class="txt-title" x="688" y="107">S1 生成 HTML 前自检</text>
+      <text class="txt" x="688" y="127">先问：不点击能否读懂？</text>
+      <path class="arrow good" d="M660 132 V182" />
+
+      <rect class="shape good" x="616" y="190" rx="18" ry="18" width="430" height="94" />
+      <text class="txt-title" x="640" y="217">F1 新增关键细节外显规则</text>
+      <text class="txt" x="640" y="240">结论、根因、修法、AC、契约、测试、风险回滚必须可见</text>
+      <text class="small" x="640" y="263">弹窗只补充日志/SQL/JSON/源码摘录等长材料</text>
+      <path class="arrow good" d="M831 284 V330" />
+
+      <polygon class="shape warn" points="831,336 918,391 831,446 744,391" />
+      <text class="txt-title" x="794" y="383">无点击可读？</text>
+      <text class="txt" x="792" y="405">否：必须重画</text>
+      <path class="arrow good" d="M831 446 V494" />
+
+      <rect class="shape good" x="616" y="502" rx="18" ry="18" width="430" height="98" />
+      <text class="txt-title" x="640" y="530">V1 测试锁定门禁</text>
+      <text class="txt" x="640" y="553">新增 essential_details 测试 + AGENTS 注入断言</text>
+      <text class="small" x="640" y="575">RED 已失败；GREEN 已通过；最终回归已通过，见下方矩阵</text>
+      <path class="arrow good" d="M831 600 V650" />
+      <circle class="end" cx="831" cy="678" r="16" />
+      <text class="txt-title" x="862" y="674">E1 交付标准</text>
+      <text class="txt" x="862" y="694">主图、旁注、矩阵承载关键细节</text>
+    </svg>
+
+    <div class="mobile-flow" aria-label="移动端纵向流程">
+      <div class="step bad"><strong>Before S1：用户看到 HTML</strong>主图只有标题/卡片摘要；业务链路复现条件、接口口径、风险回滚被塞进点击详情。</div>
+      <div class="connector">↓</div>
+      <div class="step bad"><strong>R1 根因</strong>旧规则允许“长解释、证据、输入输出、风险进入点击弹窗”，导致弹窗成为唯一信息源。</div>
+      <div class="connector">↓</div>
+      <div class="step good"><strong>After F1：关键细节外显</strong>结论、根因、修法、AC、契约、测试矩阵、风险回滚必须静态可见；弹窗只补充原始长材料。</div>
+      <div class="connector">↓</div>
+      <div class="step warn"><strong>V1 门禁</strong>如果关闭 JavaScript 或不点击任何节点仍读不懂主结论，必须重画。</div>
+    </div>
+  </section>
+
+  <section class="visible-section" aria-label="可见契约和验证矩阵">
+    <article class="panel">
+      <h2>关键契约（全部静态可见）</h2>
+      <table class="matrix">
+        <thead><tr><th>规则</th><th>必须可见的内容</th><th>弹窗允许内容</th></tr></thead>
+        <tbody>
+          <tr><td>C1 外显</td><td>结论、主路径、根因、修法、验证状态、待确认项。</td><td>重复说明、复制文本、放大查看。</td></tr>
+          <tr><td>C2 契约</td><td>验收标准、规则口径、接口/DB 契约、测试矩阵。</td><td>长 SQL、长 JSON、原始命令输出。</td></tr>
+          <tr><td>C3 风险</td><td>风险、回滚、剩余未覆盖点、方案优缺点。</td><td>原始日志、源码摘录、截图说明。</td></tr>
+          <tr><td>C4 Fail</td><td>关闭 JS 或不点击仍要读懂；否则重画。</td><td>不得承载唯一信息源。</td></tr>
+        </tbody>
+      </table>
+    </article>
+    <article class="panel">
+      <h2>本轮验证状态</h2>
+      <ul class="checklist">
+        <li>Baseline：<code>17 passed, 7 deselected</code>。</li>
+        <li>RED：新增 essential_details 后按预期失败。</li>
+        <li>GREEN：写入规则后 <code>1 passed, 16 deselected</code>。</li>
+        <li>回归：tests/test_builtin_skills_injection.py 为 17 passed；模板协议为 1 passed, 7 deselected；skill 校验通过；空白检查通过。</li>
+      </ul>
+      <div class="callout">回滚：恢复 <code>vibe-diagram/SKILL.md</code> 的点击详情相关规则，移除新增测试与本节文档；不涉及 DB、配置、依赖或发送链路。</div>
+    </article>
+  </section>
+</main>
+</body>
+</html>

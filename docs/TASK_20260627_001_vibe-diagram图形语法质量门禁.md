@@ -840,6 +840,7 @@
 | 模板协议 | `BOT_TOKEN=123:ABC /opt/homebrew/bin/python3.11 -m pytest -q tests/test_agents_template_migration.py -k html_visual` | `1 passed, 7 deselected` | 确认 AGENTS 模板触发协议仍有效。 |
 | skill 校验 | `/opt/homebrew/bin/python3.11 /Users/david/.codex/skills/.system/skill-creator/scripts/quick_validate.py vibego_cli/data/skills/vibe-diagram` | `Skill is valid!` | 确认 skill 结构有效。 |
 | Python 编译 | `/opt/homebrew/bin/python3.11 -m py_compile tests/test_builtin_skills_injection.py` | 通过，无输出 | 测试文件语法有效。 |
+| HTML 静态检查 | `/opt/homebrew/bin/python3.11 - <<'PY' ...` | `HTML visible-detail check passed` | 确认交付验收 HTML 无弹窗隐藏详情、无外链且关键契约静态可见。 |
 | Diff 空白检查 | `git diff --check` | 通过，无输出 | 确认无尾随空格或空白错误。 |
 
 ### 24.6 实施顺序
@@ -864,4 +865,82 @@
 - [x] 已补 RED 测试并看到预期失败。
 - [x] 已完成 `SKILL.md` 最小契约修正。
 - [x] 已更新 AGENTS Facts Table。
+- [x] 已执行最终回归、skill 校验、语法检查和空白检查。
+
+## 25. 第 18 轮修复：关键细节不得隐藏在点击详情里
+
+### 25.1 用户新增反馈
+
+用户基于实际生成的 HTML 截图指出：大量关键细节被放进卡片点击后的详情弹窗里，读者需要逐个点击才能看到业务链路复现条件、规则口径或判断依据。
+
+结论：该反馈成立。`vibe-diagram` 旧规则虽然写了“点击只做补充”，但多处具体规则又要求“长解释、证据、输入输出、风险进入点击弹窗”，给模型留下了把关键细节藏进弹窗的逃逸口。
+
+### 25.2 根因
+
+1. `vibego_cli/data/skills/vibe-diagram/SKILL.md` 旧规则只强调主图节点短句化，没有明确“哪些细节必须静态可见”。
+2. 旧规则允许把“输入输出、风险、证据、详细解释”放入点击弹窗，容易被模型理解成弹窗可承载唯一信息源。
+3. 旧测试覆盖了卡片堆、方向、标题和流程图语法，但没有专门锁定“关闭 JavaScript 或不点击节点也必须读懂主结论”。
+
+### 25.3 契约变更
+
+新增 `关键细节外显规则`：
+
+1. 关键细节必须直接呈现在主图或紧邻主图的可见区域。
+2. 点击详情只能用于补充、放大或复制主图已可见的信息。
+3. 不得把验收标准、规则口径、接口/DB 契约、测试矩阵、风险回滚、根因证据或方案优缺点仅放入弹窗。
+4. 弹窗不得承载唯一信息源。
+5. 如果关闭 JavaScript 或不点击任何节点仍读不懂主结论，必须重画。
+6. 节点可短句化，但不能短到只剩标题；必要时用旁注、轨道标注、可见矩阵或轻量证据表承载关键细节。
+
+### 25.4 受影响目录
+
+| 路径 | 是否影响 | 说明 |
+| --- | --- | --- |
+| `vibego_cli/data/skills/vibe-diagram/SKILL.md` | 是 | 新增关键细节外显规则，并收紧点击弹窗、视觉质量、业务流程和故障排查规则。 |
+| `tests/test_builtin_skills_injection.py` | 是 | 新增 `test_vibe_diagram_must_not_hide_essential_details_behind_click_details`，并同步检查 AGENTS 注入内容。 |
+| `AGENTS.md` | 是 | Facts Table 同步“弹窗不得承载唯一信息源”的仓库事实。 |
+| `docs/TASK_20260627_001_vibe-diagram图形语法质量门禁.md` | 是 | 追加本轮问题、根因、契约、验证、风险与回滚。 |
+| `docs/TASK_20260629_002_HTML图关键细节外显门禁.html` | 是 | 单文件 HTML 交付验收图；所有实质信息静态可见，无点击隐藏细节。 |
+| `AGENTS-template.md` | 否 | 模板只负责触发 HTML 图；具体制图细节由内置 skill 注入。 |
+| 运行链路 / Telegram 发送链路 | 否 | 本轮只改制图协议与测试，不改 HTML 文件收集、发送或附件回传逻辑。 |
+| DB / 配置 / 构建依赖 | 否 | 无数据库、配置项、依赖或 CI 变更。 |
+
+### 25.5 测试矩阵
+
+| 阶段 | 命令 | 结果 | 说明 |
+| --- | --- | --- | --- |
+| Baseline | `BOT_TOKEN=123:ABC /opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py tests/test_agents_template_migration.py -k "vibe_diagram or html_visual"` | `17 passed, 7 deselected` | 修改前受影响规则测试基线通过。 |
+| RED | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k essential_details` | `1 failed` | 新测试确认旧规则缺少“关键细节外显、弹窗不得承载唯一信息源”门禁。 |
+| GREEN | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k essential_details` | `1 passed, 16 deselected` | 写入新规则后聚焦测试通过。 |
+| 回归 | `/opt/homebrew/bin/python3.11 -m pytest -q tests/test_builtin_skills_injection.py` | `17 passed` | 覆盖内置 skill、示例 HTML 与 AGENTS 同步注入。 |
+| 模板协议 | `BOT_TOKEN=123:ABC /opt/homebrew/bin/python3.11 -m pytest -q tests/test_agents_template_migration.py -k html_visual` | `1 passed, 7 deselected` | 确认 AGENTS 模板触发协议仍有效。 |
+| skill 校验 | `/opt/homebrew/bin/python3.11 /Users/david/.codex/skills/.system/skill-creator/scripts/quick_validate.py vibego_cli/data/skills/vibe-diagram` | `Skill is valid!` | 确认 skill 结构有效。 |
+| Python 编译 | `/opt/homebrew/bin/python3.11 -m py_compile tests/test_builtin_skills_injection.py` | 通过，无输出 | 测试文件语法有效。 |
+| Diff 空白检查 | `git diff --check` | 通过，无输出 | 确认无尾随空格或空白错误。 |
+
+### 25.6 实施顺序
+
+1. 读取 AGENTS、当前 `vibe-diagram` skill、内置 skill 测试与历史任务文档。
+2. 跑受影响测试 baseline。
+3. 先新增失败测试，锁定“关键细节不得只存在于点击弹窗”。
+4. 最小更新 `vibe-diagram/SKILL.md`，消除旧规则中“把关键解释放弹窗”的逃逸口。
+5. 更新 AGENTS Facts Table、任务文档和静态 HTML 交付验收图。
+6. 执行聚焦测试、完整内置 skill 回归、模板协议、skill 校验、语法检查和空白检查。
+
+### 25.7 风险与回滚
+
+| 风险 | 影响 | 回滚方式 |
+| --- | --- | --- |
+| 主图信息变多后视觉拥挤 | 中 | 保留短句化，但用旁注、轻量矩阵和纵向卷轴承载关键细节；回滚本节新增的关键细节外显规则。 |
+| 模型误解为完全禁止弹窗 | 低 | 规则保留弹窗作为补充原始材料、放大或复制信息的渐进增强。 |
+| 旧 worker 仍使用旧 skill | 中 | 重启 worker 或重新同步 AGENTS 后生效。 |
+| 仍有模型把信息换名藏进弹窗 | 中 | 继续按“弹窗不得承载唯一信息源”补反向测试和示例检查。 |
+
+### 25.8 Checklist
+
+- [x] 已确认截图中的核心缺陷是“关键细节被点击详情承载”。
+- [x] 已补 RED 测试并看到预期失败。
+- [x] 已完成 `SKILL.md` 最小契约修正。
+- [x] 已更新 AGENTS Facts Table。
+- [x] 已生成静态 HTML 交付验收图。
 - [x] 已执行最终回归、skill 校验、语法检查和空白检查。

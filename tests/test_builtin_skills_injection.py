@@ -195,6 +195,19 @@ def test_vibe_diagram_fault_diagram_rejects_vertical_card_timeline_escape_hatch(
     assert "必须重画为流程图、因果链、泳道、时序轴或状态转换图" in skill_text
 
 
+def test_vibe_diagram_must_not_hide_essential_details_behind_click_details() -> None:
+    """HTML 图的关键细节必须静态可读，点击弹窗只能做补充，不能成为唯一信息源。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "关键细节必须直接呈现在主图或紧邻主图的可见区域" in skill_text
+    assert "点击详情只能用于补充、放大或复制主图已可见的信息" in skill_text
+    assert "不得把验收标准、规则口径、接口/DB 契约、测试矩阵、风险回滚、根因证据或方案优缺点仅放入弹窗" in skill_text
+    assert "弹窗不得承载唯一信息源" in skill_text
+    assert "如果关闭 JavaScript 或不点击任何节点仍读不懂主结论，必须重画" in skill_text
+
+
 def test_vibe_diagram_visual_quality_rejects_raw_utilitarian_svg() -> None:
     """HTML 图不能只是粗糙可用的 SVG 草图，视觉质量也要服务读图。"""
 
@@ -367,6 +380,8 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "前后对照只是容器，不是图形语法本身" in synced_text
     assert "故障排查图主路径不得由一列同形圆角卡片承担" in synced_text
     assert "隐藏节点正文后只剩一列卡片和弱连接线" in synced_text
+    assert "关键细节必须直接呈现在主图或紧邻主图的可见区域" in synced_text
+    assert "弹窗不得承载唯一信息源" in synced_text
     assert "禁止交付原始工程草图感的 SVG" in synced_text
     assert "浅色背景默认以白色为主色" in synced_text
     assert "白色背景不能是扁平纯白" in synced_text
