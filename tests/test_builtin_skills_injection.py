@@ -375,6 +375,90 @@ def test_vibe_diagram_multi_candidate_rules_cover_all_diagram_types() -> None:
     assert "每个候选必须有明确差异维度、适用边界、推荐理由和回滚或调整成本" in skill_text
 
 
+def test_vibe_diagram_diagram_type_shape_contracts_are_explicit() -> None:
+    """每一种图型都必须声明它应该长成什么样，避免继续退化成文字平铺。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "## 各图型形态与布局契约" in skill_text
+    assert "系统架构图必须长成北向南分层拓扑" in skill_text
+    assert "业务架构图 / 领域地图必须长成能力层 + 对象关系 + 规则约束" in skill_text
+    assert "业务流程图必须长成 BPMN-light 流程" in skill_text
+    assert "代码时序图必须长成参与者列 + 时间自上而下" in skill_text
+    assert "每一步调用、返回、抛出、异步回调都占独立消息行" in skill_text
+    assert "状态 / 数据模型图必须长成状态机、ER-lite 或生命周期" in skill_text
+    assert "故障排查图必须长成因果链、流程化对照或排障时序图" in skill_text
+    assert "页面设计稿必须长成页面线框 / artboard" in skill_text
+    assert "技术设计图必须长成模块 / 契约 / 数据 / 发布回滚的落地设计图" in skill_text
+    assert "需求 / 决策沟通图必须长成决策树或方案矩阵与主路径绑定" in skill_text
+    assert "如果某类图无法按上述形态画出主谓宾关系，必须换图型" in skill_text
+
+
+def test_vibe_diagram_layout_arrow_and_collision_rules_are_explicit() -> None:
+    """skill 必须定义画布利用、箭头锚点、防重叠和文字防溢出的硬门禁。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "## 布局、箭头与防重叠算法门禁" in skill_text
+    assert "画布先分配主轴和泳道，再放节点，最后连线" in skill_text
+    assert "宽度用于承载泳道、参与者列、before/after 或局部对照" in skill_text
+    assert "高度用于承载时间、阶段、因果递进和证据展开" in skill_text
+    assert "节点先排版后连线" in skill_text
+    assert "箭头只能连接节点边缘锚点" in skill_text
+    assert "北向南主线使用下边缘到上边缘锚点" in skill_text
+    assert "代码时序图消息箭头必须连接参与者生命线中心或消息端点" in skill_text
+    assert "禁止箭头穿过节点正文" in skill_text
+    assert "节点间距不得小于 16px，主路径阶段间距不得小于 28px" in skill_text
+    assert "同层节点必须等高或按内容自适应后统一留白" in skill_text
+    assert "连线层必须低于节点层" in skill_text
+    assert "节点正文必须使用 HTML/CSS 可换行容器" in skill_text
+    assert "必须通过 max-width、min-height、line-height、overflow-wrap:anywhere" in skill_text
+    assert "不得用固定高度裁切文字" in skill_text
+    assert "如果任一节点重叠、线穿字、文字溢出，必须重排" in skill_text
+    assert "必须用桌面宽度和 390px 宽度分别检查" in skill_text
+
+
+def test_vibe_diagram_fault_debugging_dedicated_skeleton_prioritizes_current_chain() -> None:
+    """故障排查图应先画当前现状链路，再把证据、根因、修法和回滚贴到链路上。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "## 故障排查图专用骨架" in skill_text
+    assert "故障排查图必须先画当前现状链路，再画根因和修法" in skill_text
+    assert "现象 / 影响 → 当前现状链路 → 证据裁决 → 根因或最高可疑点 → 修法 → 验证 / 回滚" in skill_text
+    assert "现状链路必须展示当前代码、接口、状态、配置或运行路径如何一步步走到问题点" in skill_text
+    assert "证据必须贴在现状链路节点上" in skill_text
+    assert "假设裁决只能作为证据到根因的旁路" in skill_text
+    assert "根因节点必须落在现状链路上" in skill_text
+    assert "修法节点必须明确切断、替换、补偿或兜底哪一段故障链路" in skill_text
+    assert "验证 / 回滚闭环必须贴近修法节点" in skill_text
+    assert "小故障用单图因果链" in skill_text
+    assert "链路故障用代码时序排障图" in skill_text
+    assert "影响两处以上用 before/after 流程化对照" in skill_text
+
+
+def test_vibe_diagram_feature_iteration_dedicated_skeleton_prioritizes_current_and_diff() -> None:
+    """功能迭代图应先画当前功能和实现，再把目标、差异、验证和发布闭环映射上去。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "## 功能迭代 / 开发设计图专用骨架" in skill_text
+    assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" in skill_text
+    assert "当前功能主路径 → 当前开发实现链路 → 目标主路径 → 差异映射 → 验证与发布闭环" in skill_text
+    assert "当前功能主路径必须说明用户现在入口、动作、状态和结果" in skill_text
+    assert "当前开发实现链路必须说明前端入口、API、服务、DB/状态、中间件或异步任务" in skill_text
+    assert "差异映射必须把新增 / 修改 / 删除 / 不变 / 风险 / 回滚贴到对应节点" in skill_text
+    assert "不得只画目标方案" in skill_text
+    assert "体验变更用 before/after 用户主路径对照" in skill_text
+    assert "技术链路变更用 current/target 技术时序或数据流对照" in skill_text
+    assert "大迭代用用户体验层 → 系统实现层 → 验证发布层" in skill_text
+    assert "AC、测试矩阵、灰度发布、监控和回滚动作必须贴近差异节点" in skill_text
+
+
 def test_worker_start_failure_diagram_uses_wrapping_html_nodes() -> None:
     """当前 worker 启动失败图应使用可换行 HTML 节点，避免 SVG text 溢出。"""
 
@@ -478,6 +562,15 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "## 多方案 / 多候选表达规则" in synced_text
     assert "3-5 个默认候选只适用于页面设计稿方向评审" in synced_text
     assert "真实移动端不得把横向滚动作为唯一阅读路径" in synced_text
+    assert "## 各图型形态与布局契约" in synced_text
+    assert "代码时序图必须长成参与者列 + 时间自上而下" in synced_text
+    assert "## 布局、箭头与防重叠算法门禁" in synced_text
+    assert "箭头只能连接节点边缘锚点" in synced_text
+    assert "如果任一节点重叠、线穿字、文字溢出，必须重排" in synced_text
+    assert "## 故障排查图专用骨架" in synced_text
+    assert "故障排查图必须先画当前现状链路，再画根因和修法" in synced_text
+    assert "## 功能迭代 / 开发设计图专用骨架" in synced_text
+    assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" in synced_text
     assert "视觉风格可以调整，但不得覆盖制图硬规则" in synced_text
     assert "前序用户约束必须同时满足" in synced_text
     assert "避免蓝色底、灰色底、米黄纸张感背景" in synced_text

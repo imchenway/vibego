@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>故障排查：vibe-diagram 缺少先看全貌的骨架</title>
+    <style>
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            color: #172033;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", system-ui, sans-serif;
+            line-height: 1.55;
+            background: radial-gradient(circle at 10% 4%, rgba(219, 234, 254, .72), transparent 28rem), linear-gradient(rgba(37, 99, 235, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(37, 99, 235, .045) 1px, transparent 1px), #fbfdff;
+            background-size: auto, 28px 28px, 28px 28px, auto
+        }
+
+        main {
+            width: min(1160px, calc(100vw - 28px));
+            margin: auto;
+            padding: 30px 0 56px
+        }
+
+        h1 {
+            font-size: clamp(22px, 3vw, 30px);
+            margin: 0 0 8px;
+            letter-spacing: -.02em
+        }
+
+        .lead {
+            margin: 0 0 18px;
+            color: #5f6d7d
+        }
+
+        .canvas {
+            border: 1px solid rgba(37, 99, 235, .16);
+            background: rgba(255, 255, 255, .82);
+            border-radius: 28px;
+            box-shadow: 0 20px 60px rgba(30, 64, 175, .10);
+            padding: 18px;
+            overflow: hidden
+        }
+
+        .spine {
+            display: grid;
+            grid-template-columns:repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            align-items: stretch
+        }
+
+        .step {
+            position: relative;
+            min-width: 0;
+            border: 1px solid rgba(148, 163, 184, .3);
+            background: #fff;
+            border-radius: 18px;
+            padding: 14px;
+            overflow-wrap: anywhere
+        }
+
+        .step b {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 5px
+        }
+
+        .step p {
+            margin: 0;
+            color: #64748b;
+            font-size: 12px
+        }
+
+        .step:not(:last-child)::after {
+            content: "";
+            position: absolute;
+            right: -12px;
+            top: 50%;
+            width: 14px;
+            height: 2px;
+            background: #9bb4d6
+        }
+
+        .step:not(:last-child)::before {
+            content: "";
+            position: absolute;
+            right: -13px;
+            top: calc(50% - 4px);
+            border-left: 8px solid #9bb4d6;
+            border-top: 5px solid transparent;
+            border-bottom: 5px solid transparent;
+            z-index: 1
+        }
+
+        .bad {
+            border-color: rgba(220, 38, 38, .28);
+            background: linear-gradient(180deg, #fff1f2, #fff)
+        }
+
+        .ok {
+            border-color: rgba(22, 163, 74, .28);
+            background: linear-gradient(180deg, #f0fdf4, #fff)
+        }
+
+        .why {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns:1fr 1fr;
+            gap: 14px
+        }
+
+        .lane {
+            border: 1px solid rgba(148, 163, 184, .26);
+            border-radius: 22px;
+            background: #fff;
+            padding: 15px
+        }
+
+        .lane h2 {
+            font-size: 16px;
+            margin: 0 0 10px
+        }
+
+        .list {
+            display: grid;
+            gap: 9px
+        }
+
+        .item {
+            display: grid;
+            grid-template-columns:34px minmax(0, 1fr);
+            gap: 10px;
+            align-items: start
+        }
+
+        .badge {
+            width: 28px;
+            height: 28px;
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            font-weight: 900;
+            background: #eff6ff;
+            color: #1d4ed8
+        }
+
+        .item b {
+            display: block
+        }
+
+        .item span {
+            display: block;
+            color: #64748b;
+            font-size: 12px
+        }
+
+        .rule {
+            margin-top: 18px;
+            border: 1px solid rgba(22, 163, 74, .24);
+            border-radius: 22px;
+            background: linear-gradient(180deg, rgba(240, 253, 244, .86), rgba(255, 255, 255, .92));
+            padding: 16px
+        }
+
+        .rule h2 {
+            font-size: 17px;
+            margin: 0 0 8px;
+            color: #166534
+        }
+
+        .checks {
+            display: grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 10px
+        }
+
+        .check {
+            border: 1px solid rgba(22, 163, 74, .18);
+            border-radius: 16px;
+            padding: 11px;
+            background: #fff;
+            overflow-wrap: anywhere
+        }
+
+        .check b {
+            font-size: 13px
+        }
+
+        .check p {
+            margin: 4px 0 0;
+            color: #64748b;
+            font-size: 12px
+        }
+
+        .decision {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns:repeat(4, minmax(0, 1fr));
+            gap: 10px
+        }
+
+        .choice {
+            border: 1px solid rgba(148, 163, 184, .26);
+            background: #fff;
+            border-radius: 16px;
+            padding: 11px
+        }
+
+        .choice.reco {
+            border-color: rgba(22, 163, 74, .3);
+            background: #f0fdf4
+        }
+
+        .choice b {
+            display: block;
+            font-size: 13px
+        }
+
+        .choice p {
+            margin: 4px 0 0;
+            color: #64748b;
+            font-size: 12px
+        }
+
+        @media (max-width: 860px) {
+            main {
+                width: min(100vw - 18px, 430px)
+            }
+
+            .spine {
+                grid-template-columns:1fr
+            }
+
+            .step:not(:last-child)::after {
+                right: 50%;
+                top: auto;
+                bottom: -12px;
+                width: 2px;
+                height: 14px
+            }
+
+            .step:not(:last-child)::before {
+                right: calc(50% - 4px);
+                top: auto;
+                bottom: -15px;
+                border-top: 8px solid #9bb4d6;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-bottom: 0
+            }
+
+            .why, .checks, .decision {
+                grid-template-columns:1fr
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>故障排查：vibe-diagram 缺少先看全貌的骨架</h1>
+        <p class="lead">结论：当前规则管住了“不要卡片堆”，但还没强制“首屏先用 5 秒骨架讲清来龙去脉”。</p>
+    </header>
+
+    <section class="canvas" aria-label="故障主链路">
+        <div class="spine" aria-label="五秒可读的目标骨架">
+            <div class="step"><b>1 业务想 WARN</b>
+                <p>DpsException 携带 WARN 语义。</p></div>
+            <div class="step bad"><b>2 缺业务 handler</b>
+                <p>没有命中专门异常处理。</p></div>
+            <div class="step bad"><b>3 落入兜底</b>
+                <p>Exception.class 接管未知异常。</p></div>
+            <div class="step bad"><b>4 兜底打 ERROR</b>
+                <p>显式传 ERROR 覆盖 WARN。</p></div>
+            <div class="step ok"><b>5 补 handler 验证</b>
+                <p>按异常自身级别输出。</p></div>
+        </div>
+
+        <div class="why">
+            <div class="lane">
+                <h2>为什么截图仍吃力</h2>
+                <div class="list">
+                    <div class="item">
+                        <div class="badge">R1</div>
+                        <div><b>先细节，后全貌</b><span>顶部根因大段文字抢在全貌骨架之前。</span></div>
+                    </div>
+                    <div class="item">
+                        <div class="badge">R2</div>
+                        <div><b>链路被拆成两列</b><span>业务异常链和日志输出链需要读者自己拼接。</span></div>
+                    </div>
+                    <div class="item">
+                        <div class="badge">R3</div>
+                        <div><b>视觉权重接近</b><span>证据、规则、判断、结果、修法几乎同等重量。</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="lane">
+                <h2>应该强制的新门禁</h2>
+                <div class="list">
+                    <div class="item">
+                        <div class="badge">F1</div>
+                        <div><b>首屏先放全貌骨架</b><span>5-7 个短节点串成一句因果话。</span></div>
+                    </div>
+                    <div class="item">
+                        <div class="badge">F2</div>
+                        <div><b>故障图先答四问</b><span>发生什么、为什么、改哪里、怎么验证。</span></div>
+                    </div>
+                    <div class="item">
+                        <div class="badge">F3</div>
+                        <div><b>遮正文读图测试</b><span>只看标题和箭头仍能读出主链路。</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rule">
+            <h2>推荐修法：全类型加“全貌优先 / 5 秒读图”规则</h2>
+            <div class="checks">
+                <div class="check"><b>发生了什么</b>
+                    <p>先用一个节点说明用户可见现象。</p></div>
+                <div class="check"><b>为什么</b>
+                    <p>根因压成一跳因果，不先堆长文。</p></div>
+                <div class="check"><b>改哪里</b>
+                    <p>修法必须落在骨架路径上。</p></div>
+                <div class="check"><b>怎么验证</b>
+                    <p>验证和回滚接在修法后。</p></div>
+            </div>
+        </div>
+
+        <div class="decision" aria-label="待决策项">
+            <div class="choice"><b>A 只修故障图</b>
+                <p>快，但其他类型仍可能费解。</p></div>
+            <div class="choice reco"><b>B 推荐：全类型门禁</b>
+                <p>所有图先全貌，再细节；故障图加四问。</p></div>
+            <div class="choice"><b>C 人工注意</b>
+                <p>不改规则，容易复发。</p></div>
+            <div class="choice"><b>D 先重绘样例</b>
+                <p>可视化验证后再改 skill。</p></div>
+        </div>
+    </section>
+</main>
+</body>
+</html>

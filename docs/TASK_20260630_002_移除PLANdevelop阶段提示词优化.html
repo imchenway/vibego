@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>交付验收：PLAN/develop 已迁移为 Skill 路由内核</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #172033;
+            --muted: #64748b;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .88);
+            --line: #8aa3c7;
+            --blue: #2563eb;
+            --blue-soft: #eaf2ff;
+            --green: #0f766e;
+            --green-soft: #e8fffb;
+            --amber: #b45309;
+            --amber-soft: #fff7e8;
+            --red: #b91c1c;
+            --red-soft: #fff1f1;
+            --violet: #6d28d9;
+            --violet-soft: #f4edff;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.52;
+            background: linear-gradient(90deg, rgba(37, 99, 235, .035) 1px, transparent 1px), linear-gradient(180deg, rgba(37, 99, 235, .035) 1px, transparent 1px), radial-gradient(circle at 14% 8%, rgba(37, 99, 235, .09), transparent 26rem), radial-gradient(circle at 86% 12%, rgba(15, 118, 110, .06), transparent 24rem), var(--paper);
+            background-size: 28px 28px, 28px 28px, auto, auto, auto;
+        }
+
+        main {
+            width: min(1240px, calc(100vw - 32px));
+            margin: 26px auto 46px;
+        }
+
+        h1 {
+            margin: 0 0 6px;
+            font-size: clamp(20px, 2.6vw, 29px);
+            letter-spacing: -.02em;
+        }
+
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+            max-width: 98ch;
+        }
+
+        .verdict {
+            margin: 16px 0 18px;
+            padding: 14px 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(126, 148, 179, .34);
+            border-left: 6px solid var(--green);
+            background: var(--panel);
+            box-shadow: 0 18px 52px rgba(30, 64, 175, .07);
+        }
+
+        .verdict strong {
+            color: var(--green);
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color: #1d4ed8;
+            overflow-wrap: anywhere;
+        }
+
+        .canvas {
+            padding: 18px;
+            border-radius: 24px;
+            border: 1px solid rgba(126, 148, 179, .35);
+            background: rgba(255, 255, 255, .78);
+            box-shadow: 0 24px 68px rgba(15, 23, 42, .08);
+            overflow: hidden;
+        }
+
+        .canvas h2 {
+            margin: 0 0 16px;
+            font-size: 16px;
+            color: #263550;
+        }
+
+        .pipeline {
+            display: grid;
+            grid-template-columns: 1.08fr 76px 1.16fr 76px 1fr;
+            grid-template-areas: "old a1 kernel a2 skills" "risk risk kernel output output";
+            gap: 16px 0;
+            align-items: stretch;
+        }
+
+        .lane {
+            border-radius: 22px;
+            border: 1px solid rgba(126, 148, 179, .3);
+            background: rgba(255, 255, 255, .84);
+            padding: 15px;
+            min-width: 0;
+        }
+
+        .old {
+            grid-area: old;
+        }
+
+        .kernel {
+            grid-area: kernel;
+        }
+
+        .skills {
+            grid-area: skills;
+        }
+
+        .risk {
+            grid-area: risk;
+        }
+
+        .output {
+            grid-area: output;
+        }
+
+        .lane h3 {
+            margin: 0 0 12px;
+            font-size: 16px;
+            display: flex;
+            gap: 9px;
+            align-items: center;
+        }
+
+        .badge {
+            flex: 0 0 auto;
+            width: 30px;
+            height: 30px;
+            border-radius: 12px;
+            display: grid;
+            place-items: center;
+            color: white;
+            font-weight: 900;
+            font-size: 12px;
+        }
+
+        .red {
+            background: var(--red);
+        }
+
+        .green {
+            background: var(--green);
+        }
+
+        .blue {
+            background: var(--blue);
+        }
+
+        .violet {
+            background: var(--violet);
+        }
+
+        .amber {
+            background: var(--amber);
+        }
+
+        .node {
+            min-height: 70px;
+            padding: 11px 12px;
+            border-radius: 16px;
+            border: 1px solid rgba(126, 148, 179, .3);
+            background: rgba(255, 255, 255, .94);
+            overflow-wrap: anywhere;
+        }
+
+        .node + .node {
+            margin-top: 10px;
+        }
+
+        .node b {
+            display: block;
+            margin-bottom: 3px;
+            font-size: 13.5px;
+        }
+
+        .node span {
+            color: var(--muted);
+            font-size: 12.5px;
+            display: block;
+        }
+
+        .node.redline {
+            border-left: 5px solid var(--red);
+            background: var(--red-soft);
+        }
+
+        .node.good {
+            border-left: 5px solid var(--green);
+            background: var(--green-soft);
+        }
+
+        .node.info {
+            border-left: 5px solid var(--blue);
+            background: var(--blue-soft);
+        }
+
+        .node.warn {
+            border-left: 5px solid var(--amber);
+            background: var(--amber-soft);
+        }
+
+        .node.purple {
+            border-left: 5px solid var(--violet);
+            background: var(--violet-soft);
+        }
+
+        .arrow {
+            display: grid;
+            place-items: center;
+            color: var(--line);
+            font-size: 32px;
+            font-weight: 900;
+            position: relative;
+        }
+
+        .arrow::before {
+            content: "";
+            position: absolute;
+            top: 22px;
+            bottom: 22px;
+            left: 50%;
+            width: 1px;
+            background: rgba(138, 163, 199, .35);
+        }
+
+        .arrow span {
+            z-index: 1;
+            width: 44px;
+            height: 44px;
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            background: rgba(255, 255, 255, .92);
+            border: 1px solid rgba(138, 163, 199, .45);
+        }
+
+        .a1 {
+            grid-area: a1;
+        }
+
+        .a2 {
+            grid-area: a2;
+        }
+
+        .matrix {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .option {
+            border-radius: 16px;
+            border: 1px solid rgba(126, 148, 179, .3);
+            background: rgba(255, 255, 255, .78);
+            padding: 12px;
+            min-height: 94px;
+            overflow-wrap: anywhere;
+        }
+
+        .option.reco {
+            border-left: 5px solid var(--green);
+            background: var(--green-soft);
+        }
+
+        .option b {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+
+        .option span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .note {
+            margin: 12px 2px 0;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        @media (max-width: 980px) {
+            .pipeline {
+                grid-template-columns: 1fr;
+                grid-template-areas: "old" "a1" "kernel" "a2" "skills" "risk" "output";
+            }
+
+            .arrow {
+                min-height: 54px;
+            }
+
+            .arrow::before {
+                left: 20px;
+                right: 20px;
+                top: 50%;
+                bottom: auto;
+                width: auto;
+                height: 1px;
+            }
+
+            .matrix {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 520px) {
+            main {
+                width: min(100vw - 20px, 420px);
+                margin-top: 18px;
+            }
+
+            .canvas {
+                padding: 12px;
+                border-radius: 20px;
+            }
+
+            .lane {
+                padding: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>交付验收：PLAN/develop 已迁移为 Skill 路由内核</h1>
+        <p class="subtitle">已按方案 B 落地：全局提示词不再使用显式 PLAN/develop 阶段，改为短的 Global Agent Kernel；活跃
+            vibego/Codex AGENTS 受管区块已同步。</p>
+    </header>
+    <section class="verdict"><strong>已实施：</strong><code>AGENTS-template.md</code> 与 <code>~/.config/vibego/agents/current/AGENTS-template.md</code>
+        已同步为 Global Agent Kernel；<code>~/.config/vibego/AGENTS.md</code> 与 <code>~/.codex/AGENTS.md</code>
+        的受管区块也已同步；测试断言已覆盖“不得再出现 PLAN/develop 长阶段提示词”。
+    </section>
+    <section class="canvas" aria-labelledby="diagram-title">
+        <h2 id="diagram-title">从阶段大提示词迁移到 Skill 路由内核：已选 B</h2>
+        <div class="pipeline">
+            <section class="lane old"><h3><span class="badge red">旧</span>阶段式大提示词</h3>
+                <div class="node redline"><b>问题</b><span>PLAN/develop、前端规则、制图规则、TDD、验收细则全部堆在全局，重复且容易与 skills 打架。</span>
+                </div>
+                <div class="node warn"><b>风险</b><span>删干净会失去兜底；不删又会继续膨胀。</span></div>
+            </section>
+            <div class="arrow a1" aria-hidden="true"><span>→</span></div>
+            <section class="lane kernel"><h3><span class="badge green">核</span>Global Agent Kernel</h3>
+                <div class="node good">
+                    <b>硬边界</b><span>禁 git 修改历史/远端、读仓库规约、事实要证据、未验证不声称完成。</span></div>
+                <div class="node info"><b>路由</b><span>只写何时使用 superpowers、vibe-diagram、frontend-skill、Impeccable、accessibility。</span>
+                </div>
+                <div class="node purple"><b>交付</b><span>docs、HTML、验证摘要、最终字段保留在全局。</span></div>
+            </section>
+            <div class="arrow a2" aria-hidden="true"><span>→</span></div>
+            <section class="lane skills"><h3><span class="badge blue">技</span>具体流程下沉到 Skills</h3>
+                <div class="node info"><b>superpowers</b><span>brainstorming / writing-plans / TDD / systematic-debugging / verification。</span>
+                </div>
+                <div class="node info"><b>vibe-diagram</b><span>图型、布局、HTML、附件交付、质量门禁。</span></div>
+                <div class="node info"><b>frontend + Impeccable</b><span>视觉、交互、响应式、可访问性和高级 UI。</span>
+                </div>
+            </section>
+            <section class="lane risk"><h3><span class="badge amber">守</span>不要下沉的内容</h3>
+                <div class="node warn">
+                    <b>必须留全局</b><span>git 禁令、证据模式、docs 沉淀、HTML 交付边界、验证前不得声称完成、最终字段。</span>
+                </div>
+            </section>
+            <section class="lane output"><h3><span class="badge green">选</span>决策建议</h3>
+                <div class="matrix">
+                    <div class="option"><b>A. 全删</b><span>最轻，但失去兜底，不推荐。</span></div>
+                    <div class="option reco"><b>B. 去阶段名 + 保留路由内核 🌟</b><span>已落地：不再叫 PLAN/develop，但保留质量门禁、skill routing、HTML/docs/验证收尾。</span>
+                    </div>
+                    <div class="option"><b>C. 全部技能化</b><span>进一步拆自定义 skill，成本更高。</span></div>
+                </div>
+            </section>
+        </div>
+        <p class="note">设计与实施记录：<code>docs/TASK_20260630_002_移除PLANdevelop阶段提示词优化.md</code>；验证：<code>python3.11
+            -m pytest -q tests/test_agents_template_migration.py</code> → 9 passed。</p>
+    </section>
+</main>
+</body>
+</html>

@@ -1,6 +1,9 @@
 """AGENTS 模板文件名迁移测试。"""
 
+import os
 from pathlib import Path
+
+os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
 
 import bot
 
@@ -44,7 +47,8 @@ def test_shell_defaults_use_agents_template() -> None:
     assert 'DEFAULT_AGENTS_TEMPLATE="$SOURCE_ROOT/AGENTS-template.md"' in run_bot_text
     assert 'CANDIDATE_VENV_TEMPLATE="$VENV_ROOT_FROM_SOURCE/AGENTS-template.md"' in run_bot_text
     assert '[[ -n "${VIRTUAL_ENV:-}" && -f "$VIRTUAL_ENV/AGENTS-template.md" ]]' in run_bot_text
-    assert 'AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$ROOT_DIR/AGENTS-template.md}"' in start_tmux_text
+    assert 'DEFAULT_AGENTS_TEMPLATE="$(select_agents_template_file "$ROOT_DIR/AGENTS-template.md" "start-tmux")"' in start_tmux_text
+    assert 'AGENTS_TEMPLATE_FILE="${VIBEGO_AGENTS_TEMPLATE:-$DEFAULT_AGENTS_TEMPLATE}"' in start_tmux_text
     assert 'local template="${2:-$ROOT_DIR/AGENTS-template.md}"' in common_text
 
 
@@ -71,16 +75,28 @@ def test_readme_links_point_to_agents_template() -> None:
     assert "repository `AGENTS-template.md`" in readme_en
 
 
-def test_agents_template_requires_comet_for_complex_workflows() -> None:
-    """AGENTS 模板应要求所有用户任务默认优先使用 Comet。"""
+def test_agents_template_uses_global_skill_kernel_without_plan_develop_phases() -> None:
+    """AGENTS 模板应收敛为 skill router kernel，不再内置 PLAN/develop 长阶段提示词。"""
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "## Comet 自动调用规则" in template_text
-    assert "必须优先启用 `comet` skill" in template_text
-    assert "所有用户任务默认必须走 Comet 工作流" in template_text
-    assert "不因为任务看起来简单而跳过 Comet" in template_text
-    assert "不可因自动启用 Comet 而跳过用户决策点" in template_text
+    assert "# Global Agent Kernel" in template_text
+    assert "## Skill routing" in template_text
+    assert "superpowers:brainstorming" in template_text
+    assert "superpowers:systematic-debugging" in template_text
+    assert "superpowers:test-driven-development" in template_text
+    assert "superpowers:verification-before-completion" in template_text
+    assert "vibe-diagram" in template_text
+    assert "frontend-skill" in template_text
+    assert "impeccable" in template_text
+    assert "accessibility" in template_text
+    assert "不要自行执行 git commit/push/merge/revert" in template_text
+    assert "证据不足写“待确认/推断”" in template_text
+    assert "任务编码：- ; 任务名称：- ;" in template_text
+    assert "## plan 阶段" not in template_text
+    assert "## develop 阶段" not in template_text
+    assert "PLAN-> develop" not in template_text
+    assert "vibe -> design -> develop" not in template_text
 
 
 def test_agents_template_requires_claudecode_like_communication() -> None:
@@ -88,9 +104,9 @@ def test_agents_template_requires_claudecode_like_communication() -> None:
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "## Claude Code 风格表达规则" in template_text
-    assert "先给结论，再给原因、修法和验证方式" in template_text
-    assert "少用术语、少贴过程日志、少堆文件清单" in template_text
+    assert "## Reply contract" in template_text
+    assert "默认先结论，少噪音" in template_text
+    assert "现象 -> 影响 -> 根因 -> 修法 -> 验证" in template_text
 
 
 def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks() -> None:
@@ -98,18 +114,11 @@ def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "## HTML 图形沟通默认协议" in template_text
-    assert "非琐碎任务默认优先使用 `vibe-diagram` skill" in template_text
-    assert "AGENTS 负责判断何时触发；`vibe-diagram` 负责具体制图约束" in template_text
-    assert "功能迭代或开发设计：必须先用 HTML 图展示现状、目标方案、前后差异、影响面、测试矩阵、风险与回滚" in template_text
-    assert "缺陷排查：必须用 HTML 图展示现象、影响、证据链、可疑节点、已确认根因、高亮根因节点、修法、验证与回滚" in template_text
-    assert "系统/功能理解：必须用 HTML 图展示组件、依赖、中间件、DB、MQ/队列语义、关键调用链或业务规则" in template_text
-    assert "用户明确要求不要画图、只要一句话、或任务是琐碎格式转换时，可不生成 HTML" in template_text
-    assert "## HTML-only 交付信封模式" in template_text
-    assert "所有实质内容必须进入项目内单文件 HTML" in template_text
-    assert "文本回复只允许作为交付信封" in template_text
-    assert "不得在聊天文本里展开分析、方案、证据链、测试矩阵或验收总结" in template_text
-    assert "Codex 默认只输出可点击 `file://` 链接与绝对路径兜底" in template_text
+    assert "## Visual and frontend contract" in template_text
+    assert "非琐碎设计、排障、架构、流程、技术方案和交付验收优先使用 vibe-diagram" in template_text
+    assert "AGENTS 只判断何时触发，具体制图规则以 vibe-diagram 为准" in template_text
+    assert "HTML-only" in template_text
+    assert "所有实质内容写入项目内单文件 HTML" in template_text
     assert "Telegram 来源只输出项目内 `.html/.htm` 路径" in template_text
 
 
@@ -118,8 +127,5 @@ def test_agents_template_compresses_text_after_html_delivery() -> None:
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "## HTML 图交付后的文本压缩规则" in template_text
-    assert "生成或修改 HTML 图后，聊天回复只保留交付信封、验证摘要和待执行动作" in template_text
-    assert "不得重复展开 HTML 内已有的分析、证据链、测试矩阵和风险回滚" in template_text
-    assert "需要完整总结时写入 HTML 或 docs" in template_text
-    assert "不要通过大幅删除 AGENTS 约束来降噪" in template_text
+    assert "生成 HTML 后聊天只给链接/路径、验证摘要和下一步" in template_text
+    assert "分析、证据链、测试矩阵和风险回滚写入 HTML 或 docs" in template_text

@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：故障排查与功能迭代必须重点设计</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #172033;
+            --muted: #657287;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .88);
+            --line: #8aa3c7;
+            --line-soft: rgba(138, 163, 199, .32);
+            --blue: #2563eb;
+            --blue-soft: #eaf2ff;
+            --green: #0f766e;
+            --green-soft: #e9fffb;
+            --red: #b91c1c;
+            --red-soft: #fff1f1;
+            --amber: #b45309;
+            --amber-soft: #fff7e8;
+            --violet: #6d28d9;
+            --violet-soft: #f4edff;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.52;
+            background: linear-gradient(90deg, rgba(37, 99, 235, .035) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(37, 99, 235, .035) 1px, transparent 1px),
+            radial-gradient(circle at 15% 8%, rgba(37, 99, 235, .09), transparent 26rem),
+            radial-gradient(circle at 86% 12%, rgba(15, 118, 110, .06), transparent 24rem),
+            var(--paper);
+            background-size: 28px 28px, 28px 28px, auto, auto, auto;
+        }
+
+        main {
+            width: min(1260px, calc(100vw - 32px));
+            margin: 26px auto 46px;
+        }
+
+        h1 {
+            margin: 0 0 6px;
+            font-size: clamp(20px, 2.6vw, 29px);
+            letter-spacing: -.02em;
+        }
+
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+            max-width: 98ch;
+        }
+
+        .verdict {
+            margin: 16px 0 18px;
+            padding: 14px 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(126, 148, 179, .34);
+            border-left: 6px solid var(--green);
+            background: var(--panel);
+            box-shadow: 0 18px 52px rgba(30, 64, 175, .07);
+        }
+
+        .verdict strong {
+            color: var(--green);
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color: #1d4ed8;
+            overflow-wrap: anywhere;
+        }
+
+        .canvas {
+            position: relative;
+            padding: 18px;
+            border-radius: 24px;
+            border: 1px solid rgba(126, 148, 179, .35);
+            background: rgba(255, 255, 255, .78);
+            box-shadow: 0 24px 68px rgba(15, 23, 42, .08);
+            overflow: hidden;
+        }
+
+        .canvas h2 {
+            margin: 0 0 16px;
+            font-size: 16px;
+            color: #263550;
+        }
+
+        .fork {
+            position: relative;
+            display: grid;
+            grid-template-columns: 1fr 78px 1fr;
+            grid-template-areas:
+        "fault spine feature"
+        "fault spine feature"
+        "matrix matrix matrix";
+            gap: 16px;
+            align-items: stretch;
+        }
+
+        .spine {
+            grid-area: spine;
+            position: relative;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            align-items: center;
+            justify-items: center;
+            min-height: 620px;
+            color: var(--muted);
+        }
+
+        .spine::before {
+            content: "";
+            position: absolute;
+            top: 54px;
+            bottom: 54px;
+            left: 50%;
+            width: 2px;
+            transform: translateX(-50%);
+            background: linear-gradient(var(--line-soft), rgba(37, 99, 235, .38), var(--line-soft));
+        }
+
+        .spine-pill {
+            z-index: 2;
+            width: 72px;
+            min-height: 72px;
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            padding: 8px;
+            background: rgba(255, 255, 255, .92);
+            border: 1px solid rgba(138, 163, 199, .45);
+            box-shadow: 0 14px 34px rgba(15, 23, 42, .08);
+            font-size: 12px;
+            font-weight: 900;
+            color: #29405f;
+        }
+
+        .lane {
+            position: relative;
+            z-index: 1;
+            padding: 16px;
+            border-radius: 22px;
+            border: 1px solid rgba(126, 148, 179, .3);
+            background: rgba(255, 255, 255, .82);
+            min-width: 0;
+        }
+
+        .fault {
+            grid-area: fault;
+        }
+
+        .feature {
+            grid-area: feature;
+        }
+
+        .lane-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 14px;
+            min-height: 54px;
+        }
+
+        .mark {
+            flex: 0 0 auto;
+            width: 34px;
+            height: 34px;
+            border-radius: 12px;
+            display: grid;
+            place-items: center;
+            font-weight: 900;
+            color: white;
+        }
+
+        .mark.red {
+            background: var(--red);
+        }
+
+        .mark.blue {
+            background: var(--blue);
+        }
+
+        .lane-header h3 {
+            margin: 0 0 3px;
+            font-size: 16px;
+        }
+
+        .lane-header p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .steps {
+            position: relative;
+            display: grid;
+            gap: 12px;
+            padding-left: 14px;
+        }
+
+        .steps::before {
+            content: "";
+            position: absolute;
+            left: 24px;
+            top: 22px;
+            bottom: 22px;
+            width: 2px;
+            background: var(--line-soft);
+        }
+
+        .step {
+            position: relative;
+            display: grid;
+            grid-template-columns: 28px minmax(0, 1fr);
+            gap: 10px;
+            align-items: start;
+            z-index: 2;
+        }
+
+        .dot {
+            width: 22px;
+            height: 22px;
+            margin-top: 8px;
+            border-radius: 999px;
+            border: 3px solid white;
+            background: var(--blue);
+            box-shadow: 0 0 0 1px rgba(126, 148, 179, .45), 0 8px 18px rgba(15, 23, 42, .08);
+        }
+
+        .fault .dot {
+            background: var(--red);
+        }
+
+        .card {
+            min-height: 74px;
+            padding: 11px 12px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, .94);
+            border: 1px solid rgba(126, 148, 179, .32);
+            overflow-wrap: anywhere;
+        }
+
+        .card strong {
+            display: block;
+            margin-bottom: 3px;
+            font-size: 14px;
+        }
+
+        .card span {
+            color: var(--muted);
+            font-size: 12.5px;
+        }
+
+        .card.red {
+            border-left: 5px solid var(--red);
+            background: var(--red-soft);
+        }
+
+        .card.green {
+            border-left: 5px solid var(--green);
+            background: var(--green-soft);
+        }
+
+        .card.amber {
+            border-left: 5px solid var(--amber);
+            background: var(--amber-soft);
+        }
+
+        .card.violet {
+            border-left: 5px solid var(--violet);
+            background: var(--violet-soft);
+        }
+
+        .card.blue {
+            border-left: 5px solid var(--blue);
+            background: var(--blue-soft);
+        }
+
+        .matrix {
+            grid-area: matrix;
+            margin-top: 2px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .decision {
+            padding: 12px;
+            border-radius: 16px;
+            border: 1px solid rgba(126, 148, 179, .3);
+            background: rgba(255, 255, 255, .78);
+            min-height: 92px;
+            overflow-wrap: anywhere;
+        }
+
+        .decision.reco {
+            border-left: 5px solid var(--green);
+            background: var(--green-soft);
+        }
+
+        .decision b {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+
+        .decision span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .note {
+            margin: 12px 2px 0;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        @media (max-width: 980px) {
+            .fork {
+                grid-template-columns: 1fr;
+                grid-template-areas: "fault" "spine" "feature" "matrix";
+            }
+
+            .spine {
+                min-height: 86px;
+                grid-template-columns: auto 1fr auto;
+                grid-template-rows: 1fr;
+                width: 100%;
+            }
+
+            .spine::before {
+                left: 54px;
+                right: 54px;
+                top: 50%;
+                bottom: auto;
+                width: auto;
+                height: 2px;
+                transform: translateY(-50%);
+            }
+
+            .matrix {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 560px) {
+            main {
+                width: min(100vw - 20px, 420px);
+                margin-top: 18px;
+            }
+
+            .canvas {
+                padding: 12px;
+                border-radius: 20px;
+            }
+
+            .lane {
+                padding: 12px;
+            }
+
+            .lane-header {
+                min-height: auto;
+            }
+
+            .matrix {
+                grid-template-columns: 1fr;
+            }
+
+            .steps {
+                padding-left: 6px;
+            }
+
+            .steps::before {
+                left: 16px;
+            }
+
+            .step {
+                grid-template-columns: 22px minmax(0, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>需求决策：故障排查与功能迭代必须重点设计</h1>
+        <p class="subtitle">
+            这两类图的任务不是“画结论”，而是让用户理解当前代码/功能现状，并在此基础上判断修复或迭代是否可信。</p>
+    </header>
+
+    <section class="verdict" aria-label="推荐结论">
+        <strong>推荐：</strong>为故障排查与功能迭代新增专用骨架。二者都必须先画“当前现状”，再画证据裁决、差异映射、修法/目标、验证与回滚。
+    </section>
+
+    <section class="canvas" aria-labelledby="diagram-title">
+        <h2 id="diagram-title">两类高价值图的专用骨架</h2>
+        <div class="fork">
+            <section class="lane fault" aria-label="故障排查专用骨架">
+                <div class="lane-header">
+                    <div class="mark red">F</div>
+                    <div>
+                        <h3>故障排查：从现象追到根因</h3>
+                        <p>用户要看懂故障如何沿当前链路发生，以及修法如何切断问题链路。</p>
+                    </div>
+                </div>
+                <div class="steps">
+                    <div class="step"><span class="dot"></span>
+                        <div class="card red"><strong>1. 现象 /
+                            影响</strong><span>用户看到什么，影响范围和触发条件是什么。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card"><strong>2. 当前代码 /
+                            系统链路</strong><span>接口、函数、状态、配置或运行路径如何一步步走到问题点。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card amber"><strong>3.
+                            证据裁决</strong><span>E1/E2/E3 贴在链路节点上，区分成立、排除、待验证。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card red"><strong>4. 根因 R# / 可疑点
+                            H#</strong><span>根因必须落在主路径节点上，不能漂在说明区。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card green"><strong>5. 修法
+                            F#</strong><span>明确切断、替换、补偿或兜底哪一段故障链路。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card green"><strong>6. 验证 / 回滚
+                            V#</strong><span>验证命令、结果状态、回滚动作和剩余风险形成闭环。</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <div class="spine" aria-hidden="true">
+                <div class="spine-pill">先看<br>现状</div>
+                <div class="spine-pill">再判<br>变化</div>
+                <div class="spine-pill">最后<br>闭环</div>
+            </div>
+
+            <section class="lane feature" aria-label="功能迭代专用骨架">
+                <div class="lane-header">
+                    <div class="mark blue">I</div>
+                    <div>
+                        <h3>功能迭代：从当前设计走到目标设计</h3>
+                        <p>用户要看懂当前功能和实现怎么工作，目标改变哪里，风险如何控制。</p>
+                    </div>
+                </div>
+                <div class="steps">
+                    <div class="step"><span class="dot"></span>
+                        <div class="card blue"><strong>1.
+                            当前功能主路径</strong><span>用户现在入口、动作、状态和结果是什么。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card"><strong>2.
+                            当前开发实现链路</strong><span>前端入口、API、服务、DB/状态、中间件或异步任务。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card violet"><strong>3.
+                            目标主路径</strong><span>改完后用户如何操作，体验和业务规则怎样变化。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card amber"><strong>4. 差异映射</strong><span>新增 / 修改 / 删除 / 不变 / 风险 / 回滚都落到对应节点。</span>
+                        </div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card green"><strong>5.
+                            实现与发布闭环</strong><span>接口、DB、模块、权限、幂等、观测、灰度和回滚动作。</span></div>
+                    </div>
+                    <div class="step"><span class="dot"></span>
+                        <div class="card green"><strong>6. AC /
+                            测试矩阵</strong><span>验收标准、关键用例、边界、失败态和未覆盖风险。</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="matrix" aria-label="方案选择">
+                <div class="decision"><b>A. 轻补丁</b><span>只补强调语句，成本低，但仍可能画成普通说明图。</span></div>
+                <div class="decision reco"><b>B. 专用骨架
+                    🌟</b><span>新增两类固定骨架与测试，成本可控，最匹配当前问题。</span></div>
+                <div class="decision"><b>C. 骨架 + 样板</b><span>再追加示例 HTML，稳定性更强，但维护成本更高。</span></div>
+                <div class="decision">
+                    <b>验收口径</b><span>两类图都必须先画现状，再把证据、差异、测试、回滚贴到主路径。</span></div>
+            </section>
+        </div>
+        <p class="note">已按 B 方案实施：新增 <code>故障排查图专用骨架</code> 与 <code>功能迭代 /
+            开发设计图专用骨架</code>，并用测试锁定。详见同名 Markdown 的 develop 实施记录。</p>
+    </section>
+</main>
+</body>
+</html>

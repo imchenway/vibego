@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>交付验收：vibe-diagram 全图型语法执行门禁</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #172033;
+            --muted: #66748a;
+            --line: #8aa3c7;
+            --line-soft: rgba(138, 163, 199, .35);
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .88);
+            --blue: #2563eb;
+            --blue-soft: #eaf2ff;
+            --green: #0f766e;
+            --green-soft: #e7fffb;
+            --amber: #b45309;
+            --amber-soft: #fff7e8;
+            --red: #b91c1c;
+            --red-soft: #fff1f1;
+            --violet: #6d28d9;
+            --violet-soft: #f3ecff;
+            --radius: 18px;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.52;
+            background: linear-gradient(90deg, rgba(37, 99, 235, .035) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(37, 99, 235, .035) 1px, transparent 1px),
+            radial-gradient(circle at 14% 8%, rgba(37, 99, 235, .09), transparent 25rem),
+            radial-gradient(circle at 86% 16%, rgba(15, 118, 110, .06), transparent 26rem),
+            var(--paper);
+            background-size: 28px 28px, 28px 28px, auto, auto, auto;
+        }
+
+        main {
+            width: min(1240px, calc(100vw - 32px));
+            margin: 26px auto 46px;
+        }
+
+        header {
+            margin-bottom: 18px;
+        }
+
+        h1 {
+            margin: 0 0 6px;
+            font-size: clamp(20px, 2.6vw, 29px);
+            letter-spacing: -.02em;
+        }
+
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+            max-width: 96ch;
+        }
+
+        .verdict {
+            margin: 16px 0 18px;
+            padding: 14px 16px;
+            border: 1px solid rgba(126, 148, 179, .36);
+            border-left: 6px solid var(--green);
+            border-radius: var(--radius);
+            background: var(--panel);
+            box-shadow: 0 18px 52px rgba(30, 64, 175, .07);
+        }
+
+        .verdict strong {
+            color: var(--green);
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color: #1d4ed8;
+            overflow-wrap: anywhere;
+        }
+
+        .canvas {
+            position: relative;
+            padding: 18px;
+            border: 1px solid rgba(126, 148, 179, .35);
+            border-radius: 24px;
+            background: rgba(255, 255, 255, .78);
+            box-shadow: 0 24px 68px rgba(15, 23, 42, .08);
+            overflow: hidden;
+        }
+
+        .canvas h2 {
+            margin: 0 0 16px;
+            font-size: 16px;
+            color: #263550;
+        }
+
+        .flow {
+            position: relative;
+            display: grid;
+            grid-template-columns: minmax(260px, .86fr) 70px minmax(360px, 1.24fr) 70px minmax(270px, .9fr);
+            grid-template-areas:
+        "input arrow1 contract arrow2 algorithm"
+        "evidence evidence contract gate algorithm";
+            gap: 18px 0;
+            align-items: stretch;
+            min-height: 520px;
+        }
+
+        .lane {
+            position: relative;
+            z-index: 1;
+            border-radius: 22px;
+            border: 1px solid rgba(126, 148, 179, .28);
+            background: rgba(255, 255, 255, .78);
+            padding: 14px;
+            min-width: 0;
+        }
+
+        .lane-title {
+            margin: 0 0 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #32415c;
+            font-weight: 800;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            height: 28px;
+            border-radius: 999px;
+            background: var(--blue-soft);
+            color: var(--blue);
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .node {
+            position: relative;
+            z-index: 2;
+            padding: 12px 13px;
+            border-radius: 16px;
+            border: 1px solid rgba(126, 148, 179, .36);
+            background: rgba(255, 255, 255, .92);
+            min-height: 72px;
+            overflow-wrap: anywhere;
+        }
+
+        .node + .node {
+            margin-top: 12px;
+        }
+
+        .node strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 14px;
+        }
+
+        .node p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .node.problem {
+            border-left: 5px solid var(--red);
+            background: var(--red-soft);
+        }
+
+        .node.fix {
+            border-left: 5px solid var(--green);
+            background: var(--green-soft);
+        }
+
+        .node.warn {
+            border-left: 5px solid var(--amber);
+            background: var(--amber-soft);
+        }
+
+        .node.seq {
+            border-left: 5px solid var(--violet);
+            background: var(--violet-soft);
+        }
+
+        .contract {
+            grid-area: contract;
+        }
+
+        .input {
+            grid-area: input;
+        }
+
+        .algorithm {
+            grid-area: algorithm;
+        }
+
+        .evidence {
+            grid-area: evidence;
+            align-self: start;
+        }
+
+        .gate {
+            grid-area: gate;
+            align-self: end;
+        }
+
+        .arrow-col {
+            position: relative;
+            min-height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--line);
+            font-weight: 900;
+            font-size: 34px;
+        }
+
+        .arrow-col::before {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 22px;
+            bottom: 22px;
+            width: 1px;
+            background: var(--line-soft);
+            transform: translateX(-50%);
+        }
+
+        .arrow-col span {
+            z-index: 2;
+            width: 46px;
+            height: 46px;
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            background: rgba(255, 255, 255, .9);
+            border: 1px solid rgba(138, 163, 199, .4);
+            box-shadow: 0 12px 28px rgba(15, 23, 42, .06);
+        }
+
+        .arrow1 {
+            grid-area: arrow1;
+        }
+
+        .arrow2 {
+            grid-area: arrow2;
+        }
+
+        .type-map {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 9px;
+        }
+
+        .type-cell {
+            min-height: 74px;
+            padding: 10px;
+            border-radius: 14px;
+            background: rgba(248, 251, 255, .86);
+            border: 1px solid rgba(126, 148, 179, .26);
+            overflow-wrap: anywhere;
+        }
+
+        .type-cell b {
+            display: block;
+            font-size: 13px;
+            margin-bottom: 2px;
+        }
+
+        .type-cell span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .gate .node {
+            min-height: 104px;
+            border-radius: 20px;
+            transform: rotate(0deg);
+            border-color: rgba(180, 83, 9, .45);
+            background: linear-gradient(135deg, rgba(255, 247, 232, .95), rgba(255, 255, 255, .9));
+        }
+
+        .checklist {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .check {
+            padding: 12px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, .76);
+            border: 1px solid rgba(126, 148, 179, .3);
+            min-height: 88px;
+            overflow-wrap: anywhere;
+        }
+
+        .check b {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+
+        .check span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .footer-note {
+            margin: 14px 2px 0;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        @media (max-width: 980px) {
+            .flow {
+                grid-template-columns: 1fr;
+                grid-template-areas:
+          "input"
+          "arrow1"
+          "contract"
+          "gate"
+          "arrow2"
+          "algorithm"
+          "evidence";
+                min-height: 0;
+            }
+
+            .arrow-col {
+                min-height: 44px;
+                font-size: 28px;
+            }
+
+            .arrow-col::before {
+                left: 20px;
+                right: 20px;
+                top: 50%;
+                bottom: auto;
+                width: auto;
+                height: 1px;
+                transform: translateY(-50%);
+            }
+
+            .type-map {
+                grid-template-columns: 1fr;
+            }
+
+            .checklist {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 520px) {
+            main {
+                width: min(100vw - 20px, 420px);
+                margin-top: 18px;
+            }
+
+            .canvas {
+                padding: 12px;
+                border-radius: 20px;
+            }
+
+            .lane {
+                padding: 12px;
+            }
+
+            .node {
+                min-height: auto;
+            }
+
+            .checklist {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>交付验收：vibe-diagram 全图型语法执行门禁</h1>
+        <p class="subtitle">本轮不是再加摘要，而是把“每类图必须长成什么形态、箭头锚点如何落、节点如何防重叠和文字如何防溢出”固化到
+            skill 与测试。</p>
+    </header>
+
+    <section class="verdict" aria-label="结论">
+        <strong>结论：</strong>图型名称必须绑定真实图形语法。时序图必须是参与者列 +
+        时间自上而下；流程图必须有事件、活动、判断和箭头；其他图型也都新增了明确形态与布局算法门禁。
+    </section>
+
+    <section class="canvas" aria-labelledby="main-diagram-title">
+        <h2 id="main-diagram-title">从用户纠偏到 skill 门禁的落地路径</h2>
+        <div class="flow">
+            <section class="lane input" aria-label="输入纠偏">
+                <h3 class="lane-title"><span class="badge">01</span>输入纠偏</h3>
+                <div class="node problem">
+                    <strong>旧问题：文字平铺</strong>
+                    <p>虽然不再粗暴堆卡片，但读者仍要逐块阅读；没有清晰层级、时间或因果递进。</p>
+                </div>
+                <div class="node seq">
+                    <strong>会话证据：时序图被纠偏</strong>
+                    <p><code>019f135c...</code> 中用户指出“你管这叫代码时序图？”随后修正为参与者列、生命线、时间向下、箭头精确连接。
+                    </p>
+                </div>
+            </section>
+
+            <div class="arrow-col arrow1" aria-hidden="true"><span>→</span></div>
+
+            <section class="lane contract" aria-label="各图型形态契约">
+                <h3 class="lane-title"><span class="badge">02</span>各图型必须先长对</h3>
+                <div class="type-map">
+                    <div class="type-cell"><b>系统架构</b><span>北向南分层拓扑</span></div>
+                    <div class="type-cell"><b>业务架构</b><span>能力层 + 对象关系 + 规则约束</span></div>
+                    <div class="type-cell"><b>业务流程</b><span>BPMN-light：事件 / 活动 / 判断 / 箭头</span></div>
+                    <div class="type-cell"><b>代码时序</b><span>参与者列 + 生命线 + 时间自上而下</span></div>
+                    <div class="type-cell"><b>状态 / 数据</b><span>状态机、ER-lite 或生命周期</span></div>
+                    <div class="type-cell"><b>故障排查</b><span>因果链、流程化对照或排障时序</span></div>
+                    <div class="type-cell"><b>页面设计稿</b><span>页面线框 / artboard / 状态变体</span></div>
+                    <div class="type-cell"><b>技术设计</b><span>模块 / 契约 / 数据 / 发布回滚</span></div>
+                    <div class="type-cell"><b>需求决策</b><span>决策树或方案矩阵绑定主路径</span></div>
+                    <div class="type-cell"><b>换图型门禁</b><span>无法画出主谓宾关系就换图型</span></div>
+                </div>
+            </section>
+
+            <section class="lane gate" aria-label="形态判断">
+                <h3 class="lane-title"><span class="badge">03</span>形态判断</h3>
+                <div class="node warn">
+                    <strong>当前图型能否表达主谓宾？</strong>
+                    <p>不能表达“谁作用于谁 / 什么导致什么 / 数据从哪到哪 /
+                        状态如何转移”时，禁止靠标题硬命名，必须换图型。</p>
+                </div>
+            </section>
+
+            <div class="arrow-col arrow2" aria-hidden="true"><span>→</span></div>
+
+            <section class="lane algorithm" aria-label="布局算法门禁">
+                <h3 class="lane-title"><span class="badge">04</span>布局算法门禁</h3>
+                <div class="node fix">
+                    <strong>先分配画布</strong>
+                    <p>宽度放泳道、参与者列、before/after；高度放时间、阶段、因果递进和证据展开。</p>
+                </div>
+                <div class="node fix">
+                    <strong>先节点后连线</strong>
+                    <p>节点尺寸、间距、旁注位置先确定；箭头只连边缘锚点或时序生命线中心。</p>
+                </div>
+                <div class="node fix">
+                    <strong>失败即重排</strong>
+                    <p>节点重叠、线穿字、文字溢出、390px 不可读，任一出现都不能交付。</p>
+                </div>
+            </section>
+
+            <section class="lane evidence" aria-label="验证闭环">
+                <h3 class="lane-title"><span class="badge">05</span>验证闭环</h3>
+                <div class="node">
+                    <strong>测试锁定规则</strong>
+                    <p>新增 shape contract、layout/arrow/collision 两个测试，并扩展 AGENTS 注入测试，确保 pipx/AGENTS
+                        同步后仍保留规则。</p>
+                </div>
+            </section>
+        </div>
+
+        <div class="checklist" aria-label="交付检查点">
+            <div class="check"><b>节点不覆盖</b><span>同层统一留白，最小间距 16px，主路径阶段 28px。</span></div>
+            <div class="check"><b>箭头不穿字</b><span>连线层低于节点层；标签放线段中点或拐点旁。</span></div>
+            <div class="check"><b>文字不溢出</b><span>HTML/CSS 可换行容器，max-width、min-height、line-height、overflow-wrap:anywhere。</span>
+            </div>
+            <div class="check"><b>双宽度检查</b><span>桌面检查宽度利用与锚点；390px 检查纵向降级与无横向依赖。</span>
+            </div>
+        </div>
+        <p class="footer-note">证据文件：<code>vibego_cli/data/skills/vibe-diagram/SKILL.md</code>、<code>tests/test_builtin_skills_injection.py</code>、<code>AGENTS.md</code>、本任务
+            Markdown。</p>
+    </section>
+</main>
+</body>
+</html>
