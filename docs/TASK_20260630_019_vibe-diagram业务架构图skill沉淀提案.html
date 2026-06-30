@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：业务架构图 skill 沉淀提案</title>
+    <style>
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, "Noto Sans SC", sans-serif;
+            color: #102033;
+            background: linear-gradient(90deg, rgba(43, 112, 178, .05) 1px, transparent 1px), linear-gradient(0deg, rgba(43, 112, 178, .05) 1px, transparent 1px), linear-gradient(135deg, #fcfeff, #f3f8ff);
+            background-size: 32px 32px, 32px 32px, 100% 100%;
+            line-height: 1.62
+        }
+
+        main {
+            max-width: 1160px;
+            margin: auto;
+            padding: 36px 24px 72px
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 28px;
+            line-height: 1.24
+        }
+
+        .sub {
+            margin: 0 0 24px;
+            color: #5a6b80
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, .86);
+            border: 1px solid #d8e6f5;
+            border-radius: 24px;
+            padding: 22px 24px;
+            margin: 18px 0;
+            box-shadow: 0 16px 42px rgba(33, 70, 108, .08)
+        }
+
+        .verdict {
+            border-left: 8px solid #1f6fb2
+        }
+
+        .grid {
+            display: grid;
+            gap: 14px
+        }
+
+        .cols2 {
+            grid-template-columns:1fr 1fr
+        }
+
+        .cols3 {
+            grid-template-columns:repeat(3, 1fr)
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid #dce8f6;
+            border-radius: 18px;
+            padding: 16px
+        }
+
+        .card h3 {
+            margin: 0 0 8px;
+            font-size: 16px
+        }
+
+        .tag {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 12px;
+            font-weight: 900;
+            margin-bottom: 8px
+        }
+
+        .yes {
+            background: #e8f6ee;
+            color: #147153
+        }
+
+        .no {
+            background: #ffe9e9;
+            color: #a92323
+        }
+
+        .rec {
+            background: #e8f3ff;
+            color: #175ea8
+        }
+
+        .warn {
+            background: #fff3d8;
+            color: #936000
+        }
+
+        .map {
+            display: grid;
+            grid-template-columns:140px repeat(6, 1fr);
+            gap: 10px;
+            align-items: stretch
+        }
+
+        .lane {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            border-left: 6px solid #1f6fb2;
+            background: #edf6ff;
+            border-radius: 18px;
+            padding: 12px;
+            font-weight: 900;
+            color: #174e83
+        }
+
+        .node {
+            position: relative;
+            background: #fff;
+            border: 1.5px solid #c9dbef;
+            border-radius: 16px;
+            padding: 12px;
+            min-height: 92px
+        }
+
+        .node:after {
+            content: "";
+            position: absolute;
+            right: -10px;
+            top: 50%;
+            width: 10px;
+            height: 3px;
+            background: #9db8d6
+        }
+
+        .node:last-child:after {
+            display: none
+        }
+
+        .node b {
+            display: block;
+            font-size: 13px
+        }
+
+        .node span {
+            display: block;
+            color: #52677e;
+            font-size: 12px;
+            margin-top: 4px
+        }
+
+        .rule {
+            border-radius: 16px;
+            border: 1.5px solid;
+            padding: 12px;
+            min-height: 92px
+        }
+
+        .green {
+            background: #e8f7f0;
+            border-color: #82c9a8
+        }
+
+        .amber {
+            background: #fff5dc;
+            border-color: #dfbd67
+        }
+
+        .red {
+            background: #fff0f0;
+            border-color: #df9090
+        }
+
+        .violet {
+            background: #f0eeff;
+            border-color: #b8afe8
+        }
+
+        .gray {
+            background: #f5f9fe;
+            border-color: #b9cde2
+        }
+
+        .codebox {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #0f1d2f;
+            color: #eaf4ff;
+            border-radius: 18px;
+            padding: 18px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 13px;
+            line-height: 1.6
+        }
+
+        .check li {
+            margin: 8px 0
+        }
+
+        .compare {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid #d9e6f4;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #fff
+        }
+
+        .compare th, .compare td {
+            padding: 12px 14px;
+            border-bottom: 1px solid #e5edf6;
+            vertical-align: top;
+            text-align: left
+        }
+
+        .compare tr:last-child td {
+            border-bottom: 0
+        }
+
+        .compare th {
+            background: #edf5ff
+        }
+
+        .small {
+            color: #60718a;
+            font-size: 13px
+        }
+
+        @media (max-width: 920px) {
+            main {
+                padding: 24px 14px
+            }
+
+            .cols2, .cols3 {
+                grid-template-columns:1fr
+            }
+
+            .map {
+                grid-template-columns:1fr
+            }
+
+            .node:after {
+                right: 50%;
+                top: auto;
+                bottom: -10px;
+                width: 3px;
+                height: 10px
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>需求决策：业务架构图 skill 沉淀提案</h1>
+    <p class="sub">基于 TASK_016、017、018 的试画反馈，沉淀“业务架构图 / 领域地图”应该如何生成。此页是提案，不修改 skill。</p>
+
+    <section class="panel verdict">
+        <h2>可沉淀的核心结论</h2>
+        <p><b>业务架构图不是系统架构图，也不是业务流程图，更不是调研报告。</b>它应该回答：业务由哪些参与方、能力、业务对象、规则和边界构成；用户沿着业务主轴看一遍，就能知道这个业务能力“服务谁、解决什么、靠什么依据、在哪里止步、如何沉淀”。
+        </p>
+    </section>
+
+    <section class="panel">
+        <h2>这次验证出的正反例</h2>
+        <div class="grid cols2">
+            <div class="card"><span class="tag yes">保留</span>
+                <h3>016 / 018 的布局</h3>
+                <p>四层领域地图较稳定：参与方边界、业务能力层、业务对象关系、规则约束热区，再加一个服务结果决策轴。它能保持全局可读，不会像
+                    017 那样拥挤。</p></div>
+            <div class="card"><span class="tag no">避免</span>
+                <h3>017 的对象生命周期强排版</h3>
+                <p>
+                    单轴生命周期在业务架构里容易把横向关系塞得太满，读者会感觉布局乱。该形态可作为局部解释，不适合作为默认业务架构图。</p>
+            </div>
+            <div class="card"><span class="tag yes">保留</span>
+                <h3>018 的业务化内容</h3>
+                <p>把 AppConfig / Session / Scene
+                    等技术对象改写成客服触点、咨询工单、业务场景、服务依据、人工接续、服务质量资产，读起来更像业务图。</p>
+            </div>
+            <div class="card"><span class="tag no">避免</span>
+                <h3>原图的章节卡片报告</h3>
+                <p>摘要、事实口径、能力层、对象关系、规则矩阵各自成章节，会迫使用户上下拼图；这不是“一眼看懂业务结构”。</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>建议写入 skill 的默认骨架</h2>
+        <div class="map" aria-label="业务架构图默认骨架">
+            <div class="lane">参与方边界</div>
+            <div class="node"><b>业务发起方</b><span>谁带着什么诉求进入</span></div>
+            <div class="node"><b>自有业务能力</b><span>谁负责承接与治理</span></div>
+            <div class="node"><b>依据提供方</b><span>业务数据、知识、规则</span></div>
+            <div class="node"><b>人工/外部边界</b><span>何时流出自有能力</span></div>
+            <div class="node"><b>运营闭环方</b><span>谁维护口径和质量</span></div>
+            <div class="node"><b>上下游系统</b><span>仅作为边界，不画部署</span></div>
+
+            <div class="lane">业务能力层</div>
+            <div class="node"><b>触点能力</b><span>统一入口和服务承诺</span></div>
+            <div class="node"><b>识别能力</b><span>分类、补要素、判风险</span></div>
+            <div class="node"><b>履约能力</b><span>查询、SOP、规则计算</span></div>
+            <div class="node"><b>接续能力</b><span>转人工与上下文交接</span></div>
+            <div class="node"><b>运营能力</b><span>反馈、标注、评测</span></div>
+            <div class="node"><b>灰度能力</b><span>开关、回滚和降级</span></div>
+
+            <div class="lane">业务对象关系</div>
+            <div class="node"><b>客服触点</b><span>入口、场景、开关</span></div>
+            <div class="node"><b>咨询工单</b><span>问题、上下文、状态</span></div>
+            <div class="node"><b>业务场景</b><span>风险、要素、服务方式</span></div>
+            <div class="node"><b>服务依据</b><span>知识、数据、规则</span></div>
+            <div class="node"><b>人工接续</b><span>摘要、要素、trace</span></div>
+            <div class="node"><b>质量资产</b><span>反馈、评测、指标</span></div>
+        </div>
+        <div class="grid cols3" style="margin-top:12px">
+            <div class="rule green"><b>身份权限</b><br>贴到触点/咨询工单/业务场景，不做底部说明。</div>
+            <div class="rule amber"><b>真实数据</b><br>贴到服务依据；无依据就不可输出确定结论。</div>
+            <div class="rule red"><b>高风险红线</b><br>贴到对应业务域和服务结果，不只靠颜色表达。</div>
+            <div class="rule violet"><b>人工接续</b><br>贴到接续对象；必须说明上下文不能丢。</div>
+            <div class="rule gray"><b>灰度回滚</b><br>贴到触点或能力开关，说明如何保业务连续性。</div>
+            <div class="rule amber"><b>必填要素</b><br>贴到业务场景，说明缺什么要先补问。</div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>建议写入 skill 的规则清单</h2>
+        <ul class="check">
+            <li><b>先业务化命名：</b>不要把代码对象原样放进主图。AppConfig、Session、Scene、Tool
+                等应翻译为客服触点、咨询工单、业务场景、服务依据等业务对象；技术名可进点击详情。
+            </li>
+            <li><b>首屏只保留一张主领域地图：</b>不要在主图前先放大段摘要卡片、事实口径卡片、证据卡片；摘要最多一行，证据放节点详情。
+            </li>
+            <li><b>主图四层结构：</b>默认采用“参与方边界 → 业务能力层 → 业务对象关系 → 规则约束热区”，必要时加“服务结果/决策轴”。
+            </li>
+            <li><b>规则必须贴对象：</b>身份、权限、真实数据、财务红线、人工接续、回滚等规则要贴在相关对象/能力旁，不得独立堆成底部规则清单。
+            </li>
+            <li><b>能力不是功能清单：</b>能力节点写“服务承诺、业务目标、归属方、输入输出”，不要把接口、表、类名、DDL 当主内容。
+            </li>
+            <li><b>对象关系必须有动词：</b>拥有、提出、承接、产生、约束、查询、交接、沉淀、反哺；没有关系动词就不是领域地图。</li>
+            <li><b>不要误画成流程图：</b>业务架构可以有主轴，但不强调先后办理步骤；如果重点是“先做什么后做什么”，应切换到业务流程图。
+            </li>
+            <li><b>证据进入点击详情：</b>文件路径、行号、DDL、源码锚点、长说明只做节点详情；主图保留证据编号或极短摘要。</li>
+        </ul>
+    </section>
+
+    <section class="panel">
+        <h2>可直接写入 SKILL.md 的草案</h2>
+        <pre class="codebox">## 业务架构图专用骨架
+
+业务架构图 / 领域地图必须默认回答“业务能力如何被角色、对象和规则约束”，而不是回答“系统怎么部署”或“步骤怎么执行”。
+
+默认主骨架：
+`参与方边界 → 业务能力层 → 业务对象关系 → 规则约束热区 → 服务结果 / 决策轴`
+
+执行规则：
+1. 主图必须是一张首屏可读的领域地图；禁止把摘要、事实口径、能力、对象、规则、证据拆成章节化卡片报告。
+2. 参与方边界写清业务发起方、自有能力承接方、依据提供方、人工/外部边界和运营闭环方；上下游系统只能作为业务边界，不得画成部署组件。
+3. 业务能力层写服务承诺、业务目标、归属方、输入输出；禁止把接口、表、类名、DDL 或工具名当作能力主体。
+4. 业务对象必须业务化命名，例如“客服触点、咨询工单、业务场景、服务依据、人工接续、服务质量资产”；技术对象名只能作为点击详情或证据补充。
+5. 对象关系必须用动词显式连接：拥有、提出、承接、产生、约束、查询、交接、沉淀、反哺。没有关系动词就不能称为领域地图。
+6. 规则约束热区必须贴近被约束的对象或能力，至少包含口径、阈值、权限、风险、状态边界或回滚条件；禁止把规则堆到底部当说明表。
+7. 证据、文件路径、源码锚点、DDL 和长说明进入节点点击详情；主图只保留业务结论、关系和必要证据编号。
+8. 如果图的核心变成动作先后、审批流、异常回退，应切换为业务流程图；不要把流程塞进业务架构图。
+
+反例门禁：
+- 如果去掉标题后只剩“摘要卡片 + 事实卡片 + 能力卡片 + 对象卡片 + 规则卡片”，必须重画。
+- 如果主图需要逐段阅读文字才能理解业务结构，而不是沿关系线和分层读懂，必须重画。
+- 如果技术对象名比业务对象名更醒目，必须重写节点命名。</pre>
+    </section>
+
+    <section class="panel">
+        <h2>建议的实施范围</h2>
+        <table class="compare">
+            <thead>
+            <tr>
+                <th>文件</th>
+                <th>建议改动</th>
+                <th>验证</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td><b>vibe-diagram/SKILL.md</b></td>
+                <td>新增“业务架构图专用骨架”和反例门禁；更新业务架构图规则。</td>
+                <td>文本断言覆盖关键短语。</td>
+            </tr>
+            <tr>
+                <td><b>tests/test_builtin_skills_injection.py</b></td>
+                <td>新增测试：业务架构图必须业务化命名、四层主骨架、规则贴对象、禁止章节化卡片报告。</td>
+                <td>先红后绿。</td>
+            </tr>
+            <tr>
+                <td><b>AGENTS.md / 全局 AGENTS</b></td>
+                <td>同步后在 Facts Table 记录业务架构图规则已收敛。</td>
+                <td>agents-sync + 内容检查。</td>
+            </tr>
+            <tr>
+                <td><b>docs/TASK_*.md/html</b></td>
+                <td>沉淀本轮示例、正反例和验证结果。</td>
+                <td>HTMLParser 检查。</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+</main>
+</body>
+</html>

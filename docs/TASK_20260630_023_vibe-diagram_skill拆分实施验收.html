@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>交付验收：vibe-diagram 已拆成薄内核与按图型 reference</title>
+    <style>
+        :root {
+            --ink: #132033;
+            --muted: #5b6c84;
+            --blue: #1468b7;
+            --green: #087a5a;
+            --amber: #a36a00;
+            --red: #b4232d;
+            --line: #cfdfef;
+            --panel: #ffffffdf;
+            --shadow: 0 18px 45px rgba(33, 72, 120, .12)
+        }
+
+        * {
+            box-sizing: border-box;
+            overflow-wrap: anywhere
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: linear-gradient(90deg, rgba(20, 104, 183, .055) 1px, transparent 1px), linear-gradient(0deg, rgba(20, 104, 183, .05) 1px, transparent 1px), radial-gradient(circle at 12% 0%, #f0f8ff 0, transparent 30%), radial-gradient(circle at 90% 8%, #f3fff8 0, transparent 28%), #fbfdff;
+            background-size: 24px 24px, 24px 24px, auto, auto, auto
+        }
+
+        .page {
+            max-width: 1220px;
+            margin: 0 auto;
+            padding: 32px 24px 56px
+        }
+
+        h1 {
+            font-size: 28px;
+            line-height: 1.18;
+            margin: 0 0 8px;
+            letter-spacing: -.02em
+        }
+
+        h2 {
+            font-size: 19px;
+            margin: 0 0 14px
+        }
+
+        .sub {
+            margin: 0;
+            color: var(--muted);
+            max-width: 980px
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns:1.15fr .85fr;
+            gap: 16px;
+            margin: 22px 0
+        }
+
+        .panel, .section {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            padding: 20px
+        }
+
+        .lead {
+            border-left: 6px solid var(--green);
+            padding-left: 16px
+        }
+
+        .headline {
+            font-weight: 900;
+            font-size: 20px;
+            margin: 0 0 8px
+        }
+
+        .badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 13px
+        }
+
+        .badge {
+            border: 1px solid currentColor;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-weight: 800;
+            font-size: 12px;
+            background: #fff
+        }
+
+        .green {
+            color: var(--green);
+            background: #eaf8f2
+        }
+
+        .blue {
+            color: var(--blue);
+            background: #eaf4ff
+        }
+
+        .amber {
+            color: var(--amber);
+            background: #fff6df
+        }
+
+        .red {
+            color: var(--red);
+            background: #fff0f1
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            background: #eef5ff;
+            border-radius: 6px;
+            padding: 1px 5px;
+            font-size: .9em
+        }
+
+        .section {
+            margin-top: 18px
+        }
+
+        .flow {
+            display: grid;
+            grid-template-columns:190px 1fr;
+            gap: 18px;
+            align-items: stretch
+        }
+
+        .layer {
+            border-left: 5px solid var(--blue);
+            background: rgba(234, 244, 255, .82);
+            border-radius: 18px;
+            padding: 16px;
+            min-height: 112px
+        }
+
+        .layer b {
+            display: block;
+            color: var(--blue);
+            font-size: 12px;
+            letter-spacing: .08em
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns:repeat(3, minmax(0, 1fr));
+            gap: 12px
+        }
+
+        .node {
+            background: #fff;
+            border: 1px solid #cfdef0;
+            border-radius: 18px;
+            padding: 14px;
+            min-height: 110px;
+            height: auto
+        }
+
+        .node small {
+            display: inline-block;
+            color: var(--muted);
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: .05em
+        }
+
+        .node strong {
+            display: block;
+            margin: 3px 0 5px;
+            font-size: 15px
+        }
+
+        .node p {
+            margin: 0;
+            color: #40526a
+        }
+
+        .node.ok {
+            border-color: #8ed6bd;
+            background: linear-gradient(180deg, #fff, #f2fff9)
+        }
+
+        .node.warn {
+            border-color: #e8c16f;
+            background: linear-gradient(180deg, #fff, #fff8e4)
+        }
+
+        .node.bad {
+            border-color: #f0a1a8;
+            background: linear-gradient(180deg, #fff, #fff5f6)
+        }
+
+        .down {
+            height: 30px;
+            margin-left: 94px;
+            border-left: 3px solid var(--blue);
+            position: relative
+        }
+
+        .down:after {
+            content: "";
+            position: absolute;
+            left: -7px;
+            bottom: -1px;
+            width: 12px;
+            height: 12px;
+            border-right: 3px solid var(--blue);
+            border-bottom: 3px solid var(--blue);
+            transform: rotate(45deg)
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            overflow: hidden;
+            background: #fff
+        }
+
+        th, td {
+            text-align: left;
+            vertical-align: top;
+            padding: 12px 13px;
+            border-bottom: 1px solid #e7eff8
+        }
+
+        th {
+            background: #f1f7ff;
+            font-size: 13px
+        }
+
+        tr:last-child td {
+            border-bottom: 0
+        }
+
+        .evidence {
+            display: grid;
+            grid-template-columns:repeat(2, minmax(0, 1fr));
+            gap: 12px
+        }
+
+        .ev {
+            background: #fff;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 12px
+        }
+
+        .ev b {
+            display: block;
+            margin-bottom: 4px
+        }
+
+        .foot {
+            color: var(--muted);
+            font-size: 13px;
+            margin-top: 10px
+        }
+
+        @media (max-width: 820px) {
+            .page {
+                padding: 22px 14px 42px
+            }
+
+            h1 {
+                font-size: 22px
+            }
+
+            .hero, .flow, .evidence {
+                grid-template-columns:1fr
+            }
+
+            .grid {
+                grid-template-columns:1fr
+            }
+
+            .down {
+                margin-left: 18px
+            }
+
+            .panel, .section {
+                border-radius: 18px;
+                padding: 16px
+            }
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <header>
+        <h1>交付验收：vibe-diagram 已拆成薄内核与按图型 reference</h1>
+        <p class="sub">本轮按确认的 B 方案落地：常驻内核变短，重规则按图型读取，测试保证同步 AGENTS 只注入索引而不注入全部
+            reference 正文。</p>
+    </header>
+
+    <section class="hero">
+        <div class="panel lead">
+            <p class="headline">结果：已实施并验证通过</p>
+            <p><code>vibe-diagram/SKILL.md</code> 已从 619 行收敛为 138 行薄内核；新增 10 个 <code>references/*.md</code>
+                文件承载系统架构、业务架构、故障排查、页面设计稿等专属规则。</p>
+            <div class="badges"><span class="badge green">54 passed</span><span class="badge blue">agents-sync ok</span><span
+                    class="badge amber">10 references</span><span class="badge green">core 138 lines</span></div>
+        </div>
+        <div class="panel">
+            <p class="headline">核心收益</p>
+            <p>以后触发系统架构图时只需要读系统架构 reference，触发业务架构图时只读业务架构
+                reference；页面设计稿、故障排查、功能迭代不会再互相污染上下文。</p>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2>交付拓扑：常驻短、专属按需读</h2>
+        <div class="flow">
+            <div class="layer"><b>LAYER 01</b><strong>AGENTS</strong>
+                <p>触发 HTML-first 与 vibe-diagram。</p></div>
+            <div class="grid">
+                <div class="node ok"><small>同步后</small><strong>只看到薄内核</strong>
+                    <p>AGENTS managed block 有 <code>## 图型规则索引</code> 和 reference 路径。</p></div>
+                <div class="node ok"><small>不再</small><strong>全量注入重规则</strong>
+                    <p>已检查全局 AGENTS 不含系统架构 reference 正文。</p></div>
+                <div class="node"><small>来源</small><strong><code>agents-sync</code></strong>
+                    <p>四个目标：codex、claude、gemini、vibego 均 updated。</p></div>
+            </div>
+        </div>
+        <div class="down"></div>
+        <div class="flow">
+            <div class="layer"><b>LAYER 02</b><strong>薄内核</strong>
+                <p>交付、路由、共性红线。</p></div>
+            <div class="grid">
+                <div class="node ok"><small>文件</small><strong><code>SKILL.md</code></strong>
+                    <p>138 行；保留 HTML 交付、自动路由、卡片堆门禁、节点承载、箭头防重叠、自检。</p></div>
+                <div class="node ok"><small>硬门禁</small><strong>读取 reference</strong>
+                    <p>写入“选择图型后必须读取对应 reference；读取失败必须 fail-closed”。</p></div>
+                <div class="node warn"><small>风险控制</small><strong>不能凭记忆画图</strong>
+                    <p>reference 缺失时不生成伪专业图，转为待确认/失败闭环。</p></div>
+            </div>
+        </div>
+        <div class="down"></div>
+        <div class="flow">
+            <div class="layer"><b>LAYER 03</b><strong>按图型 reference</strong>
+                <p>10 类规则独立演进。</p></div>
+            <div class="grid">
+                <div class="node"><small>架构类</small><strong>system / business</strong>
+                    <p>系统架构保留 007 宏观拓扑；业务架构保留领域地图。</p></div>
+                <div class="node"><small>过程类</small><strong>flow / sequence / state</strong>
+                    <p>业务流程、代码时序、状态/数据模型各自维护形态规则。</p></div>
+                <div class="node"><small>决策类</small><strong>fault / feature / page / tech / decision</strong>
+                    <p>故障、迭代、页面稿、技术设计、需求决策独立维护。</p></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2>主要文件影响</h2>
+        <table>
+            <thead>
+            <tr>
+                <th>文件</th>
+                <th>影响</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td><code>vibego_cli/data/skills/vibe-diagram/SKILL.md</code></td>
+                <td>改为薄内核：交付、路由、共性门禁、reference 索引、自检。</td>
+            </tr>
+            <tr>
+                <td><code>vibego_cli/data/skills/vibe-diagram/references/*.md</code></td>
+                <td>新增 10 个图型专属规则文件。</td>
+            </tr>
+            <tr>
+                <td><code>tests/test_builtin_skills_injection.py</code></td>
+                <td>测试改为内核 + reference 结构，新增薄内核、reference、同步索引断言。</td>
+            </tr>
+            <tr>
+                <td><code>pyproject.toml</code></td>
+                <td>发布包包含 <code>data/skills/*/references/*.md</code>。</td>
+            </tr>
+            <tr>
+                <td><code>AGENTS.md</code></td>
+                <td>同步 managed block，并更新 project-doc 事实锚点。</td>
+            </tr>
+            <tr>
+                <td><code>docs/superpowers/plans/2026-06-30-vibe-diagram-skill-split.md</code></td>
+                <td>记录实施计划。</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="section">
+        <h2>验证闭环</h2>
+        <div class="evidence">
+            <div class="ev"><b>RED 已确认</b>
+                <p>新增结构测试初始失败：旧 <code>SKILL.md</code> 619 行，references 不存在。</p></div>
+            <div class="ev"><b>GREEN 已确认</b>
+                <p>结构测试变为 <code>2 passed</code>；完整相关回归 <code>54 passed in 0.87s</code>。</p></div>
+            <div class="ev"><b>同步已确认</b>
+                <p><code>python3.11 -m vibego_cli agents-sync --source-root /Users/david/hypha/tools/vibego
+                    --json</code> 返回 <code>ok: true</code>。</p></div>
+            <div class="ev"><b>内容已确认</b>
+                <p>薄内核 138 行；10 个 reference 文件存在；全局 AGENTS 有 reference 索引且不含系统架构 reference
+                    正文。</p></div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2>风险与回滚</h2>
+        <table>
+            <thead>
+            <tr>
+                <th>风险</th>
+                <th>规避</th>
+                <th>回滚</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td>模型忘记读取 reference</td>
+                <td>薄内核硬门禁：读取失败必须 fail-closed</td>
+                <td>临时把对应图型规则放回内核</td>
+            </tr>
+            <tr>
+                <td>发布包缺 reference</td>
+                <td><code>pyproject.toml</code> package-data + 测试覆盖</td>
+                <td>恢复旧单文件 <code>SKILL.md</code></td>
+            </tr>
+            <tr>
+                <td>当前长会话仍使用旧上下文</td>
+                <td>新会话或重新加载上下文</td>
+                <td>无需代码回滚</td>
+            </tr>
+            </tbody>
+        </table>
+        <p class="foot">无需重启服务；如要让已有长会话立刻吃到新 AGENTS，建议新开会话或重新加载上下文。</p>
+    </section>
+</main>
+</body>
+</html>

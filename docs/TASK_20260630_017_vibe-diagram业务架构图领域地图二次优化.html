@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>业务架构：多小程序客服智能体领域地图二次优化</title>
+    <style>
+        :root {
+            --ink: #102033;
+            --muted: #5b6c80;
+            --paper: #fbfdff;
+            --blue: #1b6fb8;
+            --blue2: #e8f3ff;
+            --green: #12775a;
+            --green2: #e7f7ef;
+            --amber: #9b6500;
+            --amber2: #fff5dc;
+            --red: #a73535;
+            --red2: #fff0f0;
+            --violet: #6254ad;
+            --violet2: #f0eeff;
+            --line: #8fb2d5;
+            --soft: #d8e7f5;
+            --shadow: 0 20px 55px rgba(24, 58, 94, .10)
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+            line-height: 1.55;
+            background: linear-gradient(90deg, rgba(52, 112, 172, .045) 1px, transparent 1px), linear-gradient(0deg, rgba(52, 112, 172, .045) 1px, transparent 1px), radial-gradient(circle at 20% 5%, rgba(27, 111, 184, .15), transparent 30%), linear-gradient(135deg, #fcfeff, #f5f9ff 62%, #fbfdff);
+            background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%
+        }
+
+        .page {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 32px 28px 72px
+        }
+
+        .top {
+            margin-bottom: 18px
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid #cee1f3;
+            background: rgba(255, 255, 255, .74);
+            border-radius: 999px;
+            padding: 5px 11px;
+            color: #1b5f9f;
+            font-size: 12px;
+            font-weight: 900
+        }
+
+        .eyebrow:before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #1b6fb8
+        }
+
+        h1 {
+            margin: 12px 0 6px;
+            font-size: 28px;
+            line-height: 1.22;
+            letter-spacing: -.02em
+        }
+
+        .sub {
+            margin: 0;
+            color: var(--muted);
+            max-width: 1020px
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns:1.55fr .85fr;
+            gap: 16px;
+            margin: 20px 0
+        }
+
+        .brief, .legend {
+            background: rgba(255, 255, 255, .86);
+            border: 1px solid #d7e6f5;
+            border-radius: 24px;
+            padding: 18px 20px;
+            box-shadow: var(--shadow)
+        }
+
+        .brief b {
+            font-size: 18px
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px
+        }
+
+        .chip {
+            border-radius: 999px;
+            border: 1px solid #cfe0f1;
+            background: #fff;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 900
+        }
+
+        .chip.green {
+            color: var(--green);
+            background: var(--green2);
+            border-color: #b8dfcd
+        }
+
+        .chip.amber {
+            color: var(--amber);
+            background: var(--amber2);
+            border-color: #e8cb78
+        }
+
+        .chip.red {
+            color: var(--red);
+            background: var(--red2);
+            border-color: #e4a4a4
+        }
+
+        .legend {
+            display: grid;
+            gap: 8px
+        }
+
+        .legend-row {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            color: #40536a;
+            font-size: 13px
+        }
+
+        .legend-line {
+            width: 34px;
+            height: 4px;
+            border-radius: 999px;
+            background: #1b6fb8
+        }
+
+        .legend-line.green {
+            background: #12775a
+        }
+
+        .legend-line.amber {
+            background: repeating-linear-gradient(90deg, #b17800 0 10px, transparent 10px 16px)
+        }
+
+        .legend-line.violet {
+            background: #6254ad
+        }
+
+        .canvas {
+            background: rgba(255, 255, 255, .78);
+            border: 1px solid #d6e5f4;
+            border-radius: 30px;
+            padding: 22px;
+            box-shadow: var(--shadow);
+            overflow: hidden
+        }
+
+        .canvas-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 14px
+        }
+
+        .canvas-head h2 {
+            font-size: 18px;
+            margin: 0
+        }
+
+        .canvas-head p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            max-width: 660px
+        }
+
+        .spine-wrap {
+            position: relative;
+            border: 1px solid #d8e7f5;
+            border-radius: 26px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, .9), rgba(247, 251, 255, .88));
+            padding: 18px
+        }
+
+        .axis-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #e8f3ff;
+            border: 1px solid #bfdbf5;
+            border-radius: 999px;
+            color: #155d9e;
+            font-weight: 900;
+            padding: 5px 12px;
+            font-size: 12px;
+            margin-bottom: 12px
+        }
+
+        .axis-label:before {
+            content: "";
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #1b6fb8
+        }
+
+        .object-spine {
+            display: grid;
+            grid-template-columns:1.05fr 34px 1.05fr 34px 1.2fr 34px 1.2fr 34px 1.35fr 48px 1.25fr;
+            align-items: center;
+            gap: 8px
+        }
+
+        .node {
+            position: relative;
+            border: 1.8px solid #c7dbef;
+            background: #fff;
+            border-radius: 20px;
+            padding: 14px;
+            min-height: 128px;
+            overflow-wrap: anywhere;
+            box-shadow: 0 10px 20px rgba(34, 75, 117, .055);
+            text-align: left;
+            width: 100%;
+            font: inherit;
+            color: inherit
+        }
+
+        .node h3 {
+            font-size: 15px;
+            margin: 0 0 6px
+        }
+
+        .node p {
+            font-size: 12.5px;
+            margin: 0;
+            color: #52667c
+        }
+
+        .node strong {
+            display: block;
+            color: #2f4d68;
+            font-size: 12px;
+            margin-top: 8px
+        }
+
+        .tag {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 11px;
+            font-weight: 900;
+            margin-bottom: 7px
+        }
+
+        .tag.blue {
+            background: var(--blue2);
+            color: var(--blue)
+        }
+
+        .tag.green {
+            background: var(--green2);
+            color: var(--green)
+        }
+
+        .tag.amber {
+            background: var(--amber2);
+            color: var(--amber)
+        }
+
+        .tag.red {
+            background: var(--red2);
+            color: var(--red)
+        }
+
+        .tag.violet {
+            background: var(--violet2);
+            color: var(--violet)
+        }
+
+        .arrow {
+            height: 3px;
+            background: #1b6fb8;
+            border-radius: 999px;
+            position: relative
+        }
+
+        .arrow:after {
+            content: "";
+            position: absolute;
+            right: -2px;
+            top: 50%;
+            transform: translateY(-50%);
+            border-left: 9px solid #1b6fb8;
+            border-top: 6px solid transparent;
+            border-bottom: 6px solid transparent
+        }
+
+        .arrow-label {
+            position: absolute;
+            left: 50%;
+            top: -25px;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: #1b5f9f;
+            font-weight: 900;
+            background: #f8fbff;
+            border: 1px solid #cfe0f1;
+            border-radius: 999px;
+            padding: 2px 7px;
+            white-space: nowrap
+        }
+
+        .gate {
+            clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+            background: #fff8e3;
+            border: 2px solid #dfb75d;
+            min-height: 118px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 24px;
+            font-weight: 900;
+            color: #6f4a00
+        }
+
+        .outcome {
+            display: grid;
+            gap: 8px
+        }
+
+        .outcome-card {
+            border-radius: 18px;
+            border: 1.6px solid #cbdced;
+            background: #fff;
+            padding: 10px 11px;
+            min-height: 58px
+        }
+
+        .outcome-card b {
+            display: block;
+            font-size: 13px
+        }
+
+        .outcome-card span {
+            font-size: 12px;
+            color: #52667c
+        }
+
+        .outcome-card.violet {
+            background: var(--violet2);
+            border-color: #b9b0e7
+        }
+
+        .outcome-card.green {
+            background: var(--green2);
+            border-color: #8dceb0
+        }
+
+        .domain-fan {
+            display: grid;
+            grid-template-columns:1fr 1fr 1fr 1fr;
+            gap: 12px;
+            margin: 18px 0 12px;
+            padding: 18px;
+            border: 1px dashed #bdd3e9;
+            border-radius: 24px;
+            background: rgba(246, 251, 255, .75);
+            position: relative
+        }
+
+        .domain-fan:before {
+            content: "业务域扇出：Scene / Slot 根据 routeType + riskLevel 进入不同业务域";
+            position: absolute;
+            left: 18px;
+            top: -12px;
+            background: #f8fbff;
+            border: 1px solid #cfe0f1;
+            color: #285f93;
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 12px;
+            font-weight: 900
+        }
+
+        .domain {
+            border-radius: 20px;
+            border: 1.8px solid #cbdced;
+            background: #fff;
+            padding: 13px;
+            min-height: 136px;
+            position: relative;
+            overflow-wrap: anywhere
+        }
+
+        .domain h3 {
+            margin: 0 0 7px;
+            font-size: 14px
+        }
+
+        .domain p {
+            margin: 0 0 8px;
+            color: #52667c;
+            font-size: 12.5px
+        }
+
+        .domain.green {
+            border-color: #8dceb0;
+            background: linear-gradient(180deg, #fff, #effaf5)
+        }
+
+        .domain.amber {
+            border-color: #e0bd67;
+            background: linear-gradient(180deg, #fff, #fff7e1)
+        }
+
+        .domain.red {
+            border-color: #e08e8e;
+            background: linear-gradient(180deg, #fff, #fff1f1)
+        }
+
+        .scene-pills {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap
+        }
+
+        .pill {
+            font-size: 10.5px;
+            font-weight: 900;
+            border: 1px solid #d6e2ef;
+            background: #f8fbff;
+            border-radius: 999px;
+            padding: 3px 7px
+        }
+
+        .pill.rule {
+            border-color: #e0bd67;
+            background: #fff7e1;
+            color: #8b5d00
+        }
+
+        .pill.high {
+            border-color: #e09898;
+            background: #fff0f0;
+            color: #a73535
+        }
+
+        .rules-layer {
+            display: grid;
+            grid-template-columns:repeat(6, 1fr);
+            gap: 10px;
+            margin-top: 14px
+        }
+
+        .rule-band {
+            border-radius: 16px;
+            padding: 10px 12px;
+            border: 1.6px solid;
+            font-size: 12px;
+            min-height: 76px;
+            position: relative
+        }
+
+        .rule-band b {
+            display: block;
+            font-size: 13px
+        }
+
+        .rule-band:before {
+            content: "";
+            position: absolute;
+            left: 14px;
+            right: 14px;
+            top: -9px;
+            height: 9px;
+            border-left: 3px solid currentColor;
+            border-right: 3px solid currentColor;
+            border-top: 3px solid currentColor;
+            border-radius: 12px 12px 0 0;
+            opacity: .55
+        }
+
+        .auth {
+            grid-column: 2/4;
+            color: var(--green);
+            background: var(--green2);
+            border-color: #86c9a8
+        }
+
+        .data {
+            grid-column: 4/6;
+            color: var(--amber);
+            background: var(--amber2);
+            border-color: #dfbd68
+        }
+
+        .finance {
+            grid-column: 4/6;
+            color: var(--red);
+            background: var(--red2);
+            border-color: #df9090
+        }
+
+        .handoff {
+            grid-column: 5/7;
+            color: var(--violet);
+            background: var(--violet2);
+            border-color: #b8afe8
+        }
+
+        .rollback {
+            grid-column: 1/3;
+            color: #516f8e;
+            background: #f3f8fe;
+            border-color: #b9cde2
+        }
+
+        .loop {
+            display: grid;
+            grid-template-columns:1fr auto 1fr;
+            gap: 12px;
+            align-items: center;
+            margin-top: 16px
+        }
+
+        .loop-card {
+            border: 1.8px solid #b9b0e7;
+            background: var(--violet2);
+            border-radius: 20px;
+            padding: 12px
+        }
+
+        .loop-arrow {
+            height: 3px;
+            background: #6254ad;
+            border-radius: 999px;
+            position: relative
+        }
+
+        .loop-arrow:before {
+            content: "反哺场景 / 知识 / 评测";
+            position: absolute;
+            left: 50%;
+            top: -25px;
+            transform: translateX(-50%);
+            background: #fbfbff;
+            border: 1px solid #ccc6ee;
+            border-radius: 999px;
+            padding: 2px 8px;
+            color: #5c4fb0;
+            font-size: 11px;
+            font-weight: 900;
+            white-space: nowrap
+        }
+
+        .loop-arrow:after {
+            content: "";
+            position: absolute;
+            right: -2px;
+            top: 50%;
+            transform: translateY(-50%);
+            border-left: 9px solid #6254ad;
+            border-top: 6px solid transparent;
+            border-bottom: 6px solid transparent
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(11, 25, 41, .46);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 20
+        }
+
+        .modal-backdrop.open {
+            display: flex
+        }
+
+        .modal {
+            width: min(740px, 100%);
+            background: #fff;
+            border: 1px solid #d7e4f2;
+            border-radius: 24px;
+            box-shadow: 0 24px 70px rgba(8, 24, 44, .25);
+            padding: 22px
+        }
+
+        .modal-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px
+        }
+
+        .modal h2 {
+            margin: 0;
+            font-size: 20px
+        }
+
+        .modal pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f5f9fd;
+            border: 1px solid #dce8f5;
+            border-radius: 16px;
+            padding: 14px;
+            line-height: 1.55
+        }
+
+        .close {
+            border: 1px solid #d4e2f2;
+            background: #fff;
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-weight: 900;
+            cursor: pointer
+        }
+
+        .detail-btn {
+            cursor: pointer
+        }
+
+        .detail-btn:focus-visible, .close:focus-visible {
+            outline: 3px solid #70b7f5;
+            outline-offset: 3px
+        }
+
+        @media (max-width: 1020px) {
+            .hero {
+                grid-template-columns:1fr
+            }
+
+            .canvas-head {
+                display: block
+            }
+
+            .object-spine {
+                grid-template-columns:1fr;
+                gap: 8px
+            }
+
+            .arrow {
+                height: 32px;
+                width: 3px;
+                justify-self: center
+            }
+
+            .arrow:after {
+                right: auto;
+                left: 50%;
+                top: auto;
+                bottom: -2px;
+                transform: translateX(-50%);
+                border-top: 9px solid #1b6fb8;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-bottom: 0
+            }
+
+            .arrow-label {
+                left: 18px;
+                top: 50%;
+                transform: translateY(-50%)
+            }
+
+            .gate {
+                clip-path: none;
+                border-radius: 20px;
+                min-height: auto;
+                padding: 16px
+            }
+
+            .domain-fan {
+                grid-template-columns:1fr
+            }
+
+            .rules-layer {
+                grid-template-columns:1fr
+            }
+
+            .auth, .data, .finance, .handoff, .rollback {
+                grid-column: auto
+            }
+
+            .loop {
+                grid-template-columns:1fr
+            }
+
+            .loop-arrow {
+                height: 32px;
+                width: 3px;
+                justify-self: center
+            }
+
+            .loop-arrow:after {
+                right: auto;
+                left: 50%;
+                top: auto;
+                bottom: -2px;
+                transform: translateX(-50%);
+                border-top: 9px solid #6254ad;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-bottom: 0
+            }
+
+            .loop-arrow:before {
+                left: 18px;
+                top: 50%;
+                transform: translateY(-50%)
+            }
+        }
+
+        @media (max-width: 640px) {
+            .page {
+                padding: 22px 12px
+            }
+
+            .canvas {
+                padding: 14px
+            }
+
+            .spine-wrap {
+                padding: 14px
+            }
+
+            h1 {
+                font-size: 23px
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <header class="top">
+        <span class="eyebrow">领域地图 v2 · 对象生命周期</span>
+        <h1>业务架构：多小程序客服智能体如何把咨询沉淀成业务能力</h1>
+        <p class="sub">
+            这一版不再按“参与方/能力/对象/规则”分章节铺开，而是把它们叠到同一条业务对象生命周期上：入口配置创建会话，会话产生场景，场景选择来源，规则决定自助还是转人工，反馈再反哺能力。</p>
+    </header>
+
+    <section class="hero" aria-label="摘要">
+        <div class="brief">
+            <b>读图主线：</b>门店/加盟商用户进入三端小程序后，先被 AppConfig 和 Session 接住；Message 被识别成 Scene /
+            Slot；Scene 再扇出到四个业务域；答案必须来自 Knowledge / Tool / Rule；最后经风险裁决输出自助结果、转七鱼或反馈闭环。
+            <div class="chips">
+                <span class="chip green">三端复用：sby / dwt / lbbc</span>
+                <span class="chip">10 个一期场景</span>
+                <span class="chip amber">真实接口不可用即降级</span>
+                <span class="chip red">财务高风险一票否决</span>
+            </div>
+        </div>
+        <div class="legend" aria-label="图例">
+            <div class="legend-row"><span class="legend-line"></span>蓝线：业务对象生命周期主线</div>
+            <div class="legend-row"><span class="legend-line green"></span>绿线：可信来源与质量沉淀</div>
+            <div class="legend-row"><span class="legend-line amber"></span>虚线：兜底、降级与转人工边界</div>
+            <div class="legend-row"><span class="legend-line violet"></span>紫线：反馈闭环反哺业务资产</div>
+        </div>
+    </section>
+
+    <main class="canvas" aria-label="业务架构领域地图 v2">
+        <div class="canvas-head">
+            <h2>主图：对象生命周期 + 业务域扇出 + 规则覆盖条</h2>
+            <p>节点只写业务职责和约束；源码、DDL、文档证据放在点击详情里，避免主图再次变成证据报告。</p>
+        </div>
+
+        <section class="spine-wrap" aria-label="业务对象生命周期">
+            <div class="axis-label">业务对象生命周期主轴</div>
+            <div class="object-spine">
+                <button class="node detail-btn" data-title="用户入口"
+                        data-detail="证据摘要：源图第 241-247 行说明三端复用、自助优先与无法自助转七鱼；第 260-268 行说明咨询发起方来自生意宝、店务通、萝卜白菜小程序。">
+                    <span class="tag blue">Actor</span>
+                    <h3>门店 / 加盟商用户</h3>
+                    <p>提出订货、库存、售后、费用等咨询。</p><strong>诉求：少等人工、快拿确定答案</strong></button>
+                <div class="arrow"><span class="arrow-label">进入</span></div>
+                <button class="node detail-btn" data-title="AppConfig"
+                        data-detail="证据摘要：源图第 375-380 行说明 appCode 拥有 featureFlags、qiyuConfig、themeConfig，并决定可见场景和回滚开关。">
+                    <span class="tag blue">AppConfig</span>
+                    <h3>小程序应用配置</h3>
+                    <p>统一三端入口、场景开关、七鱼配置。</p><strong>拥有：featureFlags / qiyuConfig</strong></button>
+                <div class="arrow"><span class="arrow-label">创建</span></div>
+                <button class="node detail-btn" data-title="Session / Message"
+                        data-detail="证据摘要：源图第 383-396 行说明会话绑定 app、trace、bizUser；消息产生场景、槽位、卡片与反馈。">
+                    <span class="tag green">Session</span>
+                    <h3>会话与消息</h3>
+                    <p>把自然语言、场景点击、表单提交统一进同一上下文。</p><strong>产生：FORM / RESULT / SOP /
+                    HANDOFF</strong></button>
+                <div class="arrow"><span class="arrow-label">识别</span></div>
+                <button class="node detail-btn" data-title="Scene / Slot"
+                        data-detail="证据摘要：源图第 401-406 行说明每个场景声明 sceneCode、routeType、riskLevel、requiredSlots；缺槽必须先澄清。">
+                    <span class="tag amber">Scene</span>
+                    <h3>场景与必填槽位</h3>
+                    <p>用 routeType、riskLevel、requiredSlots 约束能否继续。</p><strong>约束：缺槽先问，不跳过</strong>
+                </button>
+                <div class="arrow"><span class="arrow-label">选择来源</span></div>
+                <button class="node detail-btn" data-title="Knowledge / Tool / Rule"
+                        data-detail="证据摘要：源图第 409-414 行说明 KNOWLEDGE 查知识库、TOOL 查业务 Adapter、RULE 由后端确定性规则计算；有来源才回答，有权限才查询。">
+                    <span class="tag red">Source</span>
+                    <h3>答案来源</h3>
+                    <p>知识库、业务工具、后端规则三类可信来源。</p><strong>红线：无来源不回答，无权限不查询</strong></button>
+                <div class="gate">四项裁决<br>槽位 / 来源 / 风险 / 置信度</div>
+                <div class="outcome">
+                    <div class="outcome-card green"><b>自助结果</b><span>返回确定 RESULT / SOP / RULE 解释。</span></div>
+                    <div class="outcome-card violet"><b>转七鱼</b><span>携带 traceId、sceneCode、摘要和 transferId。</span>
+                    </div>
+                </div>
+            </div>
+
+            <section class="domain-fan" aria-label="业务域扇出">
+                <button class="domain detail-btn" data-title="门店订货域"
+                        data-detail="证据摘要：源图第 325-333 行：STORE_TRANSFER_STATUS、STORE_ORDER_SUBMITTED 两个中风险工具场景，需要 storeId。">
+                    <h3>门店订货域</h3>
+                    <p>解决“是否转单、货单是否提交”的高频重复咨询。</p>
+                    <div class="scene-pills"><span class="pill">STORE_TRANSFER_STATUS</span><span class="pill">STORE_ORDER_SUBMITTED</span>
+                    </div>
+                </button>
+                <button class="domain green detail-btn" data-title="商品与库存域"
+                        data-detail="证据摘要：源图第 336-346 行：库存、批次、效期、可退；PRODUCT_RETURNABLE 为 TOOL_RULE，中高风险。">
+                    <h3>商品与库存域</h3>
+                    <p>用工具结果或后端确定性规则回答库存、批次、效期和可退。</p>
+                    <div class="scene-pills"><span class="pill">PRODUCT_STOCK</span><span
+                            class="pill">BATCH_QUERY</span><span class="pill rule">SHELF_LIFE_CALC</span><span
+                            class="pill">RETURNABLE</span></div>
+                </button>
+                <button class="domain amber detail-btn" data-title="退货与售后域"
+                        data-detail="证据摘要：源图第 349-357 行：DAMAGED_GOODS_SOP 为低风险知识库场景，RETURN_STATUS 仍需真实业务接口。">
+                    <h3>退货与售后域</h3>
+                    <p>SOP 可走知识库；退货进度仍必须查真实业务接口。</p>
+                    <div class="scene-pills"><span class="pill rule">DAMAGED_GOODS_SOP</span><span class="pill">RETURN_STATUS</span>
+                    </div>
+                </button>
+                <button class="domain red detail-btn" data-title="费用与抵扣域"
+                        data-detail="证据摘要：源图第 360-368 行和第 440-444 行：财务类高风险，不让 AI 解释金额、重算违约金、承诺减免或判断抵扣。">
+                    <h3>费用与抵扣域</h3>
+                    <p>只展示业务系统确定字段；争议直接转人工。</p>
+                    <div class="scene-pills"><span class="pill high">PAYMENT_PENALTY</span><span class="pill high">BRAND_FEE_DEDUCTION</span>
+                    </div>
+                </button>
+            </section>
+
+            <section class="rules-layer" aria-label="规则覆盖条">
+                <button class="rule-band rollback detail-btn" data-title="灰度回滚覆盖 AppConfig"
+                        data-detail="证据摘要：源图第 452-456 行：最高优先级回滚是 fallback_to_qiyu_direct=true，SDK 直接打开七鱼。">
+                    <b>回滚覆盖 App</b>fallback_to_qiyu_direct 可绕过自助层。
+                </button>
+                <button class="rule-band auth detail-btn" data-title="身份权限覆盖 Session 与 Scene"
+                        data-detail="证据摘要：源图第 428-432 行：storeId、franchiseeId、roleCode、财务权限只能作为参数，最终由后端鉴权。">
+                    <b>身份权限覆盖会话</b>前端身份不可信，最终后端鉴权。
+                </button>
+                <button class="rule-band data detail-btn" data-title="真实数据覆盖答案来源"
+                        data-detail="证据摘要：源图第 434-438 行：禁止伪造业务数据；真实 Adapter 未完成时必须明确不可用或转人工。">
+                    <b>真实数据覆盖来源</b>Adapter 未接入就不可用或转人工。
+                </button>
+                <button class="rule-band finance detail-btn" data-title="财务红线覆盖费用域"
+                        data-detail="证据摘要：源图第 440-444 行：财务类不让 AI 解释金额、重算违约金、承诺减免或判断抵扣。">
+                    <b>财务红线覆盖费用域</b>高风险不自动解释、不重算、不承诺。
+                </button>
+                <button class="rule-band handoff detail-btn" data-title="转人工规则覆盖 Outcome"
+                        data-detail="证据摘要：源图第 447-450 行：转七鱼前必须携带 traceId、sceneCode、transferId 和上下文摘要。">
+                    <b>转人工覆盖输出</b>高风险、低置信度、不可用时带上下文接续。
+                </button>
+            </section>
+
+            <section class="loop" aria-label="反馈闭环">
+                <button class="loop-card detail-btn" data-title="输出结果"
+                        data-detail="自助结果与转人工不是终点；它们都会产生可观测 trace、用户反馈、人工接续状态或评测样本。">
+                    <b>输出结果</b><br>自助答复、FORM 补槽、SOP、转人工。
+                </button>
+                <div class="loop-arrow"></div>
+                <button class="loop-card detail-btn" data-title="Trace / Feedback / Eval"
+                        data-detail="证据摘要：源图第 417-422 行和第 318-321 行：trace 记录路由与工具状态；反馈、标注、评测、指标用于优化意图、知识库和场景质量。">
+                    <b>Trace / Feedback / Eval</b><br>沉淀为场景质量、知识质量和后续运营资产。
+                </button>
+            </section>
+        </section>
+    </main>
+</div>
+
+<div class="modal-backdrop" id="modal" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-head"><h2 id="modal-title">详情</h2>
+            <button class="close" id="close" type="button">关闭</button>
+        </div>
+        <pre id="modal-detail"></pre>
+    </section>
+</div>
+<script>
+    const modal = document.getElementById('modal');
+    const title = document.getElementById('modal-title');
+    const detail = document.getElementById('modal-detail');
+    const close = document.getElementById('close');
+    let lastFocus = null;
+
+    function openModal(btn) {
+        lastFocus = btn;
+        title.textContent = btn.dataset.title || '详情';
+        detail.textContent = btn.dataset.detail || '暂无详情。';
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+        close.focus();
+    }
+
+    function closeModal() {
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+        if (lastFocus) lastFocus.focus();
+    }
+
+    document.querySelectorAll('.detail-btn').forEach(btn => btn.addEventListener('click', () => openModal(btn)));
+    close.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => {
+        if (e.target === modal) closeModal();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && modal.classList.contains('open')) closeModal();
+    });
+</script>
+</body>
+</html>

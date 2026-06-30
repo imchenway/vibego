@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>业务架构：多小程序客服智能体的业务领域地图</title>
+    <style>
+        :root {
+            --ink: #102033;
+            --muted: #5c6d83;
+            --paper: #fbfdff;
+            --blue: #176bb3;
+            --blue2: #e7f2ff;
+            --green: #12775a;
+            --green2: #e8f7f0;
+            --amber: #9b6500;
+            --amber2: #fff4d8;
+            --red: #a73535;
+            --red2: #fff0f0;
+            --violet: #6254ad;
+            --violet2: #f0eeff;
+            --line: #8fb1d4;
+            --soft: #d9e7f5;
+            --shadow: 0 18px 48px rgba(28, 63, 102, .10)
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+            line-height: 1.55;
+            background: linear-gradient(90deg, rgba(56, 116, 177, .05) 1px, transparent 1px), linear-gradient(0deg, rgba(56, 116, 177, .05) 1px, transparent 1px), radial-gradient(circle at 22% 8%, rgba(38, 125, 194, .14), transparent 30%), linear-gradient(135deg, #fcfeff 0%, #f3f8ff 58%, #fbfdff 100%);
+            background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%
+        }
+
+        .page {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 32px 28px 72px
+        }
+
+        .top {
+            margin-bottom: 18px
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+            padding: 5px 11px;
+            border: 1px solid #cfe0f1;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .7);
+            font-size: 12px;
+            font-weight: 800;
+            color: #2369aa
+        }
+
+        .eyebrow:before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #2369aa
+        }
+
+        h1 {
+            font-size: 28px;
+            line-height: 1.22;
+            margin: 12px 0 6px;
+            letter-spacing: -.02em
+        }
+
+        .sub {
+            margin: 0;
+            color: var(--muted);
+            max-width: 980px
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns:1.45fr .9fr;
+            gap: 16px;
+            margin: 20px 0
+        }
+
+        .brief, .read-key {
+            background: rgba(255, 255, 255, .84);
+            border: 1px solid #d7e5f4;
+            border-radius: 22px;
+            padding: 18px 20px;
+            box-shadow: var(--shadow)
+        }
+
+        .brief b {
+            font-size: 18px
+        }
+
+        .chips {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px
+        }
+
+        .chip {
+            border: 1px solid #cfe0f1;
+            background: #fff;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-weight: 800;
+            font-size: 12px
+        }
+
+        .chip.green {
+            background: var(--green2);
+            border-color: #b9decd;
+            color: var(--green)
+        }
+
+        .chip.amber {
+            background: var(--amber2);
+            border-color: #e8ca78;
+            color: var(--amber)
+        }
+
+        .chip.red {
+            background: var(--red2);
+            border-color: #e5a5a5;
+            color: var(--red)
+        }
+
+        .read-key {
+            display: flex;
+            flex-direction: column;
+            gap: 8px
+        }
+
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #40536a
+        }
+
+        .swatch {
+            width: 28px;
+            height: 4px;
+            border-radius: 999px
+        }
+
+        .swatch.blue {
+            background: #176bb3
+        }
+
+        .swatch.green {
+            background: #128464
+        }
+
+        .swatch.amber {
+            background: repeating-linear-gradient(90deg, #b17800 0 12px, transparent 12px 18px)
+        }
+
+        .swatch.red {
+            background: #c94343
+        }
+
+        .canvas {
+            position: relative;
+            background: rgba(255, 255, 255, .74);
+            border: 1px solid #d5e4f3;
+            border-radius: 28px;
+            padding: 22px 22px 24px;
+            box-shadow: var(--shadow);
+            overflow: hidden
+        }
+
+        .canvas-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            align-items: flex-start;
+            margin-bottom: 12px
+        }
+
+        .canvas-title h2 {
+            font-size: 18px;
+            margin: 0
+        }
+
+        .canvas-title p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            max-width: 650px
+        }
+
+        .architecture {
+            position: relative;
+            display: grid;
+            grid-template-columns:128px repeat(6, minmax(126px, 1fr));
+            gap: 12px;
+            align-items: stretch
+        }
+
+        .rail-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            border-radius: 20px;
+            border-left: 6px solid var(--blue);
+            background: linear-gradient(180deg, #eaf5ff, #f8fbff);
+            font-weight: 900;
+            letter-spacing: .08em;
+            color: #174e83;
+            min-height: 118px;
+            padding: 10px
+        }
+
+        .lane {
+            display: contents
+        }
+
+        .stage, .object, .rule {
+            position: relative;
+            min-height: 116px;
+            border-radius: 20px;
+            border: 1.5px solid #ccdeef;
+            background: #fff;
+            padding: 13px 13px 12px;
+            overflow-wrap: anywhere;
+            box-shadow: 0 8px 18px rgba(37, 78, 122, .06);
+            text-align: left;
+            width: 100%;
+            font: inherit;
+            color: inherit
+        }
+
+        .stage h3, .object h3, .rule h3 {
+            margin: 0 0 6px;
+            font-size: 14px
+        }
+
+        .stage p, .object p, .rule p {
+            margin: 0;
+            color: #51657b;
+            font-size: 12.5px
+        }
+
+        .type {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 2px 8px;
+            margin-bottom: 7px;
+            font-size: 11px;
+            font-weight: 900
+        }
+
+        .type.client {
+            background: var(--blue2);
+            color: #176bb3
+        }
+
+        .type.core {
+            background: var(--green2);
+            color: var(--green)
+        }
+
+        .type.knowledge {
+            background: var(--amber2);
+            color: var(--amber)
+        }
+
+        .type.handoff {
+            background: var(--violet2);
+            color: var(--violet)
+        }
+
+        .type.risk {
+            background: var(--red2);
+            color: var(--red)
+        }
+
+        .relation {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 34px;
+            color: #2a6aa8;
+            font-weight: 900;
+            font-size: 12px;
+            letter-spacing: .02em
+        }
+
+        .relation:before {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 50%;
+            height: 3px;
+            background: #1f6fb2;
+            border-radius: 999px
+        }
+
+        .relation span {
+            position: relative;
+            background: #f7fbff;
+            border: 1px solid #cfe0f1;
+            border-radius: 999px;
+            padding: 4px 10px;
+            white-space: nowrap
+        }
+
+        .relation.data:before {
+            background: #128464
+        }
+
+        .relation.data span {
+            color: #117357
+        }
+
+        .object {
+            min-height: 134px;
+            border: 2px solid #b8d1ea;
+            background: linear-gradient(180deg, #fff, #f9fcff)
+        }
+
+        .object:after, .stage:after {
+            content: "";
+            position: absolute;
+            right: -13px;
+            top: 50%;
+            width: 13px;
+            height: 3px;
+            background: #9db9d7;
+            border-radius: 999px
+        }
+
+        .object strong {
+            display: block;
+            font-size: 12px;
+            color: #36536f;
+            margin-top: 6px
+        }
+
+        .object.app {
+            border-color: #8dc4a9;
+            background: linear-gradient(180deg, #fbfffd, #effaf5)
+        }
+
+        .object.scene {
+            border-color: #e2bf69;
+            background: linear-gradient(180deg, #fffef9, #fff6df)
+        }
+
+        .object.answer {
+            border-color: #e08c8c;
+            background: linear-gradient(180deg, #fffafa, #fff0f0)
+        }
+
+        .object.eval {
+            border-color: #b7afe8;
+            background: linear-gradient(180deg, #fbfbff, #f2f0ff)
+        }
+
+        .rule {
+            min-height: 112px;
+            border: 1.8px solid;
+            background: #fff
+        }
+
+        .rule.green {
+            border-color: #79c29f;
+            background: var(--green2)
+        }
+
+        .rule.amber {
+            border-color: #e2bd67;
+            background: var(--amber2)
+        }
+
+        .rule.red {
+            border-color: #e09494;
+            background: var(--red2)
+        }
+
+        .rule.violet {
+            border-color: #b9b0e7;
+            background: var(--violet2)
+        }
+
+        .rule.gray {
+            border-color: #bdd0e3;
+            background: #f5f9fe
+        }
+
+        .heat {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            font-weight: 900;
+            margin-bottom: 6px
+        }
+
+        .heat:before {
+            content: "";
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: currentColor
+        }
+
+        .decision {
+            grid-column: 1/-1;
+            display: grid;
+            grid-template-columns:128px 1fr;
+            gap: 12px;
+            margin-top: 12px
+        }
+
+        .decision-label {
+            border-left: 6px solid #b17800;
+            background: #fff8e7;
+            border-radius: 20px;
+            padding: 16px;
+            font-weight: 900;
+            color: #8b5d00
+        }
+
+        .decision-body {
+            position: relative;
+            border: 2px solid #e1b95d;
+            border-radius: 22px;
+            background: linear-gradient(180deg, #fffdf8, #fff7e1);
+            padding: 14px 16px
+        }
+
+        .decision-body:before {
+            content: "";
+            position: absolute;
+            left: 28px;
+            right: 28px;
+            top: -20px;
+            height: 18px;
+            border-left: 3px solid #b17800;
+            border-right: 3px solid #b17800;
+            border-top: 3px dashed #b17800;
+            border-radius: 18px 18px 0 0
+        }
+
+        .decision-flow {
+            display: grid;
+            grid-template-columns:1fr auto 1fr auto 1fr;
+            gap: 10px;
+            align-items: center
+        }
+
+        .diamond {
+            clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+            background: #fff;
+            border: 2px solid #ddb45a;
+            min-height: 110px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 26px;
+            font-weight: 900
+        }
+
+        .outcome {
+            background: #fff;
+            border: 1px solid #ecd08b;
+            border-radius: 18px;
+            padding: 12px;
+            min-height: 92px
+        }
+
+        .decision-arrow {
+            color: #9b6500;
+            font-size: 24px;
+            font-weight: 900
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(12, 26, 42, .46);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 20
+        }
+
+        .modal-backdrop.open {
+            display: flex
+        }
+
+        .modal {
+            width: min(720px, 100%);
+            background: #fff;
+            border-radius: 24px;
+            border: 1px solid #d7e4f2;
+            box-shadow: 0 24px 70px rgba(8, 24, 44, .25);
+            padding: 22px
+        }
+
+        .modal-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center
+        }
+
+        .modal h2 {
+            font-size: 20px;
+            margin: 0
+        }
+
+        .modal pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f4f8fd;
+            border: 1px solid #dce8f5;
+            border-radius: 16px;
+            padding: 14px;
+            line-height: 1.55
+        }
+
+        .close {
+            border: 1px solid #d4e2f2;
+            background: #fff;
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-weight: 800;
+            cursor: pointer
+        }
+
+        .detail-btn {
+            cursor: pointer
+        }
+
+        .detail-btn:focus-visible, .close:focus-visible {
+            outline: 3px solid #6baef2;
+            outline-offset: 3px
+        }
+
+        @media (max-width: 920px) {
+            .page {
+                padding: 24px 14px
+            }
+
+            .summary {
+                grid-template-columns:1fr
+            }
+
+            .architecture {
+                grid-template-columns:1fr
+            }
+
+            .rail-label {
+                min-height: auto;
+                justify-content: flex-start
+            }
+
+            .relation {
+                min-height: 44px
+            }
+
+            .relation:before {
+                left: 50%;
+                right: auto;
+                top: 0;
+                bottom: 0;
+                width: 3px;
+                height: auto
+            }
+
+            .relation span {
+                white-space: normal
+            }
+
+            .stage:after, .object:after {
+                right: 50%;
+                top: auto;
+                bottom: -13px;
+                width: 3px;
+                height: 13px
+            }
+
+            .decision {
+                grid-template-columns:1fr
+            }
+
+            .decision-flow {
+                grid-template-columns:1fr
+            }
+
+            .decision-arrow {
+                transform: rotate(90deg);
+                justify-self: center
+            }
+
+            .diamond {
+                clip-path: none;
+                border-radius: 18px;
+                min-height: auto;
+                padding: 16px
+            }
+
+            .canvas-title {
+                display: block
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <header class="top">
+        <span class="eyebrow">领域地图 v3 · 保留 016 布局 / 重写内容</span>
+        <h1>业务架构：多小程序客服智能体的业务领域地图</h1>
+        <p class="sub">
+            这一版保留上一版较清晰的四层布局，但内容从技术对象改为业务对象：咨询诉求、服务承诺、业务域、风险边界和运营闭环。</p>
+    </header>
+
+    <section class="summary" aria-label="读图摘要">
+        <div class="brief">
+            <b>一句话结论：</b>客服智能体不是“多接一个 AI
+            聊天入口”，而是在三端小程序和七鱼人工之间建立一层可治理的业务服务台：低风险高频问题自助解决，中高风险问题先补齐业务要素，高风险或不可用时带上下文转人工，并把过程沉淀为客服运营资产。
+            <div class="chips">
+                <span class="chip green">业务目标：降低重复人工咨询</span>
+                <span class="chip">业务范围：4 域 / 10 场景</span>
+                <span class="chip amber">服务承诺：无真实数据不编造</span>
+                <span class="chip red">风险红线：财务不自动判断</span>
+            </div>
+        </div>
+        <div class="read-key">
+            <div class="legend"><span class="swatch blue"></span>蓝线：用户诉求如何被业务服务台接住</div>
+            <div class="legend"><span class="swatch green"></span>绿线：自助解决依赖的可信业务来源</div>
+            <div class="legend"><span class="swatch amber"></span>虚线：业务无法承诺时的人工接续</div>
+            <div class="legend"><span class="swatch red"></span>红色：高风险业务边界</div>
+        </div>
+    </section>
+
+    <main class="canvas" aria-label="业务架构主领域地图">
+        <div class="canvas-title">
+            <h2>主领域地图：从咨询诉求到服务结果，而不是从代码对象到代码对象</h2>
+            <p>点击节点查看证据摘要；主图只保留业务角色、能力、对象、规则和结果。</p>
+        </div>
+
+        <section class="architecture">
+            <div class="rail-label">参与方边界</div>
+            <button class="stage detail-btn" data-title="咨询发起方"
+                    data-detail="证据摘要：原图第 241-247 行描述三端复用、自助优先和无法自助转七鱼；第 260-268 行说明入口来自生意宝、店务通、萝卜白菜小程序。">
+                <span class="type client">咨询发起方</span>
+                <h3>门店 / 加盟商用户</h3>
+                <p>带着订货、库存、售后、费用等实际业务问题进入客服。</p></button>
+            <div class="relation"><span>提出业务问题</span></div>
+            <button class="stage detail-btn" data-title="自研业务服务台"
+                    data-detail="证据摘要：原图第 271-280 行说明自研前置层统一会话、场景、消息卡片和 traceId；受控 Agent 只做理解与路由，不自由执行高风险动作。">
+                <span class="type core">业务服务台</span>
+                <h3>自研客服智能体</h3>
+                <p>先判断问题类型、风险、必填信息和可用来源。</p></button>
+            <div class="relation data"><span>请求业务依据</span></div>
+            <button class="stage detail-btn" data-title="业务依据提供方"
+                    data-detail="证据摘要：原图第 282-287 行说明业务查询必须经过权限和 Adapter，SOP/规则说明来自知识库，有来源才回答。">
+                <span class="type knowledge">依据提供方</span>
+                <h3>业务系统 / SOP / 规则</h3>
+                <p>提供真实状态、制度口径、规则计算和可追溯来源。</p></button>
+            <button class="stage detail-btn" data-title="人工接续方"
+                    data-detail="证据摘要：原图第 291-296 行说明转人工不是失败兜底，而是高风险或低置信度的安全出口。"><span
+                    class="type handoff">人工接续方</span>
+                <h3>七鱼坐席</h3>
+                <p>接住争议、高风险、接口不可用或用户坚持人工的问题。</p></button>
+
+            <div class="rail-label">业务能力层</div>
+            <button class="stage detail-btn" data-title="统一触点能力"
+                    data-detail="证据摘要：原图第 306-315 行说明三端 appCode 复用 SDK 与 v1 协议；首页返回场景分组、开关和七鱼参数；消息接口承接文本、场景点击、表单提交。">
+                <span class="type core">统一触点</span>
+                <h3>三端小程序客服入口</h3>
+                <p>把不同小程序的客服入口统一到同一套业务服务口径。</p></button>
+            <div class="relation"><span>识别诉求</span></div>
+            <button class="stage detail-btn" data-title="诉求识别与补要素"
+                    data-detail="证据摘要：原图第 312-315 行说明缺槽时返回 FORM 卡片继续收集业务参数。"><span
+                    class="type core">诉求识别</span>
+                <h3>问题分类 + 必填要素</h3>
+                <p>识别业务域、场景、风险等级；缺门店、商品、账期等要素先补齐。</p></button>
+            <div class="relation data"><span>匹配服务能力</span></div>
+            <button class="stage detail-btn" data-title="四类业务服务能力"
+                    data-detail="证据摘要：原图第 325-368 行列出门店订货、商品库存、退货售后、费用抵扣四个业务域共 10 个一期场景。">
+                <span class="type knowledge">业务履约</span>
+                <h3>4 个业务域 / 10 个场景</h3>
+                <p>用不同服务方式处理查询、SOP、规则计算和高风险财务问题。</p></button>
+            <button class="stage detail-btn" data-title="客服运营闭环"
+                    data-detail="证据摘要：原图第 318-321 行说明反馈、标注、评测、指标用于优化意图、知识库和场景质量。"><span
+                    class="type handoff">运营闭环</span>
+                <h3>反馈 / 标注 / 评测</h3>
+                <p>把每次服务结果沉淀为可优化的业务资产。</p></button>
+
+            <div class="rail-label">业务对象关系</div>
+            <button class="object app detail-btn" data-title="客服触点"
+                    data-detail="业务化解释：这里不强调 AppConfig 技术表，而强调三端触点决定用户能看到哪些客服服务、哪些入口可回退到七鱼。">
+                <span class="type client">触点</span>
+                <h3>客服触点</h3>
+                <p>三端小程序入口、可见场景、灰度开关和七鱼入口。</p><strong>决定：用户从哪里来、能问什么</strong></button>
+            <button class="object detail-btn" data-title="咨询工单"
+                    data-detail="业务化解释：这里不强调 Session/Message 技术对象，而强调一次咨询需要保留上下文、历史、当前问题和服务结果。">
+                <span class="type core">咨询</span>
+                <h3>咨询工单</h3>
+                <p>用户问题、上下文、历史追问、当前处理状态。</p><strong>产生：补问、结果、SOP、转人工</strong></button>
+            <button class="object scene detail-btn" data-title="业务场景"
+                    data-detail="业务化解释：场景不是接口清单，而是用户问题的业务分类；每类场景有风险、必填要素和可用服务方式。">
+                <span class="type knowledge">场景</span>
+                <h3>业务场景</h3>
+                <p>订货、库存、售后、费用等用户问题的业务分类。</p><strong>约束：风险等级 + 必填要素 + 服务方式</strong>
+            </button>
+            <button class="object answer detail-btn" data-title="服务依据"
+                    data-detail="业务化解释：答案来源分为制度知识、真实业务查询、确定性规则；没有依据就不能输出确定结论。">
+                <span class="type risk">依据</span>
+                <h3>服务依据</h3>
+                <p>制度知识、真实业务数据、后端确定性规则。</p><strong>约束：无依据不回答，无权限不查询</strong></button>
+            <button class="object detail-btn" data-title="人工接续"
+                    data-detail="业务化解释：转人工是安全出口，需要带上已收集的业务要素和上下文，减少坐席重复询问。"><span
+                    class="type handoff">接续</span>
+                <h3>人工接续</h3>
+                <p>七鱼会话、上下文摘要、已收集业务要素。</p><strong>接续：不让用户重新讲一遍</strong></button>
+            <button class="object eval detail-btn" data-title="服务质量资产"
+                    data-detail="业务化解释：每次自助或人工接续都应该形成可运营的质量资产，用于优化场景、知识和规则。"><span
+                    class="type handoff">资产</span>
+                <h3>服务质量资产</h3>
+                <p>反馈、标注、评测、指标、问题命中率。</p><strong>反哺：业务口径和服务质量</strong></button>
+
+            <div class="rail-label">规则约束热区</div>
+            <button class="rule green detail-btn" data-title="身份权限规则"
+                    data-detail="证据摘要：原图第 428-432 行：storeId、franchiseeId、roleCode、财务权限只能作为输入参数，最终由后端鉴权。">
+                <span class="heat" style="color:#12775a">身份</span>
+                <h3>用户说自己是谁不算数</h3>
+                <p>门店、角色、财务权限必须由后端最终裁决。</p></button>
+            <button class="rule amber detail-btn" data-title="真实数据规则"
+                    data-detail="证据摘要：原图第 434-438 行：禁止伪造业务数据；真实业务 Adapter 未完成时必须明确不可用或转人工。">
+                <span class="heat" style="color:#9b6500">真实数据</span>
+                <h3>查不到就不能编</h3>
+                <p>业务接口未接入或失败时，只能明确不可用或转人工。</p></button>
+            <button class="rule gray detail-btn" data-title="必填要素规则"
+                    data-detail="证据摘要：原图第 330-366 行：不同场景存在 storeId、goodsKeyword、billMonth、productionDate 等必填要素。">
+                <span class="heat" style="color:#52708d">要素</span>
+                <h3>缺关键要素先补问</h3>
+                <p>缺门店、商品、账期、日期等信息，不直接给结论。</p></button>
+            <button class="rule red detail-btn" data-title="财务红线"
+                    data-detail="证据摘要：原图第 440-444 行：财务类不让 AI 解释金额、重算违约金、承诺减免或判断抵扣；争议进人工。">
+                <span class="heat" style="color:#a73535">财务</span>
+                <h3>金额争议不自动判断</h3>
+                <p>只展示系统确定字段，不解释、不重算、不承诺。</p></button>
+            <button class="rule violet detail-btn" data-title="转人工规则"
+                    data-detail="证据摘要：原图第 447-450 行：转七鱼前必须携带 traceId、sceneCode、transferId 和上下文摘要。">
+                <span class="heat" style="color:#6254ad">接续</span>
+                <h3>转人工必须带上下文</h3>
+                <p>已问过的问题、已收集要素、场景和摘要不能丢。</p></button>
+            <button class="rule gray detail-btn" data-title="回滚规则"
+                    data-detail="证据摘要：原图第 452-456 行：最高优先级回滚是 fallback_to_qiyu_direct=true，SDK 直接打开七鱼。">
+                <span class="heat" style="color:#52708d">回滚</span>
+                <h3>灰度失败可直接回七鱼</h3>
+                <p>按小程序、场景、能力开关回退，不影响原客服入口。</p></button>
+
+            <section class="decision" aria-label="服务结果决策轴">
+                <div class="decision-label">服务结果</div>
+                <div class="decision-body">
+                    <div class="decision-flow">
+                        <div class="outcome"><b>可自助解决</b><br>低/中风险、要素齐、依据可信：给明确状态、SOP 或规则解释。
+                        </div>
+                        <div class="decision-arrow">→</div>
+                        <div class="diamond">业务裁决<br>身份 / 要素 / 依据 / 风险</div>
+                        <div class="decision-arrow">→</div>
+                        <div class="outcome"><b>必须人工接续</b><br>高风险、争议、低置信度、接口不可用或用户坚持人工：带上下文转七鱼。
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </section>
+    </main>
+</div>
+
+<div class="modal-backdrop" id="modal" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-head"><h2 id="modal-title">详情</h2>
+            <button class="close" type="button" id="close">关闭</button>
+        </div>
+        <pre id="modal-detail"></pre>
+    </section>
+</div>
+
+<script>
+    const modal = document.getElementById('modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalDetail = document.getElementById('modal-detail');
+    const closeBtn = document.getElementById('close');
+    let lastFocus = null;
+
+    function openModal(btn) {
+        lastFocus = btn;
+        modalTitle.textContent = btn.dataset.title || '详情';
+        modalDetail.textContent = btn.dataset.detail || '暂无详情。';
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+        closeBtn.focus();
+    }
+
+    function closeModal() {
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+        if (lastFocus) lastFocus.focus();
+    }
+
+    document.querySelectorAll('.detail-btn').forEach(btn => btn.addEventListener('click', () => openModal(btn)));
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => {
+        if (e.target === modal) closeModal();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && modal.classList.contains('open')) closeModal();
+    });
+</script>
+</body>
+</html>

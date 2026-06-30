@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：业务架构图 skill 从卡片堆叠改为领域地图</title>
+    <style>
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #122033;
+            background: linear-gradient(135deg, #fbfdff, #eef6ff);
+            line-height: 1.62
+        }
+
+        main {
+            max-width: 1180px;
+            margin: auto;
+            padding: 40px 24px 76px
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 28px;
+            line-height: 1.24
+        }
+
+        .sub {
+            margin: 0 0 26px;
+            color: #5d6b80
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, .86);
+            border: 1px solid #d8e6f5;
+            border-radius: 22px;
+            padding: 22px 24px;
+            margin: 18px 0;
+            box-shadow: 0 14px 36px rgba(36, 70, 110, .08)
+        }
+
+        .verdict {
+            border-left: 8px solid #1f6fb2
+        }
+
+        .verdict b {
+            font-size: 20px
+        }
+
+        .grid {
+            display: grid;
+            gap: 16px
+        }
+
+        .cols3 {
+            grid-template-columns:repeat(3, 1fr)
+        }
+
+        .cols2 {
+            grid-template-columns:repeat(2, 1fr)
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid #dce8f6;
+            border-radius: 18px;
+            padding: 18px
+        }
+
+        .card h3 {
+            margin: 0 0 8px;
+            font-size: 17px
+        }
+
+        .tag {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 12px;
+            font-weight: 800;
+            margin-bottom: 10px
+        }
+
+        .bad {
+            background: #ffe9e9;
+            color: #a92323
+        }
+
+        .good {
+            background: #e8f6ee;
+            color: #167149
+        }
+
+        .rec {
+            background: #e8f3ff;
+            color: #175ea8
+        }
+
+        .warn {
+            background: #fff3d8;
+            color: #936000
+        }
+
+        .map {
+            display: grid;
+            grid-template-columns:160px 1fr;
+            gap: 14px;
+            align-items: stretch
+        }
+
+        .lane-label {
+            border-left: 6px solid #1f6fb2;
+            background: #edf6ff;
+            border-radius: 18px;
+            padding: 18px;
+            font-weight: 800;
+            display: flex;
+            align-items: center
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns:repeat(4, 1fr);
+            gap: 12px
+        }
+
+        .node {
+            position: relative;
+            background: #fff;
+            border: 1.5px solid #cbdcf0;
+            border-radius: 16px;
+            padding: 14px;
+            min-height: 100px
+        }
+
+        .node:after {
+            content: "";
+            position: absolute;
+            right: -13px;
+            top: 50%;
+            width: 14px;
+            height: 2px;
+            background: #8fb2d7
+        }
+
+        .row .node:last-child:after {
+            display: none
+        }
+
+        .node h4 {
+            margin: 0 0 6px;
+            font-size: 14px
+        }
+
+        .node p {
+            margin: 0;
+            color: #53657a;
+            font-size: 13px
+        }
+
+        .rulebar {
+            display: grid;
+            grid-template-columns:1fr 1fr 1fr;
+            gap: 12px
+        }
+
+        .rule {
+            border-radius: 16px;
+            padding: 14px;
+            border: 1.5px solid
+        }
+
+        .green {
+            background: #effaf5;
+            border-color: #84c7a6
+        }
+
+        .amber {
+            background: #fff7e2;
+            border-color: #e5bd67
+        }
+
+        .red {
+            background: #fff0f0;
+            border-color: #e58a8a
+        }
+
+        .compare {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid #d9e6f4;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #fff
+        }
+
+        .compare th, .compare td {
+            padding: 12px 14px;
+            border-bottom: 1px solid #e5edf6;
+            vertical-align: top;
+            text-align: left
+        }
+
+        .compare tr:last-child td {
+            border-bottom: 0
+        }
+
+        .compare th {
+            background: #edf5ff
+        }
+
+        .small {
+            font-size: 13px;
+            color: #60718a
+        }
+
+        .code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            background: #f4f7fb;
+            border: 1px solid #dde7f3;
+            border-radius: 8px;
+            padding: 1px 5px
+        }
+
+        .check li {
+            margin: 8px 0
+        }
+
+        @media (max-width: 860px) {
+            main {
+                padding: 24px 14px
+            }
+
+            .cols3, .cols2 {
+                grid-template-columns:1fr
+            }
+
+            .map {
+                grid-template-columns:1fr
+            }
+
+            .row {
+                grid-template-columns:1fr
+            }
+
+            .node:after {
+                right: 50%;
+                top: auto;
+                bottom: -12px;
+                width: 2px;
+                height: 12px
+            }
+
+            .rulebar {
+                grid-template-columns:1fr
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>需求决策：业务架构图 skill 从卡片堆叠改为领域地图</h1>
+    <p class="sub">目标：让“业务架构图”第一眼看出参与方、能力分层、领域对象关系与规则约束，而不是把调研文字分块贴成卡片。</p>
+
+    <section class="panel verdict">
+        <b>诊断结论</b>
+        <p>这份外部项目 HTML 虽然标题叫“业务架构”，但主阅读成本仍来自逐块阅读：摘要、事实口径、参与方、能力层、对象关系、规则矩阵都像独立章节；图形语法没有形成一个可一眼读取的业务结构。它比纯
+            Markdown 好，但仍不是“业务架构图”。</p>
+    </section>
+
+    <section class="panel">
+        <h2>当前失败模式</h2>
+        <div class="grid cols3">
+            <div class="card"><span class="tag bad">问题 1</span>
+                <h3>章节化堆叠</h3>
+                <p>参与方、能力、对象、规则被分成多个区块；用户要上下跳读才能拼出整体。</p></div>
+            <div class="card"><span class="tag bad">问题 2</span>
+                <h3>对象关系太弱</h3>
+                <p>领域对象之间虽然有箭头，但没有成为主图骨架；对象只是另一组卡片。</p></div>
+            <div class="card"><span class="tag bad">问题 3</span>
+                <h3>规则没有约束对象</h3>
+                <p>风险、优先级、接入状态没有贴到对应能力或对象上，像底部说明。</p></div>
+        </div>
+        <p class="small">证据：源 HTML <span class="code">/Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260630_002_业务架构图.html</span>
+            中存在 20 个 article、22 个 h3、22 个 evidence，结构上更接近“卡片型报告”。</p>
+    </section>
+
+    <section class="panel">
+        <h2>推荐的业务架构图应该长这样</h2>
+        <div class="map">
+            <div class="lane-label">参与方边界</div>
+            <div class="row">
+                <div class="node"><h4>客户/门店</h4>
+                    <p>提出业务诉求；只保留角色、诉求、触点。</p></div>
+                <div class="node"><h4>内部业务能力</h4>
+                    <p>承接诉求；不是系统模块清单。</p></div>
+                <div class="node"><h4>业务支撑方</h4>
+                    <p>提供知识、数据、规则和人工承接。</p></div>
+                <div class="node"><h4>外部/人工边界</h4>
+                    <p>明确何时流出自研能力。</p></div>
+            </div>
+            <div class="lane-label">能力分层</div>
+            <div class="row">
+                <div class="node"><h4>入口能力</h4>
+                    <p>统一触点、场景露出、身份上下文。</p></div>
+                <div class="node"><h4>识别能力</h4>
+                    <p>意图、槽位、风险、置信度。</p></div>
+                <div class="node"><h4>履约能力</h4>
+                    <p>查询、规则计算、SOP、反馈。</p></div>
+                <div class="node"><h4>接续能力</h4>
+                    <p>转人工、上下文交接、闭环评测。</p></div>
+            </div>
+            <div class="lane-label">领域对象关系</div>
+            <div class="row">
+                <div class="node"><h4>App / 用户</h4>
+                    <p>拥有会话与可见场景。</p></div>
+                <div class="node"><h4>Session / Message</h4>
+                    <p>产生意图、槽位、卡片与 trace。</p></div>
+                <div class="node"><h4>Scene / Tool / Knowledge</h4>
+                    <p>约束回答来源与风险等级。</p></div>
+                <div class="node"><h4>Handoff / Feedback</h4>
+                    <p>沉淀结果，反哺质量。</p></div>
+            </div>
+        </div>
+        <div class="rulebar" style="margin-top:14px">
+            <div class="rule green"><b>低风险</b><br>可自助回答；来源可追溯。</div>
+            <div class="rule amber"><b>中风险</b><br>必须有业务数据、权限和槽位。</div>
+            <div class="rule red"><b>高风险</b><br>默认转人工或只给解释，不直接承诺结果。</div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>三个优化方案</h2>
+        <table class="compare">
+            <thead>
+            <tr>
+                <th>方案</th>
+                <th>内容</th>
+                <th>优点</th>
+                <th>风险</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td><b>A 最小补丁</b></td>
+                <td>只强化业务架构图规则文字，增加“禁止卡片报告”。</td>
+                <td>改动小。</td>
+                <td>模型仍可能照旧分章节堆卡片。</td>
+            </tr>
+            <tr>
+                <td><b>B 推荐：领域地图骨架门禁</b></td>
+                <td>新增业务架构专用骨架：参与方边界 → 能力分层 → 领域对象关系 → 规则热区；并要求首屏一张主领域地图。</td>
+                <td>能直接针对这次失败模式，约束图必须有主谓宾与对象关系。</td>
+                <td>需要补测试和同步 AGENTS。</td>
+            </tr>
+            <tr>
+                <td><b>C 强模板化</b></td>
+                <td>除 B 外，再提供固定 HTML 模板片段和反例库。</td>
+                <td>执行最稳定。</td>
+                <td>可能过度模板化，导致不同业务都长得太像。</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="panel">
+        <h2>我建议按 B 实施</h2>
+        <ul class="check">
+            <li>在 <span class="code">vibe-diagram/SKILL.md</span> 新增“业务架构图专用骨架”。</li>
+            <li>
+                在测试中加入压力断言：必须包含“参与方边界、能力分层、领域对象关系、规则约束热区、首屏主领域地图、禁止章节化卡片报告”。
+            </li>
+            <li>同步到 AGENTS 后，后续任何触发“业务架构图 / 领域地图”的制图都会默认走这套骨架。</li>
+            <li>
+                不把业务架构图误改成业务流程图；它仍然回答“业务由哪些角色、能力、对象、规则组成”，不是回答“先做什么后做什么”。
+            </li>
+        </ul>
+    </section>
+</main>
+</body>
+</html>

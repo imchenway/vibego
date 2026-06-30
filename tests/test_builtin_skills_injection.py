@@ -8,13 +8,74 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VIBE_DIAGRAM_DIR = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram"
+VIBE_DIAGRAM_SKILL = VIBE_DIAGRAM_DIR / "SKILL.md"
+VIBE_DIAGRAM_REFERENCES = VIBE_DIAGRAM_DIR / "references"
+
+
+def _read_vibe_diagram_core() -> str:
+    """读取 vibe-diagram 常驻薄内核。"""
+
+    return VIBE_DIAGRAM_SKILL.read_text(encoding="utf-8")
+
+
+def _read_vibe_diagram_reference(name: str) -> str:
+    """读取某个图型的按需 reference。"""
+
+    return (VIBE_DIAGRAM_REFERENCES / name).read_text(encoding="utf-8")
+
+
+def _read_vibe_diagram_all_rules() -> str:
+    """读取 vibe-diagram 内核与所有 reference，供规则覆盖类断言使用。"""
+
+    texts = [_read_vibe_diagram_core()]
+    if VIBE_DIAGRAM_REFERENCES.exists():
+        texts.extend(path.read_text(encoding="utf-8") for path in sorted(VIBE_DIAGRAM_REFERENCES.glob("*.md")))
+    return "\n".join(texts)
+
+
+def test_vibe_diagram_core_is_thin_and_routes_to_references() -> None:
+    """vibe-diagram 常驻内核应变薄，并把重图型规则按需路由到 references。"""
+
+    core = _read_vibe_diagram_core()
+
+    assert core.count("\n") + 1 <= 300
+    assert "## 图型规则索引" in core
+    assert "选择图型后必须读取对应 reference" in core
+    assert "读取失败必须 fail-closed" in core
+    assert "references/system-architecture.md" in core
+    assert "references/business-architecture.md" in core
+    assert "references/fault-debugging.md" in core
+    assert "references/feature-iteration.md" in core
+
+
+def test_vibe_diagram_reference_files_exist_and_are_packaged() -> None:
+    """每个生图类型应有独立 reference，并随 Python 包发布。"""
+
+    expected = {
+        "business-architecture.md",
+        "business-flow.md",
+        "code-sequence.md",
+        "decision-communication.md",
+        "fault-debugging.md",
+        "feature-iteration.md",
+        "page-mockup.md",
+        "state-data-model.md",
+        "system-architecture.md",
+        "technical-design.md",
+    }
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert VIBE_DIAGRAM_REFERENCES.is_dir()
+    assert {path.name for path in VIBE_DIAGRAM_REFERENCES.glob("*.md")} == expected
+    assert "data/skills/*/references/*.md" in pyproject_text
 
 
 def test_vibe_diagram_skill_pack_exists_and_is_packaged() -> None:
     """vibe-diagram 图形表达 skill 必须作为 vibego 内置资源随包发布。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_core()
+    all_rule_text = _read_vibe_diagram_all_rules()
     pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     manifest_text = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
     frontmatter = skill_text.split("---", 2)[1]
@@ -22,62 +83,60 @@ def test_vibe_diagram_skill_pack_exists_and_is_packaged() -> None:
     assert "name: vibe-diagram" in skill_text
     assert "description:" in skill_text
     assert "description: Use when" in frontmatter
-    assert "单文件 HTML" in skill_text
-    assert "直接发送 `.html` 文件" in skill_text
-    assert "必须作为文件附件发送" in skill_text
-    assert "禁止只发送 Markdown 链接" in skill_text
-    assert "Telegram 中必须看到文件卡片" in skill_text
-    assert "Codex 默认" in skill_text
-    assert "`file://`" in skill_text
-    assert "Telegram 来源" in skill_text
-    assert "不需要 PNG" in skill_text
-    assert "不要把 `file://` 作为 Telegram 主入口" in skill_text
-    assert "系统架构图" in skill_text
-    assert "BPMN-light" in skill_text
-    assert "禁止把业务流程图画成密集表格" in skill_text
-    assert "事件圆点" in skill_text
-    assert "决策菱形" in skill_text
-    assert "任何图都禁止文字被节点、连线、标签或背景层遮挡" in skill_text
-    assert "顶部标题必须克制" in skill_text
-    assert "顶部描述最多一行" in skill_text
-    assert "箭头必须短、直、少交叉" in skill_text
-    assert "连线不得穿过节点正文" in skill_text
-    assert "发现遮挡或箭头混乱必须重排，不得交付" in skill_text
-    assert "## 自动路由规则" in skill_text
-    assert "路由冲突优先级" in skill_text
-    assert "业务架构图 / 领域地图" in skill_text
-    assert "状态 / 数据模型图" in skill_text
-    assert "技术设计图" in skill_text
-    assert "需求 / 决策沟通图" in skill_text
-    assert "用户提到业务能力、领域、对象、规则、价值链" in skill_text
-    assert "用户提到状态、状态流转、生命周期、实体关系、表结构" in skill_text
-    assert "用户提到 API、数据库、模块、契约、部署、回滚" in skill_text
-    assert "系统架构图规则" in skill_text
-    assert "业务架构图规则" in skill_text
-    assert "业务流程图规则" in skill_text
-    assert "代码时序图规则" in skill_text
-    assert "状态 / 数据模型图规则" in skill_text
-    assert "故障排查图规则" in skill_text
-    assert "页面设计稿规则" in skill_text
-    assert "技术设计与需求决策图规则" in skill_text
-    assert "## AGENTS 配合协议" in skill_text
-    assert "当 AGENTS 要求默认通过 HTML 图沟通时" in skill_text
-    assert "功能迭代 / 开发设计" in skill_text
-    assert "前后差异对比图" in skill_text
-    assert "缺陷排查 / 故障分析" in skill_text
-    assert "高亮根因节点" in skill_text
-    assert "设计定稿 / 方案确认" in skill_text
-    assert "每个 HTML 图都必须能脱离聊天记录独立阅读" in skill_text
+    assert "单文件 HTML" in all_rule_text
+    assert "直接发送 `.html` 文件" in all_rule_text
+    assert "必须作为文件附件发送" in all_rule_text
+    assert "禁止只发送 Markdown 链接" in all_rule_text
+    assert "Telegram 中必须看到文件卡片" in all_rule_text
+    assert "Codex 默认" in all_rule_text
+    assert "`file://`" in all_rule_text
+    assert "Telegram 来源" in all_rule_text
+    assert "不需要 PNG" in all_rule_text
+    assert "不要把 `file://` 作为 Telegram 主入口" in all_rule_text
+    assert "系统架构图" in all_rule_text
+    assert "BPMN-light" in all_rule_text
+    assert "禁止把业务流程图画成密集表格" in all_rule_text
+    assert "事件圆点" in all_rule_text
+    assert "决策菱形" in all_rule_text
+    assert "任何图都禁止文字被节点、连线、标签或背景层遮挡" in all_rule_text
+    assert "顶部标题必须克制" in all_rule_text
+    assert "顶部描述最多一行" in all_rule_text
+    assert "箭头必须短、直、少交叉" in all_rule_text
+    assert "连线不得穿过节点正文" in all_rule_text
+    assert "发现遮挡或箭头混乱必须重排，不得交付" in all_rule_text
+    assert "## 自动路由规则" in all_rule_text
+    assert "路由冲突优先级" in all_rule_text
+    assert "业务架构图 / 领域地图" in all_rule_text
+    assert "状态 / 数据模型图" in all_rule_text
+    assert "技术设计图" in all_rule_text
+    assert "需求 / 决策沟通图" in all_rule_text
+    assert "用户提到业务能力、领域、对象、规则、价值链" in all_rule_text
+    assert "用户提到状态、状态流转、生命周期、实体关系、表结构" in all_rule_text
+    assert "用户提到 API、数据库、模块、契约、部署、回滚" in all_rule_text
+    assert "系统架构图规则" in all_rule_text
+    assert "业务架构图规则" in all_rule_text
+    assert "业务流程图规则" in all_rule_text
+    assert "代码时序图规则" in all_rule_text
+    assert "状态 / 数据模型图规则" in all_rule_text
+    assert "故障排查图规则" in all_rule_text
+    assert "页面设计稿规则" in all_rule_text
+    assert "技术设计与需求决策图规则" in all_rule_text
+    assert "## AGENTS 配合协议" in all_rule_text
+    assert "当 AGENTS 要求默认通过 HTML 图沟通时" in all_rule_text
+    assert "功能迭代 / 开发设计" in all_rule_text
+    assert "前后差异对比图" in all_rule_text
+    assert "缺陷排查 / 故障分析" in all_rule_text
+    assert "高亮根因节点" in all_rule_text
+    assert "设计定稿 / 方案确认" in all_rule_text
+    assert "每个 HTML 图都必须能脱离聊天记录独立阅读" in all_rule_text
     assert "data/skills/*/SKILL.md" in pyproject_text
     assert "data/skills/*/agents/*.yaml" in pyproject_text
     assert "recursive-include vibego_cli/data/skills" in manifest_text
 
-
 def test_vibe_diagram_html_only_delivery_envelope_contract() -> None:
     """vibe-diagram 应支持 HTML-only 信封模式，避免文本通道承载实质内容。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "## HTML-only 交付信封模式" in skill_text
     assert "文本通道只做交付信封" in skill_text
@@ -93,8 +152,7 @@ def test_vibe_diagram_html_only_delivery_envelope_contract() -> None:
 def test_vibe_diagram_delivery_reply_must_stay_concise() -> None:
     """普通 HTML 图交付也应压缩聊天文本，避免 HTML 与聊天双重长文。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "## HTML 图交付后的文本压缩规则" in skill_text
     assert "生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接、验证摘要、待执行动作" in skill_text
@@ -105,8 +163,7 @@ def test_vibe_diagram_delivery_reply_must_stay_concise() -> None:
 def test_vibe_diagram_svg_text_wrapping_rules() -> None:
     """vibe-diagram 必须禁止把长句直接放进单个 SVG text，避免文字溢出节点。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "SVG 节点文字规则" in skill_text
     assert "优先使用 HTML/CSS 节点承载可换行正文" in skill_text
@@ -118,8 +175,7 @@ def test_vibe_diagram_svg_text_wrapping_rules() -> None:
 def test_vibe_diagram_fault_diagram_rules_prioritize_storyline() -> None:
     """故障排查图规则应把主图收敛为来龙去脉，而不是根因长文堆叠。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "故障故事线" in skill_text
     assert "证据阶梯" in skill_text
@@ -132,8 +188,7 @@ def test_vibe_diagram_fault_diagram_rules_prioritize_storyline() -> None:
 def test_vibe_diagram_rules_reject_card_pile_across_all_diagram_types() -> None:
     """所有图型都必须有图形语法，卡片可限用但不能退化成等权重卡片堆。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "卡片堆积不是图" in skill_text
     assert "卡片不是全局禁用，但必须限用" in skill_text
@@ -153,8 +208,7 @@ def test_vibe_diagram_rules_reject_card_pile_across_all_diagram_types() -> None:
 def test_vibe_diagram_direction_defaults_to_north_south_or_diagonal() -> None:
     """复杂 HTML 图默认北向南或左上到右下，纯左到右只适合短流程。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "默认优先北向南" in skill_text
     assert "或采用左上角向右下角的时序图" in skill_text
@@ -166,8 +220,7 @@ def test_vibe_diagram_direction_defaults_to_north_south_or_diagonal() -> None:
 def test_vibe_diagram_rules_prefer_vertical_canvas_and_highlight_change_focus() -> None:
     """HTML 图应利用纵向卷轴，并把根因/修法或前后对照做成视觉焦点。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "宽度服务阅读，长度服务推理" in skill_text
     assert "默认采用正常页面宽度 + 北向南主线 + 局部横向关系" in skill_text
@@ -183,8 +236,7 @@ def test_vibe_diagram_rules_prefer_vertical_canvas_and_highlight_change_focus() 
 def test_vibe_diagram_before_after_direction_must_be_stable() -> None:
     """前后对照必须稳定遵循左 before 右 after，不能左右交替造成误读。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "before 固定在左侧或上方" in skill_text
     assert "after 固定在右侧或下方" in skill_text
@@ -196,8 +248,7 @@ def test_vibe_diagram_before_after_direction_must_be_stable() -> None:
 def test_vibe_diagram_flowchart_grammar_required_for_fault_and_iteration() -> None:
     """故障修复和开发迭代不能只画前后卡片列，主画布必须有流程图语法。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "前后对照只是容器，不是图形语法本身" in skill_text
     assert "功能迭代、开发设计和故障修复必须优先画流程图或流程化对照图" in skill_text
@@ -211,8 +262,7 @@ def test_vibe_diagram_flowchart_grammar_required_for_fault_and_iteration() -> No
 def test_vibe_diagram_fault_diagram_rejects_vertical_card_timeline_escape_hatch() -> None:
     """故障排查图不能用竖向故事线加同形圆角卡片逃逸流程图门禁。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "故障排查图主路径不得由一列同形圆角卡片承担" in skill_text
     assert "左侧竖线、步骤图标、箭头标签只能作为辅助连接" in skill_text
@@ -224,8 +274,7 @@ def test_vibe_diagram_fault_diagram_rejects_vertical_card_timeline_escape_hatch(
 def test_vibe_diagram_must_not_hide_essential_details_behind_click_details() -> None:
     """HTML 图的关键细节必须静态可读，点击弹窗只能做补充，不能成为唯一信息源。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "节点优先承载关键信息" in skill_text
     assert "关键细节必须直接呈现在对应节点内部" in skill_text
@@ -240,8 +289,7 @@ def test_vibe_diagram_must_not_hide_essential_details_behind_click_details() -> 
 def test_vibe_diagram_visual_quality_rejects_raw_utilitarian_svg() -> None:
     """HTML 图不能只是粗糙可用的 SVG 草图，视觉质量也要服务读图。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "禁止交付原始工程草图感的 SVG" in skill_text
     assert "视觉质量必须服务流程阅读" in skill_text
@@ -255,8 +303,7 @@ def test_vibe_diagram_visual_quality_rejects_raw_utilitarian_svg() -> None:
 def test_vibe_diagram_background_should_use_premium_light_surfaces() -> None:
     """浅色背景应以有层次的高级白色为主，而不是扁平纯白或彩色底。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "浅色背景默认以白色为主色" in skill_text
     assert "白色背景不能是扁平纯白" in skill_text
@@ -273,8 +320,7 @@ def test_vibe_diagram_background_should_use_premium_light_surfaces() -> None:
 def test_vibe_diagram_style_must_not_override_accumulated_drawing_requirements() -> None:
     """视觉风格可调整，但不能回退用户已明确过的制图硬要求。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "视觉风格可以调整，但不得覆盖制图硬规则" in skill_text
     assert "柔和卡片风格只是一种视觉外观，不是图形语法豁免" in skill_text
@@ -314,8 +360,7 @@ def test_vibe_diagram_sample_html_uses_flowchart_not_card_grid() -> None:
 def test_vibe_diagram_sample_html_has_mobile_readable_vertical_flowchart() -> None:
     """移动端不能把整张宽 SVG 缩成缩略图，应提供纵向可读流程。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
     html_file = ROOT / "docs" / "TASK_20260627_001_vibe-diagram卡片堆叠故障排查.html"
     html_text = html_file.read_text(encoding="utf-8")
 
@@ -348,8 +393,7 @@ def test_vibe_diagram_macro_topology_sample_modal_details_do_not_show_literal_es
 def test_vibe_diagram_page_mockup_rules_offer_selectable_candidates() -> None:
     """页面设计稿应默认提供可选择的多候选方向，并明确桌面/移动候选排版。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "页面设计稿用于方向评审时，默认在一个单文件 HTML 内提供 3 个候选设计稿" in skill_text
     assert "当用户明确要求多方案、视觉方向开放、或需要覆盖明显不同的信息架构时，可扩展到 4-5 个" in skill_text
@@ -372,8 +416,7 @@ def test_vibe_diagram_page_mockup_rules_offer_selectable_candidates() -> None:
 def test_vibe_diagram_multi_candidate_rules_cover_all_diagram_types() -> None:
     """多方案/多候选表达应逐图型声明适用边界，避免把页面设计稿规则误套到所有图。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "## 多方案 / 多候选表达规则" in skill_text
     assert "多候选不是页面设计稿的专属排版问题，但 3-5 个默认候选只适用于页面设计稿方向评审" in skill_text
@@ -395,8 +438,7 @@ def test_vibe_diagram_multi_candidate_rules_cover_all_diagram_types() -> None:
 def test_vibe_diagram_diagram_type_shape_contracts_are_explicit() -> None:
     """每一种图型都必须声明它应该长成什么样，避免继续退化成文字平铺。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "## 各图型形态与布局契约" in skill_text
     assert "系统架构图必须长成北向南分层拓扑" in skill_text
@@ -412,11 +454,29 @@ def test_vibe_diagram_diagram_type_shape_contracts_are_explicit() -> None:
     assert "如果某类图无法按上述形态画出主谓宾关系，必须换图型" in skill_text
 
 
+def test_vibe_diagram_business_architecture_must_be_domain_map_not_card_report() -> None:
+    """业务架构图应默认是业务化领域地图，不能退化成章节化卡片报告。"""
+
+    skill_text = _read_vibe_diagram_all_rules()
+
+    assert "## 业务架构图专用骨架" in skill_text
+    assert "业务架构图 / 领域地图必须默认回答“业务能力如何被角色、对象和规则约束”" in skill_text
+    assert "参与方边界 → 业务能力层 → 业务对象关系 → 规则约束热区 → 服务结果 / 决策轴" in skill_text
+    assert "主图必须是一张首屏可读的领域地图" in skill_text
+    assert "禁止把摘要、事实口径、能力、对象、规则、证据拆成章节化卡片报告" in skill_text
+    assert "业务对象必须业务化命名" in skill_text
+    assert "客服触点、咨询工单、业务场景、服务依据、人工接续、服务质量资产" in skill_text
+    assert "技术对象名只能作为点击详情或证据补充" in skill_text
+    assert "对象关系必须用动词显式连接：拥有、提出、承接、产生、约束、查询、交接、沉淀、反哺" in skill_text
+    assert "规则约束热区必须贴近被约束的对象或能力" in skill_text
+    assert "如果去掉标题后只剩“摘要卡片 + 事实卡片 + 能力卡片 + 对象卡片 + 规则卡片”，必须重画" in skill_text
+    assert "如果技术对象名比业务对象名更醒目，必须重写节点命名" in skill_text
+
+
 def test_vibe_diagram_layout_arrow_and_collision_rules_are_explicit() -> None:
     """skill 必须定义画布利用、箭头锚点、防重叠和文字防溢出的硬门禁。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "## 布局、箭头与防重叠算法门禁" in skill_text
     assert "画布先分配主轴和泳道，再放节点，最后连线" in skill_text
@@ -443,8 +503,7 @@ def test_vibe_diagram_layout_arrow_and_collision_rules_are_explicit() -> None:
 def test_vibe_diagram_nodes_should_carry_key_details_without_bottom_card_detours() -> None:
     """关键证据和口径应优先写进对应节点，不能为了节点两行化拆到底部卡片增加阅读成本。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "节点优先承载关键信息" in skill_text
     assert "不要为了保持两行节点而把信息拆到底部证据卡片" in skill_text
@@ -458,8 +517,7 @@ def test_vibe_diagram_nodes_should_carry_key_details_without_bottom_card_detours
 def test_vibe_diagram_raw_evidence_should_live_in_node_details_not_bottom_piles() -> None:
     """原始证据不应默认堆到底部，节点摘要可见，长证据进入节点点击详情。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "原始证据默认进入对应节点的点击详情" in skill_text
     assert "节点内静态展示证据编号、结论、可信度或状态即可" in skill_text
@@ -471,8 +529,7 @@ def test_vibe_diagram_raw_evidence_should_live_in_node_details_not_bottom_piles(
 def test_vibe_diagram_system_architecture_must_read_as_global_topology_not_layered_cards() -> None:
     """系统架构图必须第一眼读出全局拓扑，而不是分层卡片清单加证据文字。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "系统架构图不是组件清单、证据清单或分层卡片目录" in skill_text
     assert "首屏必须出现一张北向南全局拓扑总览" in skill_text
@@ -486,8 +543,7 @@ def test_vibe_diagram_system_architecture_must_read_as_global_topology_not_layer
 def test_vibe_diagram_system_architecture_supports_plane_swimlanes_for_medium_complexity() -> None:
     """中等复杂系统架构可用主请求中轴 + 控制/数据/兜底泳道，而不是继续堆卡片。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "中等复杂系统架构可以使用“主请求中轴 + 控制面 / 数据面 / 兜底面泳道”" in skill_text
     assert "控制面不要与主请求节点等权重平铺" in skill_text
@@ -500,8 +556,7 @@ def test_vibe_diagram_system_architecture_supports_plane_swimlanes_for_medium_co
 def test_vibe_diagram_system_architecture_swimlanes_must_preserve_readability() -> None:
     """泳道式系统架构不能退化成多列表格，必须以单主线分段展开降低认知负担。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "泳道不是表格，不得把层级、控制面、主请求、数据面、兜底面全部做成等权重多列网格" in skill_text
     assert "先保留一条粗主线，再把控制、数据、兜底折成贴近当前阶段的侧向胶囊或短注" in skill_text
@@ -513,8 +568,7 @@ def test_vibe_diagram_system_architecture_swimlanes_must_preserve_readability() 
 def test_vibe_diagram_system_architecture_prefers_007_macro_topology_baseline() -> None:
     """用户评审确认 007 宏观拓扑布局是当前最佳基线，应作为系统架构图默认形态。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "系统架构图默认优先采用 007 宏观拓扑基线" in skill_text
     assert "北向南层级 + 层间流向分隔条 + 节点内摘要 + 点击详情证据" in skill_text
@@ -526,8 +580,7 @@ def test_vibe_diagram_system_architecture_prefers_007_macro_topology_baseline() 
 def test_vibe_diagram_system_architecture_rule_priority_keeps_swimlanes_as_exception() -> None:
     """系统架构图规则必须先讲 007 默认基线，再讲泳道例外，避免未来误读成优先升级。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     baseline_index = skill_text.index("系统架构图默认优先采用 007 宏观拓扑基线")
     exception_index = skill_text.index("系统架构图例外形态")
@@ -542,8 +595,7 @@ def test_vibe_diagram_system_architecture_rule_priority_keeps_swimlanes_as_excep
 def test_vibe_diagram_fault_debugging_dedicated_skeleton_prioritizes_current_chain() -> None:
     """故障排查图应先画当前现状链路，再把证据、根因、修法和回滚贴到链路上。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "## 故障排查图专用骨架" in skill_text
     assert "故障排查图必须先画当前现状链路，再画根因和修法" in skill_text
@@ -562,8 +614,7 @@ def test_vibe_diagram_fault_debugging_dedicated_skeleton_prioritizes_current_cha
 def test_vibe_diagram_feature_iteration_dedicated_skeleton_prioritizes_current_and_diff() -> None:
     """功能迭代图应先画当前功能和实现，再把目标、差异、验证和发布闭环映射上去。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
 
     assert "## 功能迭代 / 开发设计图专用骨架" in skill_text
     assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" in skill_text
@@ -595,8 +646,7 @@ def test_worker_start_failure_diagram_uses_wrapping_html_nodes() -> None:
 def test_vibe_diagram_title_must_start_with_generated_diagram_type() -> None:
     """所有 HTML 图顶部标题必须先显示本次触发的生图类型，而不是 skill 名。"""
 
-    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
-    skill_text = skill_file.read_text(encoding="utf-8")
+    skill_text = _read_vibe_diagram_all_rules()
     html_file = ROOT / "docs" / "TASK_20260627_001_vibe-diagram卡片堆叠故障排查.html"
     html_text = html_file.read_text(encoding="utf-8")
 
@@ -611,7 +661,7 @@ def test_vibe_diagram_title_must_start_with_generated_diagram_type() -> None:
 
 
 def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> None:
-    """同步全局 AGENTS 时，应把 vibego 内置 skill 注入到同一个受管块。"""
+    """同步全局 AGENTS 时，应注入 vibe-diagram 薄内核与 reference 索引。"""
 
     target = tmp_path / "AGENTS.md"
     env = os.environ.copy()
@@ -659,18 +709,10 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "卡片堆积不是图" in synced_text
     assert "卡片不是全局禁用，但必须限用" in synced_text
     assert "宽度服务阅读，长度服务推理" in synced_text
-    assert "默认优先北向南" in synced_text
     assert "移动端不能把整张 SVG 等比缩成缩略图" in synced_text
-    assert "移动端必须改为纵向流程" in synced_text
     assert "顶部标题必须以触发的生图类型开头" in synced_text
     assert "不要把 skill 名称写成页面主标题" in synced_text
-    assert "默认使用单图高亮根因与修法" in synced_text
-    assert "before 固定在左侧或上方" in synced_text
-    assert "前后对照只是容器，不是图形语法本身" in synced_text
-    assert "故障排查图主路径不得由一列同形圆角卡片承担" in synced_text
-    assert "隐藏节点正文后只剩一列卡片和弱连接线" in synced_text
     assert "节点优先承载关键信息" in synced_text
-    assert "关键细节必须直接呈现在对应节点内部" in synced_text
     assert "弹窗不得承载唯一信息源" in synced_text
     assert "HTML 图交付后的文本压缩规则" in synced_text
     assert "SVG 节点文字规则" in synced_text
@@ -679,21 +721,17 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "白色背景不能是扁平纯白" in synced_text
     assert "允许使用极轻白底工程网格、点阵或坐标纸肌理" in synced_text
     assert "背景纹理必须全局统一" in synced_text
-    assert "## 多方案 / 多候选表达规则" in synced_text
-    assert "3-5 个默认候选只适用于页面设计稿方向评审" in synced_text
-    assert "真实移动端不得把横向滚动作为唯一阅读路径" in synced_text
-    assert "## 各图型形态与布局契约" in synced_text
-    assert "代码时序图必须长成参与者列 + 时间自上而下" in synced_text
-    assert "## 布局、箭头与防重叠算法门禁" in synced_text
+    assert "## 图型规则索引" in synced_text
+    assert "选择图型后必须读取对应 reference" in synced_text
+    assert "读取失败必须 fail-closed" in synced_text
+    assert "references/system-architecture.md" in synced_text
+    assert "references/business-architecture.md" in synced_text
+    assert "references/fault-debugging.md" in synced_text
+    assert "references/page-mockup.md" in synced_text
     assert "箭头只能连接节点边缘锚点" in synced_text
     assert "如果任一节点重叠、线穿字、文字溢出，必须重排" in synced_text
-    assert "## 故障排查图专用骨架" in synced_text
-    assert "故障排查图必须先画当前现状链路，再画根因和修法" in synced_text
-    assert "## 功能迭代 / 开发设计图专用骨架" in synced_text
-    assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" in synced_text
-    assert "视觉风格可以调整，但不得覆盖制图硬规则" in synced_text
-    assert "前序用户约束必须同时满足" in synced_text
     assert "避免蓝色底、灰色底、米黄纸张感背景" in synced_text
-    assert "任何图都禁止文字被节点、连线、标签或背景层遮挡" in synced_text
-    assert "箭头必须短、直、少交叉" in synced_text
+    assert "系统架构图默认优先采用 007 宏观拓扑基线" not in synced_text
+    assert "故障排查图必须先画当前现状链路，再画根因和修法" not in synced_text
+    assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" not in synced_text
     assert "<!-- vibego-agents:end -->" in synced_text
