@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>调研：提示词能否唤起 Codex request_user_input 提问器</title>
+    <style>
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #132238;
+            background: linear-gradient(135deg, #fbfdff, #eef6ff);
+            line-height: 1.65
+        }
+
+        main {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 40px 24px 72px
+        }
+
+        h1 {
+            font-size: 28px;
+            line-height: 1.25;
+            margin: 0 0 8px
+        }
+
+        .sub {
+            color: #5d6b82;
+            margin: 0 0 26px
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, .82);
+            border: 1px solid #d9e5f5;
+            border-radius: 22px;
+            padding: 22px 24px;
+            margin: 18px 0;
+            box-shadow: 0 14px 38px rgba(49, 88, 135, .08)
+        }
+
+        .verdict {
+            border-left: 7px solid #1d73d8
+        }
+
+        .verdict strong {
+            font-size: 20px
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns:repeat(3, 1fr);
+            gap: 16px
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid #dce7f4;
+            border-radius: 18px;
+            padding: 18px
+        }
+
+        .card h3 {
+            margin: 0 0 8px;
+            font-size: 16px
+        }
+
+        .tag {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-weight: 700;
+            font-size: 12px;
+            margin-bottom: 10px
+        }
+
+        .no {
+            background: #ffe8e8;
+            color: #a72020
+        }
+
+        .yes {
+            background: #e8f6ee;
+            color: #167149
+        }
+
+        .warn {
+            background: #fff3d7;
+            color: #966317
+        }
+
+        .flow {
+            display: grid;
+            grid-template-columns:1fr auto 1fr auto 1fr;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px
+        }
+
+        .node {
+            background: #fff;
+            border: 1.5px solid #cbdcf1;
+            border-radius: 16px;
+            padding: 14px;
+            min-height: 90px
+        }
+
+        .arrow {
+            color: #2870c9;
+            font-weight: 900;
+            font-size: 22px
+        }
+
+        .evidence li {
+            margin: 8px 0
+        }
+
+        .sources a {
+            color: #125ab5
+        }
+
+        .small {
+            font-size: 13px;
+            color: #60708a
+        }
+
+        .code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            background: #f3f7fc;
+            border: 1px solid #dce7f4;
+            border-radius: 10px;
+            padding: 2px 6px
+        }
+
+        @media (max-width: 780px) {
+            main {
+                padding: 24px 14px
+            }
+
+            .grid {
+                grid-template-columns:1fr
+            }
+
+            .flow {
+                grid-template-columns:1fr
+            }
+
+            .arrow {
+                transform: rotate(90deg);
+                justify-self: center
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>调研：提示词不能直接唤起 Codex 原生 request_user_input 提问器</h1>
+    <p class="sub">本页只回答“能否通过 AGENTS/提示词让 Default mode 自动弹出类似 Plan mode 的点击提问器”。本轮不修改
+        AGENTS。</p>
+
+    <section class="panel verdict">
+        <strong>结论：不能只靠提示词稳定唤起。</strong>
+        <p>在当前 Codex Desktop 会话里，<span class="code">request_user_input</span> 是宿主按协作模式暴露的工具能力，不是
+            AGENTS.md 或普通 prompt 能自行开启的 UI 能力。提示词最多能要求“如果工具可用就必须用；不可用就停下来用单个阻塞问题等待用户确认”。
+        </p>
+    </section>
+
+    <section class="panel">
+        <h2>证据链</h2>
+        <ul class="evidence">
+            <li><b>当前会话实测：</b>在 Default mode 调用 <span class="code">request_user_input</span> 返回
+                “request_user_input is unavailable in Default mode”。这说明工具暴露受当前协作模式控制。
+            </li>
+            <li><b>当前工具契约：</b>开发者上下文声明该工具 “only available in Plan mode”，Default mode 下不可用。</li>
+            <li><b>官方 Codex 文档：</b>Plan mode 被定义为让 Codex 先收集上下文、提澄清问题、形成计划再实现；入口是 <span
+                    class="code">/plan</span> 或 <span class="code">Shift+Tab</span>，而不是 AGENTS prompt 自动开启。
+            </li>
+            <li><b>官方 App Server 文档：</b>存在实验性的 <span class="code">tool/requestUserInput</span>，用于让客户端向用户展示
+                1-3 个短问题；但文档没有说明普通 prompt 可以把该工具注入当前 turn。
+            </li>
+            <li><b>官方配置文档：</b>只看到 Plan mode 的推理强度配置 <span class="code">plan_mode_reasoning_effort</span>，未看到“Default
+                mode 自动开启 Plan 提问器”的配置项。
+            </li>
+        </ul>
+    </section>
+
+    <section class="panel">
+        <h2>可行路径对比</h2>
+        <div class="grid">
+            <div class="card">
+                <span class="tag no">不可行</span>
+                <h3>AGENTS 直接召唤提问器</h3>
+                <p>仅通过提示词写“必须使用
+                    request_user_input”，在工具未暴露时会失败；模型不能改变当前协作模式或工具列表。</p>
+            </div>
+            <div class="card">
+                <span class="tag yes">可行</span>
+                <h3>能力感知门禁</h3>
+                <p>AGENTS 规定：若提问器可用，必须用点击确认；若不可用，必须停止执行并问一个阻塞问题，等用户确认后再继续。</p>
+            </div>
+            <div class="card">
+                <span class="tag warn">需产品/入口支持</span>
+                <h3>默认进入 Plan-like 模式</h3>
+                <p>如果要真正每次都有原生点击提问器，需要 Codex 入口层支持默认 Plan mode，或由客户端/桥接层显式提供
+                    requestUserInput 能力。</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>推荐落地设计</h2>
+        <div class="flow">
+            <div class="node"><b>用户提出需求</b><br>默认认为尚未授权实施。</div>
+            <div class="arrow">→</div>
+            <div class="node"><b>能力检查</b><br>如果当前工具列表有 request_user_input，就用提问器；否则不执行，只问一个阻塞问题。
+            </div>
+            <div class="arrow">→</div>
+            <div class="node"><b>用户确认下一步</b><br>确认后才进入方案、计划、实现或验证；未确认则停在对话阶段。</div>
+        </div>
+        <p class="small">这能接近 Plan mode 的协作效果，但不能把 Default mode 伪装成 Plan mode。</p>
+    </section>
+
+    <section class="panel sources">
+        <h2>官方来源</h2>
+        <ul>
+            <li><a href="https://developers.openai.com/codex/learn/best-practices">Codex Best Practices</a>：Plan mode
+                用于先收集上下文、提澄清问题、形成计划。
+            </li>
+            <li><a href="https://developers.openai.com/codex/app-server">Codex App Server</a>：列出 <span class="code">tool/requestUserInput</span>
+                与 <span class="code">collaborationMode</span> 等接口事实。
+            </li>
+            <li><a href="https://developers.openai.com/codex/config-reference">Codex Configuration Reference</a>：只发现
+                Plan mode 推理强度配置，未发现 Default mode 自动开启提问器配置。
+            </li>
+            <li><a href="https://developers.openai.com/codex/changelog">Codex Changelog</a>：提到 Plan mode questions
+                的通知改进，进一步说明这是 Plan mode 问题流的一部分。
+            </li>
+        </ul>
+    </section>
+</main>
+</body>
+</html>

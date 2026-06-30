@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：系统架构图回到 007 宏观拓扑基线</title>
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: oklch(25% 0.035 255);
+            --muted: oklch(49% 0.035 255);
+            --line: oklch(90% 0.018 255);
+            --paper: oklch(99% 0.006 250);
+            --panel: oklch(98% 0.009 250);
+            --blue: oklch(54% 0.18 255);
+            --green: oklch(54% 0.13 170);
+            --amber: oklch(58% 0.13 75);
+            --red: oklch(55% 0.16 25);
+            --shadow: 0 18px 52px color-mix(in oklch, var(--blue) 12%, transparent);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+            background: radial-gradient(circle at 12% 7%, color-mix(in oklch, var(--blue) 11%, transparent), transparent 30rem),
+            radial-gradient(circle at 90% 10%, color-mix(in oklch, var(--green) 8%, transparent), transparent 28rem),
+            linear-gradient(color-mix(in oklch, var(--blue) 5%, transparent) 1px, transparent 1px),
+            linear-gradient(90deg, color-mix(in oklch, var(--blue) 5%, transparent) 1px, transparent 1px),
+            linear-gradient(180deg, var(--paper), oklch(97.5% 0.012 250));
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1120px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 30px 0 56px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 29px;
+            line-height: 1.18;
+            letter-spacing: -.035em;
+        }
+
+        .lead {
+            margin: 8px 0 18px;
+            color: var(--muted);
+            max-width: 940px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .panel, .decision, .compare {
+            background: color-mix(in oklch, var(--panel) 94%, transparent);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            overflow-wrap: anywhere;
+        }
+
+        .panel {
+            padding: 16px 18px;
+        }
+
+        .panel h2, .decision h2, .compare h2 {
+            margin: 0 0 8px;
+            font-size: 17px;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 11px;
+        }
+
+        .chip {
+            border: 1px solid var(--line);
+            background: var(--paper);
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        .chip.blue {
+            color: var(--blue);
+            background: oklch(96% 0.035 255);
+            border-color: color-mix(in oklch, var(--blue) 22%, var(--line));
+        }
+
+        .chip.green {
+            color: var(--green);
+            background: oklch(96% 0.035 170);
+            border-color: color-mix(in oklch, var(--green) 22%, var(--line));
+        }
+
+        .chip.amber {
+            color: var(--amber);
+            background: oklch(97% 0.04 78);
+            border-color: color-mix(in oklch, var(--amber) 24%, var(--line));
+        }
+
+        .chip.red {
+            color: var(--red);
+            background: oklch(96% 0.035 25);
+            border-color: color-mix(in oklch, var(--red) 22%, var(--line));
+        }
+
+        .decision {
+            padding: 18px;
+        }
+
+        .baseline {
+            display: grid;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .layer {
+            display: grid;
+            grid-template-columns: 156px minmax(0, 1fr);
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .label {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: oklch(96% 0.035 255);
+            padding: 12px;
+            min-height: 76px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .label b {
+            color: var(--blue);
+            font-size: 12px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .label strong {
+            display: block;
+            margin-top: 3px;
+        }
+
+        .nodes {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .node {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: var(--paper);
+            padding: 11px 12px;
+            min-height: 76px;
+        }
+
+        .node strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .node span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .flow {
+            display: grid;
+            grid-template-columns: 156px minmax(0, 1fr);
+            gap: 12px;
+            align-items: center;
+        }
+
+        .flow-name {
+            color: var(--muted);
+            font-size: 12px;
+            text-align: right;
+            padding-right: 8px;
+        }
+
+        .line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--blue);
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .line::before {
+            content: "";
+            height: 4px;
+            border-radius: 999px;
+            flex: 1;
+            background: linear-gradient(90deg, var(--blue), color-mix(in oklch, var(--blue) 35%, var(--paper)));
+        }
+
+        .line::after {
+            content: "↓";
+            font-size: 16px;
+        }
+
+        .compare {
+            padding: 18px;
+            margin-top: 16px;
+        }
+
+        .compare-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+        }
+
+        .verdict {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 13px;
+            background: var(--paper);
+            min-height: 144px;
+        }
+
+        .verdict h3 {
+            margin: 0 0 8px;
+            font-size: 15px;
+        }
+
+        .verdict p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .verdict.good {
+            border-color: color-mix(in oklch, var(--green) 22%, var(--line));
+            background: oklch(96% 0.035 170);
+        }
+
+        .verdict.bad {
+            border-color: color-mix(in oklch, var(--red) 18%, var(--line));
+            background: oklch(97% 0.02 25);
+        }
+
+        .rules {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        li {
+            margin: 4px 0;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 820px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            h1 {
+                font-size: 23px;
+            }
+
+            .grid, .layer, .flow, .compare-grid, .rules {
+                grid-template-columns: 1fr;
+            }
+
+            .nodes {
+                grid-template-columns: 1fr;
+            }
+
+            .flow-name {
+                text-align: left;
+                padding-right: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>需求决策：系统架构图回到 007 宏观拓扑基线</h1>
+    <p class="lead">结论：用户评审确认 007
+        是目前最可读的系统架构图布局。后续不要默认升级为多泳道、五列表格或分段故事线。</p>
+
+    <section class="grid" aria-label="结论摘要">
+        <div class="panel">
+            <h2>保留什么</h2>
+            <p>保留 007 的北向南层级、层间流向分隔条、节点内摘要、点击详情证据。这四件事共同构成系统架构图默认基线。</p>
+            <div class="chips"><span class="chip blue">北向南层级</span><span class="chip green">节点摘要</span><span
+                    class="chip amber">流向分隔条</span></div>
+        </div>
+        <div class="panel">
+            <h2>停止什么</h2>
+            <p>停止把“优化空间”理解成增加结构。010 的多泳道和 011 的分段故事线都不应成为默认升级方向。</p>
+            <div class="chips"><span class="chip red">不做五列表格</span><span class="chip red">不默认分段故事线</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="decision" aria-labelledby="baseline-title">
+        <h2 id="baseline-title">007 基线应该长成这样</h2>
+        <div class="baseline">
+            <div class="layer">
+                <div class="label"><b>Layer 01</b><strong>外部入口</strong></div>
+                <div class="nodes">
+                    <div class="node"><strong>多小程序入口</strong><span>用户侧边界</span></div>
+                    <div class="node"><strong>宿主七鱼 SDK</strong><span>兜底边界</span></div>
+                    <div class="node"><strong>入口状态</strong><span>E# 证据角标</span></div>
+                </div>
+            </div>
+            <div class="flow">
+                <div class="flow-name">请求进入</div>
+                <div class="line">open / message / transfer</div>
+            </div>
+            <div class="layer">
+                <div class="label"><b>Layer 02</b><strong>接入与服务</strong></div>
+                <div class="nodes">
+                    <div class="node"><strong>Miniapp SDK</strong><span>统一协议</span></div>
+                    <div class="node"><strong>Gateway / Facade</strong><span>服务门面</span></div>
+                    <div class="node"><strong>Guard / Flags</strong><span>控制面旁注</span></div>
+                </div>
+            </div>
+            <div class="flow">
+                <div class="flow-name">进入 Agent</div>
+                <div class="line">识别场景 → 补槽 → 执行 / 追问</div>
+            </div>
+            <div class="layer">
+                <div class="label"><b>Layer 03</b><strong>Agent 与数据面</strong></div>
+                <div class="nodes">
+                    <div class="node"><strong>AgentOrchestrator</strong><span>核心编排</span></div>
+                    <div class="node"><strong>Tools / Knowledge</strong><span>依赖与缺口</span></div>
+                    <div class="node"><strong>PostgreSQL / Trace</strong><span>状态与观测</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="compare" aria-labelledby="compare-title">
+        <h2 id="compare-title">三版复盘</h2>
+        <div class="compare-grid">
+            <div class="verdict good"><h3>007：保留为默认</h3>
+                <p>层级、流向、证据位置都平衡。第一眼像系统架构图，而不是清单或教程。</p></div>
+            <div class="verdict bad"><h3>010：作为反例</h3>
+                <p>五列泳道让读者横向扫表，信息更全但主线更弱。</p></div>
+            <div class="verdict bad"><h3>011：作为反例</h3>
+                <p>分段后更易读，但架构拓扑感变弱，更像讲解稿。</p></div>
+        </div>
+    </section>
+
+    <section class="rules" aria-label="后续规则">
+        <div class="panel"><h2>默认规则</h2>
+            <ul>
+                <li>系统架构图先用 007 基线。</li>
+                <li>节点保留摘要和状态，原始证据进详情。</li>
+                <li>层间用短分隔条表达主流向。</li>
+            </ul>
+        </div>
+        <div class="panel"><h2>例外规则</h2>
+            <ul>
+                <li>只有 007 无法表达两个以上独立平面时，才考虑侧向泳道。</li>
+                <li>即使用泳道，也不能做五列等权重表格。</li>
+                <li>分段故事线只用于讲解，不作为架构图默认形态。</li>
+            </ul>
+        </div>
+    </section>
+
+    <footer>任务编码：TASK_20260630_012；任务名称：vibe-diagram 系统架构图回到 007 基线。</footer>
+</main>
+</body>
+</html>

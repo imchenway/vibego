@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -204,7 +205,7 @@ def test_vibe_diagram_flowchart_grammar_required_for_fault_and_iteration() -> No
     assert "before/after 每一侧内部也必须是流程图" in skill_text
     assert "禁止把 before/after 列画成普通说明卡片列表" in skill_text
     assert "根因节点和修法节点必须落在流程路径上" in skill_text
-    assert "辅助证据只能作为流程节点的证据锚点" in skill_text
+    assert "辅助证据优先写入流程节点内部" in skill_text
 
 
 def test_vibe_diagram_fault_diagram_rejects_vertical_card_timeline_escape_hatch() -> None:
@@ -226,11 +227,14 @@ def test_vibe_diagram_must_not_hide_essential_details_behind_click_details() -> 
     skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
     skill_text = skill_file.read_text(encoding="utf-8")
 
-    assert "关键细节必须直接呈现在主图或紧邻主图的可见区域" in skill_text
+    assert "节点优先承载关键信息" in skill_text
+    assert "关键细节必须直接呈现在对应节点内部" in skill_text
     assert "点击详情只能用于补充、放大或复制主图已可见的信息" in skill_text
     assert "不得把验收标准、规则口径、接口/DB 契约、测试矩阵、风险回滚、根因证据或方案优缺点仅放入弹窗" in skill_text
     assert "弹窗不得承载唯一信息源" in skill_text
     assert "如果关闭 JavaScript 或不点击任何节点仍读不懂主结论，必须重画" in skill_text
+    assert "点击详情里的换行必须使用真实换行、`&#10;` 或渲染前归一化" in skill_text
+    assert "禁止让用户看到字面量 `\\n`" in skill_text
 
 
 def test_vibe_diagram_visual_quality_rejects_raw_utilitarian_svg() -> None:
@@ -328,6 +332,19 @@ def test_vibe_diagram_sample_html_has_mobile_readable_vertical_flowchart() -> No
     assert "@media (max-width: 720px)" in html_text
 
 
+def test_vibe_diagram_macro_topology_sample_modal_details_do_not_show_literal_escaped_newlines() -> None:
+    """宏观拓扑样例的点击详情不应把转义换行 \\n 当成正文显示。"""
+
+    html_file = ROOT / "docs" / "TASK_20260630_007_vibe-diagram系统架构图宏观拓扑示例.html"
+    html_text = html_file.read_text(encoding="utf-8")
+    detail_values = re.findall(r'data-detail="([^"]*)"', html_text)
+
+    assert detail_values
+    assert "&#10;" in html_text
+    assert all("\\n" not in value for value in detail_values)
+    assert "normalizeDetailText" in html_text
+
+
 def test_vibe_diagram_page_mockup_rules_offer_selectable_candidates() -> None:
     """页面设计稿应默认提供可选择的多候选方向，并明确桌面/移动候选排版。"""
 
@@ -403,21 +420,123 @@ def test_vibe_diagram_layout_arrow_and_collision_rules_are_explicit() -> None:
 
     assert "## 布局、箭头与防重叠算法门禁" in skill_text
     assert "画布先分配主轴和泳道，再放节点，最后连线" in skill_text
-    assert "宽度用于承载泳道、参与者列、before/after 或局部对照" in skill_text
+    assert "宽度用于承载泳道、参与者列、before/after" in skill_text
+    assert "或局部对照" in skill_text
     assert "高度用于承载时间、阶段、因果递进和证据展开" in skill_text
     assert "节点先排版后连线" in skill_text
     assert "箭头只能连接节点边缘锚点" in skill_text
     assert "北向南主线使用下边缘到上边缘锚点" in skill_text
     assert "代码时序图消息箭头必须连接参与者生命线中心或消息端点" in skill_text
     assert "禁止箭头穿过节点正文" in skill_text
-    assert "节点间距不得小于 16px，主路径阶段间距不得小于 28px" in skill_text
+    assert "节点间距不得小于" in skill_text
+    assert "16px，主路径阶段间距不得小于" in skill_text
+    assert "28px" in skill_text
     assert "同层节点必须等高或按内容自适应后统一留白" in skill_text
     assert "连线层必须低于节点层" in skill_text
     assert "节点正文必须使用 HTML/CSS 可换行容器" in skill_text
-    assert "必须通过 max-width、min-height、line-height、overflow-wrap:anywhere" in skill_text
+    assert "必须通过 max-width、min-height、height:auto、line-height、overflow-wrap:anywhere" in skill_text
     assert "不得用固定高度裁切文字" in skill_text
     assert "如果任一节点重叠、线穿字、文字溢出，必须重排" in skill_text
     assert "必须用桌面宽度和 390px 宽度分别检查" in skill_text
+
+
+def test_vibe_diagram_nodes_should_carry_key_details_without_bottom_card_detours() -> None:
+    """关键证据和口径应优先写进对应节点，不能为了节点两行化拆到底部卡片增加阅读成本。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "节点优先承载关键信息" in skill_text
+    assert "不要为了保持两行节点而把信息拆到底部证据卡片" in skill_text
+    assert "节点可以限制宽度，但高度必须随内容自动增长" in skill_text
+    assert "优先增高节点和自动换行，而不是把关键细节挪到图外底部卡片" in skill_text
+    assert "证据、风险、测试、回滚默认写入对应主路径节点" in skill_text
+    assert "底部证据/矩阵只承载跨多个节点的汇总或原始长材料索引" in skill_text
+    assert "禁止用 line-clamp、max-height 或 overflow:hidden 裁掉节点正文" in skill_text
+
+
+def test_vibe_diagram_raw_evidence_should_live_in_node_details_not_bottom_piles() -> None:
+    """原始证据不应默认堆到底部，节点摘要可见，长证据进入节点点击详情。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "原始证据默认进入对应节点的点击详情" in skill_text
+    assert "节点内静态展示证据编号、结论、可信度或状态即可" in skill_text
+    assert "不要默认在底部铺完整证据卡片" in skill_text
+    assert "底部证据区只用于跨节点冲突裁决、全局证据索引或测试矩阵" in skill_text
+    assert "点击详情可以承载文件路径、行号、日志片段、SQL、JSON、命令输出和截图说明" in skill_text
+
+
+def test_vibe_diagram_system_architecture_must_read_as_global_topology_not_layered_cards() -> None:
+    """系统架构图必须第一眼读出全局拓扑，而不是分层卡片清单加证据文字。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "系统架构图不是组件清单、证据清单或分层卡片目录" in skill_text
+    assert "首屏必须出现一张北向南全局拓扑总览" in skill_text
+    assert "外部入口、接入/网关、业务服务/Agent、工具与中间件、状态/数据/观测按层成带状排列" in skill_text
+    assert "层间必须画出主请求流、控制流、数据读写流或兜底流" in skill_text
+    assert "同层节点只保留组件名、职责、协议/接口、运行状态和关键约束" in skill_text
+    assert "源码证据、文件路径和长说明进入该节点点击详情" in skill_text
+    assert "如果第一眼只能看到多列卡片和证据文字，看不出入口到数据面的流向，必须重画" in skill_text
+
+
+def test_vibe_diagram_system_architecture_supports_plane_swimlanes_for_medium_complexity() -> None:
+    """中等复杂系统架构可用主请求中轴 + 控制/数据/兜底泳道，而不是继续堆卡片。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "中等复杂系统架构可以使用“主请求中轴 + 控制面 / 数据面 / 兜底面泳道”" in skill_text
+    assert "控制面不要与主请求节点等权重平铺" in skill_text
+    assert "数据/知识面应作为南向或侧向依赖泳道" in skill_text
+    assert "兜底/人工流适合画成侧边 rail" in skill_text
+    assert "运行语义条" in skill_text
+    assert "状态角标" in skill_text
+
+
+def test_vibe_diagram_system_architecture_swimlanes_must_preserve_readability() -> None:
+    """泳道式系统架构不能退化成多列表格，必须以单主线分段展开降低认知负担。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "泳道不是表格，不得把层级、控制面、主请求、数据面、兜底面全部做成等权重多列网格" in skill_text
+    assert "先保留一条粗主线，再把控制、数据、兜底折成贴近当前阶段的侧向胶囊或短注" in skill_text
+    assert "单个视口内主路径节点建议 3-5 个" in skill_text
+    assert "如果需要 5 列以上才能表达，必须改为分段卷轴、阶段轨道或多张局部小图" in skill_text
+    assert "侧向泳道只能服务当前主线阶段，不得形成第二张需要逐格阅读的矩阵" in skill_text
+
+
+def test_vibe_diagram_system_architecture_prefers_007_macro_topology_baseline() -> None:
+    """用户评审确认 007 宏观拓扑布局是当前最佳基线，应作为系统架构图默认形态。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    assert "系统架构图默认优先采用 007 宏观拓扑基线" in skill_text
+    assert "北向南层级 + 层间流向分隔条 + 节点内摘要 + 点击详情证据" in skill_text
+    assert "不要因为“还有优化空间”就自动升级为多泳道、五列表格或分段故事线" in skill_text
+    assert "只有当 007 基线无法表达清楚两个以上独立平面时，才考虑侧向泳道" in skill_text
+    assert "泳道和分段图是例外补救形态，不是系统架构图的默认升级方向" in skill_text
+
+
+def test_vibe_diagram_system_architecture_rule_priority_keeps_swimlanes_as_exception() -> None:
+    """系统架构图规则必须先讲 007 默认基线，再讲泳道例外，避免未来误读成优先升级。"""
+
+    skill_file = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md"
+    skill_text = skill_file.read_text(encoding="utf-8")
+
+    baseline_index = skill_text.index("系统架构图默认优先采用 007 宏观拓扑基线")
+    exception_index = skill_text.index("系统架构图例外形态")
+
+    assert baseline_index < exception_index
+    assert "系统架构图例外形态不是优化方向" in skill_text
+    assert "除非用户明确要求或 007 基线验证失败，否则不要使用泳道或分段故事线" in skill_text
+    assert "007 基线验证失败" in skill_text
+    assert "不要把 010/011 当作推荐模板" in skill_text
 
 
 def test_vibe_diagram_fault_debugging_dedicated_skeleton_prioritizes_current_chain() -> None:
@@ -456,7 +575,7 @@ def test_vibe_diagram_feature_iteration_dedicated_skeleton_prioritizes_current_a
     assert "体验变更用 before/after 用户主路径对照" in skill_text
     assert "技术链路变更用 current/target 技术时序或数据流对照" in skill_text
     assert "大迭代用用户体验层 → 系统实现层 → 验证发布层" in skill_text
-    assert "AC、测试矩阵、灰度发布、监控和回滚动作必须贴近差异节点" in skill_text
+    assert "AC、测试矩阵、灰度发布、监控和回滚动作必须写入或贴近差异节点" in skill_text
 
 
 def test_worker_start_failure_diagram_uses_wrapping_html_nodes() -> None:
@@ -550,7 +669,8 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "前后对照只是容器，不是图形语法本身" in synced_text
     assert "故障排查图主路径不得由一列同形圆角卡片承担" in synced_text
     assert "隐藏节点正文后只剩一列卡片和弱连接线" in synced_text
-    assert "关键细节必须直接呈现在主图或紧邻主图的可见区域" in synced_text
+    assert "节点优先承载关键信息" in synced_text
+    assert "关键细节必须直接呈现在对应节点内部" in synced_text
     assert "弹窗不得承载唯一信息源" in synced_text
     assert "HTML 图交付后的文本压缩规则" in synced_text
     assert "SVG 节点文字规则" in synced_text

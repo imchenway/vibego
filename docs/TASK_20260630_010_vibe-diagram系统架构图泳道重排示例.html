@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>系统架构：多小程序客服智能体的泳道式拓扑</title>
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #102033;
+            --muted: #62748b;
+            --line: #d7e4f1;
+            --surface: rgba(255, 255, 255, .91);
+            --blue: #226bd8;
+            --blue-2: #8bbcff;
+            --green: #0f8f72;
+            --green-2: #74d8bb;
+            --amber: #a76806;
+            --amber-2: #ffd28a;
+            --red: #bf3644;
+            --shadow: 0 20px 60px rgba(25, 72, 124, .12);
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.58 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at 13% 6%, rgba(34, 107, 216, .10), transparent 29rem),
+            radial-gradient(circle at 90% 10%, rgba(15, 143, 114, .08), transparent 28rem),
+            linear-gradient(rgba(34, 107, 216, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(34, 107, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fcfeff 0%, #f7fbff 60%, #fff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1280px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 30px 0 56px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(22px, 3vw, 30px);
+            line-height: 1.18;
+            letter-spacing: -.035em;
+        }
+
+        .lead {
+            margin: 8px 0 18px;
+            color: var(--muted);
+            max-width: 1080px;
+        }
+
+        .topline {
+            display: grid;
+            grid-template-columns: 1.1fr .9fr;
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            padding: 16px 18px;
+            box-shadow: var(--shadow);
+            overflow-wrap: anywhere;
+        }
+
+        .panel h2 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 11px;
+        }
+
+        .chip {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 850;
+            color: #29435f;
+        }
+
+        .chip.blue {
+            color: var(--blue);
+            background: #edf5ff;
+            border-color: rgba(34, 107, 216, .20);
+        }
+
+        .chip.green {
+            color: var(--green);
+            background: #effcf8;
+            border-color: rgba(15, 143, 114, .20);
+        }
+
+        .chip.amber {
+            color: var(--amber);
+            background: #fff7e9;
+            border-color: rgba(167, 104, 6, .23);
+        }
+
+        .chip.red {
+            color: var(--red);
+            background: #fff1f3;
+            border-color: rgba(191, 54, 68, .22);
+        }
+
+        .canvas {
+            position: relative;
+            background: rgba(255, 255, 255, .82);
+            border: 1px solid var(--line);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+            padding: 18px;
+            overflow: hidden;
+        }
+
+        .canvas-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+            margin: 2px 4px 16px;
+        }
+
+        .canvas-header h2 {
+            margin: 0;
+            font-size: 19px;
+            letter-spacing: -.02em;
+        }
+
+        .canvas-header p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            max-width: 690px;
+        }
+
+        .diagram-grid {
+            display: grid;
+            grid-template-columns: 136px 218px minmax(280px, 1.1fr) 258px 226px;
+            grid-template-rows: auto repeat(6, minmax(92px, auto)) auto;
+            gap: 10px 12px;
+            align-items: stretch;
+            position: relative;
+        }
+
+        .lane-head {
+            border: 1px solid var(--line);
+            background: #f6faff;
+            border-radius: 16px;
+            padding: 10px 12px;
+            min-height: 60px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            overflow-wrap: anywhere;
+        }
+
+        .lane-head b {
+            display: block;
+            font-size: 12px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--blue);
+        }
+
+        .lane-head span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .lane-head.control b {
+            color: var(--amber);
+        }
+
+        .lane-head.data b {
+            color: var(--green);
+        }
+
+        .lane-head.fallback b {
+            color: var(--amber);
+        }
+
+        .layer-label {
+            border-left: 5px solid var(--blue);
+            border-radius: 16px;
+            background: linear-gradient(180deg, #f1f7ff, #fff);
+            padding: 12px;
+            min-height: 88px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .layer-label b {
+            color: var(--blue);
+            font-size: 11px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .layer-label strong {
+            display: block;
+            margin: 3px 0;
+            font-size: 15px;
+        }
+
+        .layer-label span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .empty {
+            border: 1px dashed rgba(145, 163, 184, .35);
+            border-radius: 16px;
+            background: rgba(250, 252, 255, .55);
+            min-height: 74px;
+        }
+
+        .node {
+            appearance: none;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, .97);
+            border-radius: 18px;
+            min-height: 92px;
+            padding: 13px 14px;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+            box-shadow: 0 10px 26px rgba(22, 63, 108, .06);
+            transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+            overflow-wrap: anywhere;
+            position: relative;
+            z-index: 2;
+        }
+
+        .node:hover {
+            transform: translateY(-2px);
+            border-color: rgba(34, 107, 216, .45);
+            box-shadow: 0 18px 36px rgba(34, 107, 216, .12);
+        }
+
+        .node:focus-visible {
+            outline: 3px solid rgba(34, 107, 216, .34);
+            outline-offset: 3px;
+        }
+
+        .node strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 15px;
+        }
+
+        .node p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .node .meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 8px;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid rgba(34, 107, 216, .18);
+            background: #edf5ff;
+            color: var(--blue);
+            border-radius: 999px;
+            padding: 2px 7px;
+            font-size: 11px;
+            font-weight: 900;
+        }
+
+        .tag.green {
+            border-color: rgba(15, 143, 114, .20);
+            background: #effcf8;
+            color: var(--green);
+        }
+
+        .tag.amber {
+            border-color: rgba(167, 104, 6, .22);
+            background: #fff7e9;
+            color: var(--amber);
+        }
+
+        .tag.red {
+            border-color: rgba(191, 54, 68, .22);
+            background: #fff1f3;
+            color: var(--red);
+        }
+
+        .main-node {
+            border-color: rgba(34, 107, 216, .24);
+        }
+
+        .main-node::after {
+            content: "↓";
+            position: absolute;
+            left: calc(50% - 8px);
+            bottom: -26px;
+            color: var(--blue);
+            font-size: 20px;
+            font-weight: 900;
+            z-index: 5;
+        }
+
+        .main-node.last::after {
+            content: "";
+        }
+
+        .control-node {
+            border-color: rgba(167, 104, 6, .28);
+            background: #fffaf2;
+        }
+
+        .data-node {
+            border-color: rgba(15, 143, 114, .26);
+            background: #f6fffb;
+        }
+
+        .fallback-node {
+            border-color: rgba(167, 104, 6, .30);
+            background: #fff9ee;
+        }
+
+        .rail-cell {
+            border-left: 4px dashed rgba(167, 104, 6, .50);
+            padding-left: 10px;
+            min-height: 92px;
+            display: grid;
+            align-items: stretch;
+        }
+
+        .connector-note {
+            align-self: center;
+            justify-self: stretch;
+            color: var(--muted);
+            font-size: 12px;
+            border: 1px dashed rgba(96, 115, 138, .35);
+            background: rgba(255, 255, 255, .70);
+            border-radius: 14px;
+            padding: 8px 10px;
+            min-height: 64px;
+        }
+
+        .connector-note b {
+            display: block;
+            color: #29435f;
+            margin-bottom: 3px;
+        }
+
+        .connector-note.control b {
+            color: var(--amber);
+        }
+
+        .connector-note.data b {
+            color: var(--green);
+        }
+
+        .statebar {
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            border: 1px solid rgba(15, 143, 114, .24);
+            border-radius: 18px;
+            background: #f6fffb;
+            padding: 12px;
+        }
+
+        .statebar div {
+            border: 1px solid rgba(15, 143, 114, .16);
+            background: #fff;
+            border-radius: 14px;
+            padding: 10px;
+            min-width: 0;
+        }
+
+        .statebar b {
+            display: block;
+            color: var(--green);
+            font-size: 12px;
+            margin-bottom: 3px;
+        }
+
+        .statebar span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .notes {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .note {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fff;
+            padding: 12px;
+            overflow-wrap: anywhere;
+        }
+
+        .note h3 {
+            margin: 0 0 6px;
+            font-size: 14px;
+        }
+
+        .note p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .quality {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .quality ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        .quality li {
+            margin: 4px 0;
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(16, 32, 51, .32);
+            z-index: 20;
+        }
+
+        .modal-backdrop[aria-hidden="false"] {
+            display: flex;
+        }
+
+        .modal {
+            width: min(680px, 100%);
+            max-height: min(720px, calc(100vh - 40px));
+            overflow: auto;
+            background: white;
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            box-shadow: 0 24px 80px rgba(16, 32, 51, .28);
+            padding: 20px;
+        }
+
+        .modal header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 12px;
+        }
+
+        .modal h2 {
+            margin: 0;
+            font-size: 19px;
+        }
+
+        .modal p {
+            color: var(--muted);
+            margin: 0 0 12px;
+        }
+
+        .modal pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f6f8fb;
+            border: 1px solid #e4ebf3;
+            border-radius: 14px;
+            padding: 12px;
+            color: #30455d;
+        }
+
+        .close {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 999px;
+            padding: 7px 10px;
+            cursor: pointer;
+            font-weight: 900;
+        }
+
+        .close:focus-visible {
+            outline: 3px solid rgba(34, 107, 216, .34);
+            outline-offset: 2px;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: #f4f7fb;
+            border: 1px solid #e5ecf4;
+            border-radius: 6px;
+            padding: 1px 5px;
+        }
+
+        @media (max-width: 960px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            .topline, .notes, .quality {
+                grid-template-columns: 1fr;
+            }
+
+            .canvas-header {
+                display: block;
+            }
+
+            .diagram-grid {
+                display: block;
+            }
+
+            .diagram-grid > * {
+                margin-bottom: 10px;
+            }
+
+            .lane-head {
+                min-height: auto;
+            }
+
+            .empty {
+                display: none;
+            }
+
+            .rail-cell {
+                border-left: 0;
+                border-top: 4px dashed rgba(167, 104, 6, .50);
+                padding-left: 0;
+                padding-top: 10px;
+            }
+
+            .main-node::after {
+                left: calc(50% - 8px);
+                bottom: -25px;
+            }
+
+            .statebar {
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+
+            .node {
+                transition: none;
+            }
+
+            .node:hover {
+                transform: none;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>系统架构：多小程序客服智能体的泳道式拓扑</h1>
+    <p class="lead">按用户选择的 B
+        方案中度重排：保留北向南层级，但把控制面、数据/知识面和七鱼兜底面拆成泳道；第一眼沿蓝色主请求中轴读，侧边只看约束、依赖和兜底。</p>
+
+    <section class="topline" aria-label="读图结论">
+        <div class="panel">
+            <h2>一眼读法</h2>
+            <p>用户从多小程序入口进入 Miniapp SDK，再到 Gateway / Facade，进入 Agent
+                编排并返回答案；控制面只约束主链路，数据/知识面只提供依赖，七鱼兜底是右侧贯穿 rail。</p>
+            <div class="chips">
+                <span class="chip blue">蓝：主请求中轴</span>
+                <span class="chip amber">琥珀：控制 / 兜底面</span>
+                <span class="chip green">绿：数据 / 知识面</span>
+                <span class="chip red">红：缺口 / 待接入</span>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>B 方案的边界</h2>
+            <p>
+                这不是展开实现清单；Controller、Facade、Handler、代码路径仍进入节点详情。泳道只用于区分系统平面，避免所有组件同权重平铺。</p>
+        </div>
+    </section>
+
+    <section class="canvas" aria-labelledby="canvas-title">
+        <div class="canvas-header">
+            <h2 id="canvas-title">泳道拓扑总览</h2>
+            <p>从左到右是控制面、主请求中轴、数据/知识面、兜底面；从上到下是入口、接入、服务、Agent、工具、状态与观测。</p>
+        </div>
+
+        <div class="diagram-grid" aria-label="系统架构泳道图">
+            <div class="lane-head"><b>层级</b><span>北向南阅读</span></div>
+            <div class="lane-head control"><b>控制面泳道</b><span>开关、权限、策略、风险</span></div>
+            <div class="lane-head"><b>主请求中轴</b><span>用户请求的第一阅读路径</span></div>
+            <div class="lane-head data"><b>数据 / 知识面泳道</b><span>读写、检索、观测</span></div>
+            <div class="lane-head fallback"><b>兜底面 rail</b><span>人工 / 降级边界</span></div>
+
+            <div class="layer-label"><b>Layer 01</b><strong>外部入口</strong><span>用户侧与宿主边界</span></div>
+            <div class="empty" aria-hidden="true"></div>
+            <button class="node main-node" data-title="多小程序入口"
+                    data-detail="E1 摘要：多个微信小程序共用客服能力。&#10;主图仍不展开 appCode 明细。&#10;B 方案变化：入口只进入主请求中轴，宿主七鱼不再和入口同层竞争主线。">
+                <span class="tag green">Client</span>
+                <strong>生意宝 / 店务通 / 萝卜白菜</strong>
+                <p>用户发起客服会话；不同 appCode 进入同一客服能力。</p>
+                <div class="meta"><span class="tag">E1</span><span class="tag green">入口</span></div>
+            </button>
+            <div class="empty" aria-hidden="true"></div>
+            <div class="rail-cell">
+                <button class="node fallback-node" data-title="宿主七鱼 SDK"
+                        data-detail="E2 摘要：七鱼 SDK 是贯穿系统的人工兜底边界。&#10;B 方案变化：从普通节点移到右侧 rail，避免误读成主请求或数据面。">
+                    <span class="tag amber">Fallback Rail</span>
+                    <strong>宿主七鱼 SDK</strong>
+                    <p>人工兜底能力从入口侧可达，但不属于主请求中轴。</p>
+                    <div class="meta"><span class="tag">E2</span><span class="tag amber">边界</span></div>
+                </button>
+            </div>
+
+            <div class="layer-label"><b>Layer 02</b><strong>接入层</strong><span>SDK 与 REST 协议</span></div>
+            <div class="connector-note control"><b>控制不在此层展开</b>接入层只负责协议，策略留到服务层约束。</div>
+            <button class="node main-node" data-title="自研 Miniapp SDK"
+                    data-detail="E3 摘要：SDK 封装 open、scene、transferToHuman，并统一携带 appCode、sceneCode、traceId。&#10;B 方案变化：只保留协议职责，避免展开 SDK 方法清单。">
+                <span class="tag green">SDK / Channel</span>
+                <strong>自研 Miniapp SDK</strong>
+                <p>统一入口、appCode、sceneCode、traceId；向后端发起 REST JSON。</p>
+                <div class="meta"><span class="tag">E3</span><span class="tag green">协议</span></div>
+            </button>
+            <div class="connector-note data"><b>trace 开始贯穿</b>traceId 从 SDK 进入主链路，后续写入日志与会话。</div>
+            <div class="rail-cell">
+                <div class="connector-note control"><b>用户主动转人工</b>transferToHuman 可旁路进入七鱼 rail。</div>
+            </div>
+
+            <div class="layer-label"><b>Layer 03</b><strong>服务层</strong><span>Gateway / Facade / Guard</span></div>
+            <button class="node control-node" data-title="Feature Flags + Guard"
+                    data-detail="E5 摘要：Feature Flags 和 Guard 控制自助开关、兜底策略、工具调用权限与风险边界。&#10;B 方案变化：从主请求同层节点改为控制面泳道，短箭头约束 Gateway / Agent。">
+                <span class="tag amber">Control Plane</span>
+                <strong>Feature Flags + Guard</strong>
+                <p>约束 Gateway 与 Agent：自助开关、权限、风险、降级策略。</p>
+                <div class="meta"><span class="tag">E5</span><span class="tag amber">约束 →</span></div>
+            </button>
+            <button class="node main-node" data-title="Gateway / Facade"
+                    data-detail="E4+E6 摘要：Gateway 承接 SDK 请求；Facade 组织会话、消息、首页、history、feedback 与 transfer。&#10;B 方案变化：合并为服务层主请求节点，避免 Controller / Facade 细节平铺。">
+                <span class="tag green">Gateway / Facade</span>
+                <strong>Customer Service Gateway + 会话门面</strong>
+                <p>鉴权、应用码、trace、session、message、history 与 transfer。</p>
+                <div class="meta"><span class="tag">E4</span><span class="tag">E6</span><span class="tag green">HTTP REST</span>
+                </div>
+            </button>
+            <div class="connector-note data"><b>会话写入准备</b>session / message / trace 在服务层形成持久化输入。</div>
+            <div class="rail-cell">
+                <div class="connector-note control"><b>自助关闭 / 鉴权失败</b>服务层可触发降级或人工兜底。</div>
+            </div>
+
+            <div class="layer-label"><b>Layer 04</b><strong>Agent 层</strong><span>编排、意图、场景</span></div>
+            <div class="connector-note control"><b>策略约束 Agent</b>低置信阈值、工具权限、可回答范围在此约束。</div>
+            <button class="node main-node" data-title="Agent 编排"
+                    data-detail="E7+E8+E9 摘要：AgentOrchestrator 识别意图、收集槽位、调用 handler、决定追问或执行。&#10;B 方案变化：把 Orchestrator、Intent/Slot、Handler Registry 收束成 Agent 层主节点，避免三个卡片同权重分散注意力。">
+                <span class="tag green">Agent Work Plane</span>
+                <strong>AgentOrchestrator + Intent / Slot + Handler Registry</strong>
+                <p>识别场景、补槽、选择 handler，返回追问、执行结果或兜底动作。</p>
+                <div class="meta"><span class="tag">E7</span><span class="tag">E8</span><span class="tag">E9</span>
+                </div>
+            </button>
+            <button class="node data-node" data-title="知识与规则检索"
+                    data-detail="E11 摘要：RAG / Knowledge 属于数据与知识依赖，不应抢主请求中轴。&#10;B 方案变化：放入数据/知识面泳道，并用缺口角标表达占位或待接入。">
+                <span class="tag red">Knowledge</span>
+                <strong>RAG / Knowledge</strong>
+                <p>知识检索、规则读取、场景补充；占位时直接标缺口。</p>
+                <div class="meta"><span class="tag">E11</span><span class="tag red">缺口</span></div>
+            </button>
+            <div class="rail-cell">
+                <button class="node fallback-node" data-title="兜底触发条件"
+                        data-detail="E15 摘要：低置信、缺槽无法澄清、用户要求转人工、自助关闭或工具不可用都可触发人工兜底。&#10;B 方案变化：触发条件集中到 rail，避免主图多处虚线蜘蛛网。">
+                    <span class="tag amber">Fallback Trigger</span>
+                    <strong>低置信 / 缺槽 / 用户转人工</strong>
+                    <p>Agent 层主要兜底触发点集中展示。</p>
+                    <div class="meta"><span class="tag amber">触发</span></div>
+                </button>
+            </div>
+
+            <div class="layer-label"><b>Layer 05</b><strong>工具层</strong><span>Adapter / 外部 API</span></div>
+            <div class="connector-note control"><b>工具权限边界</b>Guard 决定哪些 handler 可以触达业务工具。</div>
+            <button class="node main-node" data-title="工具调用入口"
+                    data-detail="E10+E12 摘要：业务 Adapter 和外部 OpenAPI 是工具依赖，不是 Agent 主体。&#10;B 方案变化：主轴只保留“工具调用入口”，具体 Adapter / OpenAPI 状态放入数据/依赖泳道与运行语义条。">
+                <span class="tag amber">Tool Gateway</span>
+                <strong>工具调用入口</strong>
+                <p>Agent 执行业务动作前进入受控工具边界。</p>
+                <div class="meta"><span class="tag">E10</span><span class="tag amber">受控</span></div>
+            </button>
+            <button class="node data-node" data-title="Business Adapter / OpenAPI"
+                    data-detail="E10+E12 摘要：Business Adapter 当前可标待接入；外部 OpenAPI / 无独立 MQ 是运行语义，不应散落多个节点。&#10;B 方案变化：数据/知识面承载依赖状态，主图用角标标待接入和同步。">
+                <span class="tag amber">Dependency</span>
+                <strong>Business Adapter / OpenAPI</strong>
+                <p>业务接口、外部 API、同步 HTTP；Adapter 不可用时触发澄清或兜底。</p>
+                <div class="meta"><span class="tag red">待接入</span><span class="tag amber">同步</span></div>
+            </button>
+            <div class="rail-cell">
+                <div class="connector-note control"><b>工具不可用</b>Adapter 缺失、OpenAPI 关闭或异常时，进入兜底 rail。
+                </div>
+            </div>
+
+            <div class="layer-label"><b>Layer 06</b><strong>状态 / 观测</strong><span>RDS、向量、日志</span></div>
+            <div class="connector-note control"><b>审计与风险</b>控制面可读取运行状态与日志告警，但不直接承载数据。</div>
+            <button class="node main-node last" data-title="返回答案 / 卡片"
+                    data-detail="E14 摘要：主请求最终返回答案、澄清卡片、执行结果或人工兜底入口。&#10;B 方案变化：把返回结果放在主轴终点，数据面和兜底面作为结果来源或分支。">
+                <span class="tag green">Response</span>
+                <strong>答案 / 澄清 / 执行结果</strong>
+                <p>主链路闭环；如果无法自助解决，结果变成转人工入口。</p>
+                <div class="meta"><span class="tag green">闭环</span><span class="tag">trace 回传</span></div>
+            </button>
+            <button class="node data-node" data-title="PostgreSQL / pgvector / Trace"
+                    data-detail="E13+E14 摘要：PostgreSQL/pgvector 是状态与向量知识数据面；Trace/Logs 是观测面。&#10;B 方案变化：合并成数据/观测泳道底座，明确它们是南侧依赖，不是业务服务层。">
+                <span class="tag green">Data / Observability</span>
+                <strong>PostgreSQL / pgvector / Trace / Logs</strong>
+                <p>会话、消息、向量知识、日志、审计与回放。</p>
+                <div class="meta"><span class="tag">E13</span><span class="tag">E14</span><span
+                        class="tag green">数据面</span></div>
+            </button>
+            <div class="rail-cell">
+                <button class="node fallback-node" data-title="七鱼人工服务闭环"
+                        data-detail="E15 摘要：兜底最终进入七鱼人工服务闭环。&#10;B 方案变化：终点仍在右侧 rail 中，而不是被放到数据/观测层里。">
+                    <span class="tag amber">Human Fallback</span>
+                    <strong>七鱼人工服务闭环</strong>
+                    <p>自助不可达时由人工完成服务。</p>
+                    <div class="meta"><span class="tag amber">兜底终点</span></div>
+                </button>
+            </div>
+
+            <div class="statebar" aria-label="运行语义条">
+                <div><b>同步语义</b><span>主链路 HTTP REST；无独立 MQ 时必须显式标注。</span></div>
+                <div><b>控制语义</b><span>Feature Flags + Guard 作为侧向约束，不抢主请求中轴。</span></div>
+                <div><b>缺口语义</b><span>Adapter / RAG / OpenAPI 未接入用红色角标表达。</span></div>
+                <div><b>追踪语义</b><span>traceId 贯穿 SDK、Gateway、Agent、store 与日志。</span></div>
+            </div>
+        </div>
+
+        <div class="notes" aria-label="B 方案读图要点">
+            <div class="note"><h3>主请求中轴</h3>
+                <p>蓝色纵向节点是第一阅读路径；用户无需读侧边泳道也能理解主流程。</p></div>
+            <div class="note"><h3>平面分离</h3>
+                <p>控制面、数据/知识面、兜底面拆开后，Feature Flag、RAG、七鱼不会被误读为同层业务节点。</p></div>
+            <div class="note"><h3>证据仍可追溯</h3>
+                <p>每个节点保留 E# 和状态角标；路径、行号、日志、说明继续放在点击详情。</p></div>
+        </div>
+    </section>
+
+    <section class="quality" aria-label="方案 B 的收益和风险">
+        <div class="panel">
+            <h2>B 方案收益</h2>
+            <ul>
+                <li>比 007 更容易分清主链路、控制策略、数据依赖和人工兜底。</li>
+                <li>复杂系统的“面”比“层”更清楚，适合存在多个跨层能力的架构。</li>
+                <li>运行语义集中在底部状态条，节点正文更聚焦。</li>
+            </ul>
+        </div>
+        <div class="panel">
+            <h2>B 方案风险</h2>
+            <ul>
+                <li>桌面宽度利用更多，移动端需要降级为逐层纵向阅读。</li>
+                <li>如果真实系统很简单，泳道会显得过度设计。</li>
+                <li>仍不能把实现类、源码路径和证据重新铺回主画布。</li>
+            </ul>
+        </div>
+    </section>
+
+    <footer>任务编码：TASK_20260630_010；任务名称：vibe-diagram 系统架构图泳道重排示例。</footer>
+</main>
+
+<div class="modal-backdrop" id="backdrop" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <header>
+            <h2 id="modal-title">节点详情</h2>
+            <button class="close" id="close-modal" type="button">关闭</button>
+        </header>
+        <p>这里承载节点级原始证据与设计解释；主图只保留架构判断和状态。</p>
+        <pre id="modal-detail"></pre>
+    </section>
+</div>
+
+<script>
+    const backdrop = document.getElementById('backdrop');
+    const title = document.getElementById('modal-title');
+    const detail = document.getElementById('modal-detail');
+    const closeButton = document.getElementById('close-modal');
+    let lastTrigger = null;
+
+    function normalizeDetailText(raw) {
+        return (raw || '暂无详情。')
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t');
+    }
+
+    function openModal(button) {
+        lastTrigger = button;
+        title.textContent = button.dataset.title || '节点详情';
+        detail.textContent = normalizeDetailText(button.dataset.detail);
+        backdrop.setAttribute('aria-hidden', 'false');
+        closeButton.focus();
+    }
+
+    function closeModal() {
+        backdrop.setAttribute('aria-hidden', 'true');
+        if (lastTrigger) lastTrigger.focus();
+    }
+
+    document.querySelectorAll('.node').forEach((button) => {
+        button.addEventListener('click', () => openModal(button));
+    });
+    closeButton.addEventListener('click', closeModal);
+    backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) closeModal();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && backdrop.getAttribute('aria-hidden') === 'false') closeModal();
+    });
+</script>
+</body>
+</html>

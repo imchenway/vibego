@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>交付验收：AGENTS 已恢复 HTML-first 全程交互</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #122033;
+            --muted: #5c6b7f;
+            --line: #d7e0eb;
+            --soft: #f7fbff;
+            --panel: rgba(255, 255, 255, .88);
+            --blue: #2764d8;
+            --green: #0f8f74;
+            --amber: #b86a00;
+            --red: #c0262d;
+            --shadow: 0 18px 50px rgba(39, 100, 216, .08);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: linear-gradient(90deg, rgba(39, 100, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(39, 100, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fbfdff 0%, #f5f9ff 58%, #ffffff 100%);
+            background-size: 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1180px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 34px 0 54px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(22px, 3vw, 30px);
+            letter-spacing: -.03em;
+        }
+
+        .lead {
+            margin: 8px 0 22px;
+            color: var(--muted);
+            max-width: 980px;
+        }
+
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 18px 0 26px;
+        }
+
+        .badge {
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .72);
+            padding: 7px 12px;
+            font-weight: 700;
+            color: #29415f;
+        }
+
+        .canvas {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 26px;
+            box-shadow: var(--shadow);
+            padding: 24px;
+        }
+
+        .flow {
+            display: grid;
+            grid-template-columns: 1fr 68px 1fr;
+            gap: 18px;
+            align-items: stretch;
+        }
+
+        .lane {
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            padding: 18px;
+            background: rgba(255, 255, 255, .76);
+        }
+
+        .lane h2 {
+            margin: 0 0 14px;
+            font-size: 18px;
+        }
+
+        .step {
+            position: relative;
+            border: 1.5px solid var(--line);
+            border-radius: 18px;
+            padding: 15px 16px;
+            background: #fff;
+            margin: 14px 0;
+            overflow-wrap: anywhere;
+        }
+
+        .step strong {
+            display: block;
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+
+        .step p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .step.bad {
+            border-color: rgba(192, 38, 45, .45);
+            background: #fff7f7;
+        }
+
+        .step.good {
+            border-color: rgba(15, 143, 116, .45);
+            background: #f2fffb;
+        }
+
+        .step.warn {
+            border-color: rgba(184, 106, 0, .45);
+            background: #fffaf1;
+        }
+
+        .connector {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--blue);
+            font-weight: 900;
+            font-size: 32px;
+        }
+
+        .matrix {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+        }
+
+        .cell {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, .8);
+            padding: 15px;
+            min-height: 130px;
+            overflow-wrap: anywhere;
+        }
+
+        .cell h3 {
+            margin: 0 0 8px;
+            font-size: 15px;
+        }
+
+        .cell ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        .verify {
+            margin-top: 20px;
+            border-collapse: collapse;
+            width: 100%;
+            overflow: hidden;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: white;
+        }
+
+        .verify th, .verify td {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--line);
+            text-align: left;
+            vertical-align: top;
+            overflow-wrap: anywhere;
+        }
+
+        .verify th {
+            background: #f4f8ff;
+            font-size: 13px;
+            color: #29415f;
+        }
+
+        .verify tr:last-child td {
+            border-bottom: 0;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: #f3f6fb;
+            border: 1px solid #e4ebf4;
+            padding: 1px 5px;
+            border-radius: 6px;
+        }
+
+        .ok {
+            color: var(--green);
+            font-weight: 800;
+        }
+
+        .risk {
+            color: var(--amber);
+            font-weight: 800;
+        }
+
+        footer {
+            margin-top: 20px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 760px) {
+            main {
+                width: min(100% - 24px, 720px);
+                padding-top: 22px;
+            }
+
+            .canvas {
+                padding: 16px;
+                border-radius: 20px;
+            }
+
+            .flow {
+                grid-template-columns: 1fr;
+            }
+
+            .connector {
+                transform: rotate(90deg);
+                min-height: 34px;
+            }
+
+            .matrix {
+                grid-template-columns: 1fr;
+            }
+
+            .verify {
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>交付验收：AGENTS 已恢复 HTML-first 全程交互</h1>
+    <p class="lead">本次修复把 HTML 从“非琐碎画图任务的优先形式”提升为“默认主交互界面”：实质内容写入单文件
+        HTML，聊天只做交付信封。</p>
+    <div class="badge-row" aria-label="核心结论">
+        <span class="badge">结论：已同步到 Codex / vibego / Claude / Gemini</span>
+        <span class="badge">验证：44 passed</span>
+        <span class="badge">剩余动作：旧会话需重启或新开</span>
+    </div>
+
+    <section class="canvas" aria-labelledby="flow-title">
+        <h2 id="flow-title">从“触发式 HTML”到“全程 HTML-first”的约束变化</h2>
+        <div class="flow">
+            <div class="lane" aria-label="修复前">
+                <h2>修复前：容易被模型理解成可选</h2>
+                <div class="step bad">
+                    <strong>旧触发边界</strong>
+                    <p>AGENTS 主要写“非琐碎设计、排障、架构、流程、技术方案和交付验收优先使用 vibe-diagram”。</p>
+                </div>
+                <div class="step warn">
+                    <strong>误读结果</strong>
+                    <p>模型可能认为 HTML 只在复杂画图场景使用；普通协作、验收、总结仍可直接写长文本。</p>
+                </div>
+                <div class="step bad">
+                    <strong>用户体验问题</strong>
+                    <p>聊天里反复堆分析、证据、风险和测试矩阵，偏离“全程用 HTML 与 AI 交互”的预期。</p>
+                </div>
+            </div>
+            <div class="connector" aria-hidden="true">→</div>
+            <div class="lane" aria-label="修复后">
+                <h2>修复后：HTML 是默认主交互界面</h2>
+                <div class="step good">
+                    <strong>新增契约：HTML-first interaction contract</strong>
+                    <p>默认所有实质沟通都使用单文件 HTML 与用户交互；聊天通道默认只做交付信封。</p>
+                </div>
+                <div class="step good">
+                    <strong>写入范围明确</strong>
+                    <p>分析、设计、排障、方案、决策、验收、总结、代码逻辑说明、证据链、风险、回滚、测试矩阵都必须进入 HTML。</p>
+                </div>
+                <div class="step good">
+                    <strong>例外收窄</strong>
+                    <p>仅阻塞性澄清、极短确认、简单命令结果、用户明确不要 HTML 时，才可使用普通文本；图形化规则只决定何时调用
+                        vibe-diagram，不再限制 HTML 的使用范围。</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="matrix" aria-label="影响矩阵">
+            <div class="cell">
+                <h3>已修改</h3>
+                <ul>
+                    <li><code>AGENTS-template.md</code> 新增 HTML-first 契约。</li>
+                    <li><code>AGENTS.md</code> Facts Table 增加证据行。</li>
+                    <li>新增测试锁定该契约。</li>
+                </ul>
+            </div>
+            <div class="cell">
+                <h3>已同步</h3>
+                <ul>
+                    <li><code>~/.config/vibego/AGENTS.md</code></li>
+                    <li><code>~/.codex/AGENTS.md</code></li>
+                    <li><code>~/.claude/CLAUDE.md</code> 与 <code>~/.gemini/GEMINI.md</code></li>
+                </ul>
+            </div>
+            <div class="cell">
+                <h3>仍需注意</h3>
+                <ul>
+                    <li>已运行旧会话可能仍持有旧提示词。</li>
+                    <li>建议重启 worker / 新开模型会话让约束即时生效。</li>
+                </ul>
+            </div>
+        </div>
+
+        <table class="verify" aria-label="验证结果">
+            <thead>
+            <tr>
+                <th>验证项</th>
+                <th>命令或检查</th>
+                <th>结果</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td>TDD 红灯</td>
+                <td><code>tests/test_agents_template_migration.py::test_agents_template_requires_html_first_interaction_contract</code>
+                </td>
+                <td>修复前失败，确认缺少契约。</td>
+            </tr>
+            <tr>
+                <td>TDD 绿灯</td>
+                <td>同一测试重跑</td>
+                <td><span class="ok">1 passed</span></td>
+            </tr>
+            <tr>
+                <td>回归测试</td>
+                <td><code>python3.11 -m pytest -q tests/test_agents_template_migration.py tests/test_agents_sync.py
+                    tests/test_builtin_skills_injection.py</code></td>
+                <td><span class="ok">44 passed</span></td>
+            </tr>
+            <tr>
+                <td>同步检查</td>
+                <td><code>rg "HTML-first interaction contract|默认所有实质沟通都使用单文件 HTML|聊天通道默认只做交付信封"
+                    ...</code></td>
+                <td><span class="ok">仓库模板、override 模板、vibego AGENTS、Codex AGENTS 均命中</span></td>
+            </tr>
+            <tr>
+                <td>HTML 文件</td>
+                <td>Python HTMLParser 解析</td>
+                <td><span class="ok">HTMLParser ok</span></td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <footer>
+        任务编码：TASK_20260630_004；任务名称：AGENTS 全程 HTML 交互约束修复。
+    </footer>
+</main>
+</body>
+</html>

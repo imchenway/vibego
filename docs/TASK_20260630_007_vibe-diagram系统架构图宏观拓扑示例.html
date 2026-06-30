@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>系统架构：多小程序客服智能体的宏观拓扑</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #102033;
+            --muted: #5f6f83;
+            --line: #d8e3ef;
+            --surface: rgba(255, 255, 255, .91);
+            --soft: #f7fbff;
+            --blue: #236bd8;
+            --blue-2: #87b8ff;
+            --green: #0f8f72;
+            --green-2: #75d7b8;
+            --amber: #b56a00;
+            --amber-2: #ffd28a;
+            --red: #c23a44;
+            --shadow: 0 20px 60px rgba(25, 72, 124, .11);
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.58 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at 16% 8%, rgba(35, 107, 216, .10), transparent 30%),
+            radial-gradient(circle at 92% 12%, rgba(15, 143, 114, .08), transparent 28%),
+            linear-gradient(90deg, rgba(35, 107, 216, .04) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(35, 107, 216, .04) 1px, transparent 1px),
+            linear-gradient(180deg, #fcfeff 0%, #f7fbff 58%, #fff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1240px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 30px 0 56px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(22px, 3vw, 30px);
+            line-height: 1.18;
+            letter-spacing: -.035em;
+        }
+
+        .lead {
+            margin: 8px 0 18px;
+            color: var(--muted);
+            max-width: 1050px;
+        }
+
+        .topline {
+            display: grid;
+            grid-template-columns: 1.15fr .85fr;
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            padding: 16px 18px;
+            box-shadow: var(--shadow);
+            overflow-wrap: anywhere;
+        }
+
+        .panel h2 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 11px;
+        }
+
+        .chip {
+            border: 1px solid var(--line);
+            background: white;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 800;
+            color: #29435f;
+        }
+
+        .chip.blue {
+            color: var(--blue);
+            background: #edf5ff;
+            border-color: rgba(35, 107, 216, .2);
+        }
+
+        .chip.green {
+            color: var(--green);
+            background: #effcf8;
+            border-color: rgba(15, 143, 114, .2);
+        }
+
+        .chip.amber {
+            color: var(--amber);
+            background: #fff7e9;
+            border-color: rgba(181, 106, 0, .22);
+        }
+
+        .chip.red {
+            color: var(--red);
+            background: #fff1f2;
+            border-color: rgba(194, 58, 68, .22);
+        }
+
+        .canvas {
+            position: relative;
+            background: rgba(255, 255, 255, .80);
+            border: 1px solid var(--line);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+            padding: 18px;
+            overflow: hidden;
+        }
+
+        .canvas-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: start;
+            margin: 2px 4px 16px;
+        }
+
+        .canvas-header h2 {
+            margin: 0;
+            font-size: 19px;
+            letter-spacing: -.02em;
+        }
+
+        .canvas-header p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            max-width: 640px;
+        }
+
+        .topology {
+            position: relative;
+            display: grid;
+            gap: 14px;
+            padding: 0 0 4px;
+        }
+
+        .layer {
+            display: grid;
+            grid-template-columns: 172px 1fr;
+            gap: 14px;
+            position: relative;
+            align-items: stretch;
+        }
+
+        .layer-label {
+            border-left: 6px solid var(--blue);
+            background: linear-gradient(180deg, #f1f7ff, #fff);
+            border-radius: 18px;
+            padding: 14px;
+            min-height: 86px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .layer-label b {
+            color: var(--blue);
+            font-size: 12px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .layer-label strong {
+            display: block;
+            margin: 3px 0;
+            font-size: 17px;
+        }
+
+        .layer-label span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .node-row {
+            display: grid;
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .node-row.one {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .node-row.two {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .node-row.three {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .node {
+            appearance: none;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, .96);
+            border-radius: 18px;
+            min-height: 94px;
+            padding: 13px 14px;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+            box-shadow: 0 10px 26px rgba(22, 63, 108, .06);
+            transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+            overflow-wrap: anywhere;
+        }
+
+        .node:hover {
+            transform: translateY(-2px);
+            border-color: rgba(35, 107, 216, .45);
+            box-shadow: 0 18px 36px rgba(35, 107, 216, .12);
+        }
+
+        .node:focus-visible {
+            outline: 3px solid rgba(35, 107, 216, .34);
+            outline-offset: 3px;
+        }
+
+        .node .tag {
+            display: inline-flex;
+            border: 1px solid rgba(35, 107, 216, .18);
+            background: #edf5ff;
+            color: var(--blue);
+            border-radius: 999px;
+            padding: 3px 8px;
+            font-size: 12px;
+            font-weight: 900;
+            margin-bottom: 7px;
+        }
+
+        .node .tag.green {
+            border-color: rgba(15, 143, 114, .2);
+            background: #effcf8;
+            color: var(--green);
+        }
+
+        .node .tag.amber {
+            border-color: rgba(181, 106, 0, .22);
+            background: #fff7e9;
+            color: var(--amber);
+        }
+
+        .node .tag.red {
+            border-color: rgba(194, 58, 68, .22);
+            background: #fff1f2;
+            color: var(--red);
+        }
+
+        .node strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 16px;
+        }
+
+        .node p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .node .state {
+            display: inline-flex;
+            margin-top: 8px;
+            border-radius: 8px;
+            padding: 3px 7px;
+            background: #f5f8fc;
+            color: #405873;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .flow-separator {
+            display: grid;
+            grid-template-columns: 172px 1fr;
+            gap: 14px;
+            align-items: center;
+            margin: -2px 0;
+        }
+
+        .flow-name {
+            color: var(--muted);
+            font-size: 12px;
+            text-align: right;
+            padding-right: 8px;
+        }
+
+        .flow-lines {
+            display: grid;
+            gap: 5px;
+        }
+
+        .line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            font-weight: 900;
+            color: #29435f;
+        }
+
+        .line::before {
+            content: "";
+            height: 4px;
+            border-radius: 999px;
+            flex: 1;
+        }
+
+        .line::after {
+            content: "↓";
+            color: inherit;
+            font-size: 16px;
+        }
+
+        .line.main::before {
+            background: linear-gradient(90deg, var(--blue), var(--blue-2));
+        }
+
+        .line.data::before {
+            background: linear-gradient(90deg, var(--green), var(--green-2));
+        }
+
+        .line.fallback::before {
+            background: repeating-linear-gradient(90deg, var(--amber) 0 12px, transparent 12px 18px);
+            border: 1px solid rgba(181, 106, 0, .18);
+        }
+
+        .line.main {
+            color: var(--blue);
+        }
+
+        .line.data {
+            color: var(--green);
+        }
+
+        .line.fallback {
+            color: var(--amber);
+        }
+
+        .branch-note {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .note {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: white;
+            padding: 12px;
+            overflow-wrap: anywhere;
+        }
+
+        .note h3 {
+            margin: 0 0 6px;
+            font-size: 14px;
+        }
+
+        .note p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .quality {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .quality ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(16, 32, 51, .32);
+            z-index: 20;
+        }
+
+        .modal-backdrop[aria-hidden="false"] {
+            display: flex;
+        }
+
+        .modal {
+            width: min(680px, 100%);
+            max-height: min(720px, calc(100vh - 40px));
+            overflow: auto;
+            background: white;
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            box-shadow: 0 24px 80px rgba(16, 32, 51, .28);
+            padding: 20px;
+        }
+
+        .modal header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 12px;
+        }
+
+        .modal h2 {
+            margin: 0;
+            font-size: 19px;
+        }
+
+        .modal p {
+            color: var(--muted);
+            margin: 0 0 12px;
+        }
+
+        .modal pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f6f8fb;
+            border: 1px solid #e4ebf3;
+            border-radius: 14px;
+            padding: 12px;
+            color: #30455d;
+        }
+
+        .close {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 999px;
+            padding: 7px 10px;
+            cursor: pointer;
+            font-weight: 900;
+        }
+
+        .close:focus-visible {
+            outline: 3px solid rgba(35, 107, 216, .34);
+            outline-offset: 2px;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: #f4f7fb;
+            border: 1px solid #e5ecf4;
+            border-radius: 6px;
+            padding: 1px 5px;
+        }
+
+        @media (max-width: 860px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            .topline, .layer, .flow-separator, .branch-note, .quality {
+                grid-template-columns: 1fr;
+            }
+
+            .flow-name {
+                text-align: left;
+                padding-right: 0;
+            }
+
+            .node-row.one, .node-row.two, .node-row.three {
+                grid-template-columns: 1fr;
+            }
+
+            .layer-label {
+                min-height: auto;
+            }
+
+            .canvas-header {
+                display: block;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+
+            .node {
+                transition: none;
+            }
+
+            .node:hover {
+                transform: none;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>系统架构：多小程序客服智能体的宏观拓扑</h1>
+    <p class="lead">
+        首屏只保留系统边界、核心层级和三条流向；Controller、Facade、Handler、路径与行号不在主图平铺，点击节点查看证据详情。</p>
+
+    <section class="topline" aria-label="读图结论">
+        <div class="panel">
+            <h2>一眼读法</h2>
+            <p>用户从多个小程序进入自研 SDK，经 Spring Boot Gateway 进入受控 Agent；Agent
+                通过工具与知识检索访问数据面，低置信或未接入时走七鱼人工兜底。</p>
+            <div class="chips">
+                <span class="chip blue">蓝：主请求流</span>
+                <span class="chip green">绿：数据 / 知识流</span>
+                <span class="chip amber">琥珀虚线：兜底流</span>
+                <span class="chip red">红：当前缺口</span>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>证据放置</h2>
+            <p>主图只写 E# 与架构判断；文件路径、行号、日志、SQL、JSON 放进对应节点详情。底部不再放证据墙。</p>
+        </div>
+    </section>
+
+    <section class="canvas" aria-labelledby="canvas-title">
+        <div class="canvas-header">
+            <h2 id="canvas-title">全局拓扑总览</h2>
+            <p>这张图故意不展开所有实现类；如果需要 Controller / Facade / Handler
+                细节，应切换到技术设计图或代码时序图。</p>
+        </div>
+
+        <div class="topology">
+            <div class="layer">
+                <div class="layer-label"><b>Layer 01</b><strong>外部入口</strong><span>用户侧与宿主边界</span></div>
+                <div class="node-row two">
+                    <button class="node" data-title="多小程序入口"
+                            data-detail="E1 摘要：多个微信小程序共用客服能力。&#10;主图不展开 appCode 明细；README、设计文档、入口清单、截图说明应放在这里。&#10;架构判断：这是系统的北侧入口，不属于后端服务层。">
+                        <span class="tag green">Client</span>
+                        <strong>生意宝 / 店务通 / 萝卜白菜</strong>
+                        <p>用户发起客服会话；不同 appCode 进入同一客服能力。</p>
+                        <span class="state">E1：三端入口</span>
+                    </button>
+                    <button class="node" data-title="宿主七鱼 SDK"
+                            data-detail="E2 摘要：七鱼 SDK 是人工兜底边界，不是主链路替代。&#10;原始证据：qiyuConfig、fallbackToQiyuDirect、七鱼跳转文档、截图说明可放这里。&#10;架构判断：放在外部/兜底边界，避免与自研 Agent 同层混淆。">
+                        <span class="tag amber">Fallback Boundary</span>
+                        <strong>宿主七鱼小程序 SDK</strong>
+                        <p>低置信、关闭自助、缺工具或异常时接管。</p>
+                        <span class="state">E2：兜底边界</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flow-separator">
+                <div class="flow-name">请求进入</div>
+                <div class="flow-lines">
+                    <div class="line main">open / message / transfer</div>
+                    <div class="line fallback">命中人工兜底时旁路</div>
+                </div>
+            </div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 02</b><strong>接入 SDK</strong><span>前端协议与 trace</span></div>
+                <div class="node-row one">
+                    <button class="node" data-title="自研 Miniapp SDK"
+                            data-detail="E3 摘要：SDK 封装 open、scene、transferToHuman，并统一带上 appCode、sceneCode、traceId。&#10;原始证据：frontend-miniapp-sdk 的 index/types/README 路径和行号放这里。&#10;架构判断：这是接入层，不应把每个方法画成主图节点。">
+                        <span class="tag green">SDK / Channel</span>
+                        <strong>自研 Miniapp SDK</strong>
+                        <p>统一入口、appCode、sceneCode、traceId；对后端暴露 REST JSON。</p>
+                        <span class="state">E3：接入协议</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flow-separator">
+                <div class="flow-name">HTTP REST</div>
+                <div class="flow-lines">
+                    <div class="line main">Authorization + X-CS-App-Code + traceId</div>
+                </div>
+            </div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 03</b><strong>API / Gateway</strong><span>鉴权、路由、门面</span></div>
+                <div class="node-row three">
+                    <button class="node" data-title="Spring Boot Gateway"
+                            data-detail="E4 摘要：Spring Boot Customer Service Gateway 承接 SDK 请求。&#10;原始证据：Controller、路由、接口文档、鉴权规则放这里。&#10;架构判断：主图只画 Gateway 宏节点，不拆成多个 API 卡片。">
+                        <span class="tag green">Gateway</span>
+                        <strong>Customer Service Gateway</strong>
+                        <p>接收 v1 REST 请求；负责鉴权、应用码、trace 与兼容入口。</p>
+                        <span class="state">E4：API 门面</span>
+                    </button>
+                    <button class="node" data-title="Feature Flag / Guard"
+                            data-detail="E5 摘要：开关控制自助、七鱼直达与工具访问；Guard 约束业务工具边界。&#10;原始证据：FeatureFlags、seed SQL、Guard/ToolGateway 代码锚点放这里。&#10;架构判断：这是控制面能力，不能隐藏在底部说明。">
+                        <span class="tag amber">Control Plane</span>
+                        <strong>Feature Flags + Guard</strong>
+                        <p>控制自助开关、兜底策略、工具调用权限与风险边界。</p>
+                        <span class="state">E5：控制面</span>
+                    </button>
+                    <button class="node" data-title="消息与会话门面"
+                            data-detail="E6 摘要：Facade 组织会话、首页、消息写入、trace 回传。&#10;原始证据：CustomerServiceFacade 代码路径、方法行号和接口响应样例放这里。&#10;架构判断：主图用“会话门面”表达职责，不平铺 Controller/Facade 细节。">
+                        <span class="tag">Session Facade</span>
+                        <strong>会话 / 消息门面</strong>
+                        <p>组织 session、home、message、history、feedback 与 transfer。</p>
+                        <span class="state">E6：门面职责</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flow-separator">
+                <div class="flow-name">进入 Agent</div>
+                <div class="flow-lines">
+                    <div class="line main">识别场景 → 补槽 → 执行 / 追问</div>
+                    <div class="line fallback">低置信 / 关闭自助 → 人工</div>
+                </div>
+            </div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 04</b><strong>Agent 编排</strong><span>意图、槽位、场景注册</span></div>
+                <div class="node-row three">
+                    <button class="node" data-title="AgentOrchestrator"
+                            data-detail="E7 摘要：Agent 编排意图识别、补槽、handler 执行与转人工。&#10;原始证据：Orchestrator、转人工卡片、澄清表单、低置信策略放这里。&#10;架构判断：这是工作面核心，不应和数据面或外部兜底混在一起。">
+                        <span class="tag green">Orchestrator</span>
+                        <strong>AgentOrchestrator</strong>
+                        <p>识别意图、收集槽位、决定执行、追问或转人工。</p>
+                        <span class="state">E7：核心编排</span>
+                    </button>
+                    <button class="node" data-title="Intent / Slot"
+                            data-detail="E8 摘要：规则意图识别覆盖转单、库存、批次、效期、退货、财务等关键词。&#10;原始证据：规则表、枚举、测试用例、命中样例放这里。&#10;架构判断：这是 Agent 内部判断能力，主图只留宏节点。">
+                        <span class="tag">Intent / Slot</span>
+                        <strong>规则意图 + 槽位</strong>
+                        <p>识别场景并判断字段是否齐全；不足时返回澄清。</p>
+                        <span class="state">E8：场景识别</span>
+                    </button>
+                    <button class="node" data-title="Handler Registry"
+                            data-detail="E9 摘要：注册固定业务场景 handler，映射 Tool、Knowledge、Rule。&#10;原始证据：Enum、DomainFactory、Handler 注册代码路径和行号放这里。&#10;架构判断：业务扩展点，不应在系统图中逐个展开 10 个 handler。">
+                        <span class="tag green">Registry</span>
+                        <strong>场景 Handler 注册</strong>
+                        <p>把业务场景映射到工具、知识和规则处理器。</p>
+                        <span class="state">E9：扩展点</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flow-separator">
+                <div class="flow-name">工具与知识</div>
+                <div class="flow-lines">
+                    <div class="line data">读取业务数据 / 检索知识</div>
+                    <div class="line fallback">Adapter 不可用 → 澄清或转人工</div>
+                </div>
+            </div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 05</b><strong>工具 /
+                    外部依赖</strong><span>Adapter、RAG、外部 API</span></div>
+                <div class="node-row three">
+                    <button class="node" data-title="Business Adapter"
+                            data-detail="E10 摘要：业务 Adapter 是业务工具入口；如果当前默认 Unavailable，需要在主图用状态标明。&#10;原始证据：Adapter 类、stub、待接入接口列表、异常返回样例放这里。&#10;架构判断：属于工具层，不是核心编排层。">
+                        <span class="tag amber">Adapter</span>
+                        <strong>业务 Adapter</strong>
+                        <p>连接业务系统；当前可标注待接入或 Unavailable。</p>
+                        <span class="state">状态：待接入</span>
+                    </button>
+                    <button class="node" data-title="RAG / Knowledge"
+                            data-detail="E11 摘要：RAG 检索和知识库接入如仍占位，应在主图标红或标待接入。&#10;原始证据：RAG service、embedding、知识库 schema、占位实现放这里。&#10;架构判断：属于知识检索路径，与主请求流不同色表达。">
+                        <span class="tag red">Knowledge</span>
+                        <strong>RAG / 知识检索</strong>
+                        <p>检索知识与规则；占位或未连通时必须显式标记。</p>
+                        <span class="state">缺口：实现占位</span>
+                    </button>
+                    <button class="node" data-title="外部 OpenAPI / 无独立 MQ"
+                            data-detail="E12 摘要：如果七鱼 OpenAPI 默认关闭、没有独立 MQ，应直接标注运行语义。&#10;原始证据：配置、开关、MQ 搜索结果、接口文档放这里。&#10;架构判断：系统架构图必须明确同步/异步语义，不能让读者猜。">
+                        <span class="tag amber">External</span>
+                        <strong>OpenAPI / 无独立 MQ</strong>
+                        <p>外部 API 与异步能力；当前主链路按同步 HTTP 表达。</p>
+                        <span class="state">语义：同步</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flow-separator">
+                <div class="flow-name">状态落库</div>
+                <div class="flow-lines">
+                    <div class="line data">session / message / vector / trace</div>
+                </div>
+            </div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 06</b><strong>状态 / 数据 / 观测</strong><span>RDS、向量、日志</span>
+                </div>
+                <div class="node-row three">
+                    <button class="node" data-title="PostgreSQL / pgvector"
+                            data-detail="E13 摘要：PostgreSQL/pgvector 是状态和向量知识数据面；运行连接状态若未知必须标待确认。&#10;原始证据：DDL、migration、RDS 连接、pgvector 表结构放这里。&#10;架构判断：这是南侧数据面，不应和服务层混在一起。">
+                        <span class="tag green">Data Plane</span>
+                        <strong>PostgreSQL / pgvector</strong>
+                        <p>会话、消息、知识向量与业务状态的持久化数据面。</p>
+                        <span class="state">E13：数据面</span>
+                    </button>
+                    <button class="node" data-title="Trace / Logs"
+                            data-detail="E14 摘要：traceId 贯穿 SDK、Gateway、Agent 和 store；日志用于回放与诊断。&#10;原始证据：trace 字段、日志格式、观测点、测试输出放这里。&#10;架构判断：观测面是独立能力，不只是证据脚注。">
+                        <span class="tag">Observability</span>
+                        <strong>Trace / Logs</strong>
+                        <p>贯穿请求链路，支持排障、审计与回放。</p>
+                        <span class="state">E14：观测面</span>
+                    </button>
+                    <button class="node" data-title="七鱼人工兜底"
+                            data-detail="E15 摘要：兜底最终进入七鱼人工；触发条件包括低置信、开关关闭、Adapter 缺失或用户主动转人工。&#10;原始证据：转人工卡片、fallback 配置、七鱼跳转路径放这里。&#10;架构判断：这是异常/兜底流的终点，应用琥珀虚线连接。">
+                        <span class="tag amber">Human Fallback</span>
+                        <strong>七鱼人工兜底</strong>
+                        <p>主链路无法自助解决时，由人工侧完成服务闭环。</p>
+                        <span class="state">E15：兜底终点</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="branch-note" aria-label="三条流向说明">
+            <div class="note"><h3>主请求流</h3>
+                <p>从小程序到 SDK、Gateway、Agent，再返回卡片或答案；蓝色是第一阅读路径。</p></div>
+            <div class="note"><h3>数据 / 知识流</h3>
+                <p>Agent 调工具、查知识、写状态；绿色表示南向数据面依赖。</p></div>
+            <div class="note"><h3>兜底 / 异常流</h3>
+                <p>低置信、关闭自助、工具不可用或用户要求转人工时，走七鱼兜底。</p></div>
+        </div>
+    </section>
+
+    <section class="quality" aria-label="为什么这更像系统架构图">
+        <div class="panel">
+            <h2>这版相对上一版的变化</h2>
+            <ul>
+                <li>首屏只画宏节点，先看系统边界和层次。</li>
+                <li>三条流向比节点正文更显眼。</li>
+                <li>证据进入节点详情，不再底部堆证据墙。</li>
+                <li>实现清单被收纳，不把技术设计图混进系统架构图。</li>
+            </ul>
+        </div>
+        <div class="panel">
+            <h2>仍保持可追溯</h2>
+            <ul>
+                <li>每个节点保留 E# 与状态，截图也能读懂结论。</li>
+                <li>点击节点可看路径、行号、日志或说明。</li>
+                <li>没有把关键规则只藏进弹窗。</li>
+                <li>移动端降级为纵向层级，不依赖横向拖动。</li>
+            </ul>
+        </div>
+    </section>
+
+    <footer>任务编码：TASK_20260630_007；任务名称：vibe-diagram 系统架构图宏观拓扑示例。</footer>
+</main>
+
+<div class="modal-backdrop" id="backdrop" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <header>
+            <h2 id="modal-title">节点详情</h2>
+            <button class="close" id="close-modal" type="button">关闭</button>
+        </header>
+        <p>这里承载节点级原始证据；主图只保留架构判断和状态。</p>
+        <pre id="modal-detail"></pre>
+    </section>
+</div>
+
+<script>
+    const backdrop = document.getElementById('backdrop');
+    const title = document.getElementById('modal-title');
+    const detail = document.getElementById('modal-detail');
+    const closeButton = document.getElementById('close-modal');
+    let lastTrigger = null;
+
+    function normalizeDetailText(raw) {
+        return (raw || '暂无详情。')
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t');
+    }
+
+    function openModal(button) {
+        lastTrigger = button;
+        title.textContent = button.dataset.title || '节点详情';
+        detail.textContent = normalizeDetailText(button.dataset.detail);
+        backdrop.setAttribute('aria-hidden', 'false');
+        closeButton.focus();
+    }
+
+    function closeModal() {
+        backdrop.setAttribute('aria-hidden', 'true');
+        if (lastTrigger) lastTrigger.focus();
+    }
+
+    document.querySelectorAll('.node').forEach((button) => {
+        button.addEventListener('click', () => openModal(button));
+    });
+    closeButton.addEventListener('click', closeModal);
+    backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) closeModal();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && backdrop.getAttribute('aria-hidden') === 'false') closeModal();
+    });
+</script>
+</body>
+</html>

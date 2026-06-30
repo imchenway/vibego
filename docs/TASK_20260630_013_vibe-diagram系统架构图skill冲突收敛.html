@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>交付验收：系统架构图 skill 冲突收敛</title>
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: oklch(25% 0.035 255);
+            --muted: oklch(50% 0.035 255);
+            --line: oklch(90% 0.018 255);
+            --paper: oklch(99% 0.006 250);
+            --panel: oklch(98% 0.009 250);
+            --blue: oklch(54% 0.18 255);
+            --green: oklch(54% 0.13 170);
+            --amber: oklch(58% 0.13 75);
+            --red: oklch(55% 0.16 25);
+            --shadow: 0 18px 52px color-mix(in oklch, var(--blue) 12%, transparent);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+            background: radial-gradient(circle at 12% 7%, color-mix(in oklch, var(--blue) 11%, transparent), transparent 30rem),
+            radial-gradient(circle at 90% 10%, color-mix(in oklch, var(--green) 8%, transparent), transparent 28rem),
+            linear-gradient(color-mix(in oklch, var(--blue) 5%, transparent) 1px, transparent 1px),
+            linear-gradient(90deg, color-mix(in oklch, var(--blue) 5%, transparent) 1px, transparent 1px),
+            linear-gradient(180deg, var(--paper), oklch(97.5% 0.012 250));
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1080px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 30px 0 56px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 29px;
+            line-height: 1.18;
+            letter-spacing: -.035em;
+        }
+
+        .lead {
+            margin: 8px 0 18px;
+            color: var(--muted);
+            max-width: 920px;
+        }
+
+        .panel, .flow, .checks {
+            background: color-mix(in oklch, var(--panel) 94%, transparent);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            overflow-wrap: anywhere;
+        }
+
+        .panel {
+            padding: 16px 18px;
+            margin-bottom: 16px;
+        }
+
+        .panel h2, .flow h2, .checks h2 {
+            margin: 0 0 8px;
+            font-size: 17px;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .flow {
+            padding: 18px;
+        }
+
+        .priority {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 70px minmax(0, 1fr) 70px minmax(0, 1fr);
+            gap: 10px;
+            align-items: stretch;
+            margin-top: 14px;
+        }
+
+        .node {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 15px;
+            background: var(--paper);
+            min-height: 154px;
+        }
+
+        .node.good {
+            border-color: color-mix(in oklch, var(--green) 24%, var(--line));
+            background: oklch(96% 0.035 170);
+        }
+
+        .node.warn {
+            border-color: color-mix(in oklch, var(--amber) 24%, var(--line));
+            background: oklch(97% 0.04 78);
+        }
+
+        .node.bad {
+            border-color: color-mix(in oklch, var(--red) 22%, var(--line));
+            background: oklch(97% 0.024 25);
+        }
+
+        .node b {
+            display: inline-flex;
+            border-radius: 999px;
+            padding: 4px 9px;
+            font-size: 12px;
+            margin-bottom: 8px;
+            background: var(--paper);
+        }
+
+        .node strong {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 16px;
+        }
+
+        .node p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .arrow {
+            display: grid;
+            place-items: center;
+            color: var(--blue);
+            font-size: 34px;
+            font-weight: 950;
+        }
+
+        .rules {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            margin-top: 16px;
+        }
+
+        .checks {
+            padding: 18px;
+            margin-top: 16px;
+        }
+
+        .check-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .check {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: var(--paper);
+            padding: 12px;
+            min-height: 108px;
+        }
+
+        .check b {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .check span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        li {
+            margin: 4px 0;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: oklch(96.5% 0.012 250);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 1px 5px;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 820px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            h1 {
+                font-size: 23px;
+            }
+
+            .priority, .rules, .check-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .arrow {
+                transform: rotate(90deg);
+                min-height: 34px;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>交付验收：系统架构图 skill 冲突收敛</h1>
+    <p class="lead">结论：需要更新 skill，但更新方向不是继续加复杂布局，而是把 007
+        基线优先级写死，泳道和分段只作为例外补救。</p>
+
+    <section class="panel">
+        <h2>本轮回答</h2>
+        <p>是，需要更新。因为 skill 里虽然已经加入了 007
+            基线，也保留了泳道/分段例外，但优先级还不够显眼，未来模型仍可能把“优化空间”误解为继续升级复杂布局。</p>
+    </section>
+
+    <section class="flow" aria-labelledby="priority-title">
+        <h2 id="priority-title">新的系统架构图优先级</h2>
+        <div class="priority">
+            <article class="node good"><b>默认</b><strong>先用 007 宏观拓扑</strong>
+                <p>北向南层级、层间流向分隔条、节点摘要、点击详情证据。这是系统架构图默认模板。</p></article>
+            <div class="arrow" aria-hidden="true">→</div>
+            <article class="node warn"><b>判断</b><strong>007 是否真的不够用</strong>
+                <p>只有无法区分两个以上独立平面，或主流向与运行语义互相遮挡，才进入例外。</p></article>
+            <div class="arrow" aria-hidden="true">→</div>
+            <article class="node bad"><b>例外</b><strong>泳道 / 分段不是升级方向</strong>
+                <p>用户明确要求或 007 验证失败时才使用；不要把 010/011 当推荐模板。</p></article>
+        </div>
+        <div class="rules">
+            <div class="panel"><h2>写入 skill 的规则</h2>
+                <ul>
+                    <li>系统架构图例外形态不是优化方向。</li>
+                    <li>除非用户明确要求或 007 基线验证失败，否则不要使用泳道或分段故事线。</li>
+                    <li>进入例外形态前，必须说明为什么 007 不够用。</li>
+                </ul>
+            </div>
+            <div class="panel"><h2>保留的例外</h2>
+                <ul>
+                    <li>复杂控制面、数据面、兜底面确实互相冲突时，可用侧向泳道。</li>
+                    <li>但侧向泳道不能做五列表格。</li>
+                    <li>分段故事线只作为讲解补救，不作为默认架构图。</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="checks" aria-labelledby="checks-title">
+        <h2 id="checks-title">验证闭环</h2>
+        <div class="check-grid">
+            <div class="check">
+                <b>红灯测试</b><span>新增优先级测试先失败，证明旧 skill 缺少“系统架构图例外形态”规则。</span></div>
+            <div class="check"><b>绿色修正</b><span>skill 新增 007 优先、泳道例外、010/011 非推荐模板的明确规则。</span>
+            </div>
+            <div class="check"><b>同步范围</b><span>验证后同步到 Codex / Claude / Gemini / vibego 全局 AGENTS。</span>
+            </div>
+        </div>
+    </section>
+
+    <footer>任务编码：TASK_20260630_013；任务名称：vibe-diagram 系统架构图 skill 冲突收敛。</footer>
+</main>
+</body>
+</html>

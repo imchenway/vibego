@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>系统架构：证据进节点详情，主图必须是一张全局拓扑</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #102033;
+            --muted: #5b6a7d;
+            --line: #d7e2ee;
+            --blue: #2368d8;
+            --blue-soft: #edf5ff;
+            --green: #0f8b6d;
+            --green-soft: #effcf7;
+            --amber: #b76a00;
+            --amber-soft: #fff7e8;
+            --red: #c0353f;
+            --red-soft: #fff1f2;
+            --surface: rgba(255, 255, 255, .88);
+            --shadow: 0 18px 48px rgba(36, 78, 132, .10);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at 14% 8%, rgba(35, 104, 216, .08), transparent 30%),
+            radial-gradient(circle at 92% 2%, rgba(15, 139, 109, .08), transparent 28%),
+            linear-gradient(90deg, rgba(35, 104, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(35, 104, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fcfeff 0%, #f7fbff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1240px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 32px 0 56px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(22px, 3vw, 30px);
+            letter-spacing: -.03em;
+        }
+
+        .subtitle {
+            margin: 8px 0 20px;
+            color: var(--muted);
+            max-width: 980px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: 1.25fr .75fr;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            box-shadow: var(--shadow);
+            padding: 18px;
+            overflow-wrap: anywhere;
+        }
+
+        .panel h2, .panel h3 {
+            margin: 0 0 10px;
+            font-size: 17px;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 9px;
+            margin-top: 12px;
+        }
+
+        .chip {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-weight: 700;
+            color: #28435f;
+            font-size: 13px;
+        }
+
+        .chip.good {
+            color: var(--green);
+            background: var(--green-soft);
+            border-color: rgba(15, 139, 109, .22);
+        }
+
+        .chip.warn {
+            color: var(--amber);
+            background: var(--amber-soft);
+            border-color: rgba(183, 106, 0, .22);
+        }
+
+        .chip.bad {
+            color: var(--red);
+            background: var(--red-soft);
+            border-color: rgba(192, 53, 63, .22);
+        }
+
+        .legend {
+            display: grid;
+            gap: 8px;
+            color: var(--muted);
+        }
+
+        .legend span {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .dot.blue {
+            background: var(--blue);
+        }
+
+        .dot.green {
+            background: var(--green);
+        }
+
+        .dot.amber {
+            background: var(--amber);
+        }
+
+        .dot.red {
+            background: var(--red);
+        }
+
+        .map {
+            position: relative;
+            background: rgba(255, 255, 255, .78);
+            border: 1px solid var(--line);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+            padding: 18px 18px 24px;
+            overflow: hidden;
+        }
+
+        .map-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            align-items: baseline;
+            margin: 4px 4px 16px;
+        }
+
+        .map-title h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .map-title p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            max-width: 620px;
+        }
+
+        .arch {
+            position: relative;
+            display: grid;
+            gap: 16px;
+            z-index: 1;
+        }
+
+        .layer {
+            display: grid;
+            grid-template-columns: 180px 1fr;
+            gap: 14px;
+            align-items: stretch;
+            position: relative;
+        }
+
+        .layer-label {
+            border-left: 5px solid var(--blue);
+            background: linear-gradient(180deg, #f2f7ff, #ffffff);
+            border-radius: 18px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 108px;
+        }
+
+        .layer-label b {
+            color: var(--blue);
+            letter-spacing: .08em;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .layer-label strong {
+            font-size: 18px;
+            margin: 4px 0;
+        }
+
+        .layer-label span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .nodes {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .nodes.two {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .node {
+            appearance: none;
+            text-align: left;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, .94);
+            border-radius: 18px;
+            padding: 14px 14px 13px;
+            min-height: 112px;
+            box-shadow: 0 10px 24px rgba(20, 60, 110, .06);
+            color: inherit;
+            cursor: pointer;
+            transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+            overflow-wrap: anywhere;
+        }
+
+        .node:hover {
+            transform: translateY(-2px);
+            border-color: rgba(35, 104, 216, .45);
+            box-shadow: 0 16px 34px rgba(35, 104, 216, .12);
+        }
+
+        .node:focus-visible {
+            outline: 3px solid rgba(35, 104, 216, .35);
+            outline-offset: 3px;
+        }
+
+        .node .tag {
+            display: inline-flex;
+            width: fit-content;
+            border-radius: 999px;
+            padding: 3px 8px;
+            font-size: 12px;
+            font-weight: 800;
+            background: var(--blue-soft);
+            color: var(--blue);
+            border: 1px solid rgba(35, 104, 216, .18);
+            margin-bottom: 8px;
+        }
+
+        .node .tag.green {
+            background: var(--green-soft);
+            color: var(--green);
+            border-color: rgba(15, 139, 109, .2);
+        }
+
+        .node .tag.amber {
+            background: var(--amber-soft);
+            color: var(--amber);
+            border-color: rgba(183, 106, 0, .22);
+        }
+
+        .node .tag.red {
+            background: var(--red-soft);
+            color: var(--red);
+            border-color: rgba(192, 53, 63, .22);
+        }
+
+        .node strong {
+            display: block;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+
+        .node p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .node .evidence {
+            margin-top: 9px;
+            display: inline-flex;
+            border-radius: 9px;
+            background: #f5f8fc;
+            color: #445b76;
+            padding: 3px 7px;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .flow-label {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            color: var(--blue);
+            font-weight: 900;
+            font-size: 13px;
+            margin: -4px 0;
+        }
+
+        .flow-label::before, .flow-label::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(35, 104, 216, .32), transparent);
+        }
+
+        .arrow-down {
+            color: var(--blue);
+            font-size: 18px;
+        }
+
+        .fix-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .fix-card {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, .86);
+            padding: 14px;
+            overflow-wrap: anywhere;
+        }
+
+        .fix-card h3 {
+            margin: 0 0 8px;
+            font-size: 15px;
+        }
+
+        .fix-card ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(16, 32, 51, .28);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 20;
+        }
+
+        .modal-backdrop[aria-hidden="false"] {
+            display: flex;
+        }
+
+        .modal {
+            width: min(640px, 100%);
+            max-height: min(720px, calc(100vh - 40px));
+            overflow: auto;
+            background: #fff;
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            box-shadow: 0 24px 80px rgba(16, 32, 51, .28);
+            padding: 20px;
+        }
+
+        .modal header {
+            display: flex;
+            align-items: start;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 12px;
+        }
+
+        .modal h2 {
+            margin: 0;
+            font-size: 19px;
+        }
+
+        .modal p {
+            color: var(--muted);
+            margin: 0 0 10px;
+        }
+
+        .modal pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f6f8fb;
+            border: 1px solid #e4ebf3;
+            border-radius: 14px;
+            padding: 12px;
+            color: #30455d;
+        }
+
+        .close {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 999px;
+            padding: 7px 10px;
+            cursor: pointer;
+            font-weight: 800;
+        }
+
+        .close:focus-visible {
+            outline: 3px solid rgba(35, 104, 216, .35);
+            outline-offset: 2px;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: #f3f6fb;
+            border: 1px solid #e4ebf4;
+            padding: 1px 5px;
+            border-radius: 6px;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 860px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            .summary, .layer, .fix-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .nodes, .nodes.two {
+                grid-template-columns: 1fr;
+            }
+
+            .layer-label {
+                min-height: auto;
+            }
+
+            .map-title {
+                display: block;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .node {
+                transition: none;
+            }
+
+            .node:hover {
+                transform: none;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>系统架构：证据进节点详情，主图必须是一张全局拓扑</h1>
+    <p class="subtitle">针对截图反馈重设 vibe-diagram
+        制图规则：系统架构图先画入口到数据面的北向南拓扑；节点静态展示架构判断，文件路径/行号/日志等原始证据进入点击详情。</p>
+
+    <section class="summary" aria-label="本次修正规则摘要">
+        <div class="panel">
+            <h2>一句话结论</h2>
+            <p>系统架构图不能再是“多列分层卡片 +
+                底部证据墙”；它必须让用户沿主请求流、控制流、数据流一眼读出系统边界、运行层次和兜底路径。</p>
+            <div class="chips">
+                <span class="chip good">节点内：E# + 结论 + 状态</span>
+                <span class="chip">点击详情：路径 / 行号 / 日志</span>
+                <span class="chip warn">底部证据区：仅跨节点索引</span>
+                <span class="chip bad">禁止：证据卡片墙</span>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>图例</h2>
+            <div class="legend">
+                <span><i class="dot blue"></i> 主请求 / 控制流</span>
+                <span><i class="dot green"></i> 数据读写 / 知识检索</span>
+                <span><i class="dot amber"></i> 兜底 / 人工接入</span>
+                <span><i class="dot red"></i> 待确认 / 当前缺口</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="map" aria-labelledby="map-title">
+        <div class="map-title">
+            <h2 id="map-title">改版示意：多小程序客服智能体应先呈现全局架构拓扑</h2>
+            <p>示意基于用户截图中的组件名抽象，不新增业务事实；点击节点查看原始证据应放置的位置。</p>
+        </div>
+
+        <div class="arch">
+            <div class="layer">
+                <div class="layer-label"><b>Layer 01</b><strong>外部入口</strong><span>用户端与宿主侧边界</span></div>
+                <div class="nodes two">
+                    <button class="node" data-title="微信小程序入口"
+                            data-detail="原始证据示例：截图显示生意宝 / 店务通 / 萝卜白菜三端共用客服能力，appCode 示例为 sbv/dwt/lbbc。\n主图只保留入口与边界，详细 appCode、README 行号等放这里。">
+                        <span class="tag green">小程序</span><strong>生意宝 / 店务通 / 萝卜白菜</strong>
+                        <p>用户发起客服会话；进入自研 Miniapp SDK，而不是直接替换七鱼坐席。</p><span class="evidence">E1：三端入口</span>
+                    </button>
+                    <button class="node" data-title="宿主七鱼 SDK"
+                            data-detail="原始证据示例：截图中 qiyuConfig.open 与 fallbackToQiyuDirect 表明命中兜底时可直接打开七鱼。\n文件路径、行号、配置片段应作为本节点详情。">
+                        <span class="tag amber">人工兜底</span><strong>宿主七鱼小程序 SDK</strong>
+                        <p>作为人工兜底边界；只在回退或低置信场景接管。</p><span class="evidence">E2：兜底路径</span>
+                    </button>
+                </div>
+            </div>
+            <div class="flow-label"><span class="arrow-down">↓</span> 客服入口 / fallback 分流</div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 02</b><strong>前端接入</strong><span>SDK 与 REST 协议</span></div>
+                <div class="nodes two">
+                    <button class="node" data-title="自研 Miniapp SDK"
+                            data-detail="原始证据示例：截图中静态入口包含 /init/open/openScene/transferToHuman；env 默认走 /api/cs/v1/*。\n对应 README、index.ts、types.ts 的路径和行号放这里，不在主图底部铺证据。">
+                        <span class="tag green">SDK</span><strong>自研 Miniapp SDK</strong>
+                        <p>封装 open、scene、transferToHuman；向后端提交 appCode、sceneCode、traceId。</p><span
+                            class="evidence">E3：REST 入口</span>
+                    </button>
+                    <button class="node" data-title="HTTP REST JSON 契约"
+                            data-detail="原始证据示例：截图中的 Authorization、X-CS-App-Code、traceId、统一响应等协议细节。\n长 JSON、字段表和错误码放在点击详情或接口矩阵，不放底部证据墙。">
+                        <span class="tag">协议</span><strong>HTTP REST JSON</strong>
+                        <p>统一响应、鉴权头、应用码与 traceId 是跨端到网关的主请求流。</p><span
+                            class="evidence">E4：协议约束</span>
+                    </button>
+                </div>
+            </div>
+            <div class="flow-label"><span class="arrow-down">↓</span> 同步 HTTP 请求进入 Spring Boot Gateway</div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 03</b><strong>接入 / 网关</strong><span>Controller、Facade、开关</span>
+                </div>
+                <div class="nodes">
+                    <button class="node" data-title="CustomerServiceController"
+                            data-detail="原始证据示例：截图显示正式 v1 接口包含 session、home、message、history、feedback、transfer/qiyu，并保留旧 /api/cs/* 兼容接口。\n源码路径和行号进入本详情。">
+                        <span class="tag green">Controller</span><strong>CustomerServiceController</strong>
+                        <p>暴露 v1 REST 门面，接收小程序 SDK 请求。</p><span class="evidence">E5：v1 API</span>
+                    </button>
+                    <button class="node" data-title="CustomerServiceFacade"
+                            data-detail="原始证据示例：截图显示 Facade 创建会话、组装首页、转 v1 消息、写消息与 trace；用户消息进入 Agent，系统卡片回写 store。">
+                        <span class="tag green">Facade</span><strong>CustomerServiceFacade</strong>
+                        <p>薄门面：组织会话、消息与 trace，避免 Controller 直接承载业务。</p><span
+                            class="evidence">E6：门面职责</span>
+                    </button>
+                    <button class="node" data-title="Feature Flags / Guard"
+                            data-detail="原始证据示例：截图显示代码默认开关控制自助与七鱼直达，DB seed 配置 snake_case feature flags；Guard/ToolGateway 是业务工具入口约束。">
+                        <span class="tag amber">Guard</span><strong>Feature Flags + Guard</strong>
+                        <p>控制自助、兜底、trace 与业务工具访问边界。</p><span class="evidence">E7：开关约束</span>
+                    </button>
+                </div>
+            </div>
+            <div class="flow-label"><span class="arrow-down">↓</span> 进入受控 Agent：先识别场景，再补槽，再由 handler 执行业务
+            </div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 04</b><strong>业务服务 / Agent</strong><span>编排、意图、场景注册</span>
+                </div>
+                <div class="nodes">
+                    <button class="node" data-title="AgentOrchestrator"
+                            data-detail="原始证据示例：截图显示自助关闭或置信度低会返回转人工卡片；缺槽时返回澄清表单，齐槽后才调用 handler。">
+                        <span class="tag green">Orchestrator</span><strong>AgentOrchestrator</strong>
+                        <p>编排识别、补槽、执行与转人工兜底。</p><span class="evidence">E8：编排策略</span>
+                    </button>
+                    <button class="node" data-title="Intent / Slot"
+                            data-detail="原始证据示例：截图显示规则覆盖转单、库存、批次、效期、退货、财务等关键词；详细规则表应在此节点详情或相邻规则矩阵。">
+                        <span class="tag">Intent / Slot</span><strong>规则意图 + 简单槽位</strong>
+                        <p>识别场景并收集必要字段；不足时返回澄清。</p><span class="evidence">E9：场景识别</span>
+                    </button>
+                    <button class="node" data-title="Handler Registry"
+                            data-detail="原始证据示例：截图显示 Enum 固定 10 个一期场景，DomainFactory 注册 Tool、Knowledge、Rule。\n注册表清单和源码锚点放这里。">
+                        <span class="tag green">Registry</span><strong>10 个场景 Handler 注册</strong>
+                        <p>把固定场景映射到工具、知识与规则处理器。</p><span class="evidence">E10：场景注册</span>
+                    </button>
+                </div>
+            </div>
+            <div class="flow-label"><span class="arrow-down">↓</span> 工具调用 / 知识检索 / 人工兜底旁路</div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer
+                    05</b><strong>工具与中间件</strong><span>业务 Adapter、RAG、OpenAPI</span></div>
+                <div class="nodes">
+                    <button class="node" data-title="Business Adapters"
+                            data-detail="原始证据示例：截图显示业务 Adapter 默认 Unavailable。\n具体 adapter 类、接口状态、替身实现和待接入项放在详情。">
+                        <span class="tag amber">Adapter</span><strong>业务 Adapter</strong>
+                        <p>业务工具入口；当前可标注 Unavailable 或待接入。</p><span class="evidence">状态：待接入</span>
+                    </button>
+                    <button class="node" data-title="RAG Retrieval"
+                            data-detail="原始证据示例：截图显示 RAG 检索实现仍占位。\n检索索引、embedding、pgvector 表结构等原始证据放这里。">
+                        <span class="tag red">RAG</span><strong>知识检索 / RAG</strong>
+                        <p>连接知识库与 pgvector；若仅占位必须在主图标出。</p><span class="evidence">状态：占位</span>
+                    </button>
+                    <button class="node" data-title="OpenAPI / MQ 语义"
+                            data-detail="原始证据示例：截图显示七鱼 OpenAPI 默认关闭；未看到独立 MQ。\n若没有 MQ，应明确写“无独立 MQ / 同步 HTTP”，不要留给读者猜。">
+                        <span class="tag amber">运行语义</span><strong>OpenAPI / 无独立 MQ</strong>
+                        <p>外部 API 默认关闭；主链路按同步 HTTP 表达。</p><span class="evidence">状态：待确认</span>
+                    </button>
+                </div>
+            </div>
+            <div class="flow-label"><span class="arrow-down">↓</span> 数据读写 / 日志观测 / 人工兜底</div>
+
+            <div class="layer">
+                <div class="layer-label"><b>Layer 06</b><strong>状态 / 数据 /
+                    观测</strong><span>RDS、pgvector、trace、兜底</span></div>
+                <div class="nodes">
+                    <button class="node" data-title="PostgreSQL / pgvector"
+                            data-detail="原始证据示例：截图标题提到 PostgreSQL/pgvector + 七鱼兜底，且说明未连接运行时 RDS 时应标为待确认。\nDDL、migration、连接状态和 RDS 运行证据放这里。">
+                        <span class="tag green">DB</span><strong>PostgreSQL / pgvector</strong>
+                        <p>承载状态与知识向量；运行连接状态必须显式标注。</p><span class="evidence">E11：数据面</span>
+                    </button>
+                    <button class="node" data-title="Trace / Logs"
+                            data-detail="原始证据示例：截图中 traceId 贯穿 SDK 与后端；日志、trace、观测点应作为状态/观测面节点，不应散落在底部证据卡片。">
+                        <span class="tag">Observability</span><strong>Trace / Logs</strong>
+                        <p>贯穿请求与消息写入，支持问题回放与诊断。</p><span class="evidence">E12：观测链</span>
+                    </button>
+                    <button class="node" data-title="七鱼人工兜底"
+                            data-detail="原始证据示例：截图中人工兜底、七鱼 OpenAPI 默认关闭、fallbackToQiyuDirect 等信息。\n兜底触发条件、卡片文案和外部跳转行为放这里。">
+                        <span class="tag amber">Fallback</span><strong>七鱼人工兜底</strong>
+                        <p>低置信、关闭自助或命中 fallback 时接管。</p><span class="evidence">E13：兜底边界</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="fix-grid" aria-label="skill 修正规则">
+            <div class="fix-card"><h3>证据放置规则</h3>
+                <ul>
+                    <li>节点内展示 E#、结论、可信度。</li>
+                    <li>原始路径、行号、日志、SQL、JSON 进入点击详情。</li>
+                    <li>底部只保留跨节点索引或测试矩阵。</li>
+                </ul>
+            </div>
+            <div class="fix-card"><h3>系统架构规则</h3>
+                <ul>
+                    <li>首屏必须是北向南全局拓扑。</li>
+                    <li>入口、网关、Agent、工具、数据面按层成带。</li>
+                    <li>主请求流、数据流、兜底流必须可追踪。</li>
+                </ul>
+            </div>
+            <div class="fix-card"><h3>判废标准</h3>
+                <ul>
+                    <li>只看到多列卡片和证据文字：重画。</li>
+                    <li>看不出入口到数据面的流向：重画。</li>
+                    <li>节点像证据卡片而不是架构组件：重画。</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+    <section class="panel" style="margin-top:16px" aria-labelledby="verify-title">
+        <h2 id="verify-title">验证闭环</h2>
+        <p>已用 TDD 锁住两条新约束：原始证据进入节点详情；系统架构图必须是全局拓扑而不是分层卡片目录。相关回归 <code>46
+            passed</code>，HTMLParser 解析通过，仓库 skill、override skill、vibego AGENTS、Codex AGENTS 均已同步命中新规则。
+            未覆盖：内置浏览器本轮阻止直接打开本地 <code>file://</code> 目标，因此没有声明截图级视觉 QA 通过。</p>
+    </section>
+
+
+    <footer>任务编码：TASK_20260630_005；任务名称：vibe-diagram 证据详情与系统架构拓扑重设计。</footer>
+</main>
+
+<div class="modal-backdrop" id="backdrop" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <header>
+            <h2 id="modal-title">节点详情</h2>
+            <button class="close" id="close-modal" type="button">关闭</button>
+        </header>
+        <p>这里承载原始证据、路径、行号、日志或截图说明；主图只保留能帮助读架构的摘要。</p>
+        <pre id="modal-detail"></pre>
+    </section>
+</div>
+
+<script>
+    const backdrop = document.getElementById('backdrop');
+    const title = document.getElementById('modal-title');
+    const detail = document.getElementById('modal-detail');
+    const close = document.getElementById('close-modal');
+    let lastTrigger = null;
+
+    function openModal(button) {
+        lastTrigger = button;
+        title.textContent = button.dataset.title || '节点详情';
+        detail.textContent = button.dataset.detail || '暂无详情。';
+        backdrop.setAttribute('aria-hidden', 'false');
+        close.focus();
+    }
+
+    function closeModal() {
+        backdrop.setAttribute('aria-hidden', 'true');
+        if (lastTrigger) lastTrigger.focus();
+    }
+
+    document.querySelectorAll('.node').forEach((button) => button.addEventListener('click', () => openModal(button)));
+    close.addEventListener('click', closeModal);
+    backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) closeModal();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && backdrop.getAttribute('aria-hidden') === 'false') closeModal();
+    });
+</script>
+</body>
+</html>

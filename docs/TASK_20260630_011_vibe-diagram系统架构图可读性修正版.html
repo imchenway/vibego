@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>系统架构：多小程序客服智能体的可读主线图</title>
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: oklch(25% 0.035 255);
+            --muted: oklch(49% 0.035 255);
+            --faint: oklch(93% 0.018 255);
+            --paper: oklch(99% 0.006 250);
+            --panel: oklch(98% 0.009 250);
+            --blue: oklch(54% 0.18 255);
+            --blue-soft: oklch(96% 0.035 255);
+            --green: oklch(54% 0.13 170);
+            --green-soft: oklch(96% 0.035 170);
+            --amber: oklch(58% 0.13 75);
+            --amber-soft: oklch(97% 0.04 78);
+            --red: oklch(55% 0.16 25);
+            --red-soft: oklch(96% 0.035 25);
+            --shadow: 0 18px 52px color-mix(in oklch, var(--blue) 13%, transparent);
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+            background: radial-gradient(circle at 12% 7%, color-mix(in oklch, var(--blue) 12%, transparent), transparent 30rem),
+            radial-gradient(circle at 92% 10%, color-mix(in oklch, var(--green) 10%, transparent), transparent 28rem),
+            linear-gradient(color-mix(in oklch, var(--blue) 5%, transparent) 1px, transparent 1px),
+            linear-gradient(90deg, color-mix(in oklch, var(--blue) 5%, transparent) 1px, transparent 1px),
+            linear-gradient(180deg, var(--paper), oklch(97.5% 0.012 250));
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1120px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 30px 0 56px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 29px;
+            line-height: 1.18;
+            letter-spacing: -.035em;
+        }
+
+        .lead {
+            margin: 8px 0 18px;
+            color: var(--muted);
+            max-width: 940px;
+        }
+
+        .topline {
+            display: grid;
+            grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr);
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .panel, .canvas, .note-panel {
+            background: color-mix(in oklch, var(--panel) 92%, transparent);
+            border: 1px solid var(--faint);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            overflow-wrap: anywhere;
+        }
+
+        .panel {
+            padding: 16px 18px;
+        }
+
+        .panel h2, .note-panel h2 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .panel p, .note-panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 11px;
+        }
+
+        .chip, .badge {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 4px 9px;
+            font-size: 12px;
+            font-weight: 850;
+            border: 1px solid var(--faint);
+            background: oklch(99% 0.006 250);
+            color: var(--ink);
+        }
+
+        .chip.blue, .badge.blue {
+            color: var(--blue);
+            background: var(--blue-soft);
+            border-color: color-mix(in oklch, var(--blue) 22%, var(--faint));
+        }
+
+        .chip.green, .badge.green {
+            color: var(--green);
+            background: var(--green-soft);
+            border-color: color-mix(in oklch, var(--green) 22%, var(--faint));
+        }
+
+        .chip.amber, .badge.amber {
+            color: var(--amber);
+            background: var(--amber-soft);
+            border-color: color-mix(in oklch, var(--amber) 24%, var(--faint));
+        }
+
+        .chip.red, .badge.red {
+            color: var(--red);
+            background: var(--red-soft);
+            border-color: color-mix(in oklch, var(--red) 22%, var(--faint));
+        }
+
+        .canvas {
+            padding: 18px;
+        }
+
+        .canvas-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+            margin: 2px 4px 18px;
+        }
+
+        .canvas-header h2 {
+            margin: 0;
+            font-size: 19px;
+            letter-spacing: -.02em;
+        }
+
+        .canvas-header p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            max-width: 620px;
+        }
+
+        .spine {
+            display: grid;
+            gap: 16px;
+            position: relative;
+        }
+
+        .stage {
+            display: grid;
+            grid-template-columns: 52px minmax(0, 1fr);
+            gap: 14px;
+            align-items: stretch;
+            position: relative;
+        }
+
+        .stage:not(:last-child)::after {
+            content: "";
+            position: absolute;
+            left: 25px;
+            top: 58px;
+            bottom: -18px;
+            width: 2px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, var(--blue), color-mix(in oklch, var(--blue) 20%, transparent));
+        }
+
+        .step-number {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            background: var(--blue-soft);
+            border: 1px solid color-mix(in oklch, var(--blue) 24%, var(--faint));
+            color: var(--blue);
+            font-weight: 950;
+            position: relative;
+            z-index: 2;
+        }
+
+        .stage-body {
+            border: 1px solid var(--faint);
+            border-radius: 22px;
+            background: oklch(99% 0.006 250);
+            padding: 16px;
+            box-shadow: 0 10px 24px color-mix(in oklch, var(--blue) 7%, transparent);
+        }
+
+        .stage-main {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 14px;
+            align-items: start;
+        }
+
+        .stage h3 {
+            margin: 0 0 6px;
+            font-size: 18px;
+            letter-spacing: -.015em;
+        }
+
+        .stage p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .stage-action {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 6px;
+            min-width: 210px;
+        }
+
+        .side-notes {
+            margin-top: 12px;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .capsule {
+            border: 1px solid var(--faint);
+            border-radius: 16px;
+            padding: 10px;
+            min-height: 78px;
+            background: oklch(98.8% 0.008 250);
+        }
+
+        .capsule strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+
+        .capsule span {
+            color: var(--muted);
+            font-size: 12px;
+            display: block;
+        }
+
+        .capsule.control {
+            background: var(--amber-soft);
+            border-color: color-mix(in oklch, var(--amber) 18%, var(--faint));
+        }
+
+        .capsule.data {
+            background: var(--green-soft);
+            border-color: color-mix(in oklch, var(--green) 18%, var(--faint));
+        }
+
+        .capsule.fallback {
+            background: var(--amber-soft);
+            border-color: color-mix(in oklch, var(--amber) 22%, var(--faint));
+        }
+
+        .capsule.gap {
+            background: var(--red-soft);
+            border-color: color-mix(in oklch, var(--red) 18%, var(--faint));
+        }
+
+        details {
+            margin-top: 12px;
+            border: 1px solid var(--faint);
+            border-radius: 14px;
+            background: oklch(98.5% 0.008 250);
+            padding: 9px 11px;
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: 850;
+            color: var(--ink);
+        }
+
+        summary:focus-visible {
+            outline: 3px solid color-mix(in oklch, var(--blue) 30%, transparent);
+            outline-offset: 3px;
+            border-radius: 8px;
+        }
+
+        details p {
+            margin-top: 8px;
+            font-size: 13px;
+        }
+
+        .semantic-row {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            border: 1px solid color-mix(in oklch, var(--green) 18%, var(--faint));
+            border-radius: 18px;
+            background: var(--green-soft);
+            padding: 12px;
+        }
+
+        .semantic-row div {
+            background: oklch(99% 0.006 250);
+            border: 1px solid color-mix(in oklch, var(--green) 12%, var(--faint));
+            border-radius: 14px;
+            padding: 10px;
+            min-width: 0;
+        }
+
+        .semantic-row b {
+            display: block;
+            color: var(--green);
+            font-size: 12px;
+            margin-bottom: 3px;
+        }
+
+        .semantic-row span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .notes {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .note-panel {
+            padding: 16px 18px;
+        }
+
+        .note-panel ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        .note-panel li {
+            margin: 4px 0;
+        }
+
+        .status {
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: oklch(96.5% 0.012 250);
+            border: 1px solid var(--faint);
+            border-radius: 6px;
+            padding: 1px 5px;
+        }
+
+        @media (max-width: 820px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            h1 {
+                font-size: 23px;
+            }
+
+            .topline, .notes {
+                grid-template-columns: 1fr;
+            }
+
+            .canvas-header {
+                display: block;
+            }
+
+            .stage {
+                grid-template-columns: 42px minmax(0, 1fr);
+                gap: 10px;
+            }
+
+            .stage:not(:last-child)::after {
+                left: 20px;
+                top: 48px;
+            }
+
+            .step-number {
+                width: 42px;
+                height: 42px;
+            }
+
+            .stage-main, .side-notes, .semantic-row {
+                grid-template-columns: 1fr;
+            }
+
+            .stage-action {
+                min-width: 0;
+                justify-content: flex-start;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>系统架构：多小程序客服智能体的可读主线图</h1>
+    <p class="lead">修正 010 的问题：不再把系统画成五列表格。读者只沿蓝色主线看 5
+        个阶段，控制、数据、兜底都贴在当前阶段旁边，作为解释而不是第二张矩阵。</p>
+
+    <section class="topline" aria-label="本版结论">
+        <div class="panel">
+            <h2>一眼读法</h2>
+            <p>多小程序入口进入 SDK，经 Gateway / Facade 到 Agent，Agent
+                调工具和知识后返回答案；任何阶段遇到低置信、关闭自助或工具不可用，都进入七鱼兜底。</p>
+            <div class="chips">
+                <span class="chip blue">蓝：唯一主线</span>
+                <span class="chip amber">琥珀：控制 / 兜底</span>
+                <span class="chip green">绿：数据 / 知识</span>
+                <span class="chip red">红：缺口</span>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>为什么比 010 更可读</h2>
+            <p>010 同时展示 5 列，读者要横向逐格扫描。本版把泳道折回到阶段内部，先读主线，再看每段的控制、数据、兜底说明。</p>
+        </div>
+    </section>
+
+    <section class="canvas" aria-labelledby="canvas-title">
+        <div class="canvas-header">
+            <h2 id="canvas-title">主线分段拓扑</h2>
+            <p>每段只回答一个问题：入口如何进来、服务如何接住、Agent 如何决策、工具与知识如何支撑、结果如何闭环。</p>
+        </div>
+
+        <div class="spine" aria-label="主请求分段链路">
+            <article class="stage">
+                <div class="step-number" aria-hidden="true">1</div>
+                <div class="stage-body">
+                    <div class="stage-main">
+                        <div>
+                            <h3>多小程序入口进入自研 SDK</h3>
+                            <p>生意宝、店务通、萝卜白菜共用客服能力；主图不展开 appCode 明细，只保留系统北侧边界。</p>
+                        </div>
+                        <div class="stage-action"><span class="badge blue">E1 入口</span><span class="badge green">SDK 统一协议</span>
+                        </div>
+                    </div>
+                    <div class="side-notes">
+                        <div class="capsule control">
+                            <strong>控制</strong><span>入口只校验应用身份，复杂策略不在此层展开。</span></div>
+                        <div class="capsule data">
+                            <strong>数据</strong><span>traceId 从 SDK 开始贯穿，后续写入日志与会话。</span></div>
+                        <div class="capsule fallback"><strong>兜底</strong><span>用户主动转人工时可旁路进入七鱼。</span>
+                        </div>
+                    </div>
+                    <details>
+                        <summary>证据详情</summary>
+                        <p>E1 / E3：README、SDK index/types、入口截图、appCode 清单放这里；这些不进入主图正文。</p></details>
+                </div>
+            </article>
+
+            <article class="stage">
+                <div class="step-number" aria-hidden="true">2</div>
+                <div class="stage-body">
+                    <div class="stage-main">
+                        <div>
+                            <h3>Gateway / Facade 接住 REST 请求</h3>
+                            <p>服务层承接鉴权、应用码、trace、session、message、history 与 transfer，作为后端主门面。</p>
+                        </div>
+                        <div class="stage-action"><span class="badge blue">E4 Gateway</span><span class="badge blue">E6 Facade</span>
+                        </div>
+                    </div>
+                    <div class="side-notes">
+                        <div class="capsule control">
+                            <strong>控制</strong><span>Feature Flags + Guard 约束自助开关、工具权限和风险边界。</span>
+                        </div>
+                        <div class="capsule data">
+                            <strong>数据</strong><span>session、message、trace 在此形成持久化输入。</span></div>
+                        <div class="capsule fallback"><strong>兜底</strong><span>自助关闭、鉴权失败或显式 transfer 时进入人工路径。</span>
+                        </div>
+                    </div>
+                    <details>
+                        <summary>证据详情</summary>
+                        <p>E4 / E5 / E6：Controller、Facade、FeatureFlags、Guard、接口文档和 seed SQL
+                            作为节点详情，不在主线平铺。</p></details>
+                </div>
+            </article>
+
+            <article class="stage">
+                <div class="step-number" aria-hidden="true">3</div>
+                <div class="stage-body">
+                    <div class="stage-main">
+                        <div>
+                            <h3>Agent 识别场景、补槽、选择 handler</h3>
+                            <p>AgentOrchestrator、Intent / Slot、Handler Registry
+                                合并成一个决策阶段，避免三个节点同权重分散注意力。</p>
+                        </div>
+                        <div class="stage-action"><span class="badge blue">E7 编排</span><span class="badge blue">E8/E9 决策</span>
+                        </div>
+                    </div>
+                    <div class="side-notes">
+                        <div class="capsule control">
+                            <strong>控制</strong><span>低置信阈值、可回答范围和工具权限在此约束。</span></div>
+                        <div class="capsule data">
+                            <strong>数据</strong><span>读取规则、知识、历史上下文，决定追问或执行。</span></div>
+                        <div class="capsule fallback">
+                            <strong>兜底</strong><span>低置信、缺槽无法澄清或用户要求转人工时触发。</span></div>
+                    </div>
+                    <details>
+                        <summary>证据详情</summary>
+                        <p>E7 / E8 / E9：Orchestrator、规则表、枚举、handler 注册、测试样例可放这里；主图只保留决策口径。</p>
+                    </details>
+                </div>
+            </article>
+
+            <article class="stage">
+                <div class="step-number" aria-hidden="true">4</div>
+                <div class="stage-body">
+                    <div class="stage-main">
+                        <div>
+                            <h3>工具与知识支撑业务动作</h3>
+                            <p>业务 Adapter、OpenAPI、RAG / Knowledge 是依赖面，不是主请求本体；缺口必须直接标出来。</p>
+                        </div>
+                        <div class="stage-action"><span class="badge green">E10 工具</span><span class="badge green">E11 知识</span><span
+                                class="badge red">待接入</span></div>
+                    </div>
+                    <div class="side-notes">
+                        <div class="capsule control">
+                            <strong>控制</strong><span>Guard 决定哪些 handler 可触达业务工具。</span></div>
+                        <div class="capsule gap">
+                            <strong>缺口</strong><span>Adapter、RAG 或 OpenAPI 未连通时，不要藏在说明区。</span></div>
+                        <div class="capsule fallback">
+                            <strong>兜底</strong><span>工具不可用或外部 API 关闭时返回澄清或转人工。</span></div>
+                    </div>
+                    <details>
+                        <summary>证据详情</summary>
+                        <p>E10 / E11 / E12：Adapter 类、stub、RAG service、embedding、OpenAPI 配置、无独立 MQ
+                            搜索结论放这里。</p></details>
+                </div>
+            </article>
+
+            <article class="stage">
+                <div class="step-number" aria-hidden="true">5</div>
+                <div class="stage-body">
+                    <div class="stage-main">
+                        <div>
+                            <h3>状态落库、观测回放、返回结果</h3>
+                            <p>PostgreSQL / pgvector、Trace / Logs
+                                是南侧数据与观测底座；最终返回答案、澄清卡片、执行结果或转人工入口。</p>
+                        </div>
+                        <div class="stage-action"><span class="badge green">E13 数据面</span><span class="badge blue">E14 观测</span><span
+                                class="badge amber">E15 兜底终点</span></div>
+                    </div>
+                    <div class="side-notes">
+                        <div class="capsule data">
+                            <strong>数据</strong><span>会话、消息、向量知识、trace 与日志用于回放和审计。</span></div>
+                        <div class="capsule control">
+                            <strong>运行</strong><span>主链路同步 HTTP；无独立 MQ 时作为运行状态明示。</span></div>
+                        <div class="capsule fallback">
+                            <strong>兜底</strong><span>七鱼人工服务是侧向终点，不再误放成数据面节点。</span></div>
+                    </div>
+                    <details>
+                        <summary>证据详情</summary>
+                        <p>E13 / E14 / E15：DDL、migration、RDS、pgvector、trace
+                            字段、日志格式、七鱼跳转路径和转人工卡片放这里。</p></details>
+                </div>
+            </article>
+        </div>
+
+        <div class="semantic-row" aria-label="跨层运行语义">
+            <div><b>同步</b><span>主链路 HTTP REST；无独立 MQ 直接标注。</span></div>
+            <div><b>控制</b><span>Feature Flags + Guard 作为约束，不进入主轴。</span></div>
+            <div><b>缺口</b><span>Adapter / RAG / OpenAPI 未接入用红色角标。</span></div>
+            <div><b>追踪</b><span>traceId 贯穿入口、服务、Agent、存储、日志。</span></div>
+        </div>
+        <p class="status" id="open-status" aria-live="polite">未展开证据详情。</p>
+    </section>
+
+    <section class="notes" aria-label="修正说明">
+        <div class="note-panel">
+            <h2>这次明确承认 010 的失败点</h2>
+            <ul>
+                <li>五列同屏导致读者要横向扫表。</li>
+                <li>控制、数据、兜底变成同权重信息面。</li>
+                <li>主请求中轴不够强，第一眼不知道该从哪读。</li>
+            </ul>
+        </div>
+        <div class="note-panel">
+            <h2>本版采用的可读性原则</h2>
+            <ul>
+                <li>先读 5 个主节点，再看每段的三类胶囊。</li>
+                <li>侧向信息只服务当前阶段，不另起矩阵。</li>
+                <li>证据默认折叠，关键结论仍静态可见。</li>
+            </ul>
+        </div>
+    </section>
+
+    <footer>任务编码：TASK_20260630_011；任务名称：vibe-diagram 系统架构图可读性修正。</footer>
+</main>
+
+<script>
+    const status = document.getElementById('open-status');
+    const details = Array.from(document.querySelectorAll('details'));
+
+    function updateStatus() {
+        const count = details.filter((item) => item.open).length;
+        status.textContent = count === 0 ? '未展开证据详情。' : `已展开 ${count} 个证据详情。`;
+    }
+
+    details.forEach((item) => item.addEventListener('toggle', updateStatus));
+</script>
+</body>
+</html>

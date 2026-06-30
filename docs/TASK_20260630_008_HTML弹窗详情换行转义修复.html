@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>交付验收：HTML 弹窗详情换行转义修复</title>
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #172033;
+            --muted: #5e6f86;
+            --line: #d9e5f1;
+            --blue: #1769d8;
+            --green: #17876d;
+            --red: #c43d3d;
+            --amber: #a8690c;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .88);
+            --shadow: 0 18px 48px rgba(40, 68, 101, .13);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: linear-gradient(rgba(25, 91, 170, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(25, 91, 170, .045) 1px, transparent 1px),
+            radial-gradient(circle at 15% 5%, rgba(75, 139, 220, .13), transparent 32rem),
+            linear-gradient(180deg, #fbfdff 0%, #f7fbff 100%);
+            background-size: 28px 28px, 28px 28px, auto, auto;
+        }
+
+        main {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 34px 24px 48px;
+        }
+
+        header {
+            margin-bottom: 22px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(22px, 4vw, 30px);
+            line-height: 1.2;
+            letter-spacing: -.03em;
+        }
+
+        .subtitle {
+            margin: 10px 0 0;
+            color: var(--muted);
+            max-width: 920px;
+        }
+
+        .diagram {
+            position: relative;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 72px minmax(0, 1fr);
+            gap: 18px;
+            align-items: stretch;
+            margin-top: 22px;
+        }
+
+        .lane {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            padding: 22px;
+            min-width: 0;
+        }
+
+        .lane h2 {
+            margin: 0 0 14px;
+            font-size: 18px;
+        }
+
+        .node {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 16px 16px 14px;
+            background: #fff;
+            margin: 14px 0;
+            min-height: 112px;
+            overflow-wrap: anywhere;
+        }
+
+        .node strong {
+            display: block;
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+
+        .node p {
+            margin: 0;
+            color: #344761;
+        }
+
+        .bad {
+            border-color: rgba(196, 61, 61, .35);
+            background: #fff8f8;
+        }
+
+        .good {
+            border-color: rgba(23, 135, 109, .35);
+            background: #f5fffb;
+        }
+
+        .fix {
+            border-color: rgba(23, 105, 216, .35);
+            background: #f6faff;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 800;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            margin-bottom: 8px;
+        }
+
+        .bad .badge {
+            color: var(--red);
+        }
+
+        .good .badge {
+            color: var(--green);
+        }
+
+        .fix .badge {
+            color: var(--blue);
+        }
+
+        .arrow {
+            display: grid;
+            place-items: center;
+            color: var(--blue);
+            font-weight: 900;
+            font-size: 34px;
+        }
+
+        .verify {
+            margin-top: 22px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            padding: 22px;
+        }
+
+        .verify h2 {
+            margin: 0 0 12px;
+            font-size: 18px;
+        }
+
+        .checks {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .check {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fff;
+            padding: 14px;
+            min-height: 100px;
+        }
+
+        .check b {
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .check span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        code {
+            background: #eef5ff;
+            border: 1px solid #d7e8ff;
+            border-radius: 7px;
+            padding: 1px 5px;
+        }
+
+        @media (max-width: 760px) {
+            main {
+                padding: 24px 14px 36px;
+            }
+
+            .diagram {
+                grid-template-columns: 1fr;
+            }
+
+            .arrow {
+                transform: rotate(90deg);
+                min-height: 28px;
+            }
+
+            .checks {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>交付验收：HTML 弹窗详情换行转义修复</h1>
+        <p class="subtitle">结论：宏观拓扑示例的节点详情已从字面量 <code>\n</code> 改为真实换行渲染，并把该规则写入
+            vibe-diagram skill 与回归测试。</p>
+    </header>
+
+    <section class="diagram" aria-label="修复前后对照">
+        <div class="lane">
+            <h2>修复前：转义痕迹进入用户界面</h2>
+            <div class="node bad">
+                <span class="badge">问题 P1</span>
+                <strong><code>data-detail</code> 写入双字符 <code>\n</code></strong>
+                <p>浏览器读取 dataset 后仍是普通文本；弹窗直接写入 <code>textContent</code>，所以用户看到代码式换行符。</p>
+            </div>
+            <div class="node bad">
+                <span class="badge">影响</span>
+                <strong>弹窗不像正式交付物</strong>
+                <p>架构图主体已改善，但点击详情出现转义字符串，会增加阅读噪音并破坏专业感。</p>
+            </div>
+        </div>
+
+        <div class="arrow" aria-hidden="true">→</div>
+
+        <div class="lane">
+            <h2>修复后：属性实体 + 渲染兜底</h2>
+            <div class="node good">
+                <span class="badge">修法 F1</span>
+                <strong>详情属性统一使用 <code>&amp;#10;</code></strong>
+                <p>宏观拓扑样例的所有节点详情换行都改为 HTML 属性安全实体，打开弹窗时渲染成真实换行。</p>
+            </div>
+            <div class="node fix">
+                <span class="badge">兜底 F2</span>
+                <strong>新增 <code>normalizeDetailText()</code></strong>
+                <p>即使后续样例误写 <code>\\n</code> / <code>\\t</code>，渲染前也会归一化，避免用户看到转义痕迹。</p>
+            </div>
+            <div class="node good">
+                <span class="badge">规则 F3</span>
+                <strong>写入 vibe-diagram 点击详情门禁</strong>
+                <p>后续所有 HTML 图的弹窗详情不得显示字面量 <code>\n</code>、<code>\t</code>、未解码实体或 JSON 转义痕迹。
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section class="verify" aria-label="验证闭环">
+        <h2>验证闭环</h2>
+        <div class="checks">
+            <div class="check"><b>回归测试通过</b><span>定向测试 <code>2 passed</code>；相关测试集 <code>47 passed</code>；样例检查已覆盖 <code>&amp;#10;</code> 与 <code>normalizeDetailText</code>。</span>
+            </div>
+            <div class="check"><b>技能同步完成</b><span><code>agents-sync</code> 返回 <code>ok: true</code>，Codex / Claude / Gemini / vibego AGENTS 已更新；旧会话需要重启或新开才会拿到新规约。</span>
+            </div>
+            <div class="check">
+                <b>用户动作</b><span>刷新当前 HTML 页面；再次点击 E1/E2 等节点详情，应看到分行正文而不是 <code>\n</code>。</span>
+            </div>
+        </div>
+    </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：系统架构图下一轮只做轻量增强</title>
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #102033;
+            --muted: #60738a;
+            --line: #d8e4f1;
+            --panel: rgba(255, 255, 255, .90);
+            --blue: #226bd8;
+            --green: #0f8f72;
+            --amber: #a96605;
+            --red: #bf3644;
+            --shadow: 0 18px 52px rgba(29, 78, 133, .12);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at 12% 5%, rgba(34, 107, 216, .10), transparent 29rem),
+            radial-gradient(circle at 92% 11%, rgba(15, 143, 114, .08), transparent 27rem),
+            linear-gradient(rgba(34, 107, 216, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(34, 107, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fcfeff 0%, #f7fbff 58%, #fff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1180px, calc(100% - 38px));
+            margin: 0 auto;
+            padding: 30px 0 54px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(22px, 3vw, 30px);
+            line-height: 1.2;
+            letter-spacing: -.035em;
+        }
+
+        .lead {
+            margin: 8px 0 18px;
+            color: var(--muted);
+            max-width: 980px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: 1.05fr .95fr;
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .panel, .decision, .matrix {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            padding: 16px 18px;
+            overflow-wrap: anywhere;
+        }
+
+        .panel h2, .matrix h2 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 11px;
+        }
+
+        .chip {
+            border: 1px solid var(--line);
+            background: #fff;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        .chip.good {
+            color: var(--green);
+            background: #eefcf7;
+            border-color: rgba(15, 143, 114, .20);
+        }
+
+        .chip.warn {
+            color: var(--amber);
+            background: #fff7e9;
+            border-color: rgba(169, 102, 5, .22);
+        }
+
+        .chip.no {
+            color: var(--red);
+            background: #fff1f3;
+            border-color: rgba(191, 54, 68, .22);
+        }
+
+        .decision {
+            position: relative;
+            padding: 20px;
+        }
+
+        .decision h2 {
+            margin: 0 0 16px;
+            font-size: 19px;
+            letter-spacing: -.02em;
+        }
+
+        .path {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1.1fr) 64px minmax(0, 1fr);
+            gap: 10px;
+            align-items: center;
+        }
+
+        .stage {
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, .96);
+            border-radius: 20px;
+            min-height: 190px;
+            padding: 15px;
+            overflow-wrap: anywhere;
+            position: relative;
+        }
+
+        .stage::before {
+            content: attr(data-step);
+            display: inline-flex;
+            border-radius: 999px;
+            padding: 4px 9px;
+            font-size: 12px;
+            font-weight: 900;
+            margin-bottom: 9px;
+            color: var(--blue);
+            background: #edf5ff;
+            border: 1px solid rgba(34, 107, 216, .18);
+        }
+
+        .stage h3 {
+            margin: 0 0 8px;
+            font-size: 17px;
+        }
+
+        .stage p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .stage ul {
+            margin: 10px 0 0;
+            padding-left: 18px;
+            color: #344a63;
+        }
+
+        .stage li {
+            margin: 4px 0;
+        }
+
+        .stage.current {
+            border-color: rgba(15, 143, 114, .24);
+            background: linear-gradient(180deg, #f8fffc, #fff);
+        }
+
+        .stage.target {
+            border-color: rgba(34, 107, 216, .30);
+            background: linear-gradient(180deg, #f7fbff, #fff);
+        }
+
+        .stage.stop {
+            border-color: rgba(191, 54, 68, .24);
+            background: linear-gradient(180deg, #fff7f8, #fff);
+        }
+
+        .arrow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--blue);
+            font-size: 36px;
+            font-weight: 900;
+        }
+
+        .next-layout {
+            margin-top: 18px;
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            background: rgba(255, 255, 255, .86);
+            padding: 16px;
+        }
+
+        .next-layout h2 {
+            margin: 0 0 14px;
+            font-size: 19px;
+        }
+
+        .topology-mini {
+            display: grid;
+            grid-template-columns: 150px minmax(0, 1fr) 128px;
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .labels, .spine, .rail {
+            display: grid;
+            gap: 10px;
+        }
+
+        .label, .mini-node, .rail-node, .statebar {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fff;
+            padding: 11px 12px;
+            min-height: 72px;
+            overflow-wrap: anywhere;
+        }
+
+        .label {
+            border-left: 5px solid var(--blue);
+            background: #f2f8ff;
+        }
+
+        .label b {
+            display: block;
+            color: var(--blue);
+            font-size: 12px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .label span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .mini-node {
+            position: relative;
+            border-color: rgba(34, 107, 216, .20);
+        }
+
+        .mini-node::after {
+            content: "↓";
+            position: absolute;
+            left: calc(50% - 8px);
+            bottom: -23px;
+            color: var(--blue);
+            font-weight: 900;
+            font-size: 19px;
+        }
+
+        .mini-node:last-child::after {
+            content: "";
+        }
+
+        .mini-node strong, .rail-node strong, .statebar strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .mini-node p, .rail-node p, .statebar p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .badge {
+            display: inline-flex;
+            border-radius: 999px;
+            padding: 2px 7px;
+            font-size: 11px;
+            font-weight: 900;
+            margin-right: 5px;
+            border: 1px solid var(--line);
+            background: #f7faff;
+            color: var(--blue);
+        }
+
+        .badge.warn {
+            color: var(--amber);
+            background: #fff8ed;
+            border-color: rgba(169, 102, 5, .22);
+        }
+
+        .badge.gap {
+            color: var(--red);
+            background: #fff2f4;
+            border-color: rgba(191, 54, 68, .22);
+        }
+
+        .rail {
+            border-left: 4px dashed rgba(169, 102, 5, .45);
+            padding-left: 12px;
+        }
+
+        .rail-node {
+            border-color: rgba(169, 102, 5, .26);
+            background: #fffaf1;
+        }
+
+        .statebar {
+            grid-column: 1 / -1;
+            min-height: auto;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            border-color: rgba(15, 143, 114, .24);
+            background: #f6fffb;
+        }
+
+        .statebar div {
+            min-width: 0;
+        }
+
+        .statebar b {
+            color: var(--green);
+            font-size: 12px;
+        }
+
+        .matrix {
+            margin-top: 16px;
+        }
+
+        .matrix-grid {
+            display: grid;
+            grid-template-columns: 1.1fr 1fr 1fr 1fr;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            overflow: hidden;
+            background: #fff;
+        }
+
+        .cell {
+            padding: 12px;
+            border-right: 1px solid var(--line);
+            border-bottom: 1px solid var(--line);
+            min-height: 82px;
+        }
+
+        .cell:nth-child(4n) {
+            border-right: 0;
+        }
+
+        .cell:nth-last-child(-n + 4) {
+            border-bottom: 0;
+        }
+
+        .head {
+            background: #f3f8ff;
+            font-weight: 900;
+            color: #264763;
+        }
+
+        .recommend {
+            background: #f5fffb;
+        }
+
+        .avoid {
+            background: #fff7f8;
+        }
+
+        .cell b {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .cell span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: #f4f7fb;
+            border: 1px solid #e5ecf4;
+            border-radius: 6px;
+            padding: 1px 5px;
+        }
+
+        @media (max-width: 860px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            .summary, .path, .topology-mini, .statebar, .matrix-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .arrow {
+                transform: rotate(90deg);
+                min-height: 34px;
+            }
+
+            .rail {
+                border-left: 0;
+                border-top: 4px dashed rgba(169, 102, 5, .45);
+                padding-left: 0;
+                padding-top: 12px;
+            }
+
+            .cell, .cell:nth-child(4n), .cell:nth-last-child(-n + 4) {
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>需求决策：系统架构图下一轮只做轻量增强</h1>
+    <p class="lead">
+        结论：这一版已经进入“能一眼看出系统拓扑”的状态；下一轮不建议推倒重画，只建议把主请求中轴、兜底边界和运行语义再做得更明确。</p>
+
+    <section class="summary" aria-label="当前判断摘要">
+        <div class="panel">
+            <h2>当前版已经做对的事</h2>
+            <p>
+                它不再是实现卡片清单：北向南层级、主请求流、数据/知识流、兜底流都已出现；证据也收进节点详情，主图更像系统架构图。</p>
+            <div class="chips">
+                <span class="chip good">保留：宏观拓扑</span>
+                <span class="chip good">保留：证据进节点详情</span>
+                <span class="chip warn">小调：主线和边界更强</span>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>不建议继续大改</h2>
+            <p>如果再展开 Controller / Facade / Handler
+                细节，会退回技术设计图或代码时序图。系统架构图现在应该继续克制，只强化读图路径。</p>
+            <div class="chips">
+                <span class="chip no">不要回到底部证据墙</span>
+                <span class="chip no">不要展开实现类清单</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="decision" aria-labelledby="decision-title">
+        <h2 id="decision-title">优化决策主轴</h2>
+        <div class="path">
+            <article class="stage current" data-step="现状">
+                <h3>已经达标：读者能看出系统边界</h3>
+                <p>外部入口、SDK、Gateway、Agent、工具、数据面按北向南排列，三条流向可被识别。</p>
+                <ul>
+                    <li>主图不再平铺证据。</li>
+                    <li>节点高度可承载摘要。</li>
+                    <li>点击详情只做补充。</li>
+                </ul>
+            </article>
+            <div class="arrow" aria-hidden="true">→</div>
+            <article class="stage target" data-step="推荐">
+                <h3>下一轮只强化“第一眼路径”</h3>
+                <p>不增加信息量，只重排视觉权重：蓝色主请求流变成贯穿中轴；琥珀兜底流变成右侧边界
+                    rail；运行语义压成跨层状态条。</p>
+                <ul>
+                    <li>主线更连续。</li>
+                    <li>边界更像边界。</li>
+                    <li>缺口更像状态，而不是解释文字。</li>
+                </ul>
+            </article>
+            <div class="arrow" aria-hidden="true">→</div>
+            <article class="stage stop" data-step="避免">
+                <h3>不要为了“更完整”再铺细节</h3>
+                <p>系统架构图只回答“系统由哪些层构成、请求如何走、数据在哪里、兜底在哪里”。实现调用链应交给代码时序图。</p>
+                <ul>
+                    <li>不展开所有 handler。</li>
+                    <li>不把源码路径放回主画布。</li>
+                    <li>不把异常分支画成蜘蛛网。</li>
+                </ul>
+            </article>
+        </div>
+    </section>
+
+    <section class="next-layout" aria-labelledby="layout-title">
+        <h2 id="layout-title">推荐下一版长相：主请求中轴 + 右侧兜底 rail + 底部运行语义条</h2>
+        <div class="topology-mini">
+            <div class="labels" aria-label="层级标签">
+                <div class="label"><b>Layer 01</b><strong>外部入口</strong><span>用户和宿主边界</span></div>
+                <div class="label"><b>Layer 02</b><strong>接入层</strong><span>SDK 与 REST 协议</span></div>
+                <div class="label"><b>Layer 03</b><strong>服务层</strong><span>Gateway / Facade / Guard</span></div>
+                <div class="label"><b>Layer 04</b><strong>智能体层</strong><span>Orchestrator / Intent / Handler</span>
+                </div>
+                <div class="label"><b>Layer 05</b><strong>数据与观测</strong><span>PostgreSQL / pgvector / Trace</span>
+                </div>
+            </div>
+            <div class="spine" aria-label="主请求中轴">
+                <div class="mini-node"><span class="badge">E1</span><strong>多小程序入口</strong>
+                    <p>只保留三端共享客服能力，不展开 appCode。</p></div>
+                <div class="mini-node"><span class="badge">E3</span><strong>Miniapp SDK → HTTP REST</strong>
+                    <p>统一 appCode、sceneCode、traceId。</p></div>
+                <div class="mini-node"><span class="badge">E4</span><span class="badge warn">控制面旁挂</span><strong>Gateway
+                    / Facade</strong>
+                    <p>主链路只保留接入和会话门面；Guard 作为侧挂控制策略。</p></div>
+                <div class="mini-node"><span class="badge">E7</span><strong>Agent 编排</strong>
+                    <p>识别场景、补槽、执行、追问；handler registry 保持为扩展点。</p></div>
+                <div class="mini-node"><span class="badge">E13</span><span class="badge gap">缺口角标</span><strong>PostgreSQL
+                    / pgvector / Trace</strong>
+                    <p>数据面和观测面收束到南侧，RAG/Adapter 缺口用角标标明。</p></div>
+            </div>
+            <aside class="rail" aria-label="右侧兜底边界">
+                <div class="rail-node"><span class="badge warn">Fallback Rail</span><strong>七鱼人工兜底</strong>
+                    <p>从入口到 Agent 都可旁路进入，视觉上应是右侧边界，不是数据面节点。</p></div>
+                <div class="rail-node"><span class="badge warn">触发条件</span><strong>低置信 / 自助关闭 /
+                    工具不可用</strong>
+                    <p>触发条件放在 rail 内，避免在主链路到处拉虚线。</p></div>
+                <div class="rail-node"><span class="badge warn">终点</span><strong>人工服务闭环</strong>
+                    <p>终点仍可见，但不再和 PostgreSQL / Trace 同层竞争注意力。</p></div>
+            </aside>
+            <div class="statebar" aria-label="运行语义条">
+                <div><b>同步语义</b>
+                    <p>主链路 HTTP REST；无独立 MQ。</p></div>
+                <div><b>控制语义</b>
+                    <p>Feature Flags + Guard 作为侧挂策略。</p></div>
+                <div><b>缺口语义</b>
+                    <p>Adapter / RAG 待接入用红色角标。</p></div>
+                <div><b>追踪语义</b>
+                    <p>traceId 贯穿入口、服务、Agent、存储。</p></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="matrix" aria-labelledby="matrix-title">
+        <h2 id="matrix-title">三种优化力度对比</h2>
+        <div class="matrix-grid" role="table" aria-label="优化力度对比矩阵">
+            <div class="cell head">选项</div>
+            <div class="cell head">优点</div>
+            <div class="cell head">代价</div>
+            <div class="cell head">结论</div>
+            <div class="cell recommend"><b>A. 轻量增强</b><span>主线、兜底 rail、状态角标更清晰。</span></div>
+            <div class="cell recommend"><span>保持当前版优点，不增加阅读负担。</span></div>
+            <div class="cell recommend"><span>只需调整布局权重和少量文案。</span></div>
+            <div class="cell recommend"><b>推荐</b><span>最符合“已经好了很多”的状态。</span></div>
+            <div class="cell"><b>B. 中度重排</b><span>把控制面、数据面、兜底面全部拆成泳道。</span></div>
+            <div class="cell"><span>边界会更工程化。</span></div>
+            <div class="cell"><span>容易变宽，移动端可读性下降。</span></div>
+            <div class="cell"><span>只在系统规模更复杂时考虑。</span></div>
+            <div class="cell avoid"><b>C. 推倒重画</b><span>展开 Controller / Facade / Handler / 表结构。</span></div>
+            <div class="cell avoid"><span>细节更完整。</span></div>
+            <div class="cell avoid"><span>会从系统架构图退化成实现清单。</span></div>
+            <div class="cell avoid"><b>不建议</b><span>应另画技术设计图或代码时序图。</span></div>
+        </div>
+    </section>
+
+    <footer>任务编码：TASK_20260630_009；任务名称：vibe-diagram 系统架构图二次优化建议。</footer>
+</main>
+</body>
+</html>

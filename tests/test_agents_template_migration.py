@@ -122,6 +122,21 @@ def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks
     assert "Telegram 来源只输出项目内 `.html/.htm` 路径" in template_text
 
 
+def test_agents_template_requires_html_first_interaction_contract() -> None:
+    """AGENTS 模板应把全程 HTML 交互作为默认，而不是只在非琐碎画图任务中触发。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "## HTML-first interaction contract" in template_text
+    assert "默认所有实质沟通都使用单文件 HTML 与用户交互" in template_text
+    assert "聊天通道默认只做交付信封" in template_text
+    assert "分析、设计、排障、方案、决策、验收、总结、代码逻辑说明、证据链、风险、回滚、测试矩阵" in template_text
+    assert "不要把 HTML 只限定为非琐碎任务" in template_text
+    assert "本节只定义何时调用 vibe-diagram 做图形化表达，不得把 HTML 限定在这些场景" in template_text
+    assert "阻塞性澄清问题、极短确认、简单命令结果、用户明确不要 HTML" in template_text
+    assert "docs 做长期沉淀；HTML 是主交互界面" in template_text
+
+
 def test_agents_template_compresses_text_after_html_delivery() -> None:
     """生成 HTML 图后，AGENTS 应要求聊天回复只保留交付信封和必要摘要。"""
 

@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：系统架构图还有优化空间</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ink: #102033;
+            --muted: #617084;
+            --line: #d9e3ef;
+            --blue: #256bd8;
+            --green: #0f8b6d;
+            --amber: #b76a00;
+            --red: #c03a43;
+            --surface: rgba(255, 255, 255, .9);
+            --soft: #f7fbff;
+            --shadow: 0 18px 54px rgba(27, 74, 125, .10);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at 12% 10%, rgba(37, 107, 216, .08), transparent 30%),
+            linear-gradient(90deg, rgba(37, 107, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(37, 107, 216, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fcfeff 0%, #f7fbff 100%);
+            background-size: auto, 28px 28px, 28px 28px, auto;
+        }
+
+        main {
+            width: min(1220px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 32px 0 56px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(22px, 3vw, 30px);
+            letter-spacing: -.03em;
+        }
+
+        .lead {
+            margin: 8px 0 22px;
+            color: var(--muted);
+            max-width: 980px;
+        }
+
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            padding: 20px;
+            overflow-wrap: anywhere;
+        }
+
+        .decision {
+            display: grid;
+            grid-template-columns: 1.2fr .8fr;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        h2 {
+            margin: 0 0 10px;
+            font-size: 19px;
+        }
+
+        h3 {
+            margin: 0 0 8px;
+            font-size: 15px;
+        }
+
+        p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 9px;
+            margin-top: 12px;
+        }
+
+        .chip {
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: #fff;
+            padding: 6px 10px;
+            font-size: 13px;
+            font-weight: 800;
+            color: #28415c;
+        }
+
+        .chip.good {
+            color: var(--green);
+            background: #effcf7;
+            border-color: rgba(15, 139, 109, .22);
+        }
+
+        .chip.warn {
+            color: var(--amber);
+            background: #fff7e8;
+            border-color: rgba(183, 106, 0, .22);
+        }
+
+        .chip.bad {
+            color: var(--red);
+            background: #fff1f2;
+            border-color: rgba(192, 58, 67, .22);
+        }
+
+        .blueprint {
+            margin-top: 18px;
+            padding: 20px;
+            border-radius: 28px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, .82);
+            box-shadow: var(--shadow);
+        }
+
+        .arch-line {
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .macro {
+            min-height: 132px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: white;
+            padding: 13px;
+            position: relative;
+            overflow-wrap: anywhere;
+            box-shadow: 0 10px 24px rgba(20, 60, 110, .06);
+        }
+
+        .macro::after {
+            content: "→";
+            position: absolute;
+            top: 50%;
+            right: -16px;
+            transform: translateY(-50%);
+            color: var(--blue);
+            font-weight: 900;
+            z-index: 2;
+        }
+
+        .macro:last-child::after {
+            content: "";
+        }
+
+        .macro b {
+            display: inline-flex;
+            border-radius: 999px;
+            padding: 3px 8px;
+            background: #edf5ff;
+            color: var(--blue);
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+
+        .macro strong {
+            display: block;
+            font-size: 15px;
+            margin-bottom: 5px;
+        }
+
+        .macro span {
+            display: block;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .flow-legend {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .flow {
+            border-radius: 16px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            background: #fff;
+        }
+
+        .line {
+            height: 4px;
+            border-radius: 999px;
+            margin-bottom: 8px;
+        }
+
+        .line.blue {
+            background: var(--blue);
+        }
+
+        .line.green {
+            background: var(--green);
+        }
+
+        .line.amber {
+            background: repeating-linear-gradient(90deg, var(--amber) 0 10px, transparent 10px 16px);
+            border: 1px solid rgba(183, 106, 0, .2);
+        }
+
+        .options {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+            margin-top: 18px;
+        }
+
+        .option {
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            padding: 16px;
+            background: rgba(255, 255, 255, .86);
+            overflow-wrap: anywhere;
+        }
+
+        .option.recommended {
+            border-color: rgba(15, 139, 109, .38);
+            background: #f5fffb;
+        }
+
+        .option ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--muted);
+        }
+
+        .matrix {
+            width: 100%;
+            border-collapse: collapse;
+            overflow: hidden;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: white;
+            margin-top: 18px;
+        }
+
+        .matrix th, .matrix td {
+            padding: 12px 13px;
+            border-bottom: 1px solid var(--line);
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .matrix th {
+            background: #f3f8ff;
+            color: #28415c;
+            font-size: 13px;
+        }
+
+        .matrix tr:last-child td {
+            border-bottom: 0;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: #f4f7fb;
+            border: 1px solid #e5ecf4;
+            border-radius: 6px;
+            padding: 1px 5px;
+        }
+
+        footer {
+            margin-top: 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 900px) {
+            main {
+                width: min(100% - 24px, 760px);
+                padding-top: 22px;
+            }
+
+            .decision, .options, .flow-legend {
+                grid-template-columns: 1fr;
+            }
+
+            .arch-line {
+                grid-template-columns: 1fr;
+            }
+
+            .macro::after {
+                content: "↓";
+                right: auto;
+                left: 50%;
+                top: auto;
+                bottom: -18px;
+                transform: translateX(-50%);
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>需求决策：系统架构图还有优化空间</h1>
+    <p class="lead">当前版本已经从“证据墙 +
+        卡片目录”向架构图靠近，但仍应继续减少同屏实现清单，把主流向、系统边界和运行语义变成第一视觉层。</p>
+
+    <section class="decision">
+        <div class="panel">
+            <h2>判断：有优化空间，而且值得继续收敛</h2>
+            <p>最关键的下一步不是加更多节点，而是做减法：首屏只保留 6-8
+                个宏节点，让用户不读正文也能看出系统从入口到数据/观测面的运行方式。</p>
+            <div class="chips">
+                <span class="chip good">推荐：两级架构图</span>
+                <span class="chip warn">收敛主图节点数</span>
+                <span class="chip">三条流向显性化</span>
+                <span class="chip bad">避免同屏实现清单</span>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>3 秒钟测试</h2>
+            <p>
+                遮住节点正文，只看层、边界和箭头：如果说不出“请求从哪来、经过哪里、读写什么、失败怎么兜底”，这张系统架构图就还要重画。</p>
+        </div>
+    </section>
+
+    <section class="blueprint" aria-labelledby="arch-title">
+        <h2 id="arch-title">推荐目标形态：首屏宏观拓扑，细节二级展开</h2>
+        <div class="arch-line" aria-label="系统架构宏观拓扑">
+            <div class="macro"><b>入口</b><strong>用户 / 客户端</strong><span>微信小程序、Webhook、CLI、外部调用方。</span>
+            </div>
+            <div class="macro"><b>接入</b><strong>SDK / Channel</strong><span>统一入口、appCode、trace、降级入口。</span>
+            </div>
+            <div class="macro"><b>网关</b><strong>API / Gateway</strong><span>鉴权、路由、门面、feature flag。</span></div>
+            <div class="macro"><b>编排</b><strong>Agent / Service</strong><span>识别意图、补槽、执行业务或转人工。</span>
+            </div>
+            <div class="macro"><b>工具</b><strong>Adapter /
+                ToolGateway</strong><span>业务工具、外部 API、Guard 约束。</span></div>
+            <div class="macro"><b>状态</b><strong>DB / Vector /
+                Store</strong><span>PostgreSQL、pgvector、消息与会话状态。</span></div>
+            <div class="macro"><b>观测/兜底</b><strong>Trace / Human</strong><span>日志追踪、告警、人工接管路径。</span>
+            </div>
+        </div>
+
+        <div class="flow-legend" aria-label="三条主路径">
+            <div class="flow">
+                <div class="line blue"></div>
+                <h3>主请求流</h3>
+                <p>入口 → SDK → 网关 → Agent → 返回用户。</p></div>
+            <div class="flow">
+                <div class="line green"></div>
+                <h3>数据 / 知识流</h3>
+                <p>Agent → 工具 / RAG → DB / pgvector → 回写状态。</p></div>
+            <div class="flow">
+                <div class="line amber"></div>
+                <h3>兜底 / 异常流</h3>
+                <p>低置信、关闭自助、缺工具或超时 → 人工 / 七鱼。</p></div>
+        </div>
+    </section>
+
+    <section class="options" aria-label="下一步方案">
+        <div class="option recommended">
+            <h3>A. 强化系统架构图规则 🌟</h3>
+            <ul>
+                <li>限制首屏宏节点 6-8 个。</li>
+                <li>要求先画三条流向。</li>
+                <li>组件细节进入二级展开或详情。</li>
+            </ul>
+        </div>
+        <div class="option">
+            <h3>B. 同时做技术设计图</h3>
+            <ul>
+                <li>系统架构图负责全貌。</li>
+                <li>技术设计图承载 Controller / Handler / DB 细节。</li>
+                <li>适合落地评审。</li>
+            </ul>
+        </div>
+        <div class="option">
+            <h3>C. 只优化视觉样式</h3>
+            <ul>
+                <li>成本低。</li>
+                <li>但无法解决主图仍像实现清单的问题。</li>
+                <li>不推荐单独做。</li>
+            </ul>
+        </div>
+    </section>
+
+    <table class="matrix" aria-label="优化清单">
+        <thead>
+        <tr>
+            <th>问题</th>
+            <th>优化规则</th>
+            <th>判断标准</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr>
+            <td>节点太多，像清单</td>
+            <td>首屏只放宏节点；超过 8 个必须收纳。</td>
+            <td>不读正文也能说出架构层次。</td>
+        </tr>
+        <tr>
+            <td>线条不够主导</td>
+            <td>主请求流、数据流、兜底流三条路径必须显性化。</td>
+            <td>沿箭头能走到数据/观测面。</td>
+        </tr>
+        <tr>
+            <td>状态混杂</td>
+            <td>区分已落地、待接入、待确认、当前缺口。</td>
+            <td>用户不用读说明也能看出风险点。</td>
+        </tr>
+        <tr>
+            <td>架构图和实现图混在一起</td>
+            <td>系统架构图看全貌；技术设计图看实现细节。</td>
+            <td>主图不再塞满 Controller / Facade / Handler 清单。</td>
+        </tr>
+        </tbody>
+    </table>
+
+    <footer>任务编码：TASK_20260630_006；任务名称：vibe-diagram 系统架构图进一步优化建议。本轮仅评审建议，尚未修改 skill。
+    </footer>
+</main>
+</body>
+</html>
