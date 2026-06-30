@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>交付验收：交付验收图改为清爽验收账本</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --paper: #fbfdff;
+            --sheet: rgba(255, 255, 255, .84);
+            --panel: rgba(255, 255, 255, .72);
+            --ink: oklch(24% 0.035 245);
+            --muted: oklch(48% 0.026 248);
+            --hairline: oklch(86% 0.017 242);
+            --green: oklch(45% 0.108 164);
+            --green-soft: oklch(94% 0.034 162);
+            --amber: oklch(56% 0.12 75);
+            --amber-soft: oklch(95% 0.045 86);
+            --blue: oklch(42% 0.09 252);
+            --blue-soft: oklch(94.5% 0.028 252);
+            --red: oklch(47% 0.15 25);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            overflow-wrap: anywhere;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            overflow-x: hidden;
+            color: var(--ink);
+            background: radial-gradient(circle at 20% 0%, rgba(210, 232, 255, .72), transparent 32rem),
+            radial-gradient(circle at 80% 10%, rgba(225, 244, 238, .72), transparent 28rem),
+            linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #ffffff 0%, #f7fbff 52%, #fbfdff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+            line-height: 1.48;
+            font-size: 14px;
+        }
+
+        .page {
+            width: min(1160px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 34px 0 48px;
+        }
+
+        .masthead {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 28px;
+            align-items: end;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--hairline);
+        }
+
+        .kicker {
+            margin: 0 0 8px;
+            color: var(--blue);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 0;
+            max-width: 760px;
+            font-size: 32px;
+            line-height: 1.12;
+            letter-spacing: -.04em;
+        }
+
+        .visual-thesis {
+            margin: 12px 0 0;
+            max-width: 72ch;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .status-stamp {
+            width: 138px;
+            min-height: 138px;
+            border: 1px solid var(--green);
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            color: var(--green);
+            background: var(--green-soft);
+        }
+
+        .status-stamp strong {
+            display: block;
+            font-size: 31px;
+            letter-spacing: -.05em;
+            line-height: 1;
+        }
+
+        .status-meta {
+            display: grid;
+            gap: 2px;
+            justify-items: center;
+            max-width: 82px;
+            margin-top: 8px;
+            color: oklch(38% 0.07 164);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: .045em;
+            line-height: 1.05;
+            text-transform: uppercase;
+            overflow-wrap: normal;
+        }
+
+        .status-meta span {
+            display: block;
+        }
+
+        .acceptance-ledger {
+            margin-top: 28px;
+            max-width: 100%;
+            background: var(--sheet);
+            border: 1px solid var(--hairline);
+            border-radius: 26px;
+            padding: 30px;
+        }
+
+        .desktop-subway {
+            display: grid;
+            grid-template-columns: 248px minmax(0, 1fr);
+            gap: 40px;
+        }
+
+        .mobile-subway {
+            display: none;
+        }
+
+        .handoff-timeline {
+            position: relative;
+            padding-left: 28px;
+            list-style: none;
+            margin: 0;
+        }
+
+        .handoff-timeline::before {
+            content: "";
+            position: absolute;
+            left: 8px;
+            top: 32px;
+            bottom: 18px;
+            width: 1px;
+            background: var(--hairline);
+        }
+
+        .handoff-title {
+            margin: 0 0 24px -28px;
+            font-size: 12px;
+            color: var(--muted);
+            font-weight: 800;
+            letter-spacing: .10em;
+            text-transform: uppercase;
+        }
+
+        .handoff-step {
+            position: relative;
+            padding-bottom: 26px;
+        }
+
+        .handoff-step:last-child {
+            padding-bottom: 0;
+        }
+
+        .handoff-step::before {
+            content: attr(data-step);
+            position: absolute;
+            left: -30px;
+            top: 1px;
+            width: 20px;
+            height: 20px;
+            border: 1px solid var(--blue);
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            background: var(--sheet);
+            color: var(--blue);
+            font-size: 10px;
+            font-weight: 900;
+        }
+
+        .handoff-step b {
+            display: block;
+            font-size: 13px;
+            letter-spacing: -.01em;
+        }
+
+        .handoff-step span {
+            display: block;
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .route-panel {
+            min-width: 0;
+        }
+
+        .route-head {
+            display: grid;
+            grid-template-columns: 54px repeat(5, minmax(92px, 1fr));
+            gap: 0;
+            padding: 0 0 10px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--hairline);
+        }
+
+        .route-row {
+            display: grid;
+            grid-template-columns: 54px repeat(5, minmax(92px, 1fr));
+            align-items: center;
+            min-height: 94px;
+            border-bottom: 1px solid var(--hairline);
+        }
+
+        .route-row:last-child {
+            border-bottom: 0;
+        }
+
+        .route-id {
+            width: 40px;
+            height: 40px;
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            background: var(--ink);
+            color: var(--sheet);
+            font-weight: 900;
+            letter-spacing: -.03em;
+        }
+
+        .route-cell {
+            position: relative;
+            min-width: 0;
+            padding: 16px 14px 16px 0;
+        }
+
+        .route-cell::before {
+            content: "";
+            position: absolute;
+            left: 10px;
+            right: -8px;
+            top: 31px;
+            height: 1px;
+            background: var(--hairline);
+        }
+
+        .route-cell:last-child::before {
+            display: none;
+        }
+
+        .subway-station {
+            position: relative;
+            z-index: 1;
+            display: inline-block;
+            width: 19px;
+            height: 19px;
+            border: 2px solid var(--blue);
+            border-radius: 999px;
+            background: var(--sheet);
+            vertical-align: top;
+            margin: 0 0 9px;
+        }
+
+        .route-pass .station-status {
+            border-color: var(--green);
+            background: var(--green-soft);
+        }
+
+        .route-warn .station-status {
+            border-color: var(--amber);
+            background: var(--amber-soft);
+        }
+
+        .cell-title {
+            display: block;
+            color: var(--ink);
+            font-size: 13px;
+            font-weight: 850;
+            letter-spacing: -.01em;
+        }
+
+        .cell-note {
+            display: block;
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .verdict {
+            color: var(--green);
+            font-weight: 900;
+        }
+
+        .route-warn .verdict {
+            color: var(--amber);
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: var(--blue-soft);
+            color: oklch(37% 0.08 252);
+            border-radius: 6px;
+            padding: 1px 5px;
+            font-size: .9em;
+        }
+
+        .quiet-index {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 1px;
+            border: 1px solid var(--hairline);
+            border-radius: 20px;
+            overflow: hidden;
+            background: var(--hairline);
+        }
+
+        .index-item {
+            background: var(--panel);
+            padding: 16px;
+        }
+
+        .index-item dt {
+            margin: 0 0 6px;
+            color: var(--ink);
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .index-item dd {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .footer {
+            margin-top: 18px;
+            color: var(--muted);
+            font-size: 12px;
+            border-top: 1px solid var(--hairline);
+            padding-top: 14px;
+        }
+
+        .footer div + div {
+            margin-top: 4px;
+        }
+
+        @media (max-width: 860px) {
+            .page {
+                width: min(100% - 24px, 520px);
+                padding-top: 22px;
+            }
+
+            .masthead {
+                display: block;
+            }
+
+            h1 {
+                font-size: 27px;
+            }
+
+            .status-stamp {
+                width: 112px;
+                min-height: 112px;
+                margin-top: 18px;
+            }
+
+            .status-stamp strong {
+                font-size: 25px;
+            }
+
+            .desktop-subway {
+                display: none;
+            }
+
+            .mobile-subway {
+                display: block;
+            }
+
+            .acceptance-ledger {
+                padding: 20px;
+                border-radius: 22px;
+            }
+
+            .mobile-route {
+                padding: 18px 0;
+                border-bottom: 1px solid var(--hairline);
+            }
+
+            .mobile-route:last-child {
+                border-bottom: 0;
+            }
+
+            .mobile-route h2 {
+                margin: 0 0 14px;
+                font-size: 16px;
+            }
+
+            .mobile-track {
+                list-style: none;
+                margin: 0;
+                padding: 0 0 0 26px;
+                position: relative;
+            }
+
+            .mobile-track::before {
+                content: "";
+                position: absolute;
+                left: 9px;
+                top: 10px;
+                bottom: 10px;
+                width: 1px;
+                background: var(--hairline);
+            }
+
+            .mobile-track li {
+                position: relative;
+                margin: 0 0 14px;
+                color: var(--muted);
+                font-size: 12px;
+            }
+
+            .mobile-track li:last-child {
+                margin-bottom: 0;
+            }
+
+            .mobile-track li::before {
+                content: "";
+                position: absolute;
+                left: -24px;
+                top: 2px;
+                width: 15px;
+                height: 15px;
+                border-radius: 999px;
+                border: 2px solid var(--blue);
+                background: var(--sheet);
+            }
+
+            .mobile-track b {
+                color: var(--ink);
+            }
+
+            .quiet-index {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <header class="masthead">
+        <div>
+            <p class="kicker">TASK_20260630_024 · delivery acceptance</p>
+            <h1>交付验收：从卡片堆改为清爽验收账本</h1>
+            <p class="visual-thesis">视觉口径：沿用既有架构图统一白底背景，双色柔光 + 28px 工程格子 +
+                白底渐变；只用细线、圆点站位和一枚验收章建立层级；先纵向读交付五问，再横向核对每条 R# 证据。</p>
+        </div>
+        <div class="status-stamp" aria-label="验收状态：规则与样例已通过回归">
+            <strong>PASS</strong>
+            <span class="status-meta"><span>61 tests</span><span>sync ok</span></span>
+        </div>
+    </header>
+
+    <section class="acceptance-ledger acceptance-subway desktop-subway" aria-label="交付验收账本，桌面版">
+        <ol class="handoff-timeline handoff-column vertical-handoff" aria-label="交付纵向总控轴">
+            <li class="handoff-title">交付五问</li>
+            <li class="handoff-step" data-step="1"><b>改了什么</b><span>新增验收图规则 + 站点样例</span></li>
+            <li class="handoff-step" data-step="2"><b>影响入口</b><span>交付验收 / 收尾 / 验证闭环</span></li>
+            <li class="handoff-step" data-step="3"><b>如何验证</b><span>61 项回归通过 + sync ok</span></li>
+            <li class="handoff-step" data-step="4"><b>脚本 /
+                重启</b><span>无需用户手动再跑脚本；重启旧 worker / 新开长会话</span></li>
+            <li class="handoff-step" data-step="5"><b>未覆盖点</b><span>未重跑 Zeus，只验证 vibego</span></li>
+        </ol>
+
+        <div class="route-panel" aria-label="R# 验收路线">
+            <div class="route-head" aria-hidden="true">
+                <span>R#</span><span>原始要求</span><span>交付变更</span><span>验证证据</span><span>判定</span><span>动作 / 回滚</span>
+            </div>
+            <div class="route-row route-pass">
+                <div class="route-id">R1</div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">必答信息外显</span><span
+                        class="cell-note">不只写在聊天收尾</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">新增交付五问</span><span
+                        class="cell-note">改动、入口、验证、脚本、未覆盖</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">规则测试覆盖</span><span
+                        class="cell-note">delivery-acceptance.md</span></div>
+                <div class="route-cell"><span class="subway-station station-status"></span><span
+                        class="cell-title verdict">PASS</span><span class="cell-note">五问首屏可读</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">无需手动脚本</span><span
+                        class="cell-note">旧会话需重启加载</span></div>
+            </div>
+            <div class="route-row route-pass">
+                <div class="route-id">R2</div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">不能卡片堆砌</span><span
+                        class="cell-note">卡片不是图形语法</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span
+                        class="cell-title">账本路线牌</span><span class="cell-note">纵向总控 + 横向 R#</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span
+                        class="cell-title">反向搜索旧类名</span><span class="cell-note">无旧版网格类名</span></div>
+                <div class="route-cell"><span class="subway-station station-status"></span><span
+                        class="cell-title verdict">PASS</span><span class="cell-note">旧结构被测试拦截</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">回滚规则清楚</span><span
+                        class="cell-note">恢复样例与断言即可</span></div>
+            </div>
+            <div class="route-row route-pass">
+                <div class="route-id">R3</div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">总控轴要纵向</span><span
+                        class="cell-note">按交付阅读顺序</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">左侧纵向五问</span><span
+                        class="cell-note">不横铺首屏</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">纵向测试保护</span><span
+                        class="cell-note">handoff-column / vertical-handoff</span></div>
+                <div class="route-cell"><span class="subway-station station-status"></span><span
+                        class="cell-title verdict">PASS</span><span class="cell-note">横向总控线已移除</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">用户读序稳定</span><span
+                        class="cell-note">先五问，再证据</span></div>
+            </div>
+            <div class="route-row route-pass">
+                <div class="route-id">R4</div>
+                <div class="route-cell"><span class="subway-station"></span><span
+                        class="cell-title">内容再优化</span><span class="cell-note">减少解释腔和噪音</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span
+                        class="cell-title">短句账本化</span><span class="cell-note">每格只留验收判断</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">静态结构检查</span><span
+                        class="cell-note">HTML 必答项完整</span></div>
+                <div class="route-cell"><span class="subway-station station-status"></span><span
+                        class="cell-title verdict">PASS</span><span class="cell-note">61 项回归通过</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span
+                        class="cell-title">影响入口</span><span class="cell-note">交付验收图生成规则</span></div>
+            </div>
+            <div class="route-row route-warn">
+                <div class="route-id">R5</div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">肉眼美观终验</span><span
+                        class="cell-note">主观质量需用户确认</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span
+                        class="cell-title">去 SVG 图纸感</span><span class="cell-note">无背景网格，无发光线</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span class="cell-title">可测项已覆盖</span><span
+                        class="cell-note">无内嵌 SVG 与发光渐变</span></div>
+                <div class="route-cell"><span class="subway-station station-status"></span><span
+                        class="cell-title verdict">WARN</span><span class="cell-note">审美需现场看</span></div>
+                <div class="route-cell"><span class="subway-station"></span><span
+                        class="cell-title">打开 HTML 核对</span><span class="cell-note">不满意继续换风格</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="acceptance-ledger acceptance-subway mobile-subway" aria-label="交付验收账本，移动版">
+        <ol class="handoff-timeline handoff-column vertical-handoff" aria-label="移动端交付纵向总控轴">
+            <li class="handoff-title">交付五问</li>
+            <li class="handoff-step" data-step="1"><b>改了什么</b><span>新增验收图规则 + 站点样例</span></li>
+            <li class="handoff-step" data-step="2"><b>影响入口</b><span>交付验收 / 收尾 / 验证闭环</span></li>
+            <li class="handoff-step" data-step="3"><b>如何验证</b><span>61 项回归通过 + sync ok</span></li>
+            <li class="handoff-step" data-step="4"><b>脚本 /
+                重启</b><span>无需用户手动再跑脚本；重启旧 worker / 新开长会话</span></li>
+            <li class="handoff-step" data-step="5"><b>未覆盖点</b><span>未重跑 Zeus，只验证 vibego</span></li>
+        </ol>
+        <div class="mobile-route"><h2>R1：必答信息外显</h2>
+            <ol class="mobile-track">
+                <li><b>要求</b>：不只写在聊天收尾</li>
+                <li><b>变更</b>：新增交付五问</li>
+                <li><b>证据</b>：规则测试覆盖</li>
+                <li><b>判定</b>：PASS，五问首屏可读</li>
+            </ol>
+        </div>
+        <div class="mobile-route"><h2>R2：不能卡片堆砌</h2>
+            <ol class="mobile-track">
+                <li><b>要求</b>：卡片不是图形语法</li>
+                <li><b>变更</b>：账本路线牌</li>
+                <li><b>证据</b>：旧类名反查</li>
+                <li><b>判定</b>：PASS，旧结构被拦截</li>
+            </ol>
+        </div>
+        <div class="mobile-route"><h2>R3：总控轴纵向</h2>
+            <ol class="mobile-track">
+                <li><b>要求</b>：按交付阅读顺序</li>
+                <li><b>变更</b>：左侧纵向五问</li>
+                <li><b>证据</b>：vertical-handoff</li>
+                <li><b>判定</b>：PASS，横向总控线已移除</li>
+            </ol>
+        </div>
+        <div class="mobile-route"><h2>R4：内容再优化</h2>
+            <ol class="mobile-track">
+                <li><b>要求</b>：减少解释腔和噪音</li>
+                <li><b>变更</b>：短句账本化</li>
+                <li><b>证据</b>：HTML 静态结构检查</li>
+                <li><b>判定</b>：PASS，61 项回归通过</li>
+            </ol>
+        </div>
+        <div class="mobile-route"><h2>R5：肉眼美观终验</h2>
+            <ol class="mobile-track">
+                <li><b>要求</b>：主观质量需用户确认</li>
+                <li><b>变更</b>：去 SVG 图纸感</li>
+                <li><b>证据</b>：无内嵌 SVG 与发光渐变</li>
+                <li><b>判定</b>：WARN，请打开核对</li>
+            </ol>
+        </div>
+    </section>
+
+    <dl class="quiet-index" aria-label="轻量证据索引">
+        <div class="index-item">
+            <dt>规则落点</dt>
+            <dd><code>references/delivery-acceptance.md</code> 明确验收账本、路线牌和反重装饰 SVG 图纸感。</dd>
+        </div>
+        <div class="index-item">
+            <dt>测试保护</dt>
+            <dd><code>test_vibe_diagram_delivery_acceptance_sample_uses_quiet_product_layout</code> 防止回退到丑版。</dd>
+        </div>
+        <div class="index-item">
+            <dt>验证结果</dt>
+            <dd><code>61 passed</code>；<code>agents-sync ok=true</code>；静态 HTML 结构检查通过。</dd>
+        </div>
+    </dl>
+
+    <footer class="footer" role="contentinfo">
+        <div>任务编码：TASK_20260630_024；任务名称：vibe-diagram 交付验收图直观化；</div>
+        <div>
+            本次使用的skill：using-superpowers、receiving-code-review、frontend-skill、impeccable、accessibility、superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion；
+        </div>
+        <div>本次修改的影响点：交付验收图视觉从重装饰站点 SVG 改为克制产品式验收账本；保留纵向交付五问和 R# 证据路线；
+        </div>
+        <div>待用户重启服务或待执行脚本：已执行 agents-sync；运行中的旧 worker / 长会话如未重新加载 AGENTS，建议重启对应
+            worker 或新开会话。
+        </div>
+    </footer>
+</main>
+</body>
+</html>

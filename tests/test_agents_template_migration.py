@@ -99,23 +99,24 @@ def test_agents_template_uses_global_skill_kernel_without_plan_develop_phases() 
     assert "vibe -> design -> develop" not in template_text
 
 
-def test_agents_template_requires_claudecode_like_communication() -> None:
-    """AGENTS 模板应固化接近 Claude Code 的清晰表达风格。"""
+def test_agents_template_does_not_keep_extra_reply_style_prompts() -> None:
+    """AGENTS 模板不应保留用户明确不要的额外回复风格提示。"""
 
     template_text = _read_text("AGENTS-template.md")
 
     assert "## Reply contract" in template_text
-    assert "默认先结论，少噪音" in template_text
-    assert "现象 -> 影响 -> 根因 -> 修法 -> 验证" in template_text
+    assert "默认先结论，少噪音" not in template_text
+    assert "现象 -> 影响 -> 根因 -> 修法 -> 验证" not in template_text
 
 
 def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks() -> None:
-    """AGENTS 模板应把 HTML 图形沟通作为非琐碎任务的默认沟通协议。"""
+    """AGENTS 模板应把 HTML 图形沟通提升为几乎所有实质会话的默认协议。"""
 
     template_text = _read_text("AGENTS-template.md")
 
     assert "## Visual and frontend contract" in template_text
-    assert "非琐碎设计、排障、架构、流程、技术方案和交付验收优先使用 vibe-diagram" in template_text
+    assert "几乎所有需要解释、判断、设计、排障、复盘、代码逻辑说明或交付验收的会话都应优先触发 vibe-diagram" in template_text
+    assert "一图胜千言" in template_text
     assert "AGENTS 只判断何时触发，具体制图规则以 vibe-diagram 为准" in template_text
     assert "HTML-only" in template_text
     assert "所有实质内容写入项目内单文件 HTML" in template_text
@@ -138,9 +139,10 @@ def test_agents_template_requires_html_first_interaction_contract() -> None:
 
 
 def test_agents_template_compresses_text_after_html_delivery() -> None:
-    """生成 HTML 图后，AGENTS 应要求聊天回复只保留交付信封和必要摘要。"""
+    """生成 HTML 图后，AGENTS 应要求聊天回复只保留交付信封和下一步。"""
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "生成 HTML 后聊天只给链接/路径、验证摘要和下一步" in template_text
+    assert "生成 HTML 后聊天只给链接/路径和下一步" in template_text
+    assert "验证摘要" not in template_text
     assert "分析、证据链、测试矩阵和风险回滚写入 HTML 或 docs" in template_text

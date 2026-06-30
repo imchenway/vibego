@@ -43,8 +43,8 @@
 
 ## Visual and frontend contract
 
-- 非琐碎设计、排障、架构、流程、技术方案和交付验收优先使用 vibe-diagram 生成单文件 HTML；AGENTS 只判断何时触发，具体制图规则以
-  vibe-diagram 为准。
+- 几乎所有需要解释、判断、设计、排障、复盘、代码逻辑说明或交付验收的会话都应优先触发 vibe-diagram 生成单文件
+  HTML；核心理念是一图胜千言；AGENTS 只判断何时触发，具体制图规则以 vibe-diagram 为准。
 - 上一节 HTML-first 是全程交互默认；本节只定义何时调用 vibe-diagram 做图形化表达，不得把 HTML 限定在这些场景。
 - HTML-only 场景下，所有实质内容写入项目内单文件 HTML；Codex 默认给可点击 file:// 链接与绝对路径兜底，Telegram 来源只输出项目内
   `.html/.htm` 路径以触发附件发送。

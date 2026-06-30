@@ -1,6 +1,6 @@
 ---
 name: vibe-diagram
-description: Use when the user asks to draw, diagram, visualize, finalize, or communicate system architecture, business/domain architecture, workflows, code sequence, state/data models, incidents/debugging, page mockups, technical design, requirements, decisions, or any one-picture visual explanation; triggers include 画图, 架构图, 业务架构图, 流程图, 时序图, 状态图, 故障排查图, 设计稿, HTML 图, 一图胜千言.
+description: Use when the user asks to draw, diagram, visualize, finalize, or communicate system architecture, business/domain architecture, workflows, code sequence, state/data models, incidents/debugging, page mockups, technical design, requirements, decisions, delivery acceptance, or any one-picture visual explanation; triggers include 画图, 架构图, 业务架构图, 流程图, 时序图, 状态图, 故障排查图, 交付验收图, 设计稿, HTML 图, 一图胜千言.
 ---
 
 # HTML 图形表达协议（薄内核）
@@ -14,12 +14,13 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 - 每个 HTML 图都必须能脱离聊天记录独立阅读：标题、目标、主路径、关键结论、证据/待确认项必须在图内自解释。
 - 缺陷排查的根因节点只有证据成立后才能标为“根因”；证据不足时只能高亮为“可疑节点”或“待验证”。
 
-| 任务阶段 | 默认图型 | 必须表达 |
-| --- | --- | --- |
-| 功能迭代 / 开发设计 | 前后差异对比图 或 技术设计图 | 现状、目标方案、前后差异、影响面、接口/DB/模块、测试矩阵、风险与回滚 |
-| 缺陷排查 / 故障分析 | 故障排查图 | 现象、影响、证据链、可疑节点、已确认根因、高亮根因节点、修法、验证与回滚 |
-| 系统/功能理解 | 系统架构图、业务架构图、代码时序图 或 状态/数据模型图 | 组件、依赖、中间件、DB、MQ/队列语义、关键调用链、业务规则或状态口径 |
-| 设计定稿 / 方案确认 | 需求 / 决策沟通图 或 页面设计稿 | 问题、目标、选项、推荐项、AC、待决策项、前后体验变化 |
+| 任务阶段        | 默认图型                         | 必须表达                                 |
+|-------------|------------------------------|--------------------------------------|
+| 功能迭代 / 开发设计 | 前后差异对比图 或 技术设计图              | 现状、目标方案、前后差异、影响面、接口/DB/模块、测试矩阵、风险与回滚 |
+| 缺陷排查 / 故障分析 | 故障排查图                        | 现象、影响、证据链、可疑节点、已确认根因、高亮根因节点、修法、验证与回滚 |
+| 系统/功能理解     | 系统架构图、业务架构图、代码时序图 或 状态/数据模型图 | 组件、依赖、中间件、DB、MQ/队列语义、关键调用链、业务规则或状态口径 |
+| 设计定稿 / 方案确认 | 需求 / 决策沟通图 或 页面设计稿           | 问题、目标、选项、推荐项、AC、待决策项、前后体验变化          |
+| 最终交付 / 验收收口 | 交付验收图                        | 原始需求、交付变更、验证证据、验收判定、未覆盖项、回滚与待执行动作    |
 
 ## 交付铁律
 
@@ -33,7 +34,7 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 
 ## HTML 图交付后的文本压缩规则
 
-- 生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接、验证摘要、待执行动作。
+- 生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作。
 - 不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚。
 - HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复。
 
@@ -59,6 +60,7 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 | 页面、设计稿、交互、布局、移动端、空/错/加载态            | 页面设计稿        | 页面线框 / artboard              | references/page-mockup.md            |
 | API、数据库、模块、契约、部署、回滚、开发设计定稿          | 技术设计图        | 契约 + 模块 + 数据 + 发布回滚          | references/technical-design.md       |
 | 需求评审、方案选择、A/B/C/D、AC、决策定稿           | 需求 / 决策沟通图   | 决策树或方案矩阵与主路径绑定               | references/decision-communication.md |
+| 交付验收、验收、收尾、验证闭环、完成交付、测试通过、发布/打包     | 交付验收图        | 需求到证据的验收轨道                   | references/delivery-acceptance.md    |
 
 兼容触发短语必须保留：用户提到业务能力、领域、对象、规则、价值链时路由业务架构图；用户提到状态、状态流转、生命周期、实体关系、表结构时路由状态 /
 数据模型图；用户提到 API、数据库、模块、契约、部署、回滚时路由技术设计图。
@@ -80,11 +82,12 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 - 页面设计稿：`references/page-mockup.md`
 - 技术设计图：`references/technical-design.md`
 - 需求 / 决策沟通图：`references/decision-communication.md`
+- 交付验收图：`references/delivery-acceptance.md`
 
 ## 共性图形语法门禁
 
 - 卡片堆积不是图；卡片不是全局禁用，但必须限用。卡片只能作为节点、摘要、泳道单元或分组边界，不能替代关系结构。
-- 生成 HTML 前，必须先选定一种视觉语法：分层拓扑、阶段轨道、泳道流程、时序轴、状态机、ER-lite、因果链、决策树、矩阵热区或页面线框之一。
+- 生成 HTML 前，必须先选定一种视觉语法：分层拓扑、阶段轨道、泳道流程、时序轴、状态机、ER-lite、因果链、决策树、矩阵热区、证据验收轨道或页面线框之一。
 - 所有图型都必须显式表达关系；如果去掉箭头、坐标轴、泳道、分层、包含关系或状态转换线后，剩下的仍然是一组同等权重文字卡片，必须重画。
 - 主画布必须占据首屏主要面积，读者第一眼看到的是关系结构，不是标题下面的卡片列表。
 - 辅助信息不得与主图同等视觉重量；证据、假设、行动必须锚定到对应主路径节点。

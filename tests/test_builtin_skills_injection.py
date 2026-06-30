@@ -56,6 +56,7 @@ def test_vibe_diagram_reference_files_exist_and_are_packaged() -> None:
         "business-architecture.md",
         "business-flow.md",
         "code-sequence.md",
+        "delivery-acceptance.md",
         "decision-communication.md",
         "fault-debugging.md",
         "feature-iteration.md",
@@ -155,7 +156,8 @@ def test_vibe_diagram_delivery_reply_must_stay_concise() -> None:
     skill_text = _read_vibe_diagram_all_rules()
 
     assert "## HTML 图交付后的文本压缩规则" in skill_text
-    assert "生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接、验证摘要、待执行动作" in skill_text
+    assert "生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作" in skill_text
+    assert "验证摘要" not in skill_text
     assert "不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚" in skill_text
     assert "HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复" in skill_text
 
@@ -451,7 +453,149 @@ def test_vibe_diagram_diagram_type_shape_contracts_are_explicit() -> None:
     assert "页面设计稿必须长成页面线框 / artboard" in skill_text
     assert "技术设计图必须长成模块 / 契约 / 数据 / 发布回滚的落地设计图" in skill_text
     assert "需求 / 决策沟通图必须长成决策树或方案矩阵与主路径绑定" in skill_text
+    assert "交付验收图必须长成需求到证据的验收轨道" in skill_text
     assert "如果某类图无法按上述形态画出主谓宾关系，必须换图型" in skill_text
+
+
+def test_vibe_diagram_delivery_acceptance_uses_requirement_evidence_track() -> None:
+    """交付验收图应把原始需求逐条映射到交付、证据和剩余动作，而不是报告卡片堆。"""
+
+    core_text = _read_vibe_diagram_core()
+    delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
+    skill_text = _read_vibe_diagram_all_rules()
+
+    assert "交付验收、验收、收尾、验证闭环、完成交付" in core_text
+    assert "references/delivery-acceptance.md" in core_text
+    assert "## 交付验收图专用骨架" in delivery_text
+    assert "交付验收图必须默认回答“原始要求是否逐条满足、证据是否足够、还剩什么动作”" in delivery_text
+    assert "需求验收轨道：原始要求 → 交付变更 → 验证证据 → 验收判定 → 待执行 / 回滚" in delivery_text
+    assert "每一条用户需求或 AC 都必须拥有独立 R# 泳道" in delivery_text
+    assert "验证命令、测试结果、截图核对和打包门禁必须贴在对应 R# 泳道内" in delivery_text
+    assert "不得把“验证闭环”“代码影响点”“保留与回滚”拆成彼此等权重的底部卡片区" in delivery_text
+    assert "如果读者需要在需求卡、代码卡、验证卡之间来回跳读才能判断某条需求是否通过，必须重画" in delivery_text
+    assert "pass / warn / fail / blocked 必须同时使用文字标签和形状或图标" in delivery_text
+    assert "交付验收图规则" in skill_text
+
+
+def test_vibe_diagram_delivery_acceptance_must_expose_change_user_action_and_entry_impact() -> None:
+    """交付验收图必须明确改了什么、影响入口、用户动作、重启脚本和验证方式。"""
+
+    delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
+
+    assert "## 交付验收必答信息" in delivery_text
+    assert "改了什么" in delivery_text
+    assert "影响哪些功能入口" in delivery_text
+    assert "用户需要执行什么脚本" in delivery_text
+    assert "需要重启什么服务" in delivery_text
+    assert "如何验证" in delivery_text
+    assert "必须在首屏或紧邻主轨道的固定信息区直接外显" in delivery_text
+    assert "待用户执行脚本 / 重启服务" in delivery_text
+    assert "影响功能入口" in delivery_text
+    assert "验证方式" in delivery_text
+    assert "如果无需脚本或无需重启，也必须明确写“无需执行脚本”或“无需重启服务”" in delivery_text
+    assert "不得只在最终聊天收尾字段里说明" in delivery_text
+
+
+def test_vibe_diagram_delivery_acceptance_rejects_card_pile_sample() -> None:
+    """交付验收图样例应是一张站点线路图，而不是矩形卡片线路图。"""
+
+    delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
+    html_text = (ROOT / "docs" / "TASK_20260630_024_vibe-diagram交付验收图直观化.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "交付说明栏不能做成 5 张等权重卡片" in delivery_text
+    assert "必须收敛成一条横向或纵向连通的信息带" in delivery_text
+    assert "旧图问题只能作为旁注或反例标记" in delivery_text
+    assert "主图第一视觉必须是验收线路、验收看板或证据矩阵热区" in delivery_text
+    assert "交付验收主画布不得再用矩形卡片节点承载每一步" in delivery_text
+    assert "优先使用地铁图 / 站点图 / 状态热区" in delivery_text
+    assert "acceptance-subway" in html_text
+    assert "handoff-timeline" in html_text
+    assert "subway-station" in html_text
+    assert "desktop-subway" in html_text
+    assert "mobile-subway" in html_text
+    assert "acceptance-board" not in html_text
+    assert "handoff-rail" not in html_text
+    assert "evidence-map" not in html_text
+    assert "handoff-grid" not in html_text
+    assert "pain-axis" not in html_text
+    assert "mini-grid" not in html_text
+    assert "class=\"handoff\"" not in html_text
+    assert "class=\"slot" not in html_text
+    assert "class=\"map-row" not in html_text
+    assert "class=\"rail-item" not in html_text
+
+
+def test_vibe_diagram_delivery_acceptance_handoff_axis_is_vertical() -> None:
+    """交付总控信息应默认纵向排列，避免横向拥挤且更符合用户验收顺序。"""
+
+    delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
+    html_text = (ROOT / "docs" / "TASK_20260630_024_vibe-diagram交付验收图直观化.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "改了什么、影响入口、如何验证、脚本 / 重启、未覆盖点默认纵向排列" in delivery_text
+    assert "除非用户明确要求横向总控线，否则不要把这五项横向铺满首屏" in delivery_text
+    assert "handoff-column" in html_text
+    assert "vertical-handoff" in html_text
+    assert "d=\"M120 70 H1060\"" not in html_text
+    assert "61 项回归通过" in html_text
+    assert "无需用户手动再跑脚本" in html_text
+    assert "重启旧 worker / 新开长会话" in html_text
+
+
+def test_vibe_diagram_delivery_acceptance_sample_uses_quiet_product_layout() -> None:
+    """交付验收样例应避免重装饰工程图感，采用克制的产品式验收账本。"""
+
+    delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
+    html_text = (ROOT / "docs" / "TASK_20260630_024_vibe-diagram交付验收图直观化.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "交付验收样例优先使用克制的产品式验收账本或路线牌" in delivery_text
+    assert "避免重装饰 SVG 图纸感" in delivery_text
+    assert "acceptance-ledger" in html_text
+    assert "status-stamp" in html_text
+    assert "visual-thesis" in html_text
+    assert "<svg" not in html_text
+    assert "radial-gradient(circle at 8%" not in html_text
+
+
+def test_vibe_diagram_delivery_acceptance_sample_keeps_unified_white_background() -> None:
+    """交付验收样例不得因视觉返工改掉 vibe-diagram 统一白底背景系统。"""
+
+    html_text = (ROOT / "docs" / "TASK_20260630_024_vibe-diagram交付验收图直观化.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--paper: #fbfdff" in html_text
+    assert "--sheet: rgba(255,255,255,.84)" in html_text
+    assert "--panel: rgba(255,255,255,.72)" in html_text
+    assert "radial-gradient(circle at 20% 0%, rgba(210,232,255,.72), transparent 32rem)" in html_text
+    assert "radial-gradient(circle at 80% 10%, rgba(225,244,238,.72), transparent 28rem)" in html_text
+    assert "linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px)" in html_text
+    assert "linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px)" in html_text
+    assert "linear-gradient(180deg, #ffffff 0%, #f7fbff 52%, #fbfdff 100%)" in html_text
+    assert "background-size: auto, auto, 28px 28px, 28px 28px, auto" in html_text
+    assert "统一白底背景" in html_text
+    assert "oklch(98.2% 0.008 88)" not in html_text
+    assert "oklch(99.4% 0.006 92)" not in html_text
+
+
+def test_vibe_diagram_delivery_acceptance_status_stamp_text_does_not_overflow() -> None:
+    """状态章内的小字必须可换行且不能把测试与同步状态塞成一行。"""
+
+    html_text = (ROOT / "docs" / "TASK_20260630_024_vibe-diagram交付验收图直观化.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "class=\"status-meta\"" in html_text
+    assert "<span>61 tests · sync ok</span>" not in html_text
+    assert "<span>61 tests</span><span>sync ok</span>" in html_text
+    assert ".status-meta { display: grid;" in html_text
+    assert "max-width: 82px" in html_text
+    assert "overflow-wrap: normal" in html_text
 
 
 def test_vibe_diagram_business_architecture_must_be_domain_map_not_card_report() -> None:
