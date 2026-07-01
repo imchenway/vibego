@@ -34,6 +34,95 @@ def _read_vibe_diagram_all_rules() -> str:
     return "\n".join(texts)
 
 
+CANDIDATE_ATLAS_EXPECTATIONS = {
+    "system-architecture.md": (
+        "系统架构图",
+        "北向南分层拓扑",
+        ["主请求中轴 + 控制/数据/兜底泳道", "运行时依赖拓扑"],
+    ),
+    "business-architecture.md": (
+        "业务架构 / 领域地图",
+        "能力层 + 领域对象关系图",
+        ["参与方边界图", "规则约束热区图", "价值链地图"],
+    ),
+    "business-flow.md": (
+        "业务流程图",
+        "BPMN-light 流程图",
+        ["泳道流程图", "阶段轨道图", "异常分支流程图"],
+    ),
+    "code-sequence.md": (
+        "代码时序图",
+        "参与者列 + 时间向下时序图",
+        ["异步回调时序图", "事务边界时序图", "重试/异常返回时序图"],
+    ),
+    "state-data-model.md": (
+        "状态 / 数据模型图",
+        "状态机图",
+        ["ER-lite", "生命周期轨道", "数据流图", "状态-事件矩阵热区"],
+    ),
+    "fault-debugging.md": (
+        "故障排查图",
+        "排障时序图",
+        ["因果链图", "BPMN-light 排查流程", "before/after 流程化对照", "状态/数据断点图"],
+    ),
+    "feature-iteration.md": (
+        "功能迭代 / 开发设计图",
+        "当前流程 vs 目标流程的流程化对照",
+        ["current/target 技术时序", "差异热区", "发布回滚轨道"],
+    ),
+    "page-mockup.md": (
+        "页面设计稿",
+        "页面线框 / artboard",
+        ["多候选 artboard filmstrip", "响应式状态板", "主路径页面流"],
+    ),
+    "technical-design.md": (
+        "技术设计图",
+        "模块 / 契约 / 数据 / 发布回滚拓扑",
+        ["API 契约泳道", "数据流 + 一致性边界", "发布切换轨道"],
+    ),
+    "decision-communication.md": (
+        "需求 / 决策沟通图",
+        "决策树",
+        ["方案矩阵 + 主路径绑定", "取舍象限", "推荐路径图"],
+    ),
+    "delivery-acceptance.md": (
+        "交付验收图",
+        "需求到证据的验收轨道",
+        ["R# 泳道验收看板", "证据矩阵热区", "地铁站点式验收线路"],
+    ),
+}
+
+REFERENCE_BUSINESS_ARCHITECTURE_COLOR_LINES = [
+    "--ink: #102033;",
+    "--muted: #5a6c80;",
+    "--paper: #fbfdff;",
+    "--panel: rgba(255,255,255,.9);",
+    "--line: #8db3d8;",
+    "--blue: #1f6fb2;",
+    "--blue-soft: #e8f3ff;",
+    "--green: #17785a;",
+    "--green-soft: #e9f8f2;",
+    "--amber: #986506;",
+    "--amber-soft: #fff6de;",
+    "--red: #a63a3a;",
+    "--red-soft: #fff0f0;",
+    "--violet: #6254ad;",
+    "--violet-soft: #f1efff;",
+    "--shadow: 0 16px 42px rgba(20, 57, 92, .085);",
+    "--radius: 20px;",
+]
+
+REFERENCE_BUSINESS_ARCHITECTURE_BACKGROUND_LINES = [
+    "background:",
+    "radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),",
+    "radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),",
+    "linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),",
+    "linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),",
+    "linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);",
+    "background-size: auto, auto, 28px 28px, 28px 28px, auto;",
+]
+
+
 def test_vibe_diagram_core_is_thin_and_routes_to_references() -> None:
     """vibe-diagram 常驻内核应变薄，并把重图型规则按需路由到 references。"""
 
@@ -70,6 +159,268 @@ def test_vibe_diagram_reference_files_exist_and_are_packaged() -> None:
     assert VIBE_DIAGRAM_REFERENCES.is_dir()
     assert {path.name for path in VIBE_DIAGRAM_REFERENCES.glob("*.md")} == expected
     assert "data/skills/*/references/*.md" in pyproject_text
+
+
+
+def test_vibe_diagram_candidate_atlas_mode_is_required_for_calibration() -> None:
+    """校准期每次命中图型都必须生成首选候选与全部备选候选。"""
+
+    core_text = _read_vibe_diagram_core()
+    all_rule_text = _read_vibe_diagram_all_rules()
+
+    assert "## 候选全集校准模式" in core_text
+    assert "每次只对当前命中的生图类型生成候选全集" in core_text
+    assert "首选候选图型 + 全部备选候选图型" in core_text
+    assert "候选 A/B/C/D" in core_text
+    assert "每个候选都必须是真图" in core_text
+    assert "信息不足时也必须生成该备选候选" in core_text
+    assert "待确认节点" in core_text
+    assert "候选对比矩阵只比较“可读性、事实承载、适用边界、风险”" in core_text
+
+    for _reference_name, (_diagram_type, preferred, alternatives) in CANDIDATE_ATLAS_EXPECTATIONS.items():
+        assert preferred in all_rule_text
+        for alternative in alternatives:
+            assert alternative in all_rule_text
+
+
+def test_vibe_diagram_references_list_candidate_atlas_for_every_diagram_type() -> None:
+    """每个图型 reference 都应声明首选候选与全量备选，供生成 HTML 前读取。"""
+
+    for reference_name, (diagram_type, preferred, alternatives) in CANDIDATE_ATLAS_EXPECTATIONS.items():
+        reference_text = _read_vibe_diagram_reference(reference_name)
+
+        assert "## 候选全集清单" in reference_text
+        assert f"生图类型：{diagram_type}" in reference_text
+        assert f"首选候选：{preferred}" in reference_text
+        assert "必生成备选候选" in reference_text
+        for alternative in alternatives:
+            assert alternative in reference_text
+
+
+def test_vibe_diagram_background_grid_contract_is_fixed_and_testable() -> None:
+    """背景必须固化为参考业务架构图的白蓝工程纸配色系统。"""
+
+    skill_text = _read_vibe_diagram_all_rules()
+
+    assert "参考业务架构图配色系统" in skill_text
+    assert "必须与参考文件逐项对齐" in skill_text
+    for line in REFERENCE_BUSINESS_ARCHITECTURE_COLOR_LINES:
+        assert line in skill_text
+    for line in REFERENCE_BUSINESS_ARCHITECTURE_BACKGROUND_LINES:
+        assert line in skill_text
+    assert "主画布可叠加局部低对比网格" in skill_text
+    assert "禁止 body 一个背景、SVG/主画布另一个背景" in skill_text
+    assert "节点正文区域必须使用不透明白底或等效遮罩" in skill_text
+    assert "状态色只能用于描边、角标、少量状态章" in skill_text
+    assert "不得回退到旧版 `--paper: #fbfaf7`" in skill_text
+    assert "标题字体默认使用 `clamp(24px, 2.8vw, 32px)`" in skill_text
+
+
+def test_task_20260701_fault_html_uses_candidate_atlas_and_reference_color_system() -> None:
+    """TASK_20260701_001 故障排查样例必须是真候选全集，而不是卡片/表格主图。"""
+
+    html_text = (
+        ROOT / "docs" / "TASK_20260701_001_Vibego启动失败Telegram连通性排查.html"
+    ).read_text(encoding="utf-8")
+
+    assert "candidate-atlas" in html_text
+    assert html_text.count("candidate-panel") >= 5
+    assert "candidate-sequence" in html_text
+    assert "candidate-causal-chain" in html_text
+    assert "candidate-bpmn" in html_text
+    assert "candidate-before-after" in html_text
+    assert "candidate-state-breakpoint" in html_text
+    assert "--paper:#fbfdff" in html_text or "--paper: #fbfdff" in html_text
+    assert "--panel:rgba(255,255,255,.9)" in html_text or "--panel: rgba(255,255,255,.9)" in html_text
+    assert "--blue:#1f6fb2" in html_text or "--blue: #1f6fb2" in html_text
+    assert "radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem)" in html_text
+    assert "radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem)" in html_text
+    assert "background-size:auto,auto,28px28px,28px28px,auto" in html_text.replace(" ", "")
+    assert "font-size:clamp(24px,2.8vw,32px)" in html_text.replace(" ", "")
+    assert "<svg" in html_text
+    assert "marker-end" in html_text
+    assert 'class="flow"' not in html_text
+    assert 'button class="node"' not in html_text
+    assert 'class="matrix"' not in html_text
+
+
+def test_vibe_diagram_candidate_atlas_uses_accessible_tab_switching() -> None:
+    """候选全集校准期应默认用按钮切换候选，避免把全部候选纵向压到同一阅读流。"""
+
+    skill_text = _read_vibe_diagram_all_rules()
+
+    assert "候选切换按钮" in skill_text
+    assert "默认只显示当前按钮对应候选" in skill_text
+    assert "所有候选仍必须完整生成在 HTML DOM 中" in skill_text
+    assert "关闭 JavaScript 或脚本失败时必须降级为全部纵向展开" in skill_text
+    assert "支持 URL hash 深链" in skill_text
+    assert "左右方向键切换候选" in skill_text
+    assert '`role="tablist"`' in skill_text
+    assert '`role="tab"`' in skill_text
+    assert '`aria-selected`' in skill_text
+    assert '`role="tabpanel"`' in skill_text
+
+
+def test_vibe_diagram_html_must_pin_task_handoff_meta_top_right() -> None:
+    """每个 HTML 必须把任务编码和 skill 放到标题顶部，并使用紧凑双列抬头。"""
+
+    skill_text = _read_vibe_diagram_all_rules()
+    self_check = skill_text.split("## 输出前自检", 1)[1]
+
+    assert "标题顶部任务元信息" in skill_text
+    assert "任务编码和本次使用的skill必须放在标题顶部" in skill_text
+    assert "任务编码和本次使用的skill必须在同一行" in skill_text
+    assert "标题顶部任务元信息必须使用顶部容器完整宽度" in skill_text
+    assert "主标题默认回到左侧标题列" in skill_text
+    assert "不得横跨或占用右侧交付栏宽度" in skill_text
+    assert "右上角交付卡片必须与主标题所在内容列顶部对齐" in skill_text
+    assert "候选切换按钮必须放在左侧标题列内部，并紧跟描述下方" in skill_text
+    assert "不得为了等待右侧交付卡片高度而在左侧描述和候选按钮之间留下大块空白" in skill_text
+    assert "`title-meta` 必须使用 `display:grid`" in skill_text
+    assert "`grid-template-columns:auto minmax(0,1fr)`" in skill_text
+    assert "`skill-strip` 必须使用单行省略防溢出" in skill_text
+    assert "任务编码只显示编码值" in skill_text
+    assert "不得写成 `任务编码：TASK_xxx`" in skill_text
+    assert "右上角固定任务交付信息卡片" in skill_text
+    assert "每个字段都必须是独立小卡片" in skill_text
+    assert "右上角不再重复任务编码和本次使用的skill" in skill_text
+    assert "右上角卡片必须一行一个" in skill_text
+    assert "grid-template-columns: 1fr" in skill_text
+    assert "本次修改的影响功能点" in skill_text
+    assert "待用户执行事项" in skill_text
+    assert "不得只在最终聊天收尾字段里说明" in skill_text
+    assert "标题顶部任务元信息是否使用顶部容器完整宽度" in self_check
+    assert "主标题是否回到左侧标题列" in self_check
+    assert "是否没有横跨或占用右侧交付栏宽度" in self_check
+    assert "右上角交付卡片是否与主标题所在内容列顶部对齐" in self_check
+    assert "候选切换按钮是否放在左侧标题列内部并紧跟描述下方" in self_check
+    assert "是否没有为了等待右侧交付卡片高度而留下左侧大块空白" in self_check
+    assert "`skill-strip` 是否单行省略且通过 `title` 或等效可访问属性保留完整 skill 文本" in self_check
+
+
+def test_task_20260701_fault_html_uses_tabs_and_top_right_handoff_meta() -> None:
+    """故障排查候选全集样例应可通过按钮切换，并在右上角外显交付信息。"""
+
+    html_text = (
+        ROOT / "docs" / "TASK_20260701_001_Vibego启动失败Telegram连通性排查.html"
+    ).read_text(encoding="utf-8")
+
+    assert "candidate-tabs" in html_text
+    assert 'role="tablist"' in html_text
+    assert html_text.count('role="tab"') >= 5
+    assert html_text.count('role="tabpanel"') >= 5
+    assert 'aria-selected="true"' in html_text
+    assert 'aria-controls="candidate-a"' in html_text
+    assert 'data-candidate-target="candidate-b"' in html_text
+    assert "selectCandidate" in html_text
+    assert "hashchange" in html_text
+    assert "ArrowRight" in html_text
+    assert "ArrowLeft" in html_text
+    assert "no-js" in html_text
+    assert "title-meta" in html_text
+    assert "task-code-pill" in html_text
+    assert "skill-strip" in html_text
+    assert ".title-meta{display:grid;grid-template-columns:autominmax(0,1fr)" in html_text.replace(" ", "")
+    assert ".skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" in html_text.replace(" ", "")
+    assert '<span class="skill-strip" title="本次使用的skill：' in html_text
+    assert ".top-title-column" in html_text
+    assert html_text.index('<div class="title-meta"') < html_text.index('<div class="top-grid"')
+    assert html_text.index('<div class="top-grid"') < html_text.index("<h1")
+    assert html_text.index("<h1") < html_text.index('<div class="candidate-tabs"')
+    assert html_text.index('<div class="candidate-tabs"') < html_text.index('<aside class="task-handoff"')
+    assert html_text.index("task-code-pill") < html_text.index("<h1")
+    assert html_text.index("skill-strip") < html_text.index("<h1")
+    assert '<span class="task-code-pill">TASK_20260701_001</span>' in html_text
+    assert "task-code-pill\">任务编码" not in html_text
+    assert "task-handoff" in html_text
+    handoff = html_text.split('<aside class="task-handoff"', 1)[1].split("</aside>", 1)[0]
+    assert handoff.count("task-handoff-card") == 2
+    assert "grid-template-columns: 1fr" in html_text
+    assert "repeat(2,minmax(0,1fr))" not in html_text.replace(" ", "")
+    assert "任务编码" not in handoff
+    assert "本次使用的skill" not in handoff
+    assert "本次修改的影响功能点" in html_text
+    assert "待用户执行事项" in html_text
+
+
+def test_task_20260701_delivery_html_uses_tabs_and_top_right_handoff_meta() -> None:
+    """交付验收候选全集样例同样应支持按钮切换与右上角交付信息。"""
+
+    html_text = (
+        ROOT / "docs" / "TASK_20260701_002_vibe-diagram候选全集与背景网格硬约束.html"
+    ).read_text(encoding="utf-8")
+
+    assert "candidate-tabs" in html_text
+    assert 'role="tablist"' in html_text
+    assert html_text.count('role="tab"') >= 4
+    assert html_text.count('role="tabpanel"') >= 4
+    assert "selectCandidate" in html_text
+    assert "hashchange" in html_text
+    assert "title-meta" in html_text
+    assert ".title-meta{display:grid;grid-template-columns:autominmax(0,1fr)" in html_text.replace(" ", "")
+    assert ".skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" in html_text.replace(" ", "")
+    assert '<span class="skill-strip" title="本次使用的skill：' in html_text
+    assert ".top-title-column" in html_text
+    assert html_text.index('<div class="title-meta"') < html_text.index('<div class="top-grid"')
+    assert html_text.index('<div class="top-grid"') < html_text.index("<h1")
+    assert html_text.index("<h1") < html_text.index('<div class="candidate-tabs"')
+    assert html_text.index('<div class="candidate-tabs"') < html_text.index('<aside class="task-handoff"')
+    assert html_text.index("task-code-pill") < html_text.index("<h1")
+    assert html_text.index("skill-strip") < html_text.index("<h1")
+    assert '<span class="task-code-pill">TASK_20260701_002</span>' in html_text
+    assert "task-handoff" in html_text
+    handoff = html_text.split('<aside class="task-handoff"', 1)[1].split("</aside>", 1)[0]
+    assert handoff.count("task-handoff-card") == 2
+    assert "grid-template-columns: 1fr" in html_text
+    assert "repeat(2,minmax(0,1fr))" not in html_text.replace(" ", "")
+    assert "任务编码：TASK_20260701_002" not in html_text
+    assert "任务编码" not in handoff
+    assert "本次使用的skill" not in handoff
+    assert "本次修改的影响功能点" in html_text
+    assert "待用户执行事项" in html_text
+
+
+def test_task_20260701_html_samples_use_reference_palette_handoff_cards_and_smaller_title() -> None:
+    """本轮相关 HTML 样例必须统一参考配色、独立交付卡片和较小标题字号。"""
+
+    samples = [
+        ROOT / "docs" / "TASK_20260701_001_Vibego启动失败Telegram连通性排查.html",
+        ROOT / "docs" / "TASK_20260701_002_vibe-diagram候选全集与背景网格硬约束.html",
+        ROOT / "docs" / "TASK_20260701_003_候选全集按钮切换与右上交付信息.html",
+        ROOT / "docs" / "TASK_20260701_004_参考配色固化与右上交付卡片.html",
+        ROOT / "docs" / "TASK_20260701_005_vibe-diagram规则沉淀逐项审计.html",
+    ]
+
+    for sample in samples:
+        html_text = sample.read_text(encoding="utf-8")
+        compact = html_text.replace(" ", "")
+
+        for line in REFERENCE_BUSINESS_ARCHITECTURE_COLOR_LINES:
+            assert line in html_text
+        for line in REFERENCE_BUSINESS_ARCHITECTURE_BACKGROUND_LINES:
+            assert line in html_text
+        assert 'h1 { margin: 0 0 14px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }' in html_text
+        assert "title-meta" in html_text
+        assert "task-code-pill" in html_text
+        assert "skill-strip" in html_text
+        assert ".title-meta{display:grid;grid-template-columns:autominmax(0,1fr)" in compact
+        assert ".skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" in compact
+        assert ".top-title-column" in html_text
+        assert '<span class="skill-strip" title="本次使用的skill：' in html_text
+        assert html_text.index('<div class="title-meta"') < html_text.index('<div class="top-grid"')
+        assert html_text.index('<div class="top-grid"') < html_text.index("<h1")
+        assert html_text.index("<h1") < html_text.index('<div class="candidate-tabs"')
+        assert html_text.index('<div class="candidate-tabs"') < html_text.index('<aside class="task-handoff"')
+        assert html_text.index("task-code-pill") < html_text.index("<h1")
+        assert html_text.index("skill-strip") < html_text.index("<h1")
+        handoff = html_text.split('<aside class="task-handoff"', 1)[1].split("</aside>", 1)[0]
+        assert handoff.count("task-handoff-card") == 2
+        assert "grid-template-columns: 1fr" in html_text
+        assert "repeat(2,minmax(0,1fr))" not in compact
+        assert "任务编码" not in handoff
+        assert "本次使用的skill" not in handoff
+        assert "本次修改的影响功能点" in html_text
+        assert "待用户执行事项" in html_text
 
 
 def test_vibe_diagram_skill_pack_exists_and_is_packaged() -> None:
@@ -309,13 +660,15 @@ def test_vibe_diagram_background_should_use_premium_light_surfaces() -> None:
 
     assert "浅色背景默认以白色为主色" in skill_text
     assert "白色背景不能是扁平纯白" in skill_text
-    assert "使用瓷白、珍珠白、雪白、雾白等白色系明度层次" in skill_text
-    assert "允许使用极轻白底工程网格、点阵或坐标纸肌理" in skill_text
-    assert "网格必须低对比、低存在感" in skill_text
+    assert "参考业务架构图配色系统" in skill_text
+    assert "--paper: #fbfdff" in skill_text
+    assert "--panel: rgba(255,255,255,.9)" in skill_text
+    assert "--shadow: 0 16px 42px rgba(20, 57, 92, .085)" in skill_text
+    assert "28px 低对比工程网格" in skill_text
     assert "背景纹理必须全局统一" in skill_text
     assert "不要只在主画布局部铺网格或局部底纹" in skill_text
     assert "HTML body、SVG 主画布和弹窗遮罩以外的页面区域应共享同一背景系统" in skill_text
-    assert "避免蓝色底、灰色底、米黄纸张感背景" in skill_text
+    assert "状态色只能用于描边、角标、少量状态章" in skill_text
     assert "背景只能提供质感和空间层次，不得抢主线" in skill_text
 
 
@@ -421,16 +774,18 @@ def test_vibe_diagram_multi_candidate_rules_cover_all_diagram_types() -> None:
     skill_text = _read_vibe_diagram_all_rules()
 
     assert "## 多方案 / 多候选表达规则" in skill_text
-    assert "多候选不是页面设计稿的专属排版问题，但 3-5 个默认候选只适用于页面设计稿方向评审" in skill_text
-    assert "系统架构图：默认单架构；只有用户要求架构方案对比时才输出 2-3 个候选架构" in skill_text
-    assert "业务架构图 / 领域地图：默认单领域地图；多候选只用于领域边界、能力分层或角色协作方案选择" in skill_text
-    assert "业务流程图：默认单主流程；多候选流程必须用流程方案 A/B/C、泳道或阶段对照表达" in skill_text
-    assert "代码时序图：默认单调用链；多候选只用于替代调用策略、事务边界、重试/异步策略对比" in skill_text
-    assert "状态 / 数据模型图：默认单模型；多候选只用于状态机、实体边界、索引或迁移策略对比" in skill_text
-    assert "故障排查图：不生成 3-5 个修法设计稿；多假设必须进入假设裁决" in skill_text
-    assert "页面设计稿：方向评审默认 3 个候选，可扩展到 4-5 个" in skill_text
-    assert "技术设计图：方案对比保持 2-4 个" in skill_text
-    assert "需求 / 决策沟通图：方案对比保持 2-4 个" in skill_text
+    assert "校准期多候选不再是页面设计稿专属" in skill_text
+    assert "每次只对当前命中的生图类型生成候选全集" in skill_text
+    assert "系统架构图：首选北向南分层拓扑，备选主请求中轴 + 控制/数据/兜底泳道、运行时依赖拓扑" in skill_text
+    assert "业务架构图 / 领域地图：首选能力层 + 领域对象关系图" in skill_text
+    assert "业务流程图：首选 BPMN-light 流程图" in skill_text
+    assert "代码时序图：首选参与者列 + 时间向下时序图" in skill_text
+    assert "状态 / 数据模型图：首选状态机图" in skill_text
+    assert "故障排查图：首选排障时序图" in skill_text
+    assert "页面设计稿：首选页面线框 / artboard" in skill_text
+    assert "技术设计图：首选模块 / 契约 / 数据 / 发布回滚拓扑" in skill_text
+    assert "需求 / 决策沟通图：首选决策树" in skill_text
+    assert "交付验收图：首选需求到证据的验收轨道" in skill_text
     assert "Web 端多候选优先纵向展开" in skill_text
     assert "窄移动稿可在桌面视口横向 filmstrip 对比" in skill_text
     assert "真实移动端不得把横向滚动作为唯一阅读路径" in skill_text
@@ -570,15 +925,14 @@ def test_vibe_diagram_delivery_acceptance_sample_keeps_unified_white_background(
     )
 
     assert "--paper: #fbfdff" in html_text
-    assert "--sheet: rgba(255,255,255,.84)" in html_text
-    assert "--panel: rgba(255,255,255,.72)" in html_text
-    assert "radial-gradient(circle at 20% 0%, rgba(210,232,255,.72), transparent 32rem)" in html_text
-    assert "radial-gradient(circle at 80% 10%, rgba(225,244,238,.72), transparent 28rem)" in html_text
-    assert "linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px)" in html_text
-    assert "linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px)" in html_text
-    assert "linear-gradient(180deg, #ffffff 0%, #f7fbff 52%, #fbfdff 100%)" in html_text
+    assert "--panel: rgba(255,255,255,.9)" in html_text
+    assert "--blue: #1f6fb2" in html_text
+    assert "--green: #17785a" in html_text
+    assert "radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem)" in html_text
+    assert "radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem)" in html_text
     assert "background-size: auto, auto, 28px 28px, 28px 28px, auto" in html_text
-    assert "统一白底背景" in html_text
+    assert "参考业务架构图配色系统" in html_text
+    assert "linear-gradient(180deg, #ffffff 0%, #f7fbff 52%, #fbfdff 100%)" not in html_text
     assert "oklch(98.2% 0.008 88)" not in html_text
     assert "oklch(99.4% 0.006 92)" not in html_text
 
@@ -863,7 +1217,9 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "禁止交付原始工程草图感的 SVG" in synced_text
     assert "浅色背景默认以白色为主色" in synced_text
     assert "白色背景不能是扁平纯白" in synced_text
-    assert "允许使用极轻白底工程网格、点阵或坐标纸肌理" in synced_text
+    assert "参考业务架构图配色系统" in synced_text
+    assert "--paper: #fbfdff" in synced_text
+    assert "radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem)" in synced_text
     assert "背景纹理必须全局统一" in synced_text
     assert "## 图型规则索引" in synced_text
     assert "选择图型后必须读取对应 reference" in synced_text
@@ -874,7 +1230,7 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "references/page-mockup.md" in synced_text
     assert "箭头只能连接节点边缘锚点" in synced_text
     assert "如果任一节点重叠、线穿字、文字溢出，必须重排" in synced_text
-    assert "避免蓝色底、灰色底、米黄纸张感背景" in synced_text
+    assert "状态色只能用于描边、角标、少量状态章" in synced_text
     assert "系统架构图默认优先采用 007 宏观拓扑基线" not in synced_text
     assert "故障排查图必须先画当前现状链路，再画根因和修法" not in synced_text
     assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" not in synced_text

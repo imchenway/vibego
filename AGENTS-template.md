@@ -12,20 +12,23 @@
 
 ## Skill routing
 
-- 需求、方案、行为变更、复杂设计：使用 superpowers:brainstorming。
+- 任何任务进入方案、计划、实现或验证等下一阶段前，必须先使用 superpowers:brainstorming 与用户做交互问答；需求、方案、行为变更、复杂设计不得跳过。
 - 复杂实现计划：使用 superpowers:writing-plans。
 - Bug、异常、测试失败：使用 superpowers:systematic-debugging。
 - 代码实现或修复：使用 superpowers:test-driven-development。
 - 收尾声明前：使用 superpowers:verification-before-completion。
 - 系统、业务、流程、时序、状态、故障、技术设计、需求决策等视觉沟通：使用 vibe-diagram。
 - 前端页面、组件、布局、样式、交互：使用 frontend-skill + impeccable + accessibility。
+- 产品体验、UX 研究、用户流程审计、视觉方向探索、原型/重设计/URL 克隆、截图/Figma/ImageGen 到可交互原型、原型视觉 QA：若当前环境已提供 OpenAI Product Design，则按需使用；不会因本模板自动安装，缺失时不得假装可用，应回退到现有前端/视觉链路；使用时必须先确认 brief，缺少视觉目标时先生成 3 个方向并等待用户选择，不得从文字 brief 直接实现；落地代码仍遵守 superpowers:test-driven-development、frontend-skill、impeccable、accessibility 与本仓库验证门禁。
 - 高级视觉、记忆点、沉浸式体验：按需使用 premium-frontend-ui。
 - 滚动叙事、页面转场、视差、连续动效：按需使用 gsap-framer-scroll-animation，并提供 reduced-motion 降级。
 
 ## Work contract
 
 - 先理解目标和现状，再选择技能；不要把需求清单直接翻译成实现。
-- 用户已确认方案，或明确说“按推荐做 / 开始修复 / 直接实现”时，可以进入实现；否则先给方案、影响面、验证方式和待决策项。
+- 任何任务开始后，先通过 superpowers:brainstorming 明确目标、范围、关键约束、验收口径和下一阶段；只有用户明确确认方案或确认进入下一阶段后，才结束交互问答并进入 writing-plans、test-driven-development、实现或验证。
+- 若当前线程已完成同一目标的 brainstorming 并获得用户确认，后续“按推荐做 / 开始修复 / 直接实现”才可视为进入下一阶段的确认；否则不得跳过 brainstorming。
+- 同一会话连续处理多个任务时，每次源码、测试、docs、skill、AGENTS、配置、构建/CI 等 repo-tracked 内容的修改类动作完成并完成验证/交付后，必须视为该任务闭环；之后遇到新的修改类动作，即使仍在同一会话内，也必须回到新的交互式起点，重新用 superpowers:brainstorming 收敛目标并等待用户确认，不得把上一任务的确认跨任务复用。
 - 代码修改只改源码、测试、docs 和必要规约文件；保持仓库整洁，不留临时产物、无用文件或无用代码。
 - 任何新增依赖、改构建、改 CI 都视为高风险，必须先说明收益、成本、风险与回滚，并征得确认。
 - 任何 Bug 修复与需求开发必须修改源码实现；不要把运行产物、构建产物或 patch 临时修改当作交付结果。
@@ -37,7 +40,7 @@
 - 分析、设计、排障、方案、决策、验收、总结、代码逻辑说明、证据链、风险、回滚、测试矩阵都必须写入 HTML；docs 做长期沉淀；HTML 是主交互界面。
 - 不要把 HTML 只限定为非琐碎任务；除非是阻塞性澄清问题、极短确认、简单命令结果、用户明确不要 HTML，否则默认生成或更新项目内单文件
   HTML。
-- Codex 默认给可点击 `file://` 链接和绝对路径兜底；Telegram 来源只输出项目内 `.html/.htm` 路径以触发附件发送。
+- Codex 默认给可点击 `file://` 链接和绝对路径兜底；平台或入口侧要求由发送侧提示词前缀或运行时适配层注入，不写入本全局模板。
 - 如果本轮修改了代码、skill、AGENTS 或 docs，也要把改动影响、验证、风险和待执行动作写入 HTML；聊天不要重复展开 HTML 内已有内容。
 - 如果当前环境无法写入 HTML，才允许在聊天里输出完整 HTML 代码块，并说明无法写文件。
 
@@ -46,18 +49,9 @@
 - 几乎所有需要解释、判断、设计、排障、复盘、代码逻辑说明或交付验收的会话都应优先触发 vibe-diagram 生成单文件
   HTML；核心理念是一图胜千言；AGENTS 只判断何时触发，具体制图规则以 vibe-diagram 为准。
 - 上一节 HTML-first 是全程交互默认；本节只定义何时调用 vibe-diagram 做图形化表达，不得把 HTML 限定在这些场景。
-- HTML-only 场景下，所有实质内容写入项目内单文件 HTML；Codex 默认给可点击 file:// 链接与绝对路径兜底，Telegram 来源只输出项目内
-  `.html/.htm` 路径以触发附件发送。
+- HTML-only 场景下，所有实质内容写入项目内单文件 HTML；Codex 默认给可点击 file:// 链接与绝对路径兜底；平台或入口侧要求由发送侧提示词前缀或运行时适配层注入，不写入本全局模板。
 - 生成 HTML 后聊天只给链接/路径和下一步；分析、证据链、测试矩阵和风险回滚写入 HTML 或 docs。
 - 前端任务必须明确唯一核心目标、用户主路径、首层展示和收纳内容；视觉、交互、响应式、可访问性细节以
   frontend-skill、impeccable、accessibility 为准。
+- Product Design 仅负责产品设计前置、视觉探索、原型化和视觉 QA；正式仓库实现仍以本仓源码、测试、docs 和必要规约文件为交付边界。全局 HTML-first 交付优先级高于 Product Design 的普通聊天输出格式。
 - 前端页面不能卡片堆叠、不能功能平铺、不能重复废话标题；宁可多一层递进，也不要把所有功能塞进同一屏。
-
-## Reply contract
-
-- 面向用户决策输出时，明确推荐项、优缺点、风险和回滚方式。
-- 最后一条回复必须包含：
-  任务编码：- ; 任务名称：- ;
-  本次使用的skill：-；
-  本次修改的影响功能点：-；
-  待用户重启服务或待执行脚本：-；

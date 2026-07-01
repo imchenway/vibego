@@ -1,0 +1,113 @@
+<!doctype html>
+<html class="no-js" lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：vibe-diagram 候选全集与背景网格硬约束</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+      --strong: rgba(78,127,173,.34);
+      --mask: rgba(255,255,255,.92);
+      --danger: var(--red);
+      --warn: var(--amber);
+      --ok: var(--green);
+      --accent: var(--blue);
+      --sheet: var(--panel);
+      --hairline: rgba(78,127,173,.18);
+    }
+    * { box-sizing: border-box; overflow-wrap: anywhere; }
+    html { min-height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    body { overflow-x: hidden; }main{width:min(1180px,calc(100% - 36px));margin:0 auto;padding:34px 0 56px}h1 { margin: 0 0 14px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }h2{margin:0 0 8px;font-size:22px;line-height:1.18;letter-spacing:-.025em}h3,p{margin-top:0}code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.92em}.candidate-atlas{display:grid;gap:24px}.top,.candidate-panel,.comparison{border:1px solid var(--line);border-radius:28px;background:var(--panel);box-shadow:var(--shadow)}.top{padding:24px}.top-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(360px,.9fr);gap:22px;align-items:start}.top-title-column{display:grid;gap:12px;align-content:start;min-width:0}.top-title-column .candidate-tabs{margin-top:2px}.lead{margin:0;max-width:78ch;color:var(--muted)}.title-meta{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center;margin:0 0 10px;max-width:100%}.task-code-pill,.skill-strip{min-height:26px;border:1px solid rgba(78,127,173,.18);border-radius:999px;background:rgba(255,255,255,.92);box-shadow:0 8px 18px rgba(17,71,120,.06);padding:4px 9px;font-size:12px}.task-code-pill{display:inline-flex;align-items:center;color:var(--blue);font-weight:900;letter-spacing:.04em;white-space:nowrap}.skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--muted);font-weight:720;max-width:100%}.task-handoff{display:grid;grid-template-columns: 1fr;gap:10px}.task-handoff-card{border:1px solid rgba(78,127,173,.18);border-radius:16px;background:rgba(255,255,255,.92);box-shadow:0 10px 24px rgba(17,71,120,.07);padding:10px 12px}.task-handoff-card b{display:block;font-size:11px;color:var(--blue);letter-spacing:.04em;margin-bottom:5px}.task-handoff-card span{display:block;color:var(--muted);font-size:12px}.candidate-tabs{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.candidate-tab{min-height:44px;border:1px solid rgba(24,32,28,.18);border-radius:999px;background:var(--mask);padding:8px 16px;color:#304138;font:inherit;font-weight:850;cursor:pointer}.candidate-tab[aria-selected="true"]{color:var(--ok);border-color:rgba(36,115,72,.42);box-shadow:inset 0 0 0 1px rgba(36,115,72,.20)}.candidate-tab:focus-visible{outline:3px solid rgba(36,115,72,.25);outline-offset:3px}.candidate-panel{padding:22px;overflow:hidden}.js .candidate-panel[hidden]{display:none}.candidate-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center;margin-bottom:18px}.letter{width:38px;height:38px;border-radius:999px;display:grid;place-items:center;border:2px solid var(--strong);background:var(--mask);font-weight:900}.candidate-head p{margin:4px 0 0;color:var(--muted);font-size:13px}.status{display:inline-flex;align-items:center;justify-content:center;padding:4px 8px;border-radius:999px;border:1px solid currentColor;background:var(--mask);font-size:11px;font-weight:850}.ok{color:var(--ok)}.warn{color:var(--warn)}.pending{color:var(--pending)}.canvas{position:relative;border:1px solid rgba(24,32,28,.13);border-radius:24px;background:rgba(255,255,255,.9);padding:18px;overflow:hidden}.node,.station,.heat-cell{border:1px solid rgba(24,32,28,.18);background:var(--mask);box-shadow:0 8px 18px rgba(24,32,28,.055)}.node{border-radius:18px;padding:12px 13px;min-width:0}.node b,.station b,.heat-cell b{display:block;font-size:13px;margin-bottom:5px}.node p,.station p,.heat-cell p{margin:0;color:var(--muted);font-size:12px}.accept-track{display:grid;gap:14px}.r-lane{display:grid;grid-template-columns:98px repeat(5,minmax(0,1fr));gap:10px;align-items:stretch;position:relative}.r-label{display:grid;place-items:center;border:1px solid var(--strong);border-radius:999px;background:var(--mask);font-weight:900;color:var(--accent)}.r-lane .node{min-height:112px}.r-lane .node:not(:last-child):after{content:"→";position:absolute;right:-10px;top:44%;color:var(--strong);font-weight:900}.board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.board-lane{border:1px solid rgba(24,32,28,.12);border-radius:22px;padding:14px;background:rgba(255,255,255,.78)}.board-lane h3{margin:0 0 12px;font-size:14px}.board-stack{display:grid;gap:12px}.heatmap{display:grid;grid-template-columns:150px repeat(4,minmax(0,1fr));gap:8px;align-items:stretch}.heat-head{font-weight:850;color:var(--accent);padding:8px;border-bottom:1px solid var(--line)}.heat-cell{border-radius:16px;padding:10px;min-height:90px}.heat-cell.pass{border-color:rgba(36,115,72,.42)}.heat-cell.warn{border-color:rgba(154,98,15,.42)}.subway{min-height:300px;position:relative}.subway svg{width:100%;height:auto;display:block}.subway-stations{position:absolute;inset:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;align-items:center;padding:34px 20px}.station{border-radius:20px;padding:12px;min-height:126px}.comparison{padding:20px}.compare-table{width:100%;border-collapse:collapse;background:var(--mask);border-radius:18px;overflow:hidden;font-size:13px}.compare-table th,.compare-table td{padding:12px 13px;text-align:left;vertical-align:top;border-bottom:1px solid rgba(24,32,28,.10)}.compare-table th{color:var(--accent);font-size:12px;letter-spacing:.04em;text-transform:uppercase}.compare-table tr:last-child td{border-bottom:0}@media(max-width:980px){main{width:min(100% - 22px,720px)}.top-grid,.board,.heatmap{grid-template-columns:1fr}.task-handoff{grid-template-columns:1fr}.candidate-head{grid-template-columns:auto minmax(0,1fr)}.candidate-head .status{grid-column:2;justify-self:start}.r-lane{grid-template-columns:1fr}.r-lane .node:not(:last-child):after{content:"↓";right:50%;top:auto;bottom:-18px}.subway svg{display:none}.subway{min-height:auto}.subway-stations{position:static;grid-template-columns:1fr;padding:0}}@media(max-width:430px){main{width:min(100% - 18px,390px);padding-top:20px}.top,.candidate-panel,.comparison{padding:16px;border-radius:22px}.compare-table,.compare-table tbody,.compare-table tr,.compare-table th,.compare-table td{display:block;width:100%}.compare-table thead{display:none}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+  </style>
+</head>
+<body>
+<main class="candidate-atlas">
+  <section class="top" aria-labelledby="title">
+    <div class="title-meta" aria-label="任务元信息"><span class="task-code-pill">TASK_20260701_002</span><span class="skill-strip" title="本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、vibe-diagram、accessibility、superpowers:verification-before-completion">本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、vibe-diagram、accessibility、superpowers:verification-before-completion</span></div>
+    <div class="top-grid">
+      <div class="top-title-column">
+        <h1 id="title">交付验收：vibe-diagram 候选全集与背景网格硬约束</h1>
+        <p class="lead">本页按交付验收图候选全集呈现本轮改动：规则、reference、测试与故障排查样例。</p>
+        <div class="candidate-tabs" role="tablist" aria-label="交付验收图候选切换按钮"><button class="candidate-tab" id="tab-candidate-a" role="tab" aria-selected="true" aria-controls="candidate-a" data-candidate-target="candidate-a" tabindex="0">A 验收轨道</button><button class="candidate-tab" id="tab-candidate-b" role="tab" aria-selected="false" aria-controls="candidate-b" data-candidate-target="candidate-b" tabindex="-1">B R# 泳道看板</button><button class="candidate-tab" id="tab-candidate-c" role="tab" aria-selected="false" aria-controls="candidate-c" data-candidate-target="candidate-c" tabindex="-1">C 证据矩阵热区</button><button class="candidate-tab" id="tab-candidate-d" role="tab" aria-selected="false" aria-controls="candidate-d" data-candidate-target="candidate-d" tabindex="-1">D 地铁站点线路</button></div>
+    </div>
+      </div>
+      <aside class="task-handoff" aria-label="任务交付信息"><div class="task-handoff-card"><b>本次修改的影响功能点</b><span>vibe-diagram 内置规则、reference 候选全集清单、回归测试、TASK_20260701_001/002 HTML。</span></div><div class="task-handoff-card"><b>待用户执行事项</b><span>重新同步/重启 Vibego worker，使活跃 AGENTS 注入新规则。</span></div></aside>
+    </div>
+  </section>
+
+  <section id="candidate-a" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-a" tabindex="0"><header class="candidate-head"><span class="letter">A</span><div><h2>首选候选：需求到证据的验收轨道</h2><p>逐条把原始要求、交付变更、验证证据、验收判定和待执行动作连成轨道。</p></div><span class="status ok">推荐首选</span></header><div class="canvas accept-track"><div class="r-lane"><div class="r-label">R1</div><div class="node"><b>原始要求</b><p>每次命中图型生成首选 + 全部备选。</p></div><div class="node"><b>交付变更</b><p>SKILL.md 候选全集校准模式。</p></div><div class="node"><b>证据</b><p>候选全集断言。</p></div><div class="node"><b>判定</b><p><span class="status ok">通过</span></p></div><div class="node"><b>动作</b><p>重启 worker 注入新规约。</p></div></div><div class="r-lane"><div class="r-label">R2</div><div class="node"><b>原始要求</b><p>11 类图型锁定首选/备选清单。</p></div><div class="node"><b>交付变更</b><p>所有 reference 写入候选全集清单。</p></div><div class="node"><b>证据</b><p>reference 覆盖测试遍历 11 个文件。</p></div><div class="node"><b>判定</b><p><span class="status ok">通过</span></p></div><div class="node"><b>动作</b><p>后续按用户评审再收敛默认首选。</p></div></div><div class="r-lane"><div class="r-label">R3</div><div class="node"><b>原始要求</b><p>固定白底工程网格。</p></div><div class="node"><b>交付变更</b><p>固定 CSS token 与禁用项。</p></div><div class="node"><b>证据</b><p>背景硬约束测试 + 样例回归。</p></div><div class="node"><b>判定</b><p><span class="status ok">通过</span></p></div><div class="node"><b>动作</b><p>历史未指定样例暂未批量迁移。</p></div></div><div class="r-lane"><div class="r-label">R4</div><div class="node"><b>原始要求</b><p>重画 TASK_20260701_001 故障排查 HTML。</p></div><div class="node"><b>交付变更</b><p>生成 A-E 五个故障排查候选图。</p></div><div class="node"><b>证据</b><p>HTML 回归检查。</p></div><div class="node"><b>判定</b><p><span class="status ok">通过</span></p></div><div class="node"><b>动作</b><p>用户可逐候选评审。</p></div></div></div></section>
+
+  <section id="candidate-b" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-b" tabindex="0"><header class="candidate-head"><span class="letter">B</span><div><h2>备选候选：R# 泳道验收看板</h2><p>把每条要求当作一条泳道，适合快速看到每条要求当前状态。</p></div><span class="status warn">备选</span></header><div class="canvas board"><div class="board-lane"><h3>R1 候选全集</h3><div class="board-stack"><div class="node"><b>改动</b><p>内核规则 + 自检。</p></div><div class="node"><b>验证</b><p>候选全集测试。</p></div></div></div><div class="board-lane"><h3>R2 reference 清单</h3><div class="board-stack"><div class="node"><b>改动</b><p>11 个 reference。</p></div><div class="node"><b>验证</b><p>遍历覆盖断言。</p></div></div></div><div class="board-lane"><h3>R3 背景硬约束</h3><div class="board-stack"><div class="node"><b>改动</b><p>固定网格 token。</p></div><div class="node"><b>验证</b><p>禁用旧背景。</p></div></div></div><div class="board-lane"><h3>R4 样例重画</h3><div class="board-stack"><div class="node"><b>改动</b><p>故障排查 A-E。</p></div><div class="node"><b>验证</b><p>HTML 回归。</p></div></div></div></div></section>
+
+  <section id="candidate-c" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-c" tabindex="0"><header class="candidate-head"><span class="letter">C</span><div><h2>备选候选：证据矩阵热区</h2><p>用热区显示哪条证据覆盖哪条要求；适合测试审计，不替代主验收轨道。</p></div><span class="status warn">备选</span></header><div class="canvas heatmap"><div class="heat-head">需求 / 证据</div><div class="heat-head">skill</div><div class="heat-head">reference</div><div class="heat-head">HTML</div><div class="heat-head">test</div><div class="heat-head">候选全集</div><div class="heat-cell pass"><b>强</b><p>核心模式。</p></div><div class="heat-cell pass"><b>强</b><p>11 类清单。</p></div><div class="heat-cell warn"><b>样例</b><p>故障排查。</p></div><div class="heat-cell pass"><b>强</b><p>新增断言。</p></div><div class="heat-head">背景网格</div><div class="heat-cell pass"><b>强</b><p>固定 token。</p></div><div class="heat-cell pass"><b>强</b><p>全局规则。</p></div><div class="heat-cell pass"><b>强</b><p>指定样例。</p></div><div class="heat-cell pass"><b>强</b><p>禁用旧样式。</p></div></div></section>
+
+  <section id="candidate-d" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-d" tabindex="0"><header class="candidate-head"><span class="letter">D</span><div><h2>备选候选：地铁站点式验收线路</h2><p>适合最终签收口径：每个站点代表一类交付证据，末站是用户动作。</p></div><span class="status warn">备选</span></header><div class="canvas subway"><svg viewBox="0 0 1040 300" aria-hidden="true"><defs><marker id="arrow-subway" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#6f7b70"/></marker></defs><path d="M90 150 C230 85 330 85 470 150 S720 215 910 150" fill="none" stroke="#6f7b70" stroke-width="5" marker-end="url(#arrow-subway)"/><circle cx="90" cy="150" r="13" fill="#fffefb" stroke="#247348" stroke-width="4"/><circle cx="300" cy="104" r="13" fill="#fffefb" stroke="#247348" stroke-width="4"/><circle cx="520" cy="168" r="13" fill="#fffefb" stroke="#247348" stroke-width="4"/><circle cx="735" cy="201" r="13" fill="#fffefb" stroke="#247348" stroke-width="4"/><circle cx="910" cy="150" r="13" fill="#fffefb" stroke="#9a620f" stroke-width="4"/></svg><div class="subway-stations"><div class="station"><b>规则站</b><p>SKILL.md 候选全集 + 背景硬约束。</p></div><div class="station"><b>清单站</b><p>11 个 reference 候选表。</p></div><div class="station"><b>样例站</b><p>TASK_20260701_001 A-E 候选。</p></div><div class="station"><b>测试站</b><p>候选、背景、样例回归。</p></div><div class="station"><b>动作站</b><p>重启 worker 后生效。</p></div></div></div></section>
+
+  <section class="comparison" aria-labelledby="compare-title"><h2 id="compare-title">候选对比矩阵</h2><table class="compare-table"><thead><tr><th>候选</th><th>可读性</th><th>事实承载</th><th>适用边界</th><th>风险</th></tr></thead><tbody><tr><td>A 验收轨道</td><td>最适合逐需求验收。</td><td>强，绑定每条需求与证据。</td><td>最终交付收口。</td><td>内容多时页面较长。</td></tr><tr><td>B 泳道看板</td><td>状态总览快。</td><td>中，细证据需展开。</td><td>多人评审或同步。</td><td>容易退化成卡片看板。</td></tr><tr><td>C 证据矩阵热区</td><td>测试覆盖直观。</td><td>强，适合审计。</td><td>验证覆盖分析。</td><td>不能替代因果轨道。</td></tr><tr><td>D 地铁线路</td><td>签收感强。</td><td>中，证据摘要。</td><td>最终汇报。</td><td>站点文字过长会变装饰图。</td></tr></tbody></table><p id="validation-summary" class="lead" style="margin-top:16px">验证状态：已通过 `python3.11 -m pytest -q tests/test_builtin_skills_injection.py`（52 passed）、`quick_validate.py`（Skill is valid!）与 `git diff --check`（无输出）。</p></section>
+</main>
+<script>
+  document.documentElement.classList.remove('no-js');
+  document.documentElement.classList.add('js');
+  const tabs = Array.from(document.querySelectorAll('[role="tab"][data-candidate-target]'));
+  const panels = tabs.map((tab) => document.getElementById(tab.dataset.candidateTarget)).filter(Boolean);
+  function selectCandidate(id, updateHash = true, focusTab = false) {
+    const targetId = panels.some((panel) => panel.id === id) ? id : panels[0].id;
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.candidateTarget === targetId;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && focusTab) tab.focus();
+    });
+    panels.forEach((panel) => { panel.hidden = panel.id !== targetId; });
+    if (updateHash && location.hash !== '#' + targetId) history.replaceState(null, '', '#' + targetId);
+  }
+  function hashCandidate() { return location.hash ? location.hash.slice(1) : panels[0].id; }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectCandidate(tab.dataset.candidateTarget));
+    tab.addEventListener('keydown', (event) => {
+      const last = tabs.length - 1;
+      let next = index;
+      if (event.key === 'ArrowRight') next = index === last ? 0 : index + 1;
+      else if (event.key === 'ArrowLeft') next = index === 0 ? last : index - 1;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = last;
+      else return;
+      event.preventDefault();
+      selectCandidate(tabs[next].dataset.candidateTarget, true, true);
+    });
+  });
+  window.addEventListener('hashchange', () => selectCandidate(hashCandidate(), false));
+  selectCandidate(hashCandidate(), false);
+</script>
+</body>
+</html>

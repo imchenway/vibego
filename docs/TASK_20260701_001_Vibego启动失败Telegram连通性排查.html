@@ -1,0 +1,121 @@
+<!doctype html>
+<html class="no-js" lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>故障排查：Vibego 启动失败候选全集校准图</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+      --strong: rgba(78,127,173,.34);
+      --mask: rgba(255,255,255,.92);
+      --danger: var(--red);
+      --warn: var(--amber);
+      --ok: var(--green);
+      --accent: var(--blue);
+      --sheet: var(--panel);
+      --hairline: rgba(78,127,173,.18);
+    }
+    * { box-sizing: border-box; overflow-wrap: anywhere; }
+    html { min-height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    body { overflow-x: hidden; }main{width:min(1180px,calc(100% - 36px));margin:0 auto;padding:34px 0 56px}h1,h2,h3,p{margin-top:0}h1 { margin: 0 0 14px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }h2{font-size:22px;line-height:1.18;letter-spacing:-.025em;margin-bottom:8px}h3{font-size:14px;margin-bottom:8px}code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;font-size:.92em}.candidate-atlas{display:grid;gap:24px}.top-sheet,.candidate-panel,.candidate-compare,.source-strip{border:1px solid var(--line);border-radius:28px;background:var(--panel);box-shadow:var(--shadow);backdrop-filter:blur(2px)}.top-sheet{padding:24px}.top-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(340px,.9fr);gap:22px;align-items:start}.top-title-column{display:grid;gap:12px;align-content:start;min-width:0}.top-title-column .candidate-tabs{margin-top:2px}.subtitle{color:var(--muted);margin:0;max-width:76ch}.title-meta{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center;margin:0 0 10px;max-width:100%}.task-code-pill,.skill-strip{min-height:26px;border:1px solid rgba(78,127,173,.18);border-radius:999px;background:rgba(255,255,255,.92);box-shadow:0 8px 18px rgba(17,71,120,.06);padding:4px 9px;font-size:12px}.task-code-pill{display:inline-flex;align-items:center;color:var(--blue);font-weight:900;letter-spacing:.04em;white-space:nowrap}.skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--muted);font-weight:720;max-width:100%}.task-handoff{display:grid;grid-template-columns: 1fr;gap:10px}.task-handoff-card{border:1px solid rgba(78,127,173,.18);border-radius:16px;background:rgba(255,255,255,.92);box-shadow:0 10px 24px rgba(17,71,120,.07);padding:10px 12px}.task-handoff-card b{display:block;font-size:11px;color:var(--blue);letter-spacing:.04em;margin-bottom:5px}.task-handoff-card span{display:block;color:var(--muted);font-size:12px}.candidate-tabs{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.candidate-tab{min-height:44px;border:1px solid rgba(24,32,28,.18);border-radius:999px;background:var(--mask);padding:8px 16px;color:#304138;font:inherit;font-weight:850;cursor:pointer}.candidate-tab[aria-selected="true"]{color:var(--ok);border-color:rgba(36,115,72,.42);box-shadow:inset 0 0 0 1px rgba(36,115,72,.20)}.candidate-tab:focus-visible{outline:3px solid rgba(36,115,72,.25);outline-offset:3px}.source-strip{padding:14px 16px;display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px;font-size:13px;color:var(--muted)}.source-strip strong{color:var(--ink)}.candidate-panel{padding:22px;overflow:hidden}.js .candidate-panel[hidden]{display:none}.candidate-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center;margin-bottom:18px}.letter{width:38px;height:38px;border-radius:999px;display:grid;place-items:center;border:2px solid var(--strong);background:var(--mask);font-weight:900}.candidate-head p{margin:4px 0 0;color:var(--muted);font-size:13px}.badge{display:inline-flex;align-items:center;justify-content:center;padding:4px 8px;border-radius:999px;border:1px solid currentColor;background:var(--mask);font-size:11px;font-weight:850}.danger{color:var(--danger)}.warn{color:var(--warn)}.ok{color:var(--ok)}.graph-box{position:relative;border:1px solid rgba(24,32,28,.13);border-radius:24px;background:rgba(255,255,255,.9);padding:18px;overflow:hidden}.graph-box svg{width:100%;height:auto;display:block;overflow:visible}.g-node,.g-decision,.g-event,.g-state,.g-data{position:relative;min-width:0;border:1px solid rgba(24,32,28,.18);background:var(--mask);color:var(--ink);padding:12px 13px;box-shadow:0 8px 18px rgba(24,32,28,.055);z-index:2}.g-node{border-radius:18px}.g-event{border-radius:999px;text-align:center}.g-decision{border-radius:18px;transform:rotate(45deg);aspect-ratio:1/1;display:grid;place-items:center;text-align:center;margin:6px auto}.g-decision>div{transform:rotate(-45deg);padding:8px}.g-state{border-radius:20px}.g-data{border-radius:14px;border-style:dashed}.g-node b,.g-decision b,.g-event b,.g-state b,.g-data b{display:block;font-size:13px;margin-bottom:5px}.g-node p,.g-decision p,.g-event p,.g-state p,.g-data p{margin:0;color:var(--muted);font-size:12px}.seq-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.participant{text-align:center;font-weight:850;font-size:12px;padding:8px;border:1px solid rgba(24,32,28,.12);border-radius:999px;background:var(--mask)}.seq-lines{grid-column:1/-1;min-height:390px;position:relative;border:1px solid rgba(24,32,28,.10);border-radius:22px;background:rgba(255,255,255,.78);overflow:hidden}.seq-lines svg{position:absolute;inset:0;width:100%;height:100%}.seq-note{position:absolute;width:23%;min-width:160px}.seq-note.n1{left:2%;top:24px}.seq-note.n2{left:21%;top:92px}.seq-note.n3{left:43%;top:158px}.seq-note.n4{left:61%;top:226px}.seq-note.n5{left:73%;top:292px}.causal-chain{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:18px;align-items:center;position:relative}.connector-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}.causal-chain .g-node{min-height:148px}.bpmn-track{display:grid;grid-template-columns:.72fr 1.1fr .9fr 1.1fr 1.05fr .8fr;gap:18px;align-items:center;position:relative;min-height:250px}.bpmn-track .connector-svg{inset:18px;width:calc(100% - 36px);height:calc(100% - 36px)}.ba-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.ba-side{border:1px solid rgba(24,32,28,.12);border-radius:24px;background:rgba(255,255,255,.78);padding:16px;position:relative}.ba-side h3{display:inline-flex;margin-bottom:14px;padding:5px 10px;border:1px solid rgba(24,32,28,.14);border-radius:999px;background:var(--mask)}.mini-steps{display:grid;gap:22px;position:relative}.mini-steps:before{content:"";position:absolute;left:22px;top:34px;bottom:34px;width:2px;background:var(--line)}.mini-steps .g-node{margin-left:46px}.state-map{display:grid;grid-template-columns:1.3fr .7fr;gap:20px}.state-rail{display:grid;grid-template-columns:1fr 1fr;gap:14px;position:relative}.state-rail .g-state{min-height:132px}.data-stack{display:grid;gap:12px}.candidate-compare{padding:20px}.compare-table{width:100%;border-collapse:collapse;background:var(--mask);border-radius:18px;overflow:hidden;font-size:13px}.compare-table th,.compare-table td{text-align:left;vertical-align:top;padding:12px 13px;border-bottom:1px solid rgba(24,32,28,.10)}.compare-table th{color:var(--accent);font-size:12px;letter-spacing:.04em;text-transform:uppercase;background:rgba(255,255,255,.95)}.compare-table tr:last-child td{border-bottom:0}@media(max-width:980px){main{width:min(100% - 22px,720px)}.top-grid,.ba-grid,.state-map{grid-template-columns:1fr}.task-handoff,.source-strip{grid-template-columns:1fr}.candidate-head{grid-template-columns:auto minmax(0,1fr)}.candidate-head .badge{grid-column:2;justify-self:start}.seq-grid{grid-template-columns:1fr 1fr}.participant:nth-child(n+3){display:none}.seq-lines{min-height:auto;display:grid;gap:12px;padding:12px}.seq-lines svg,.connector-svg{display:none}.seq-note{position:static;width:auto}.causal-chain,.bpmn-track,.state-rail{grid-template-columns:1fr}.g-decision{transform:none;aspect-ratio:auto;width:auto}.g-decision>div{transform:none}}@media(max-width:430px){main{width:min(100% - 18px,390px);padding-top:20px}.top-sheet,.candidate-panel,.candidate-compare{padding:16px;border-radius:22px}.compare-table,.compare-table tbody,.compare-table tr,.compare-table th,.compare-table td{display:block;width:100%}.compare-table thead{display:none}.compare-table td{border-bottom:1px solid rgba(24,32,28,.10)}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+  </style>
+</head>
+<body>
+<main class="candidate-atlas">
+  <section class="top-sheet" aria-labelledby="title">
+    <div class="title-meta" aria-label="任务元信息"><span class="task-code-pill">TASK_20260701_001</span><span class="skill-strip" title="本次使用的skill：vibe-diagram、superpowers:systematic-debugging、superpowers:verification-before-completion">本次使用的skill：vibe-diagram、superpowers:systematic-debugging、superpowers:verification-before-completion</span></div>
+    <div class="top-grid">
+      <div class="top-title-column">
+        <h1 id="title">故障排查：Vibego 启动失败候选全集校准图</h1>
+        <p class="subtitle">本 HTML 只生成“故障排查图”的首选候选与全部备选候选。默认用按钮切换候选；所有候选仍完整留在 DOM 中，无 JS 时全部纵向展开。</p>
+        <div class="candidate-tabs" role="tablist" aria-label="故障排查图候选切换按钮">
+      <button class="candidate-tab" id="tab-candidate-a" role="tab" aria-selected="true" aria-controls="candidate-a" data-candidate-target="candidate-a" tabindex="0">A 首选 · 排障时序图</button>
+      <button class="candidate-tab" id="tab-candidate-b" role="tab" aria-selected="false" aria-controls="candidate-b" data-candidate-target="candidate-b" tabindex="-1">B 因果链图</button>
+      <button class="candidate-tab" id="tab-candidate-c" role="tab" aria-selected="false" aria-controls="candidate-c" data-candidate-target="candidate-c" tabindex="-1">C BPMN-light 排查流程</button>
+      <button class="candidate-tab" id="tab-candidate-d" role="tab" aria-selected="false" aria-controls="candidate-d" data-candidate-target="candidate-d" tabindex="-1">D before/after 流程化对照</button>
+      <button class="candidate-tab" id="tab-candidate-e" role="tab" aria-selected="false" aria-controls="candidate-e" data-candidate-target="candidate-e" tabindex="-1">E 状态/数据断点图</button>
+    </div>
+      </div>
+      <aside class="task-handoff" aria-label="任务交付信息"><div class="task-handoff-card"><b>本次修改的影响功能点</b><span>故障排查候选全集样例；未修改业务源码。</span></div><div class="task-handoff-card"><b>待用户执行事项</b><span>本排查无需脚本；若同步新规约需重启 Vibego worker。</span></div></aside>
+    </div>
+  </section>
+  <aside class="source-strip" aria-label="证据摘要"><strong>证据摘要</strong><span>E1/E2：本次 boot_id 使用代理并 30 秒握手失败；E3/E4：<code>ensure_telegram_connectivity()</code> 超时后 <code>SystemExit(1)</code>；E6：同代理链路历史多次超时/断连；E7-E12：当前代理与 worker 已恢复。</span></aside>
+
+  <section id="candidate-a" class="candidate-panel candidate-sequence" role="tabpanel" aria-labelledby="tab-candidate-a" tabindex="0"><header class="candidate-head"><span class="letter">A</span><div><h2>首选候选：排障时序图</h2><p>参与者列 + 时间向下，把启动、代理、Telegram API、日志状态放在同一时间轴上。</p></div><span class="badge ok">推荐首选</span></header><div class="graph-box"><div class="seq-grid"><div class="participant">Master</div><div class="participant">run_bot</div><div class="participant">Worker / bot.py</div><div class="participant">Proxy 127.0.0.1:6152</div><div class="participant">Telegram API</div><div class="participant">State / Log</div><div class="seq-lines"><svg viewBox="0 0 1100 390" aria-hidden="true"><defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#6f7b70"/></marker></defs><line x1="88" y1="0" x2="88" y2="390" stroke="rgba(24,32,28,.14)" stroke-width="2"/><line x1="270" y1="0" x2="270" y2="390" stroke="rgba(24,32,28,.14)" stroke-width="2"/><line x1="452" y1="0" x2="452" y2="390" stroke="rgba(24,32,28,.14)" stroke-width="2"/><line x1="634" y1="0" x2="634" y2="390" stroke="rgba(24,32,28,.14)" stroke-width="2"/><line x1="816" y1="0" x2="816" y2="390" stroke="rgba(24,32,28,.14)" stroke-width="2"/><line x1="998" y1="0" x2="998" y2="390" stroke="rgba(24,32,28,.14)" stroke-width="2"/><path d="M88 66 C130 66 205 66 270 88" stroke="#6f7b70" stroke-width="2" fill="none" marker-end="url(#arrow)"/><path d="M270 132 C330 132 380 132 452 150" stroke="#6f7b70" stroke-width="2" fill="none" marker-end="url(#arrow)"/><path d="M452 198 C520 198 560 198 634 214" stroke="#9a620f" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/><path d="M634 246 C700 246 752 246 816 260" stroke="#9f2f2f" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/><path d="M452 318 C620 318 832 318 998 332" stroke="#9f2f2f" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/></svg><div class="g-node seq-note n1"><b>23:13:07 启动</b><p>Master 启动 worker，boot_id=1d79…；E1/E2。</p></div><div class="g-node seq-note n2"><b>代理注入</b><p><code>https_proxy=http://127.0.0.1:6152</code>。</p></div><div class="g-node seq-note n3"><b>启动前握手</b><p><code>bot.get_me()</code> 被 30 秒 timeout 包裹；E3。</p></div><div class="g-node seq-note n4"><b>30 秒未返回</b><p>Telegram 握手失败，H1 只标高置信可疑。</p></div><div class="g-node seq-note n5"><b>fail-closed 退出</b><p><code>SystemExit(1)</code>，Master 展示本次日志；E4/E5。</p></div></div></div></div></section>
+
+  <section id="candidate-b" class="candidate-panel candidate-causal-chain" role="tabpanel" aria-labelledby="tab-candidate-b" tabindex="0"><header class="candidate-head"><span class="letter">B</span><div><h2>备选候选：因果链图</h2><p>把“用户可见失败”一路连到“程序内直接故障点”和“外部最高可疑点”。</p></div><span class="badge warn">备选</span></header><div class="graph-box causal-chain"><svg class="connector-svg" viewBox="0 0 1000 220" aria-hidden="true"><defs><marker id="arrow-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#6f7b70"/></marker></defs><path d="M150 110 H250" stroke="#6f7b70" stroke-width="2" marker-end="url(#arrow-b)"/><path d="M350 110 H450" stroke="#6f7b70" stroke-width="2" marker-end="url(#arrow-b)"/><path d="M550 110 H650" stroke="#9f2f2f" stroke-width="2.5" marker-end="url(#arrow-b)"/><path d="M750 110 H850" stroke="#247348" stroke-width="2.5" marker-end="url(#arrow-b)"/></svg><div class="g-node"><b>现象</b><p>worker 60295 已退出；23:13:07 → 23:13:37。</p><span class="badge danger">E1/E2</span></div><div class="g-node"><b>代码门禁</b><p>启动前必须 <code>get_me()</code>，30 秒超时。</p></div><div class="g-node"><b>直接故障点 R1</b><p>握手超时触发 fail-closed。</p></div><div class="g-node"><b>外部 H1</b><p>代理历史多次超时；失败当刻无端口现场。</p></div><div class="g-node"><b>当前状态</b><p>08:45 后 worker running；代理可达。</p></div></div></section>
+
+  <section id="candidate-c" class="candidate-panel candidate-bpmn" role="tabpanel" aria-labelledby="tab-candidate-c" tabindex="0"><header class="candidate-head"><span class="letter">C</span><div><h2>备选候选：BPMN-light 排查流程</h2><p>用开始/活动/决策/结束节点表达“再次遇到同类错误时该怎么排”。</p></div><span class="badge warn">备选</span></header><div class="graph-box bpmn-track"><svg class="connector-svg" viewBox="0 0 1020 230" aria-hidden="true"><defs><marker id="arrow-c" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#6f7b70"/></marker></defs><path d="M95 115 H210" stroke="#6f7b70" stroke-width="2" marker-end="url(#arrow-c)"/><path d="M330 115 H440" stroke="#6f7b70" stroke-width="2" marker-end="url(#arrow-c)"/><path d="M560 115 H675" stroke="#6f7b70" stroke-width="2" marker-end="url(#arrow-c)"/><path d="M795 115 H910" stroke="#6f7b70" stroke-width="2" marker-end="url(#arrow-c)"/></svg><div class="g-event"><b>开始</b><p>收到启动失败日志。</p></div><div class="g-node"><b>锁定 boot_id</b><p>先看本次日志，避免旧日志误判。</p></div><div class="g-decision"><div><b>代理端口通？</b><p><code>nc 127.0.0.1 6152</code></p></div></div><div class="g-decision"><div><b>经代理到 Telegram 通？</b><p><code>curl -x ...</code></p></div></div><div class="g-node"><b>裁决</b><p>R1 可确认；H1 需失败当刻现场。</p></div><div class="g-event"><b>结束</b><p>恢复代理/重启项目，或另开 TDD 硬化。</p></div></div></section>
+
+  <section id="candidate-d" class="candidate-panel candidate-before-after" role="tabpanel" aria-labelledby="tab-candidate-d" tabindex="0"><header class="candidate-head"><span class="letter">D</span><div><h2>备选候选：before/after 流程化对照</h2><p>左侧是失败时链路，右侧是当前恢复后的同一链路；不伪造源码修复。</p></div><span class="badge warn">备选</span></header><div class="graph-box ba-grid"><div class="ba-side"><h3>before · 2026-06-30 23:13 失败链路</h3><div class="mini-steps"><div class="g-node"><b>启动 worker</b><p>boot_id=1d79…，使用代理 6152。</p></div><div class="g-node"><b>get_me 握手等待</b><p>30 秒内未成功返回。</p></div><div class="g-node"><b>fail-closed 退出</b><p>Master 返回“worker 已退出”。</p></div></div></div><div class="ba-side"><h3>after · 2026-07-01 08:45 恢复现场</h3><div class="mini-steps"><div class="g-node"><b>代理端口可连</b><p><code>nc</code> 成功；经代理访问 Telegram 返回 302。</p></div><div class="g-node"><b>worker 握手成功</b><p><code>Telegram 连接正常</code>。</p></div><div class="g-node"><b>状态 running</b><p><code>master_state.json</code> running。</p></div></div></div></div></section>
+
+  <section id="candidate-e" class="candidate-panel candidate-state-breakpoint" role="tabpanel" aria-labelledby="tab-candidate-e" tabindex="0"><header class="candidate-head"><span class="letter">E</span><div><h2>备选候选：状态/数据断点图</h2><p>把 worker 生命周期和关键证据数据放在一起，突出哪个状态断点造成“启动失败”。</p></div><span class="badge warn">备选</span></header><div class="graph-box state-map"><div class="state-rail"><svg class="connector-svg" viewBox="0 0 520 290" aria-hidden="true"><defs><marker id="arrow-e" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#6f7b70"/></marker></defs><path d="M125 80 H265" stroke="#6f7b70" stroke-width="2" marker-end="url(#arrow-e)"/><path d="M395 80 V206 H270" stroke="#9f2f2f" stroke-width="2.5" marker-end="url(#arrow-e)"/><path d="M125 206 H265" stroke="#247348" stroke-width="2.5" marker-end="url(#arrow-e)"/></svg><div class="g-state"><b>starting</b><p>读取代理环境与 boot_id。</p></div><div class="g-state"><b>handshaking</b><p><code>get_me()</code> 等待 Telegram API。</p></div><div class="g-state"><b>failed</b><p>30 秒超时 → <code>SystemExit(1)</code>。</p></div><div class="g-state"><b>running</b><p>当前已恢复；PID 存活。</p></div></div><div class="data-stack"><div class="g-data"><b>日志断点</b><p><code>run_bot.log:3242-3246</code>。</p></div><div class="g-data"><b>代码断点</b><p><code>bot.py:26791-26813</code>。</p></div><div class="g-data"><b>环境断点</b><p>失败当刻代理端口状态待确认。</p></div></div></div></section>
+
+  <section class="candidate-compare" aria-labelledby="compare-title"><h2 id="compare-title">候选对比矩阵</h2><table class="compare-table"><thead><tr><th>候选</th><th>可读性</th><th>事实承载</th><th>适用边界</th><th>风险</th></tr></thead><tbody><tr><td>A 排障时序图</td><td>最能按时间读懂启动失败。</td><td>参与者、日志、代码与超时。</td><td>链路型启动/调用失败。</td><td>节点过多时需分段。</td></tr><tr><td>B 因果链图</td><td>结论快。</td><td>证据较压缩。</td><td>小故障或单根因链。</td><td>需强标待确认。</td></tr><tr><td>C BPMN-light</td><td>适合 SOP。</td><td>命令和决策点清晰。</td><td>再次复现排查。</td><td>本次真实时间链较弱。</td></tr><tr><td>D before/after</td><td>恢复前后直观。</td><td>表达当前已恢复。</td><td>有明确前后状态时。</td><td>避免误读为源码修复。</td></tr><tr><td>E 状态断点</td><td>生命周期断点清楚。</td><td>代码/日志/环境并列。</td><td>状态机或数据问题。</td><td>网络细节不如时序图。</td></tr></tbody></table></section>
+</main>
+<script>
+  document.documentElement.classList.remove('no-js');
+  document.documentElement.classList.add('js');
+  const tabs = Array.from(document.querySelectorAll('[role="tab"][data-candidate-target]'));
+  const panels = tabs.map((tab) => document.getElementById(tab.dataset.candidateTarget)).filter(Boolean);
+  function selectCandidate(id, updateHash = true, focusTab = false) {
+    const targetId = panels.some((panel) => panel.id === id) ? id : panels[0].id;
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.candidateTarget === targetId;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && focusTab) tab.focus();
+    });
+    panels.forEach((panel) => { panel.hidden = panel.id !== targetId; });
+    if (updateHash && location.hash !== '#' + targetId) history.replaceState(null, '', '#' + targetId);
+  }
+  function hashCandidate() { return location.hash ? location.hash.slice(1) : panels[0].id; }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectCandidate(tab.dataset.candidateTarget));
+    tab.addEventListener('keydown', (event) => {
+      const last = tabs.length - 1;
+      let next = index;
+      if (event.key === 'ArrowRight') next = index === last ? 0 : index + 1;
+      else if (event.key === 'ArrowLeft') next = index === 0 ? last : index - 1;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = last;
+      else return;
+      event.preventDefault();
+      selectCandidate(tabs[next].dataset.candidateTarget, true, true);
+    });
+  });
+  window.addEventListener('hashchange', () => selectCandidate(hashCandidate(), false));
+  selectCandidate(hashCandidate(), false);
+</script>
+</body>
+</html>

@@ -92,11 +92,55 @@ def test_agents_template_uses_global_skill_kernel_without_plan_develop_phases() 
     assert "accessibility" in template_text
     assert "不要自行执行 git commit/push/merge/revert" in template_text
     assert "证据不足写“待确认/推断”" in template_text
-    assert "任务编码：- ; 任务名称：- ;" in template_text
     assert "## plan 阶段" not in template_text
     assert "## develop 阶段" not in template_text
     assert "PLAN-> develop" not in template_text
     assert "vibe -> design -> develop" not in template_text
+
+
+def test_agents_template_requires_brainstorming_stage_gate_and_task_reset() -> None:
+    """AGENTS 模板应强制下一阶段前先做 brainstorming，并在任务闭环后复位边界。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "任何任务进入方案、计划、实现或验证等下一阶段前，必须先使用 superpowers:brainstorming" in template_text
+    assert "先通过 superpowers:brainstorming 明确目标、范围、关键约束、验收口径和下一阶段" in template_text
+    assert "只有用户明确确认方案或确认进入下一阶段后，才结束交互问答" in template_text
+    assert "若当前线程已完成同一目标的 brainstorming 并获得用户确认" in template_text
+    assert "修改类动作完成并完成验证/交付后，必须视为该任务闭环" in template_text
+    assert "即使仍在同一会话内，也必须回到新的交互式起点" in template_text
+    assert "不得把上一任务的确认跨任务复用" in template_text
+    assert "明确说“按推荐做 / 开始修复 / 直接实现”时，可以进入实现" not in template_text
+
+
+def test_agents_template_routes_openai_product_design_with_gates() -> None:
+    """AGENTS 模板应把 Product Design 作为按需产品设计路由，而不是替换现有前端链路。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "若当前环境已提供 OpenAI Product Design" in template_text
+    assert "不会因本模板自动安装" in template_text
+    assert "缺失时不得假装可用" in template_text
+    assert "产品体验、UX 研究、用户流程审计、视觉方向探索" in template_text
+    assert "原型/重设计/URL 克隆" in template_text
+    assert "截图/Figma/ImageGen 到可交互原型" in template_text
+    assert "必须先确认 brief" in template_text
+    assert "缺少视觉目标时先生成 3 个方向并等待用户选择" in template_text
+    assert "不得从文字 brief 直接实现" in template_text
+    assert "落地代码仍遵守 superpowers:test-driven-development、frontend-skill、impeccable、accessibility" in template_text
+    assert "Product Design 仅负责产品设计前置、视觉探索、原型化和视觉 QA" in template_text
+    assert "全局 HTML-first 交付优先级高于 Product Design 的普通聊天输出格式" in template_text
+
+
+def test_agents_template_keeps_runtime_entry_prompts_out() -> None:
+    """AGENTS 模板不应内置具体运行入口文案，入口差异由发送侧前缀处理。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "平台或入口侧要求由发送侧提示词前缀或运行时适配层注入" in template_text
+    assert "Telegram" not in template_text
+    assert "Vibego" not in template_text
+    assert "vibego" not in template_text
 
 
 def test_agents_template_does_not_keep_extra_reply_style_prompts() -> None:
@@ -104,7 +148,12 @@ def test_agents_template_does_not_keep_extra_reply_style_prompts() -> None:
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "## Reply contract" in template_text
+    assert "## Reply contract" not in template_text
+    assert "任务编码：-" not in template_text
+    assert "任务名称：-" not in template_text
+    assert "本次使用的skill：-" not in template_text
+    assert "本次修改的影响功能点：-" not in template_text
+    assert "待用户重启服务或待执行脚本：-" not in template_text
     assert "默认先结论，少噪音" not in template_text
     assert "现象 -> 影响 -> 根因 -> 修法 -> 验证" not in template_text
 
@@ -120,7 +169,7 @@ def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks
     assert "AGENTS 只判断何时触发，具体制图规则以 vibe-diagram 为准" in template_text
     assert "HTML-only" in template_text
     assert "所有实质内容写入项目内单文件 HTML" in template_text
-    assert "Telegram 来源只输出项目内 `.html/.htm` 路径" in template_text
+    assert "平台或入口侧要求由发送侧提示词前缀或运行时适配层注入" in template_text
 
 
 def test_agents_template_requires_html_first_interaction_contract() -> None:

@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：brainstorming 阶段确认与任务边界复位门禁</title>
+  <script>document.documentElement.classList.add('js');</script>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.62;
+      overflow-wrap: anywhere;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    main { width: min(1180px, calc(100vw - 44px)); margin: 28px auto 64px; }
+    .top, .panel, .matrix, .notes {
+      background: var(--panel);
+      border: 1px solid rgba(141,179,216,.42);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .top { padding: 22px; }
+    .title-meta {
+      width: 100%;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .task-code, .skill-strip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border-radius: 999px;
+      border: 1px solid rgba(141,179,216,.55);
+      background: rgba(255,255,255,.92);
+      color: var(--blue);
+      font-weight: 800;
+      font-size: 12px;
+      letter-spacing: .02em;
+      padding: 3px 11px;
+    }
+    .skill-strip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #35516c; }
+    .top-grid { display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 24px; align-items: start; }
+    h1 { margin: 0 0 8px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }
+    .lead { margin: 0 0 16px; color: #334d68; max-width: 72ch; }
+    .task-handoff { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .handoff-card { background: rgba(255,255,255,.94); border: 1px solid rgba(141,179,216,.5); border-radius: 16px; padding: 12px 14px; }
+    .handoff-card b { display:block; color: var(--blue); font-size: 12px; margin-bottom: 4px; }
+    .handoff-card span { display:block; color: #3e5872; font-size: 13px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+    .tab {
+      border: 1px solid rgba(141,179,216,.65);
+      background: rgba(255,255,255,.94);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 9px 15px;
+      font-weight: 800;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .tab[aria-selected="true"] { border-color: rgba(23,120,90,.55); background: var(--green-soft); color: var(--green); box-shadow: inset 0 0 0 1px rgba(23,120,90,.18); }
+    .tab:focus-visible, .node:focus-visible { outline: 3px solid rgba(31,111,178,.36); outline-offset: 3px; }
+    .panel { margin-top: 22px; padding: 20px; }
+    .js [role="tabpanel"] { display: none; }
+    .js [role="tabpanel"].is-active { display: block; }
+    .panel-head { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 14px; align-items: start; margin-bottom: 18px; }
+    .badge { width: 34px; height: 34px; border-radius: 50%; display:inline-grid; place-items:center; border:1px solid var(--line); color: var(--blue); background:#fff; font-weight:900; }
+    h2 { margin: 0; font-size: 22px; letter-spacing: -.018em; }
+    .panel-sub { margin: 3px 0 0; color: var(--muted); }
+    .status { align-self:center; border:1px solid rgba(23,120,90,.45); color:var(--green); background:var(--green-soft); border-radius:999px; padding:5px 10px; font-size:12px; font-weight:900; white-space:nowrap; }
+    .control-rail { display:grid; grid-template-columns: 210px minmax(0,1fr); gap: 18px; }
+    .control-axis { position:relative; padding-left: 18px; display:grid; gap: 10px; }
+    .control-axis:before { content:""; position:absolute; left:6px; top:11px; bottom:11px; width:2px; background: linear-gradient(var(--blue), var(--green)); opacity:.45; }
+    .control-item { position:relative; background:#fff; border:1px solid rgba(141,179,216,.45); border-radius:14px; padding:10px 12px; }
+    .control-item:before { content:""; position:absolute; left:-17px; top:15px; width:12px; height:12px; border-radius:50%; background: var(--blue); box-shadow: 0 0 0 3px #fff; }
+    .control-item b { display:block; font-size:12px; color:var(--blue); }
+    .control-item span { display:block; font-size:12px; color:#3f5872; }
+    .track { position:relative; padding: 18px 8px 8px; background:
+      linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px),
+      rgba(255,255,255,.72);
+      background-size: 22px 22px, 22px 22px, auto;
+      border:1px solid rgba(141,179,216,.35); border-radius:18px;
+    }
+    .lane { display:grid; grid-template-columns: 132px repeat(5, minmax(115px,1fr)); gap: 10px; align-items:center; min-height: 88px; position:relative; }
+    .lane + .lane { border-top:1px solid rgba(141,179,216,.24); }
+    .lane:before { content:""; position:absolute; left:150px; right:12px; top:50%; height:3px; background: linear-gradient(90deg, rgba(31,111,178,.55), rgba(23,120,90,.62)); z-index:0; border-radius:999px; }
+    .req { font-weight:900; color:var(--ink); background:#fff; border:1px solid rgba(141,179,216,.48); border-radius:13px; padding:10px; z-index:1; }
+    .station { position:relative; z-index:1; min-height:58px; padding: 8px 8px 8px 28px; background:rgba(255,255,255,.96); border:1px solid rgba(141,179,216,.48); border-radius:14px; font-size:12px; }
+    .station:before { content:""; position:absolute; left:8px; top:13px; width:12px; height:12px; border-radius:50%; background:#fff; border:4px solid var(--blue); }
+    .station.pass:before { border-color:var(--green); }
+    .station.warn:before { border-color:var(--amber); }
+    .station b { display:block; font-size:12px; color:#0f2942; }
+    .station small { display:block; color:#526b84; }
+    .board { display:grid; grid-template-columns: 140px repeat(4,minmax(140px,1fr)); gap: 10px; background:rgba(255,255,255,.75); border:1px solid rgba(141,179,216,.35); border-radius:18px; padding:14px; }
+    .board .head { font-size:12px; color:var(--blue); font-weight:900; padding:6px; }
+    .swim { display:contents; }
+    .swim > div { background:#fff; border:1px solid rgba(141,179,216,.45); border-radius:14px; padding:10px; min-height:72px; font-size:12px; }
+    .swim .r { font-weight:900; color:var(--ink); display:grid; place-items:center start; }
+    .heatmap { display:grid; grid-template-columns: 190px repeat(4,1fr); gap: 8px; border:1px solid rgba(141,179,216,.35); border-radius:18px; padding:14px; background:rgba(255,255,255,.78); }
+    .heatmap div { border-radius:12px; min-height:54px; padding:9px; font-size:12px; background:#fff; border:1px solid rgba(141,179,216,.42); }
+    .heatmap .h { color:var(--blue); font-weight:900; background:var(--blue-soft); }
+    .ok { background:var(--green-soft)!important; border-color:rgba(23,120,90,.38)!important; }
+    .warncell { background:var(--amber-soft)!important; border-color:rgba(152,101,6,.32)!important; }
+    .metro { border:1px solid rgba(141,179,216,.35); border-radius:18px; padding:18px; background:rgba(255,255,255,.78); display:grid; gap:22px; }
+    .metro-line { position:relative; display:grid; grid-template-columns: repeat(7,1fr); gap: 8px; align-items:start; padding-top:18px; }
+    .metro-line:before { content:""; position:absolute; left:6%; right:6%; top:29px; height:5px; border-radius:999px; background:linear-gradient(90deg,var(--blue),var(--violet),var(--green)); opacity:.65; }
+    .metro-stop { position:relative; z-index:1; text-align:center; font-size:12px; color:#36506a; }
+    .metro-dot { margin:0 auto 8px; width:24px; height:24px; border-radius:50%; background:#fff; border:6px solid var(--blue); box-shadow:0 0 0 4px rgba(255,255,255,.9); }
+    .metro-stop:nth-child(5) .metro-dot { border-color:var(--amber); }
+    .metro-stop:nth-child(6) .metro-dot, .metro-stop:nth-child(7) .metro-dot { border-color:var(--green); }
+    .matrix { margin-top: 22px; padding: 20px; }
+    table { width:100%; border-collapse:collapse; overflow:hidden; border-radius:14px; background:#fff; }
+    th, td { text-align:left; padding:12px; border-bottom:1px solid rgba(141,179,216,.28); vertical-align:top; font-size:13px; }
+    th { color:var(--blue); font-size:12px; }
+    .notes { margin-top:22px; padding:18px 20px; color:#3d5872; }
+    code { background:#eef6ff; border:1px solid rgba(141,179,216,.42); border-radius:8px; padding:1px 5px; }
+    @media (max-width: 900px) {
+      main { width: min(100% - 24px, 720px); }
+      .top-grid, .control-rail { grid-template-columns: 1fr; }
+      .lane { grid-template-columns:1fr; padding:10px 0; }
+      .lane:before { left:20px; right:auto; top:78px; bottom:10px; width:3px; height:auto; }
+      .station { margin-left: 26px; }
+      .board, .heatmap { grid-template-columns:1fr; }
+      .metro-line { grid-template-columns:1fr; }
+      .metro-line:before { left:12px; right:auto; top:18px; bottom:18px; width:5px; height:auto; }
+      .metro-stop { display:grid; grid-template-columns:36px 1fr; text-align:left; align-items:center; }
+      .metro-dot { margin:0; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition:none!important; animation:none!important; } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="top" aria-labelledby="title">
+    <div class="title-meta">
+      <span class="task-code">TASK_20260701_007</span>
+      <span class="skill-strip" title="本次使用的skill：superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion">本次使用的skill：superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion</span>
+    </div>
+    <div class="top-grid">
+      <div>
+        <h1 id="title">交付验收：brainstorming 阶段确认与任务边界复位门禁</h1>
+        <p class="lead">本页把用户确认的全局协作门禁收敛为可验收的规则链路：新任务先交互问答，用户确认后再进入下一阶段；每次修改类动作闭环后，下一项修改必须回到新的交互式起点。</p>
+        <div class="tabs" role="tablist" aria-label="交付验收图候选">
+          <button class="tab" role="tab" id="tab-a" aria-controls="candidate-a" aria-selected="true">A 首选：验收轨道</button>
+          <button class="tab" role="tab" id="tab-b" aria-controls="candidate-b" aria-selected="false">B R# 泳道看板</button>
+          <button class="tab" role="tab" id="tab-c" aria-controls="candidate-c" aria-selected="false">C 证据矩阵热区</button>
+          <button class="tab" role="tab" id="tab-d" aria-controls="candidate-d" aria-selected="false">D 地铁验收线路</button>
+        </div>
+      </div>
+      <aside class="task-handoff" aria-label="任务交付信息">
+        <div class="handoff-card"><b>本次修改的影响功能点</b><span>AGENTS-template 的 brainstorming 阶段门禁、同会话多任务复位、模板同步与回归断言。</span></div>
+        <div class="handoff-card"><b>待用户执行事项</b><span>请重新同步或重启对应 worker，让活跃会话注入最新模板；无需新增依赖。</span></div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="candidate-a" class="panel is-active" role="tabpanel" aria-labelledby="tab-a" tabindex="0">
+    <div class="panel-head"><span class="badge">A</span><div><h2>首选候选：需求到证据的验收轨道</h2><p class="panel-sub">按 R# 从“原始要求 → 模板变更 → 测试证据 → 判定 → 待执行”逐条签收。</p></div><span class="status">4 项通过，1 项待用户重启</span></div>
+    <div class="control-rail">
+      <div class="control-axis" aria-label="交付总控轴">
+        <div class="control-item"><b>改了什么</b><span>模板新增阶段确认与任务复位。</span></div>
+        <div class="control-item"><b>影响入口</b><span>后续 agent 全局协作规则。</span></div>
+        <div class="control-item"><b>如何验证</b><span>13 条模板迁移测试与同步检查。</span></div>
+        <div class="control-item"><b>脚本 / 重启</b><span>用户侧重启或重新同步 worker。</span></div>
+        <div class="control-item"><b>未覆盖点</b><span>运行中旧会话需用户重启后生效。</span></div>
+      </div>
+      <div class="track" aria-label="需求验收轨道">
+        <div class="lane"><div class="req">R1 阶段门禁</div><div class="station"><b>原始要求</b><small>任何任务进入下一阶段前先 brainstorming。</small></div><div class="station"><b>模板变更</b><small>AGENTS-template.md:15。</small></div><div class="station pass"><b>证据</b><small>tests:106。</small></div><div class="station pass"><b>判定</b><small>pass：文案已固化。</small></div><div class="station warn"><b>动作</b><small>重启后进入活跃提示词。</small></div></div>
+        <div class="lane"><div class="req">R2 用户确认</div><div class="station"><b>原始要求</b><small>用户确认方案或下一阶段后才结束问答。</small></div><div class="station"><b>模板变更</b><small>AGENTS-template.md:29。</small></div><div class="station pass"><b>证据</b><small>tests:107-108。</small></div><div class="station pass"><b>判定</b><small>pass：确认门禁明确。</small></div><div class="station"><b>动作</b><small>后续任务按新门禁执行。</small></div></div>
+        <div class="lane"><div class="req">R3 同目标例外</div><div class="station"><b>原始要求</b><small>同目标已确认时，“开始修复”才算确认。</small></div><div class="station"><b>模板变更</b><small>AGENTS-template.md:30。</small></div><div class="station pass"><b>证据</b><small>tests:109。</small></div><div class="station pass"><b>判定</b><small>pass：限定在同一目标。</small></div><div class="station"><b>动作</b><small>避免重复追问同一决策。</small></div></div>
+        <div class="lane"><div class="req">R4 任务复位</div><div class="station"><b>原始要求</b><small>修改闭环后，新修改回到新起点。</small></div><div class="station"><b>模板变更</b><small>AGENTS-template.md:31。</small></div><div class="station pass"><b>证据</b><small>tests:110-113。</small></div><div class="station pass"><b>判定</b><small>pass：禁止跨任务复用确认。</small></div><div class="station warn"><b>动作</b><small>用户重启后对新会话生效。</small></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="candidate-b" class="panel" role="tabpanel" aria-labelledby="tab-b" tabindex="0">
+    <div class="panel-head"><span class="badge">B</span><div><h2>备选候选：R# 泳道验收看板</h2><p class="panel-sub">把每条要求拆成独立泳道，便于逐项验收而不被总结果掩盖。</p></div><span class="status">适合审计</span></div>
+    <div class="board" aria-label="R# 泳道验收看板">
+      <div class="head">需求</div><div class="head">原始诉求</div><div class="head">模板锚点</div><div class="head">测试锚点</div><div class="head">判定 / 动作</div>
+      <div class="swim"><div class="r">R1</div><div>任何任务下一阶段前先 brainstorming。</div><div>AGENTS-template.md:15</div><div>tests:106</div><div class="ok">pass；待用户重启活跃 worker。</div></div>
+      <div class="swim"><div class="r">R2</div><div>只有用户确认后才结束交互问答。</div><div>AGENTS-template.md:29</div><div>tests:107-108</div><div class="ok">pass；后续按确认门禁执行。</div></div>
+      <div class="swim"><div class="r">R3</div><div>同目标已确认时才可接受“开始修复”。</div><div>AGENTS-template.md:30</div><div>tests:109</div><div class="ok">pass；未确认目标不得跳过。</div></div>
+      <div class="swim"><div class="r">R4</div><div>修改类动作闭环后，新任务重新起点。</div><div>AGENTS-template.md:31</div><div>tests:110-113</div><div class="warncell">pass + action；需要同步/重启后进入运行态。</div></div>
+    </div>
+  </section>
+
+  <section id="candidate-c" class="panel" role="tabpanel" aria-labelledby="tab-c" tabindex="0">
+    <div class="panel-head"><span class="badge">C</span><div><h2>备选候选：证据矩阵热区</h2><p class="panel-sub">适合快速判断“哪条要求由哪份证据证明”，避免把测试通过误当需求通过。</p></div><span class="status">证据聚焦</span></div>
+    <div class="heatmap" aria-label="证据矩阵热区">
+      <div class="h">要求 / 证据</div><div class="h">模板锚点</div><div class="h">回归断言</div><div class="h">运行验证</div><div class="h">旧模式反查</div>
+      <div>R1 阶段门禁</div><div class="ok">line 15</div><div class="ok">tests:106</div><div class="ok">13 passed</div><div class="ok">旧“复杂设计才 brainstorming”已替换。</div>
+      <div>R2 用户确认</div><div class="ok">line 29</div><div class="ok">tests:107-108</div><div class="ok">13 passed</div><div class="ok">未保留无确认进入下一阶段。</div>
+      <div>R3 同目标例外</div><div class="ok">line 30</div><div class="ok">tests:109</div><div class="ok">13 passed</div><div class="ok">“开始修复”只限同目标。</div>
+      <div>R4 任务复位</div><div class="ok">line 31</div><div class="ok">tests:110-113</div><div class="ok">template synced</div><div class="ok">跨任务复用确认被断言禁止。</div>
+    </div>
+  </section>
+
+  <section id="candidate-d" class="panel" role="tabpanel" aria-labelledby="tab-d" tabindex="0">
+    <div class="panel-head"><span class="badge">D</span><div><h2>备选候选：地铁站点式验收线路</h2><p class="panel-sub">用一条运行时行为线表达新规则的递进关系：请求、问答、确认、下一阶段、修改闭环、复位、新起点。</p></div><span class="status">最适合培训</span></div>
+    <div class="metro" aria-label="地铁站点式验收线路">
+      <div class="metro-line">
+        <div class="metro-stop"><div class="metro-dot"></div><b>用户请求</b><br><span>识别是否会进入下一阶段</span></div>
+        <div class="metro-stop"><div class="metro-dot"></div><b>brainstorming 问答</b><br><span>目标 / 范围 / 约束 / 验收</span></div>
+        <div class="metro-stop"><div class="metro-dot"></div><b>用户确认</b><br><span>确认方案或进入下一阶段</span></div>
+        <div class="metro-stop"><div class="metro-dot"></div><b>下一阶段</b><br><span>计划 / TDD / 实现 / 验证</span></div>
+        <div class="metro-stop"><div class="metro-dot"></div><b>修改完成</b><br><span>验证并交付 HTML / docs</span></div>
+        <div class="metro-stop"><div class="metro-dot"></div><b>任务复位</b><br><span>本目标闭环，不继承确认</span></div>
+        <div class="metro-stop"><div class="metro-dot"></div><b>新交互起点</b><br><span>新修改重新 brainstorming</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="matrix" aria-labelledby="compare-title">
+    <h2 id="compare-title">候选对比矩阵</h2>
+    <table>
+      <thead><tr><th>候选</th><th>可读性</th><th>事实承载</th><th>适用边界</th><th>风险</th></tr></thead>
+      <tbody>
+        <tr><td>A 验收轨道</td><td>逐条签收最清晰</td><td>强：每条 R# 绑定锚点与测试</td><td>默认交付验收</td><td>信息较多，需保持简洁</td></tr>
+        <tr><td>B 泳道看板</td><td>审计友好</td><td>强：列式对齐</td><td>需求较多时适用</td><td>容易像表格，需保留泳道关系</td></tr>
+        <tr><td>C 热区矩阵</td><td>快速扫证据</td><td>中强：突出覆盖与缺口</td><td>回归与反查旧模式</td><td>不适合表达完整流程</td></tr>
+        <tr><td>D 地铁线路</td><td>培训和宣导最直观</td><td>中：强调行为递进</td><td>解释门禁如何运行</td><td>证据粒度弱于 A/B</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="notes" aria-label="验证与回滚">
+    <p><b>验证命令：</b><code>python3.11 -m pytest -q tests/test_agents_template_migration.py</code> → 13 passed；<code>cmp -s AGENTS-template.md /Users/david/.config/vibego/agents/current/AGENTS-template.md</code> → template synced。<code>git diff --check</code> → passed。</p>
+    <p><b>回滚方式：</b>恢复 <code>AGENTS-template.md</code> 中本次新增的阶段门禁与任务复位三条规则，同步活跃模板，并按旧口径调整新增测试。</p>
+  </section>
+</main>
+<script>
+(function(){
+  const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+  const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
+  function activate(tab, updateHash = true){
+    tabs.forEach(t => t.setAttribute('aria-selected', String(t === tab)));
+    panels.forEach(p => p.classList.toggle('is-active', p.id === tab.getAttribute('aria-controls')));
+    if(updateHash) history.replaceState(null, '', '#' + tab.getAttribute('aria-controls'));
+    tab.focus({preventScroll:true});
+  }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => activate(tab));
+    tab.addEventListener('keydown', (event) => {
+      let next = index;
+      if(event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if(event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      else if(event.key === 'Home') next = 0;
+      else if(event.key === 'End') next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      activate(tabs[next]);
+    });
+  });
+  const hash = decodeURIComponent(location.hash || '').replace('#','');
+  const fromHash = tabs.find(t => t.getAttribute('aria-controls') === hash);
+  if(fromHash) activate(fromHash, false);
+})();
+</script>
+</body>
+</html>

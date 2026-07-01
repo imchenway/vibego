@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>需求决策：Product Design 建议作为全局提示词的按需路由补充</title>
+  <script>document.documentElement.classList.remove('no-js');document.documentElement.classList.add('js');</script>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+      --strong: rgba(78,127,173,.34);
+      --mask: rgba(255,255,255,.94);
+      --hairline: rgba(78,127,173,.18);
+      --ok: var(--green);
+      --warn: var(--amber);
+      --danger: var(--red);
+      --accent: var(--blue);
+    }
+    * { box-sizing: border-box; overflow-wrap: anywhere; }
+    html { min-height: 100%; scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.58;
+      min-height: 100vh;
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    a { color: var(--blue); }
+    main { width: min(1180px, calc(100vw - 40px)); margin: 32px auto 72px; display: grid; gap: 22px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin: 0 0 12px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }
+    h2 { font-size: 21px; line-height: 1.22; letter-spacing: -.02em; margin-bottom: 8px; }
+    h3 { font-size: 15px; line-height: 1.25; margin-bottom: 8px; }
+    .top, .candidate-panel, .comparison { border: 1px solid var(--hairline); border-radius: 28px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(2px); }
+    .top { padding: 24px; }
+    .title-meta { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; align-items: center; margin: 0 0 12px; max-width: 100%; }
+    .task-code-pill, .skill-strip { min-height: 26px; display: inline-flex; align-items: center; border: 1px solid rgba(141,179,216,.55); background: rgba(255,255,255,.92); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 760; color: var(--blue); }
+    .skill-strip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; color: #476078; }
+    .top-grid { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(360px, .92fr); gap: 22px; align-items: start; }
+    .top-title-column { min-width: 0; display: grid; gap: 12px; align-content: start; }
+    .lead { margin: 0; color: var(--muted); max-width: 76ch; }
+    .task-handoff { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .handoff-card { background: rgba(255,255,255,.92); border: 1px solid rgba(141,179,216,.52); border-radius: 16px; padding: 12px 14px; box-shadow: 0 8px 18px rgba(20,57,92,.04); }
+    .handoff-card strong { display: block; color: var(--blue); font-size: 12px; margin-bottom: 4px; }
+    .handoff-card span { display: block; color: #456078; font-size: 13px; line-height: 1.55; }
+    .candidate-tabs { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .candidate-tabs button { appearance: none; border: 1px solid rgba(141,179,216,.62); background: rgba(255,255,255,.94); color: #25425f; border-radius: 999px; padding: 9px 14px; font-weight: 780; cursor: pointer; font-size: 14px; box-shadow: 0 4px 12px rgba(20,57,92,.04); }
+    .candidate-tabs button[aria-selected="true"] { color: var(--green); border-color: rgba(23,120,90,.5); background: var(--green-soft); box-shadow: inset 0 0 0 1px rgba(23,120,90,.12); }
+    .candidate-tabs button:focus-visible, a:focus-visible { outline: 3px solid rgba(31,111,178,.28); outline-offset: 2px; }
+    .candidate-panel { padding: 20px; display: grid; gap: 16px; }
+    .js .candidate-panel { display: none; }
+    .js .candidate-panel.active { display: grid; }
+    .panel-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+    .letter { width: 34px; height: 34px; border-radius: 999px; border: 2px solid rgba(31,111,178,.28); display: grid; place-items: center; color: var(--blue); font-weight: 850; background: #fff; }
+    .panel-head p { color: var(--muted); margin: 2px 0 0; }
+    .badge { justify-self: end; border: 1px solid rgba(23,120,90,.42); color: var(--green); background: var(--green-soft); border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 760; white-space: nowrap; }
+    .diagram { position: relative; border: 1px solid rgba(141,179,216,.42); border-radius: 22px; padding: 16px; background:
+        linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px),
+        rgba(255,255,255,.72);
+      background-size: 22px 22px, 22px 22px, auto; }
+    .node { position: relative; z-index: 1; background: #fff; border: 1px solid rgba(141,179,216,.62); border-radius: 16px; padding: 12px 13px; min-height: 58px; box-shadow: 0 8px 18px rgba(20,57,92,.045); }
+    .node strong { display: block; font-size: 13px; line-height: 1.35; margin-bottom: 4px; color: #122a44; }
+    .node span, .node p { color: #496176; font-size: 13px; line-height: 1.5; margin: 0; }
+    .node.ok { border-color: rgba(23,120,90,.48); box-shadow: inset 4px 0 0 rgba(23,120,90,.8), 0 8px 18px rgba(20,57,92,.045); }
+    .node.warn { border-color: rgba(152,101,6,.45); box-shadow: inset 4px 0 0 rgba(152,101,6,.72), 0 8px 18px rgba(20,57,92,.045); }
+    .node.no { border-color: rgba(166,58,58,.34); box-shadow: inset 4px 0 0 rgba(166,58,58,.65), 0 8px 18px rgba(20,57,92,.045); }
+    .arrow, .arrow-down { color: var(--blue); font-weight: 900; display: grid; place-items: center; min-height: 32px; }
+    .arrow::before { content: "→"; }
+    .arrow-down::before { content: "↓"; }
+    .tree { display: grid; gap: 10px; }
+    .tree-root { width: min(680px, 100%); margin: 0 auto; text-align: center; }
+    .branch-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+    .decision-outcome { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 12px; align-items: stretch; margin-top: 8px; }
+    .pathline { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 10px; align-items: stretch; }
+    .pathline .step { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: center; }
+    .pathline .step:last-child { grid-template-columns: minmax(0,1fr); }
+    .option-grid { display: grid; grid-template-columns: 1.1fr repeat(4, minmax(0,1fr)); border: 1px solid rgba(141,179,216,.45); border-radius: 18px; overflow: hidden; background: rgba(255,255,255,.85); }
+    .option-grid > div { padding: 10px; border-right: 1px solid rgba(141,179,216,.25); border-bottom: 1px solid rgba(141,179,216,.25); font-size: 13px; min-height: 54px; }
+    .option-grid > div:nth-child(5n) { border-right: 0; }
+    .option-grid .head { color: var(--blue); font-weight: 850; background: rgba(232,243,255,.78); }
+    .option-grid .rec { background: var(--green-soft); color: #245144; font-weight: 760; }
+    .option-grid .risk { background: var(--amber-soft); color: #5f4a19; }
+    .main-path-binding { margin-top: 14px; display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; align-items: center; }
+    .quadrant { min-height: 460px; position: relative; overflow: hidden; }
+    .axis-x, .axis-y { position: absolute; background: rgba(31,111,178,.24); z-index: 0; }
+    .axis-x { left: 7%; right: 7%; top: 52%; height: 2px; }
+    .axis-y { top: 8%; bottom: 10%; left: 50%; width: 2px; }
+    .axis-label { position: absolute; z-index: 2; color: var(--blue); font-weight: 820; font-size: 12px; background: rgba(255,255,255,.92); border: 1px solid rgba(141,179,216,.42); border-radius: 999px; padding: 4px 9px; }
+    .axis-label.top { left: 50%; transform: translateX(-50%); top: 6px; }
+    .axis-label.right { right: 10px; top: calc(52% + 8px); }
+    .bubble { position: absolute; z-index: 1; width: min(300px, 42%); }
+    .bubble.low-left { left: 7%; bottom: 10%; }
+    .bubble.high-left { left: 7%; top: 12%; }
+    .bubble.low-right { right: 7%; bottom: 10%; }
+    .bubble.high-right { right: 7%; top: 12%; }
+    .recommend-route { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 10px; align-items: stretch; }
+    .route-step { display: grid; grid-template-rows: auto 1fr auto; gap: 8px; }
+    .step-num { width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center; background: var(--blue-soft); color: var(--blue); font-weight: 850; border: 1px solid rgba(31,111,178,.28); }
+    .side-rails { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-top: 14px; }
+    .evidence { display: grid; gap: 10px; }
+    .evidence-row { display: grid; grid-template-columns: 180px minmax(0,1fr) 110px; gap: 10px; align-items: stretch; }
+    .evidence-row > div { background: rgba(255,255,255,.92); border: 1px solid rgba(141,179,216,.45); border-radius: 14px; padding: 10px 12px; font-size: 13px; }
+    .evidence-row.head > div { color: var(--blue); font-weight: 850; background: rgba(232,243,255,.86); }
+    .comparison { padding: 20px; display: grid; gap: 12px; }
+    .compare-grid { display: grid; grid-template-columns: 1.1fr repeat(4, minmax(0,1fr)); gap: 0; border: 1px solid rgba(141,179,216,.45); border-radius: 18px; overflow: hidden; background: rgba(255,255,255,.86); }
+    .compare-grid > div { padding: 10px; border-right: 1px solid rgba(141,179,216,.25); border-bottom: 1px solid rgba(141,179,216,.25); font-size: 13px; }
+    .compare-grid > div:nth-child(5n) { border-right: 0; }
+    .compare-grid .head { color: var(--blue); font-weight: 850; background: rgba(232,243,255,.78); }
+    .codebox { background: #fff; border: 1px solid rgba(141,179,216,.5); border-radius: 16px; padding: 12px 14px; color: #2d435a; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+    .legend span { border: 1px solid rgba(141,179,216,.45); background: rgba(255,255,255,.92); border-radius: 999px; padding: 4px 9px; font-size: 12px; color: #496176; }
+    @media (max-width: 900px) {
+      main { width: min(100% - 28px, 1180px); margin-top: 18px; }
+      .top-grid, .decision-outcome, .branch-grid, .pathline, .main-path-binding, .recommend-route, .side-rails { grid-template-columns: 1fr; }
+      .panel-head { grid-template-columns: auto minmax(0,1fr); }
+      .badge { justify-self: start; grid-column: 2; }
+      .option-grid, .compare-grid { grid-template-columns: 1fr; }
+      .option-grid > div, .compare-grid > div { border-right: 0; }
+      .evidence-row { grid-template-columns: 1fr; }
+      .quadrant { min-height: auto; display: grid; gap: 10px; }
+      .axis-x, .axis-y, .axis-label { display: none; }
+      .bubble { position: relative; width: auto; left: auto !important; right: auto !important; top: auto !important; bottom: auto !important; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="top" aria-labelledby="title">
+      <div class="title-meta">
+        <span class="task-code-pill">TASK_20260701_006</span>
+        <span class="skill-strip" title="本次使用的skill：product-design:index、superpowers:brainstorming、vibe-diagram、superpowers:verification-before-completion">本次使用的skill：product-design:index、superpowers:brainstorming、vibe-diagram、superpowers:verification-before-completion</span>
+      </div>
+      <div class="top-grid">
+        <div class="top-title-column">
+          <div>
+            <h1 id="title">需求决策：Product Design 建议作为全局提示词的按需路由补充</h1>
+            <p class="lead">结论：已按“条件路由”融入 <strong>AGENTS-template.md</strong>：Product Design 只有在当前环境已提供时才按需使用，不会因模板自动安装；缺失时必须回退到现有 <strong>vibe-diagram</strong> 与 <strong>frontend-skill + impeccable + accessibility</strong> 链路。平台入口侧要求已从全局模板移出，交给发送侧前缀或运行时适配层注入。</p>
+          </div>
+          <nav class="candidate-tabs" role="tablist" aria-label="需求决策候选图型">
+            <button id="tab-a" role="tab" aria-selected="true" aria-controls="candidate-a" data-target="candidate-a">A 首选：决策树</button>
+            <button id="tab-b" role="tab" aria-selected="false" aria-controls="candidate-b" data-target="candidate-b">B 方案矩阵 + 主路径</button>
+            <button id="tab-c" role="tab" aria-selected="false" aria-controls="candidate-c" data-target="candidate-c">C 取舍象限</button>
+            <button id="tab-d" role="tab" aria-selected="false" aria-controls="candidate-d" data-target="candidate-d">D 推荐路径图</button>
+          </nav>
+        </div>
+        <aside class="task-handoff" aria-label="任务交付信息">
+          <div class="handoff-card"><strong>本次修改的影响功能点</strong><span>已修改 AGENTS-template.md 与当前 active 模板：Product Design 改为“若当前环境已提供”的条件路由；平台入口文案移出全局模板；Reply contract 字段保持移除；回归测试已更新。</span></div>
+          <div class="handoff-card"><strong>待用户执行事项</strong><span>请重新同步或重启对应 worker，让活跃 AGENTS 注入最新模板；本轮已完成聚焦测试。</span></div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="candidate-a" class="candidate-panel active" role="tabpanel" aria-labelledby="tab-a">
+      <div class="panel-head">
+        <div class="letter">A</div>
+        <div><h2>首选候选：决策树</h2><p>适合回答“Product Design 到底什么时候该接管，什么时候不该接管”。</p></div>
+        <span class="badge">推荐首选</span>
+      </div>
+      <div class="diagram tree" aria-label="Product Design 融入全局提示词决策树">
+        <div class="node tree-root ok"><strong>用户问题：能否融入全局提示词？</strong><span>判断不是“能不能用”，而是“在哪些触发词下接管、哪些场景继续留给现有链路”。</span></div>
+        <div class="arrow-down" aria-hidden="true"></div>
+        <div class="branch-grid">
+          <div class="node ok"><strong>产品体验 / UX 研究 / 用户摩擦</strong><span>Product Design research：源证据扫描、痛点聚类、机会地图。证据：research/SKILL.md:25-33。</span></div>
+          <div class="node ok"><strong>用户流程审计 / 体验评审</strong><span>Product Design audit：先截图取证，再把发现绑定到步骤/截图。证据：audit/SKILL.md:8-17。</span></div>
+          <div class="node ok"><strong>视觉方向 / 原型 / 重设计 / URL 克隆</strong><span>Product Design：仅在当前环境已提供时使用；get-context → ideate/prototype；缺视觉目标时必须 3 个方向并等待选择。</span></div>
+          <div class="node warn"><strong>仓库前端小修 / 技术图 / HTML 图</strong><span>继续走现有链路：TDD + frontend-skill，或 vibe-diagram；Product Design 不替换。</span></div>
+        </div>
+        <div class="arrow-down" aria-hidden="true"></div>
+        <div class="decision-outcome">
+          <div class="node ok"><strong>融入方式：新增条件按需路由</strong><span>在 Skill routing 里写“若当前环境已提供”；在 Visual/frontend contract 里写清边界与全局 HTML-first 优先级。</span></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node no"><strong>不要做：全局强制默认</strong><span>会把小修小补、排障图、交付验收图拖进 brief/visual-target/三方案流程，违背 Vibego 快速 HTML-first 交付。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="candidate-b" class="candidate-panel" role="tabpanel" aria-labelledby="tab-b">
+      <div class="panel-head">
+        <div class="letter">B</div>
+        <div><h2>备选候选：方案矩阵 + 主路径绑定</h2><p>把 4 个整合方案和落地路径绑在一起，便于做提示词变更决策。</p></div>
+      </div>
+      <div class="diagram" aria-label="Product Design 融入方案矩阵">
+        <div class="option-grid">
+          <div class="head">方案</div><div class="head">收益</div><div class="head">成本</div><div class="head">风险</div><div class="head">判定</div>
+          <div><strong>O1 不融入</strong></div><div>保持当前稳定</div><div>零改动</div><div class="risk">错过 UX 研究、审计、原型、视觉 QA 的专门门禁</div><div>不推荐</div>
+          <div><strong>O2 按需路由补充</strong></div><div class="rec">覆盖 Product Design 强项，同时保留 TDD/HTML-first</div><div>只改路由、可用性条件和边界说明</div><div>需要补测试防止误触发</div><div class="rec">推荐</div>
+          <div><strong>O3 替换前端路由</strong></div><div>所有 UI 设计流程更统一</div><div class="risk">小修小补也被 brief/三方案拖慢</div><div class="risk">可能绕过现有前端技能与仓库验证</div><div>不推荐</div>
+          <div><strong>O4 只显式 @Product Design 才用</strong></div><div>最保守</div><div>低</div><div class="risk">用户自然语言“审计/原型/重设计”不能自动受益</div><div>次选</div>
+        </div>
+        <div class="main-path-binding" aria-label="推荐方案主路径">
+          <div class="node ok"><strong>1 触发词</strong><span>UX 研究 / 用户流审计 / 视觉方向 / 原型 / URL 克隆 / 设计 QA。</span></div>
+          <div class="node ok"><strong>2 Product Design 门禁</strong><span>brief gate、视觉目标、三方向选择、截图证据、design-qa。</span></div>
+          <div class="node warn"><strong>3 Vibego 覆盖</strong><span>全局 HTML-first、vibe-diagram、TDD 与前端技能优先级保持。</span></div>
+          <div class="node ok"><strong>4 测试固化</strong><span>AGENTS-template migration / injection 测试锁住触发边界。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="candidate-c" class="candidate-panel" role="tabpanel" aria-labelledby="tab-c">
+      <div class="panel-head">
+        <div class="letter">C</div>
+        <div><h2>备选候选：取舍象限</h2><p>用“覆盖收益 × 流程侵入成本”解释为什么推荐按需路由，而不是全局替换。</p></div>
+      </div>
+      <div class="diagram quadrant" aria-label="Product Design 融入取舍象限">
+        <div class="axis-y" aria-hidden="true"></div><div class="axis-x" aria-hidden="true"></div>
+        <div class="axis-label top">覆盖收益 ↑</div><div class="axis-label right">流程侵入成本 →</div>
+        <div class="node bubble high-left ok"><strong>推荐：按需路由补充</strong><span>收益高：覆盖研究、审计、视觉探索、原型、QA；成本可控：只在命中产品设计类需求时启用。</span></div>
+        <div class="node bubble high-right warn"><strong>不推荐：替换所有前端任务</strong><span>收益看似高，但 brief gate、视觉目标和三方案流程会侵入小修/现有代码实现。</span></div>
+        <div class="node bubble low-left"><strong>保守：只显式 @Product Design</strong><span>成本最低，但自然语言“审计这个流程 / 做三版原型”无法自动走专业工作流。</span></div>
+        <div class="node bubble low-right no"><strong>最差：全局默认 Product Design</strong><span>把排障图、技术设计、交付验收、仓库 bugfix 误导到产品原型流程。</span></div>
+      </div>
+    </section>
+
+    <section id="candidate-d" class="candidate-panel" role="tabpanel" aria-labelledby="tab-d">
+      <div class="panel-head">
+        <div class="letter">D</div>
+        <div><h2>备选候选：推荐路径图</h2><p>本图现在对应已执行路径：模板已加入条件路由并移出平台入口文案，后续只需同步/重启让 worker 生效。</p></div>
+      </div>
+      <div class="diagram" aria-label="Product Design 全局提示词融入推荐路径">
+        <div class="recommend-route">
+          <div class="route-step"><span class="step-num">1</span><div class="node ok"><strong>新增条件 Skill routing</strong><span>产品体验、UX 研究、审计、视觉方向、原型、重设计、URL/Figma/截图转原型；仅当前环境已提供时启用。</span></div><div class="arrow" aria-hidden="true"></div></div>
+          <div class="route-step"><span class="step-num">2</span><div class="node ok"><strong>写入 Product Design gate</strong><span>先确认 brief；无视觉目标先 3 个方向；选择前不构建。</span></div><div class="arrow" aria-hidden="true"></div></div>
+          <div class="route-step"><span class="step-num">3</span><div class="node warn"><strong>保留全局优先级</strong><span>全局 HTML-first、vibe-diagram、TDD、frontend-skill 不被 Product Design 覆盖。</span></div><div class="arrow" aria-hidden="true"></div></div>
+          <div class="route-step"><span class="step-num">4</span><div class="node ok"><strong>补测试断言</strong><span>锁定新增路由、brief gate、visual target gate、HTML-first 优先级。</span></div><div class="arrow" aria-hidden="true"></div></div>
+          <div class="route-step"><span class="step-num">5</span><div class="node ok"><strong>同步/重启</strong><span>让活跃 AGENTS 注入最新规则；否则本轮只是模板变更。</span></div><div class="arrow" aria-hidden="true"></div></div>
+          <div class="route-step"><span class="step-num">6</span><div class="node ok"><strong>回归观察</strong><span>看自然语言触发是否准确，避免把技术图/小修误路由。</span></div></div>
+        </div>
+        <div class="side-rails">
+          <div class="node"><strong>继续由 vibe-diagram 处理</strong><span>架构、流程、时序、排障、交付验收、单文件 HTML 图。</span></div>
+          <div class="node"><strong>继续由前端技能处理</strong><span>现有仓库页面、组件、布局、样式、交互的代码实现与修复。</span></div>
+          <div class="node"><strong>Product Design 只接产品原型路径</strong><span>研究、审计、三方向视觉、原型、URL 克隆、image-to-code、design-qa。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="comparison" aria-labelledby="evidence-title">
+      <h2 id="evidence-title">事实来源与建议写入文本</h2>
+      <div class="legend"><span>调研范围：本地 OpenAI-curated Product Design plugin v0.1.47</span><span>本轮已改 AGENTS-template；平台入口文案已移出</span><span>证据以文件路径 + 行号锚点为准</span></div>
+      <div class="evidence" aria-label="关键证据矩阵">
+        <div class="evidence-row head"><div>判断</div><div>证据锚点</div><div>结论</div></div>
+        <div class="evidence-row"><div>当前全局路由缺口</div><div>/Users/david/.config/vibego/agents/current/AGENTS-template.md:13-23 已有 superpowers、vibe-diagram、frontend-skill 等路由；未见 Product Design。</div><div>可补充</div></div>
+        <div class="evidence-row"><div>HTML-first 优先级</div><div>/Users/david/.config/vibego/agents/current/AGENTS-template.md:34-54 要求实质内容写入 HTML，图形表达由 vibe-diagram 负责。</div><div>必须保留</div></div>
+        <div class="evidence-row"><div>Product Design 能力</div><div>README.md:19-31 覆盖新原型、URL 克隆、选中设计实现、视觉方向、重设计、流程审计、用户摩擦研究、原型分享。</div><div>适合补位</div></div>
+        <div class="evidence-row"><div>核心硬门禁</div><div>skills/index/SKILL.md:40-49、references/critical-overrides.md:16-22 明确 brief gate 与 “No Visual Target, No Build”。</div><div>需写清</div></div>
+        <div class="evidence-row"><div>落地边界</div><div>image-to-code/SKILL.md:23-29 要求选中视觉目标；design-qa/SKILL.md:12-19 要求源视觉目标和渲染实现，否则 blocked。</div><div>不能泛化</div></div>
+      </div>
+      <div class="legend"><span>验证：python3.11 -m pytest -q tests/test_agents_template_migration.py → 12 passed</span><span>验证：git diff --check → exit 0</span></div>
+      <h3>当前已加入全局提示词的关键文本</h3>
+      <div class="codebox">- 产品体验、UX 研究、用户流程审计、视觉方向探索、原型/重设计/URL 克隆、截图/Figma/ImageGen 到可交互原型、原型视觉 QA：若当前环境已提供 OpenAI Product Design，则按需使用；不会因本模板自动安装，缺失时不得假装可用，应回退到现有前端/视觉链路；使用时必须先确认 brief，缺少视觉目标时先生成 3 个方向并等待用户选择，不得从文字 brief 直接实现；落地代码仍遵守 superpowers:test-driven-development、frontend-skill、impeccable、accessibility 与本仓库验证门禁。
+
+- Product Design 负责产品设计前置、视觉探索、原型化和视觉 QA；正式仓库实现仍以本仓源码、测试、docs 和必要规约文件为交付边界。全局 HTML-first 交付优先级高于 Product Design 的普通聊天输出格式。</div>
+      <div class="compare-grid" aria-label="候选图型对比矩阵">
+        <div class="head">候选</div><div class="head">可读性</div><div class="head">事实承载</div><div class="head">适用边界</div><div class="head">风险</div>
+        <div>A 决策树</div><div>最直观回答“何时触发”</div><div>能把门禁绑定到分支</div><div>适合全局提示词路由判断</div><div>细节证据需靠矩阵补充</div>
+        <div>B 方案矩阵</div><div>适合比较 4 个方案</div><div>证据和收益/成本并列清楚</div><div>适合决策评审</div><div>路径感弱于决策树</div>
+        <div>C 取舍象限</div><div>能解释为什么不全局替换</div><div>事实密度中等</div><div>适合向上沟通取舍</div><div>坐标本身带主观判断</div>
+        <div>D 推荐路径</div><div>适合实施前确认步骤</div><div>能承载测试/同步动作</div><div>适合“开始实施”后的计划</div><div>不是首轮判断最优图</div>
+      </div>
+    </section>
+  </main>
+  <script>
+    (function(){
+      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+      const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
+      function activate(id, push=true){
+        const tab = tabs.find(t => t.dataset.target === id) || tabs[0];
+        if(!tab) return;
+        const target = tab.dataset.target;
+        tabs.forEach(t => { t.setAttribute('aria-selected', String(t === tab)); t.tabIndex = t === tab ? 0 : -1; });
+        panels.forEach(p => p.classList.toggle('active', p.id === target));
+        if(push && history.replaceState) history.replaceState(null, '', '#' + target);
+      }
+      tabs.forEach((tab, idx) => {
+        tab.addEventListener('click', () => activate(tab.dataset.target));
+        tab.addEventListener('keydown', (event) => {
+          let next = idx;
+          if(event.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+          else if(event.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+          else if(event.key === 'Home') next = 0;
+          else if(event.key === 'End') next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          tabs[next].focus();
+          activate(tabs[next].dataset.target);
+        });
+      });
+      const hash = decodeURIComponent(location.hash || '').replace('#','');
+      activate(hash || 'candidate-a', false);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：vibe-diagram 规则沉淀逐项审计</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; overflow-wrap: anywhere; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+      min-height: 100vh;
+    }
+    a { color: var(--blue); }
+    main { width: min(1180px, calc(100vw - 40px)); margin: 36px auto 72px; }
+    .top, .candidate-panel, .comparison { background: var(--panel); border: 1px solid rgba(141,179,216,.42); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .top { padding: 24px; margin-bottom: 24px; }
+    .title-meta{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:10px;margin-bottom:12px;max-width:100%;}
+    .task-code-pill,.skill-strip{border:1px solid rgba(141,179,216,.55);background:rgba(255,255,255,.92);border-radius:999px;padding:5px 10px;font-size:12px;font-weight:750;color:var(--blue);}
+    .skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:#476078;}
+    h1 { margin: 0 0 14px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }
+    .top-grid { display: grid; grid-template-columns: minmax(0,1.28fr) minmax(340px,.72fr); gap: 20px; align-items: start; }
+    .top-title-column { display: grid; gap: 12px; align-content: start; min-width: 0; }
+    .top-title-column .candidate-tabs { margin-top: 2px; }
+    .lead { margin: 0; color: #43566c; font-size: 15px; line-height: 1.7; max-width: 72ch; }
+    .task-handoff { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .task-handoff-card { background: rgba(255,255,255,.96); border: 1px solid rgba(141,179,216,.5); border-radius: 16px; padding: 12px 14px; }
+    .task-handoff-card strong { display: block; color: var(--blue); font-size: 12px; margin-bottom: 6px; }
+    .task-handoff-card span { display: block; color: #475b70; font-size: 13px; line-height: 1.55; }
+    .candidate-tabs { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0 0; }
+    .candidate-tabs button { min-height: 38px; border: 1px solid rgba(141,179,216,.6); background: rgba(255,255,255,.95); border-radius: 999px; padding: 8px 14px; color: var(--ink); font-weight: 800; cursor: pointer; }
+    .candidate-tabs button[aria-selected="true"] { color: var(--green); border-color: rgba(23,120,90,.55); background: rgba(233,248,242,.86); box-shadow: 0 8px 18px rgba(23,120,90,.08); }
+    .candidate-tabs button:focus-visible, .station:focus-visible { outline: 3px solid rgba(31,111,178,.32); outline-offset: 3px; }
+    .js .candidate-panel[hidden] { display: none; }
+    .candidate-panel { margin-top: 24px; padding: 22px; }
+    .panel-head { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: start; margin-bottom: 20px; }
+    .badge { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 999px; border: 1px solid var(--line); color: var(--blue); background: #fff; font-weight: 850; }
+    h2 { margin: 0; font-size: 20px; line-height: 1.25; }
+    .sub { margin: 5px 0 0; color: var(--muted); line-height: 1.55; }
+    .status-pass { justify-self: end; border: 1px solid rgba(23,120,90,.55); background: var(--green-soft); color: var(--green); border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 850; }
+    .track, .swimboard, .heatmap-wrap, .metro-wrap {
+      position: relative;
+      border: 1px solid rgba(141,179,216,.38);
+      border-radius: 18px;
+      padding: 18px;
+      background:
+        linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px),
+        rgba(255,255,255,.82);
+      background-size: 22px 22px, 22px 22px, auto;
+    }
+    .track-head, .lane { display: grid; grid-template-columns: 155px repeat(5, minmax(110px,1fr)); gap: 10px; align-items: center; }
+    .track-head { color: var(--blue); font-size: 12px; font-weight: 850; padding: 0 0 10px; }
+    .lane { position: relative; padding: 12px 0; border-top: 1px solid rgba(141,179,216,.28); }
+    .lane::before { content: ""; position: absolute; left: 168px; right: 20px; top: 50%; height: 2px; background: linear-gradient(90deg, rgba(31,111,178,.28), rgba(23,120,90,.35)); z-index: 0; }
+    .lane-title { font-weight: 850; color: var(--ink); background: rgba(255,255,255,.98); padding: 8px 9px; border-radius: 12px; border: 1px solid rgba(141,179,216,.38); }
+    .station { position: relative; z-index: 1; min-height: 76px; border-radius: 14px; padding: 11px 10px 10px; background: #fff; border: 1px solid rgba(141,179,216,.45); box-shadow: 0 8px 18px rgba(20,57,92,.05); }
+    .station::before { content: ""; position: absolute; width: 11px; height: 11px; left: 10px; top: -7px; border-radius: 999px; background: var(--blue); border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(31,111,178,.35); }
+    .station strong { display: block; font-size: 12px; margin-bottom: 5px; }
+    .station span { display: block; font-size: 12px; color: #4a5f74; line-height: 1.45; }
+    .pass .station::before, .pass.station::before { background: var(--green); }
+    .warn .station::before, .warn.station::before { background: var(--amber); }
+    .swimboard { display: grid; grid-template-columns: 150px repeat(4, 1fr); gap: 0; padding: 0; overflow: hidden; }
+    .swimboard > div { min-height: 78px; padding: 12px; border-right: 1px solid rgba(141,179,216,.28); border-bottom: 1px solid rgba(141,179,216,.28); background: rgba(255,255,255,.88); }
+    .swimboard .head { color: var(--blue); font-weight: 850; font-size: 12px; background: rgba(232,243,255,.78); min-height: 46px; }
+    .swimboard .req { font-weight: 850; color: var(--ink); }
+    .swimboard .cell { font-size: 12px; color: #4d6177; line-height: 1.5; }
+    .heatmap { width: 100%; border-collapse: separate; border-spacing: 0; overflow: hidden; border-radius: 14px; background: #fff; }
+    .heatmap th, .heatmap td { border-right: 1px solid rgba(141,179,216,.28); border-bottom: 1px solid rgba(141,179,216,.28); padding: 11px 10px; text-align: left; font-size: 12px; vertical-align: top; }
+    .heatmap th { color: var(--blue); background: rgba(232,243,255,.82); }
+    .heatmap .ok { background: var(--green-soft); color: var(--green); font-weight: 850; }
+    .heatmap .warn { background: var(--amber-soft); color: var(--amber); font-weight: 850; }
+    .metro { position: relative; display: grid; grid-template-columns: 170px 1fr; gap: 18px; }
+    .metro-lines { position: relative; padding: 16px 0 16px 28px; }
+    .metro-lines::before { content: ""; position: absolute; left: 42px; top: 24px; bottom: 24px; width: 5px; border-radius: 999px; background: linear-gradient(180deg, var(--blue), var(--green)); }
+    .stop { position: relative; margin: 0 0 18px 42px; padding: 12px 14px; background: #fff; border: 1px solid rgba(141,179,216,.45); border-radius: 14px; min-height: 60px; }
+    .stop::before { content: ""; position: absolute; left: -33px; top: 18px; width: 16px; height: 16px; border-radius: 999px; background: #fff; border: 4px solid var(--blue); }
+    .stop.done::before { border-color: var(--green); }
+    .stop strong { display: block; font-size: 13px; }
+    .stop span { display: block; margin-top: 4px; font-size: 12px; color: #4b6075; line-height: 1.5; }
+    .legend { background: rgba(255,255,255,.96); border: 1px solid rgba(141,179,216,.38); border-radius: 16px; padding: 14px; align-self: start; }
+    .legend h3 { margin: 0 0 10px; font-size: 14px; }
+    .legend p { margin: 8px 0; font-size: 12px; line-height: 1.55; color: #4a5d72; }
+    .comparison { margin-top: 24px; padding: 20px; }
+    .comparison h2 { margin-bottom: 12px; }
+    .compare-grid { display: grid; grid-template-columns: 160px repeat(4, 1fr); border: 1px solid rgba(141,179,216,.32); border-radius: 16px; overflow: hidden; }
+    .compare-grid div { padding: 12px; border-right: 1px solid rgba(141,179,216,.24); border-bottom: 1px solid rgba(141,179,216,.24); background: rgba(255,255,255,.9); font-size: 12px; line-height: 1.5; }
+    .compare-grid .head { color: var(--blue); font-weight: 850; background: rgba(232,243,255,.82); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; color: #23445f; }
+    @media (max-width: 900px) {
+      main { width: min(100% - 24px, 780px); margin-top: 18px; }
+      .top-grid, .panel-head, .metro { grid-template-columns: 1fr; }
+      .status-pass { justify-self: start; }
+      .track-head { display: none; }
+      .lane { grid-template-columns: 1fr; }
+      .lane::before { left: 22px; right: auto; top: 78px; bottom: 18px; height: auto; width: 2px; }
+      .station { margin-left: 28px; }
+      .swimboard, .compare-grid { grid-template-columns: 1fr; }
+      .swimboard .head { display: none; }
+      .heatmap-wrap { overflow-x: auto; }
+      .title-meta{grid-template-columns:1fr;}
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="top" aria-labelledby="title">
+      <div class="title-meta">
+        <span class="task-code-pill">TASK_20260701_005</span>
+        <span class="skill-strip" title="本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、frontend-skill、impeccable、accessibility、vibe-diagram、superpowers:verification-before-completion">本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、frontend-skill、impeccable、accessibility、vibe-diagram、superpowers:verification-before-completion</span>
+      </div>
+    <div class="top-grid">
+      <div class="top-title-column">
+        <h1 id="title">交付验收：vibe-diagram 规则沉淀逐项审计</h1>
+        <p class="lead">结论：用户连续提出的候选全集、按钮切换、参考配色、右上交付卡片、标题顶部元信息、紧凑双列和防空白要求已经沉淀进 skill、测试和样例。审计过程中发现“输出前自检”缺一组最新布局反查项，本轮已补齐并用测试锁定。</p>
+        <div class="candidate-tabs" role="tablist" aria-label="交付验收候选图型">
+        <button id="tab-candidate-a" role="tab" aria-selected="true" aria-controls="candidate-a" data-candidate-target="candidate-a">A 首选：验收轨道</button>
+        <button id="tab-candidate-b" role="tab" aria-selected="false" aria-controls="candidate-b" data-candidate-target="candidate-b">B R# 泳道看板</button>
+        <button id="tab-candidate-c" role="tab" aria-selected="false" aria-controls="candidate-c" data-candidate-target="candidate-c">C 证据矩阵热区</button>
+        <button id="tab-candidate-d" role="tab" aria-selected="false" aria-controls="candidate-d" data-candidate-target="candidate-d">D 地铁验收线路</button>
+      </div>
+      </div>
+      <aside class="task-handoff" aria-label="任务交付信息">
+          <div class="task-handoff-card"><strong>本次修改的影响功能点</strong><span>补强 vibe-diagram 输出前自检，新增测试断言，并生成规则沉淀审计 HTML。</span></div>
+          <div class="task-handoff-card"><strong>待用户执行事项</strong><span>请重新同步或重启 Vibego worker，让活跃 AGENTS 注入最新 skill；无需新增依赖。</span></div>
+        </aside>
+    </div>
+  </section>
+
+    <section class="candidate-panel" id="candidate-a" role="tabpanel" aria-labelledby="tab-candidate-a">
+      <div class="panel-head"><div class="badge">A</div><div><h2>首选候选：需求到证据的验收轨道</h2><p class="sub">按“要求 → skill 锚点 → 测试锚点 → 样例锚点 → 判定”逐行检查。</p></div><div class="status-pass">7 项通过，1 项本轮补齐</div></div>
+      <div class="track" aria-label="规则沉淀验收轨道">
+        <div class="track-head"><div>需求</div><div>用户原始诉求</div><div>skill 锚点</div><div>测试锚点</div><div>样例锚点</div><div>判定</div></div>
+        <div class="lane pass"><div class="lane-title">R1 候选全集</div><div class="station"><strong>原始要求</strong><span>每次生成首选和全部备选。</span></div><div class="station"><strong>SKILL.md:47-79</strong><span>校准模式和 11 类候选表。</span></div><div class="station"><strong>tests:165-197</strong><span>候选全集和 reference 覆盖。</span></div><div class="station"><strong>001/002/003</strong><span>candidate panels 和 tabs。</span></div><div class="station"><strong>pass</strong><span>已沉淀。</span></div></div>
+        <div class="lane pass"><div class="lane-title">R2 按钮切换</div><div class="station"><strong>原始要求</strong><span>候选通过按钮切换。</span></div><div class="station"><strong>SKILL.md:52-54</strong><span>tablist、hash、键盘、无 JS 降级。</span></div><div class="station"><strong>tests:247-262</strong><span>交互语义断言。</span></div><div class="station"><strong>HTML samples</strong><span>role=tablist / tab / tabpanel。</span></div><div class="station"><strong>pass</strong><span>已沉淀。</span></div></div>
+        <div class="lane pass"><div class="lane-title">R3 参考配色</div><div class="station"><strong>原始要求</strong><span>对齐参考业务架构图配色。</span></div><div class="station"><strong>SKILL.md:158-191</strong><span>token、柔光、28px 工程网格。</span></div><div class="station"><strong>tests:200-216</strong><span>固定 token 和反旧背景。</span></div><div class="station"><strong>001-004</strong><span>样例统一配色系统。</span></div><div class="station"><strong>pass</strong><span>已沉淀。</span></div></div>
+        <div class="lane pass"><div class="lane-title">R4 右上卡片</div><div class="station"><strong>原始要求</strong><span>右上字段一行一个独立小卡片。</span></div><div class="station"><strong>SKILL.md:63</strong><span>只保留影响点和待执行事项。</span></div><div class="station"><strong>tests:264-288</strong><span>字段、单列、禁止重复。</span></div><div class="station"><strong>001-004</strong><span>aside 内交付动作卡。</span></div><div class="station"><strong>pass</strong><span>已沉淀。</span></div></div>
+        <div class="lane pass"><div class="lane-title">R5 标题元信息</div><div class="station"><strong>原始要求</strong><span>任务编码和 skill 到标题顶部同一行。</span></div><div class="station"><strong>SKILL.md:61</strong><span>完整宽度、单行省略、title 保留全文。</span></div><div class="station"><strong>tests:269-281</strong><span>title-meta 和 skill-strip。</span></div><div class="station"><strong>004</strong><span>编码仅显示 TASK_20260701_004。</span></div><div class="station"><strong>pass</strong><span>已沉淀。</span></div></div>
+        <div class="lane pass"><div class="lane-title">R6 标题与对齐</div><div class="station"><strong>原始要求</strong><span>标题回到左列，右侧交付卡上移填空。</span></div><div class="station"><strong>SKILL.md:61,210</strong><span>主标题位于左列，交付卡与标题同排。</span></div><div class="station"><strong>tests:272-280,291-295</strong><span>本轮新增自检断言。</span></div><div class="station"><strong>004/005</strong><span>title-meta → top-grid → h1/tabs + aside。</span></div><div class="station"><strong>pass</strong><span>本轮补齐。</span></div></div>
+        <div class="lane pass"><div class="lane-title">R7 标题字号</div><div class="station"><strong>原始要求</strong><span>标题稍小后再稍加大。</span></div><div class="station"><strong>SKILL.md:192</strong><span>clamp(24px, 2.8vw, 32px)。</span></div><div class="station"><strong>tests:372-410</strong><span>样例标题字号断言。</span></div><div class="station"><strong>001-005</strong><span>统一 h1 CSS。</span></div><div class="station"><strong>pass</strong><span>已沉淀。</span></div></div>
+      </div>
+    </section>
+
+    <section class="candidate-panel" id="candidate-b" role="tabpanel" aria-labelledby="tab-candidate-b" hidden>
+      <div class="panel-head"><div class="badge">B</div><div><h2>备选候选：R# 泳道验收看板</h2><p class="sub">用泳道看每条诉求是否跨 skill、测试、样例闭环。</p></div><div class="status-pass">全部闭环</div></div>
+      <div class="swimboard" aria-label="R# 泳道验收看板">
+        <div class="head">R#</div><div class="head">用户要求</div><div class="head">沉淀位置</div><div class="head">回归保护</div><div class="head">剩余动作</div>
+        <div class="req">R1</div><div class="cell">候选全集和全部备选。</div><div class="cell">SKILL.md:47-79，references/*.md。</div><div class="cell">tests:165-197。</div><div class="cell">用户后续确定首选后再收敛。</div>
+        <div class="req">R2</div><div class="cell">通过按钮切换候选。</div><div class="cell">SKILL.md:52-54。</div><div class="cell">tests:247-262，001/002 样例。</div><div class="cell">无。</div>
+        <div class="req">R3</div><div class="cell">参考文件配色完全对齐。</div><div class="cell">SKILL.md:158-191。</div><div class="cell">tests:200-216，372-410。</div><div class="cell">无。</div>
+        <div class="req">R4</div><div class="cell">右上角字段独立卡，一行一个。</div><div class="cell">SKILL.md:63。</div><div class="cell">tests:264-288，292-410。</div><div class="cell">无。</div>
+        <div class="req">R5</div><div class="cell">任务编码和 skill 到标题顶部，同一行，不溢出。</div><div class="cell">SKILL.md:61。</div><div class="cell">tests:269-281，314-323，349-359。</div><div class="cell">无。</div>
+        <div class="req">R6</div><div class="cell">标题回到左列，右侧交付区上移填空。</div><div class="cell">SKILL.md:61,210。</div><div class="cell">tests:291-295，本轮 RED → GREEN。</div><div class="cell">需同步 worker。</div>
+      </div>
+    </section>
+
+    <section class="candidate-panel" id="candidate-c" role="tabpanel" aria-labelledby="tab-candidate-c" hidden>
+      <div class="panel-head"><div class="badge">C</div><div><h2>备选候选：证据矩阵热区</h2><p class="sub">绿色表示有直接证据，黄色表示实现已补但需要用户重启 worker 生效。</p></div><div class="status-pass">无阻塞</div></div>
+      <div class="heatmap-wrap">
+        <table class="heatmap" aria-label="规则沉淀证据矩阵">
+          <thead><tr><th>要求</th><th>SKILL.md</th><th>references</th><th>tests</th><th>HTML 样例</th><th>运行验证</th></tr></thead>
+          <tbody>
+            <tr><th>候选全集</th><td class="ok">47-79</td><td class="ok">全部 10 个 reference</td><td class="ok">165-197</td><td class="ok">001/002/003</td><td class="ok">53 passed</td></tr>
+            <tr><th>按钮切换</th><td class="ok">52-54</td><td class="ok">交付验收候选清单</td><td class="ok">247-262</td><td class="ok">role tablist</td><td class="ok">53 passed</td></tr>
+            <tr><th>参考配色</th><td class="ok">158-191</td><td class="ok">全局视觉规则</td><td class="ok">200-216</td><td class="ok">001-004</td><td class="ok">53 passed</td></tr>
+            <tr><th>右上交付卡</th><td class="ok">63</td><td class="ok">交付验收必答</td><td class="ok">264-288</td><td class="ok">001-005</td><td class="ok">53 passed</td></tr>
+            <tr><th>标题左列紧凑</th><td class="ok">61,210</td><td class="ok">交付验收首屏规则</td><td class="ok">291-295</td><td class="ok">004/005</td><td class="ok">RED 后 GREEN</td></tr>
+            <tr><th>生效动作</th><td class="ok">skill 已写入</td><td class="ok">无需改依赖</td><td class="ok">测试已锁</td><td class="ok">HTML 已生成</td><td class="warn">待重启或同步 worker</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="candidate-panel" id="candidate-d" role="tabpanel" aria-labelledby="tab-candidate-d" hidden>
+      <div class="panel-head"><div class="badge">D</div><div><h2>备选候选：地铁站点式验收线路</h2><p class="sub">从用户评论到 skill 生效的单线验收路径。</p></div><div class="status-pass">终点待重启</div></div>
+      <div class="metro-wrap">
+        <div class="metro">
+          <div class="legend"><h3>线路图例</h3><p>蓝色站点表示规则沉淀，绿色站点表示已有测试或样例闭环。</p><p>终点动作：同步或重启 Vibego worker。</p></div>
+          <div class="metro-lines">
+            <div class="stop done"><strong>站点 1：用户连续评论</strong><span>候选全集、按钮切换、参考配色、右上卡片、标题宽度、skill 同行、防溢出。</span></div>
+            <div class="stop done"><strong>站点 2：规则进入 SKILL.md</strong><span>47-79、61、63、158-192、203-213。</span></div>
+            <div class="stop done"><strong>站点 3：reference 候选清单</strong><span>各图型 reference 写入首选和备选候选。</span></div>
+            <div class="stop done"><strong>站点 4：测试回归保护</strong><span>新增或扩展 tests/test_builtin_skills_injection.py 对候选、配色、布局和样例断言。</span></div>
+            <div class="stop done"><strong>站点 5：样例 HTML 对齐</strong><span>001/002/003/004 使用相同标题元信息、交付卡片和参考配色。</span></div>
+            <div class="stop"><strong>终点：运行环境生效</strong><span>需要用户重启或重新同步 Vibego worker，活跃 AGENTS 才会注入最新 skill。</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="comparison" aria-labelledby="compare-title">
+      <h2 id="compare-title">候选对比矩阵</h2>
+      <div class="compare-grid">
+        <div class="head">维度</div><div class="head">A 验收轨道</div><div class="head">B 泳道看板</div><div class="head">C 热区矩阵</div><div class="head">D 地铁线路</div>
+        <div>可读性</div><div>最适合逐条签收。</div><div>适合看责任分布。</div><div>适合快速找缺口。</div><div>适合复盘递进链路。</div>
+        <div>事实承载</div><div>锚点和判定绑定最强。</div><div>承载多，但横向略密。</div><div>最高密度。</div><div>更偏故事线。</div>
+        <div>适用边界</div><div>交付验收默认首选。</div><div>多 R# 并行时好用。</div><div>审计型任务好用。</div><div>用户要看过程时好用。</div>
+        <div>风险</div><div>长需求会变高。</div><div>移动端会变长。</div><div>需要避免变成普通表格。</div><div>证据细节需要旁注。</div>
+      </div>
+    </section>
+  </main>
+  <script>
+    document.documentElement.classList.remove('no-js');
+    document.documentElement.classList.add('js');
+    const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+    const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
+    function selectCandidate(id, focusTab = false) {
+      const target = document.getElementById(id) ? id : 'candidate-a';
+      tabs.forEach(tab => {
+        const selected = tab.dataset.candidateTarget === target;
+        tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected && focusTab) tab.focus();
+      });
+      panels.forEach(panel => { panel.hidden = panel.id !== target; });
+      if (location.hash.slice(1) !== target) history.replaceState(null, '', '#' + target);
+    }
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => selectCandidate(tab.dataset.candidateTarget));
+      tab.addEventListener('keydown', event => {
+        let next = null;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === 'Home') next = 0;
+        if (event.key === 'End') next = tabs.length - 1;
+        if (next !== null) { event.preventDefault(); selectCandidate(tabs[next].dataset.candidateTarget, true); }
+      });
+    });
+    window.addEventListener('hashchange', () => selectCandidate(location.hash.slice(1) || 'candidate-a'));
+    selectCandidate(location.hash.slice(1) || 'candidate-a');
+  </script>
+</body>
+</html>

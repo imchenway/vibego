@@ -1,0 +1,105 @@
+<!doctype html>
+<html class="no-js" lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：候选全集按钮切换与右上交付信息</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+      --strong: rgba(78,127,173,.34);
+      --mask: rgba(255,255,255,.92);
+      --danger: var(--red);
+      --warn: var(--amber);
+      --ok: var(--green);
+      --accent: var(--blue);
+      --sheet: var(--panel);
+      --hairline: rgba(78,127,173,.18);
+    }
+    * { box-sizing: border-box; overflow-wrap: anywhere; }
+    html { min-height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    body { overflow-x: hidden; }main{width:min(1180px,calc(100% - 36px));margin:0 auto;padding:34px 0 56px;display:grid;gap:24px}h1 { margin: 0 0 14px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }h2{margin:0 0 8px;font-size:22px;line-height:1.18;letter-spacing:-.025em}.top,.candidate-panel,.comparison{border:1px solid var(--line);border-radius:28px;background:var(--panel);box-shadow:var(--shadow)}.top{padding:24px}.top-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(360px,.9fr);gap:22px;align-items:start}.top-title-column{display:grid;gap:12px;align-content:start;min-width:0}.top-title-column .candidate-tabs{margin-top:2px}.lead{margin:0;max-width:78ch;color:var(--muted)}.title-meta{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center;margin:0 0 10px;max-width:100%}.task-code-pill,.skill-strip{min-height:26px;border:1px solid rgba(78,127,173,.18);border-radius:999px;background:rgba(255,255,255,.92);box-shadow:0 8px 18px rgba(17,71,120,.06);padding:4px 9px;font-size:12px}.task-code-pill{display:inline-flex;align-items:center;color:var(--blue);font-weight:900;letter-spacing:.04em;white-space:nowrap}.skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--muted);font-weight:720;max-width:100%}.task-handoff{display:grid;grid-template-columns: 1fr;gap:10px}.task-handoff-card{border:1px solid rgba(78,127,173,.18);border-radius:16px;background:rgba(255,255,255,.92);box-shadow:0 10px 24px rgba(17,71,120,.07);padding:10px 12px}.task-handoff-card b{display:block;font-size:11px;color:var(--blue);letter-spacing:.04em;margin-bottom:5px}.task-handoff-card span{display:block;color:var(--muted);font-size:12px}.candidate-tabs{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.candidate-tab{min-height:44px;border:1px solid rgba(24,32,28,.18);border-radius:999px;background:var(--mask);padding:8px 16px;color:#304138;font:inherit;font-weight:850;cursor:pointer}.candidate-tab[aria-selected="true"]{color:var(--ok);border-color:rgba(36,115,72,.42);box-shadow:inset 0 0 0 1px rgba(36,115,72,.20)}.candidate-tab:focus-visible{outline:3px solid rgba(36,115,72,.25);outline-offset:3px}.candidate-panel{padding:22px;overflow:hidden}.js .candidate-panel[hidden]{display:none}.candidate-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center;margin-bottom:18px}.letter{width:38px;height:38px;border-radius:999px;display:grid;place-items:center;border:2px solid var(--strong);background:var(--mask);font-weight:900}.candidate-head p{margin:4px 0 0;color:var(--muted);font-size:13px}.status{display:inline-flex;align-items:center;justify-content:center;padding:4px 8px;border-radius:999px;border:1px solid currentColor;background:var(--mask);font-size:11px;font-weight:850}.ok{color:var(--ok)}.warn{color:var(--warn)}.canvas{position:relative;border:1px solid rgba(24,32,28,.13);border-radius:24px;background:rgba(255,255,255,.9);padding:18px;overflow:hidden}.track{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;position:relative}.track:before{content:"";position:absolute;left:8%;right:8%;top:50%;height:3px;background:var(--strong)}.node{position:relative;z-index:1;border:1px solid rgba(24,32,28,.18);border-radius:18px;background:var(--mask);padding:12px;box-shadow:0 8px 18px rgba(24,32,28,.055)}.node b{display:block;font-size:13px;margin-bottom:5px}.node p{margin:0;color:var(--muted);font-size:12px}.comparison{padding:20px}.compare-table{width:100%;border-collapse:collapse;background:var(--mask);border-radius:18px;overflow:hidden;font-size:13px}.compare-table th,.compare-table td{padding:12px 13px;text-align:left;vertical-align:top;border-bottom:1px solid rgba(24,32,28,.10)}.compare-table th{color:var(--accent);font-size:12px;letter-spacing:.04em;text-transform:uppercase}@media(max-width:980px){main{width:min(100% - 22px,720px)}.top-grid,.track{grid-template-columns:1fr}.task-handoff{grid-template-columns:1fr}.track:before{display:none}.candidate-head{grid-template-columns:auto minmax(0,1fr)}.candidate-head .status{grid-column:2;justify-self:start}}@media(max-width:430px){main{width:min(100% - 18px,390px);padding-top:20px}.top,.candidate-panel,.comparison{padding:16px;border-radius:22px}.compare-table,.compare-table tbody,.compare-table tr,.compare-table th,.compare-table td{display:block;width:100%}.compare-table thead{display:none}}
+  </style>
+</head>
+<body>
+<main class="candidate-atlas">
+  <section class="top" aria-labelledby="title"><div class="title-meta" aria-label="任务元信息"><span class="task-code-pill">TASK_20260701_003</span><span class="skill-strip" title="本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、accessibility、vibe-diagram、superpowers:verification-before-completion">本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、accessibility、vibe-diagram、superpowers:verification-before-completion</span></div>
+    <div class="top-grid">
+      <div class="top-title-column">
+        <h1 id="title">交付验收：候选全集按钮切换与右上交付信息</h1>
+        <p class="lead">本页验证本轮增量：候选全集从纵向铺开改为按钮切换，同时将交付动作字段固化到 HTML 右上角。</p>
+        <div class="candidate-tabs" role="tablist" aria-label="交付验收候选切换按钮"><button class="candidate-tab" id="tab-candidate-a" role="tab" aria-selected="true" aria-controls="candidate-a" data-candidate-target="candidate-a" tabindex="0">A 验收轨道</button><button class="candidate-tab" id="tab-candidate-b" role="tab" aria-selected="false" aria-controls="candidate-b" data-candidate-target="candidate-b" tabindex="-1">B 交互验证</button><button class="candidate-tab" id="tab-candidate-c" role="tab" aria-selected="false" aria-controls="candidate-c" data-candidate-target="candidate-c" tabindex="-1">C 风险回滚</button></div>
+      </div>
+      <aside class="task-handoff" aria-label="任务交付信息"><div class="task-handoff-card"><b>本次修改的影响功能点</b><span>vibe-diagram 候选切换规则、当前两个样例 HTML、回归测试、任务文档。</span></div><div class="task-handoff-card"><b>待用户执行事项</b><span>重新同步/重启 Vibego worker，使活跃 AGENTS 注入新规则。</span></div></aside>
+    </div>
+  </section>
+  <section id="candidate-a" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-a" tabindex="0"><header class="candidate-head"><span class="letter">A</span><div><h2>需求到证据的验收轨道</h2><p>把用户确认的两个要求直接映射到交付和验证。</p></div><span class="status ok">推荐首选</span></header><div class="canvas track"><div class="node"><b>R1 用户要求</b><p>候选通过按钮切换。</p></div><div class="node"><b>交付</b><p>tablist/tab/tabpanel + hash + 键盘。</p></div><div class="node"><b>R2 用户要求</b><p>交付字段放右上角。</p></div><div class="node"><b>交付</b><p>task-handoff 信息块。</p></div><div class="node"><b>验证</b><p>待执行最终命令。</p></div></div></section>
+  <section id="candidate-b" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-b" tabindex="0"><header class="candidate-head"><span class="letter">B</span><div><h2>交互验证轨道</h2><p>验证 JS 成功时只显示当前候选；无 JS 时全部候选仍可读。</p></div><span class="status warn">备选</span></header><div class="canvas track"><div class="node"><b>默认 A</b><p>页面加载显示首选候选。</p></div><div class="node"><b>点击按钮</b><p>切换 aria-selected 与 hidden。</p></div><div class="node"><b>hash 深链</b><p>#candidate-b 直达。</p></div><div class="node"><b>键盘</b><p>ArrowLeft / ArrowRight。</p></div><div class="node"><b>无 JS</b><p>全部纵向展开。</p></div></div></section>
+  <section id="candidate-c" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-c" tabindex="0"><header class="candidate-head"><span class="letter">C</span><div><h2>风险与回滚轨道</h2><p>明确本轮交互对校准全集和 HTML-only 的影响。</p></div><span class="status warn">备选</span></header><div class="canvas track"><div class="node"><b>风险</b><p>JS 出错导致按钮不切换。</p></div><div class="node"><b>保护</b><p>初始不写 hidden。</p></div><div class="node"><b>风险</b><p>按钮变成普通链接。</p></div><div class="node"><b>保护</b><p>测试锁定 role 与键盘。</p></div><div class="node"><b>回滚</b><p>移除 tab 规则即可回到纵向全集。</p></div></div></section>
+  <section class="comparison" aria-labelledby="compare-title"><h2 id="compare-title">候选对比矩阵</h2><table class="compare-table"><thead><tr><th>候选</th><th>可读性</th><th>事实承载</th><th>适用边界</th><th>风险</th></tr></thead><tbody><tr><td>A 验收轨道</td><td>最适合最终收口。</td><td>强，需求与证据绑定。</td><td>交付验收。</td><td>页面稍长。</td></tr><tr><td>B 交互验证</td><td>操作逻辑清晰。</td><td>强，覆盖 tab 行为。</td><td>交互回归。</td><td>不是最终汇报首选。</td></tr><tr><td>C 风险回滚</td><td>风险直观。</td><td>中，偏决策。</td><td>上线前检查。</td><td>不能替代验收轨道。</td></tr></tbody></table><p id="validation-summary" class="lead" style="margin-top:16px">验证状态：已通过 `python3.11 -m pytest -q tests/test_builtin_skills_injection.py`（52 passed）、`quick_validate.py`（Skill is valid!）、`git diff --check`（无输出）与静态 HTML 交互契约验证；浏览器 file:// 自动验证受当前工具策略阻断，未声称浏览器实测。</p></section>
+</main>
+<script>
+  document.documentElement.classList.remove('no-js');
+  document.documentElement.classList.add('js');
+  const tabs = Array.from(document.querySelectorAll('[role="tab"][data-candidate-target]'));
+  const panels = tabs.map((tab) => document.getElementById(tab.dataset.candidateTarget)).filter(Boolean);
+  function selectCandidate(id, updateHash = true, focusTab = false) {
+    const targetId = panels.some((panel) => panel.id === id) ? id : panels[0].id;
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.candidateTarget === targetId;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && focusTab) tab.focus();
+    });
+    panels.forEach((panel) => { panel.hidden = panel.id !== targetId; });
+    if (updateHash && location.hash !== '#' + targetId) history.replaceState(null, '', '#' + targetId);
+  }
+  function hashCandidate() { return location.hash ? location.hash.slice(1) : panels[0].id; }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectCandidate(tab.dataset.candidateTarget));
+    tab.addEventListener('keydown', (event) => {
+      const last = tabs.length - 1;
+      let next = index;
+      if (event.key === 'ArrowRight') next = index === last ? 0 : index + 1;
+      else if (event.key === 'ArrowLeft') next = index === 0 ? last : index - 1;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = last;
+      else return;
+      event.preventDefault();
+      selectCandidate(tabs[next].dataset.candidateTarget, true, true);
+    });
+  });
+  window.addEventListener('hashchange', () => selectCandidate(hashCandidate(), false));
+  selectCandidate(hashCandidate(), false);
+</script>
+</body>
+</html>

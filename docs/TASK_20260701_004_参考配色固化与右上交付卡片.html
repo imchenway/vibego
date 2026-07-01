@@ -1,0 +1,155 @@
+<!doctype html>
+<html class="no-js" lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>交付验收：参考配色固化与右上交付卡片</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+      --strong: rgba(78,127,173,.34);
+      --mask: rgba(255,255,255,.92);
+      --danger: var(--red);
+      --warn: var(--amber);
+      --ok: var(--green);
+      --accent: var(--blue);
+      --sheet: var(--panel);
+      --hairline: rgba(78,127,173,.18);
+    }
+    * { box-sizing: border-box; overflow-wrap: anywhere; }
+    html { min-height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    body { overflow-x: hidden; }main{width:min(1180px,calc(100% - 36px));margin:0 auto;padding:34px 0 56px;display:grid;gap:24px}h1,h2,h3,p{margin-top:0}h1 { margin: 0 0 14px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }h2{font-size:21px;line-height:1.2;margin-bottom:8px;letter-spacing:-.02em}h3{font-size:14px;margin-bottom:8px}.top,.candidate-panel,.compare{border:1px solid rgba(78,127,173,.18);border-radius:28px;background:var(--panel);box-shadow:var(--shadow);backdrop-filter:blur(2px)}.top{padding:24px}.top-grid{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(360px,.92fr);gap:22px;align-items:start}.top-title-column{display:grid;gap:12px;align-content:start;min-width:0}.top-title-column .candidate-tabs{margin-top:2px}.lead{margin:0;color:var(--muted);max-width:78ch}.title-meta{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center;margin:0 0 10px;max-width:100%}.task-code-pill,.skill-strip{min-height:26px;border:1px solid rgba(78,127,173,.18);border-radius:999px;background:rgba(255,255,255,.92);box-shadow:0 8px 18px rgba(17,71,120,.06);padding:4px 9px;font-size:12px}.task-code-pill{display:inline-flex;align-items:center;color:var(--blue);font-weight:900;letter-spacing:.04em;white-space:nowrap}.skill-strip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--muted);font-weight:720;max-width:100%}.task-handoff{display:grid;grid-template-columns: 1fr;gap:10px}.task-handoff-card{border:1px solid rgba(78,127,173,.18);border-radius:16px;background:rgba(255,255,255,.92);box-shadow:0 10px 24px rgba(17,71,120,.07);padding:10px 12px}.task-handoff-card b{display:block;font-size:11px;color:var(--blue);letter-spacing:.04em;margin-bottom:5px}.task-handoff-card span{display:block;color:var(--muted);font-size:12px}.candidate-tabs{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.candidate-tab{min-height:44px;border:1px solid rgba(78,127,173,.22);border-radius:999px;background:rgba(255,255,255,.82);padding:8px 16px;color:#24455f;font:inherit;font-weight:850;cursor:pointer}.candidate-tab[aria-selected="true"]{color:var(--green);border-color:rgba(23,120,90,.42);box-shadow:inset 0 0 0 1px rgba(23,120,90,.18)}.candidate-tab:focus-visible{outline:3px solid rgba(31,111,178,.22);outline-offset:3px}.candidate-panel{padding:22px;overflow:hidden}.js .candidate-panel[hidden]{display:none}.candidate-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center;margin-bottom:18px}.letter{width:38px;height:38px;border-radius:999px;display:grid;place-items:center;border:2px solid var(--strong);background:var(--mask);font-weight:900;color:var(--blue)}.badge{display:inline-flex;align-items:center;justify-content:center;padding:4px 8px;border-radius:999px;border:1px solid currentColor;background:var(--mask);font-size:11px;font-weight:850}.ok{color:var(--green)}.warn{color:var(--amber)}.canvas{position:relative;border:1px solid rgba(78,127,173,.18);border-radius:24px;background:rgba(255,255,255,.86);padding:18px;overflow:hidden}.canvas:before{content:"";position:absolute;inset:0;background:linear-gradient(rgba(38,102,154,.043) 1px,transparent 1px),linear-gradient(90deg,rgba(38,102,154,.043) 1px,transparent 1px);background-size:22px 22px;pointer-events:none}.flow{position:relative;z-index:1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:18px;align-items:stretch}.flow:before{content:"";position:absolute;left:8%;right:8%;top:50%;height:3px;background:linear-gradient(90deg,var(--blue),var(--green));z-index:0}.node{position:relative;z-index:1;border:1px solid rgba(78,127,173,.22);border-radius:18px;background:var(--mask);box-shadow:0 10px 22px rgba(17,71,120,.07);padding:12px 13px}.node b{display:block;font-size:13px;margin-bottom:5px}.node p{margin:0;color:var(--muted);font-size:12px}.card-grid{position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.mini-card{border:1px solid rgba(78,127,173,.18);border-radius:18px;background:var(--mask);padding:14px}.mini-card b{display:block;color:var(--blue);font-size:13px;margin-bottom:6px}.mini-card p{margin:0;color:var(--muted);font-size:12px}.palette{position:relative;z-index:1;display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.palette-rail{display:grid;gap:10px}.swatch{display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;align-items:center}.swatch i{height:32px;border-radius:12px;border:1px solid rgba(78,127,173,.2);display:block}.compare{padding:20px}.compare-table{width:100%;border-collapse:collapse;background:var(--mask);border-radius:18px;overflow:hidden;font-size:13px}.compare-table th,.compare-table td{text-align:left;vertical-align:top;padding:12px 13px;border-bottom:1px solid rgba(78,127,173,.14)}.compare-table th{color:var(--blue);font-size:12px;letter-spacing:.04em;text-transform:uppercase;background:rgba(255,255,255,.94)}@media(max-width:980px){main{width:min(100% - 22px,720px)}.top-grid,.flow,.card-grid,.palette{grid-template-columns:1fr}.task-handoff{grid-template-columns:1fr}.flow:before{display:none}.candidate-head{grid-template-columns:auto minmax(0,1fr)}.candidate-head .badge{grid-column:2;justify-self:start}}@media(max-width:430px){main{width:min(100% - 18px,390px);padding-top:20px}.top,.candidate-panel,.compare{padding:16px;border-radius:22px}.compare-table,.compare-table tbody,.compare-table tr,.compare-table th,.compare-table td{display:block;width:100%}.compare-table thead{display:none}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+  </style>
+</head>
+<body>
+<main>
+  <section class="top" aria-labelledby="title">
+    <div class="title-meta" aria-label="任务元信息"><span class="task-code-pill">TASK_20260701_004</span><span class="skill-strip" title="本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、frontend-skill、impeccable、accessibility、vibe-diagram、superpowers:verification-before-completion">本次使用的skill：superpowers:test-driven-development、superpowers:writing-skills、frontend-skill、impeccable、accessibility、vibe-diagram、superpowers:verification-before-completion</span></div>
+    <div class="top-grid">
+      <div class="top-title-column">
+        <h1 id="title">交付验收：参考配色固化与右上交付卡片</h1>
+        <p class="lead">本页把用户指定的漂亮参考样式收敛为可回归的 HTML 规则：逐项对齐参考白蓝柔光工程纸背景、标题回到左列、右侧交付卡上移填充标题右侧空间、标题顶部任务元信息同一行且防溢出、较小标题字号。</p>
+        <div class="candidate-tabs" role="tablist" aria-label="本轮交付候选切换按钮">
+      <button class="candidate-tab" id="tab-candidate-a" role="tab" aria-selected="true" aria-controls="candidate-a" data-candidate-target="candidate-a" tabindex="0">A 验收主轨道</button>
+      <button class="candidate-tab" id="tab-candidate-b" role="tab" aria-selected="false" aria-controls="candidate-b" data-candidate-target="candidate-b" tabindex="-1">B 配色继承图</button>
+      <button class="candidate-tab" id="tab-candidate-c" role="tab" aria-selected="false" aria-controls="candidate-c" data-candidate-target="candidate-c" tabindex="-1">C 交付卡片布局</button>
+    </div>
+      </div>
+      <aside class="task-handoff" aria-label="任务交付信息">
+        <div class="task-handoff-card"><b>本次修改的影响功能点</b><span>vibe-diagram 视觉硬约束、标题回左列、右上交付字段上移填充空白、标题字号、001/002/003/024/004 HTML 样例与回归测试。</span></div>
+        <div class="task-handoff-card"><b>待用户执行事项</b><span>实施后如需让活跃 Vibego worker 生效，请重新同步/重启对应 worker 或新开会话。</span></div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="candidate-a" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-a" tabindex="0">
+    <header class="candidate-head"><span class="letter">A</span><div><h2>首选候选：需求到证据的验收主轨道</h2><p class="lead">按用户 3 条要求从左到右验收，不把交付信息散落在聊天结尾。</p></div><span class="badge ok">推荐首选</span></header>
+    <div class="canvas"><div class="flow">
+      <div class="node"><b>R1 参考配色</b><p>读取业务架构图样式，逐项对齐 CSS token、白蓝柔光、28px 工程网格和语义状态色。</p></div>
+      <div class="node"><b>R2 标题元信息</b><p>任务编码与 skill 同行放到顶部完整宽度；标题回到左侧标题列，右侧交付卡上移填充标题右侧空间。</p></div>
+      <div class="node"><b>R3 标题缩小</b><p>标题默认改为 <code>clamp(22px, 2.6vw, 29px)</code>。</p></div>
+      <div class="node"><b>回归样例</b><p>001/002/003/024 与本页同步使用新视觉系统。</p></div>
+      <div class="node"><b>验证门禁</b><p>测试、skill 校验、静态 HTML 合约和 diff 检查收口。</p></div>
+    </div></div>
+  </section>
+
+  <section id="candidate-b" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-b" tabindex="0">
+    <header class="candidate-head"><span class="letter">B</span><div><h2>备选候选：参考配色继承图</h2><p class="lead">把参考文件的视觉语言逐项拆成可复用 CSS token，避免下次又回退成灰绿网格。</p></div><span class="badge warn">备选</span></header>
+    <div class="canvas"><div class="palette">
+      <div class="palette-rail">
+        <div class="swatch"><i style="background:#fbfdff"></i><div><b>纸张</b><p><code>--paper:#fbfdff</code> + 顶部蓝绿柔光。</p></div></div>
+        <div class="swatch"><i style="background:#1f6fb2"></i><div><b>主强调</b><p><code>--blue:#1f6fb2</code> 用于标题、tab、边线重点。</p></div></div>
+        <div class="swatch"><i style="background:#17785a"></i><div><b>通过状态</b><p><code>--green:#17785a</code> 只做状态章/描边。</p></div></div>
+        <div class="swatch"><i style="background:#986506"></i><div><b>提醒状态</b><p><code>--amber:#986506</code> 只做风险与待确认。</p></div></div>
+      </div>
+      <div class="node"><b>继承边界</b><p>允许柔光 radial-gradient，因为这是用户明确指定的漂亮参考；禁止的是背景割裂、节点文字被网格穿透、颜色污染主画布关系结构。</p></div>
+    </div></div>
+  </section>
+
+  <section id="candidate-c" class="candidate-panel" role="tabpanel" aria-labelledby="tab-candidate-c" tabindex="0">
+    <header class="candidate-head"><span class="letter">C</span><div><h2>备选候选：右上 4 卡布局图</h2><p class="lead">任务编码与 skill 不再占用右上交付卡片；右上只保留交付动作字段，一行一个。</p></div><span class="badge warn">备选</span></header>
+    <div class="canvas"><div class="card-grid">
+      <div class="mini-card"><b>任务编码</b><p>一眼定位本轮任务，不依赖聊天上下文。</p></div>
+      <div class="mini-card"><b>本次使用的skill</b><p>把执行约束外显，方便复盘。</p></div>
+      <div class="mini-card"><b>影响功能点</b><p>说明这轮改动影响哪里。</p></div>
+      <div class="mini-card"><b>待用户执行事项</b><p>比“待用户重启服务或待执行脚本”更泛化，可承载同步、重启、评审等动作。</p></div>
+    </div></div>
+  </section>
+
+  <section class="compare" aria-labelledby="compare-title">
+    <h2 id="compare-title">验收矩阵</h2>
+    <table class="compare-table">
+      <thead><tr><th>要求</th><th>交付</th><th>验证状态</th><th>剩余动作</th></tr></thead>
+      <tbody>
+        <tr><td>参考配色固化</td><td>SKILL.md + HTML 样例统一新 token。</td><td id="v-test"><span class="badge ok">53 passed</span></td><td>验证通过后重启/同步 worker。</td></tr>
+        <tr><td>右上独立小卡片</td><td>task-handoff-card 固化为交付动作单列卡。</td><td id="v-html"><span class="badge ok">单列卡片通过</span></td><td>后续 HTML 继续沿用。</td></tr>
+        <tr><td>标题字号稍小</td><td>h1 使用 22/2.6vw/29 clamp。</td><td id="v-diff"><span class="badge ok">diff 检查通过</span></td><td>如需海报式标题再单独声明。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+<script>
+  document.documentElement.classList.remove('no-js');
+  document.documentElement.classList.add('js');
+  const tabs = Array.from(document.querySelectorAll('[role="tab"][data-candidate-target]'));
+  const panels = tabs.map((tab) => document.getElementById(tab.dataset.candidateTarget)).filter(Boolean);
+  function selectCandidate(id, updateHash = true, focusTab = false) {
+    const targetId = panels.some((panel) => panel.id === id) ? id : panels[0].id;
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.candidateTarget === targetId;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && focusTab) tab.focus();
+    });
+    panels.forEach((panel) => { panel.hidden = panel.id !== targetId; });
+    if (updateHash && location.hash !== '#' + targetId) history.replaceState(null, '', '#' + targetId);
+  }
+  function hashCandidate() { return location.hash ? location.hash.slice(1) : panels[0].id; }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectCandidate(tab.dataset.candidateTarget));
+    tab.addEventListener('keydown', (event) => {
+      const last = tabs.length - 1;
+      let next = index;
+      if (event.key === 'ArrowRight') next = index === last ? 0 : index + 1;
+      else if (event.key === 'ArrowLeft') next = index === 0 ? last : index - 1;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = last;
+      else return;
+      event.preventDefault();
+      selectCandidate(tabs[next].dataset.candidateTarget, true, true);
+    });
+  });
+  window.addEventListener('hashchange', () => selectCandidate(hashCandidate(), false));
+  selectCandidate(hashCandidate(), false);
+</script>
+</body>
+</html>
