@@ -87,8 +87,8 @@ CANDIDATE_ATLAS_EXPECTATIONS = {
     ),
     "delivery-acceptance.md": (
         "交付验收图",
-        "需求到证据的验收轨道",
-        ["R# 泳道验收看板", "证据矩阵热区", "地铁站点式验收线路"],
+        "验收账本 / 需求到证据签收表",
+        ["证据泳道图", "风险动作板", "交付时间线"],
     ),
 }
 
@@ -162,6 +162,27 @@ def test_vibe_diagram_reference_files_exist_and_are_packaged() -> None:
 
 
 
+
+def test_vibe_diagram_prompt_compaction_preserves_recent_feedback_rules() -> None:
+    """vibe-diagram 提示词应沉淀近期反馈，同时避免继续膨胀。"""
+
+    core_text = _read_vibe_diagram_core()
+    delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
+
+    assert len(core_text) <= 11000
+    assert len(delivery_text) <= 3100
+    assert "Markdown 链接文字必须使用 HTML 内部 `<h1>` 主标题" in core_text
+    assert "不要写成固定的“打开 HTML”" in core_text
+    assert "标题顶部只保留任务编码" in core_text
+    assert "不要生成 skill 使用清单" in core_text
+    assert "不再生成右上角交付信息卡片" in core_text
+    assert "候选切换按钮和候选面板可见标题只显示图名本身" in core_text
+    assert "交付验收图保留候选切换入口" in core_text
+    assert "不要用移除按钮或删除面板来解决可读性问题" in delivery_text
+    assert "证据泳道图" in delivery_text
+    assert "风险动作板" in delivery_text
+    assert "交付时间线" in delivery_text
+
 def test_vibe_diagram_candidate_atlas_mode_is_required_for_calibration() -> None:
     """校准期每次命中图型都必须生成首选候选与全部备选候选。"""
 
@@ -176,11 +197,24 @@ def test_vibe_diagram_candidate_atlas_mode_is_required_for_calibration() -> None
     assert "信息不足时也必须生成该备选候选" in core_text
     assert "待确认节点" in core_text
     assert "候选对比矩阵只比较“可读性、事实承载、适用边界、风险”" in core_text
+    assert "交付验收图保留候选切换入口" in core_text
 
     for _reference_name, (_diagram_type, preferred, alternatives) in CANDIDATE_ATLAS_EXPECTATIONS.items():
         assert preferred in all_rule_text
         for alternative in alternatives:
             assert alternative in all_rule_text
+
+
+def test_vibe_diagram_candidate_labels_must_use_plain_diagram_names_for_all_types() -> None:
+    """候选切换和面板可见标题应只显示图名，不带候选/方案/视图前缀。"""
+
+    core_text = _read_vibe_diagram_core()
+
+    assert "候选切换按钮和候选面板可见标题只显示图名本身" in core_text
+    assert "不得显示 `候选 A：`、`候选 B：`、`方案 A：`、`方案 B：`、`验收视图：`、`验收图层：`" in core_text
+    assert "内部 DOM id、hash、aria-controls 可继续使用稳定编号" in core_text
+    assert "推荐、首选、适用边界等说明只能放在按钮旁的辅助文案、面板右侧说明或说明栏" in core_text
+    assert "该规则适用于所有生图类型" in core_text
 
 
 def test_vibe_diagram_references_list_candidate_atlas_for_every_diagram_type() -> None:
@@ -261,42 +295,30 @@ def test_vibe_diagram_candidate_atlas_uses_accessible_tab_switching() -> None:
     assert '`role="tabpanel"`' in skill_text
 
 
-def test_vibe_diagram_html_must_pin_task_handoff_meta_top_right() -> None:
-    """每个 HTML 必须把任务编码和 skill 放到标题顶部，并使用紧凑双列抬头。"""
+def test_vibe_diagram_html_should_not_generate_skill_strip_or_top_right_handoff_cards() -> None:
+    """后续 HTML 不再生成顶部 skill 条和右上角交付卡片。"""
 
     skill_text = _read_vibe_diagram_all_rules()
     self_check = skill_text.split("## 输出前自检", 1)[1]
 
-    assert "标题顶部任务元信息" in skill_text
-    assert "任务编码和本次使用的skill必须放在标题顶部" in skill_text
-    assert "任务编码和本次使用的skill必须在同一行" in skill_text
-    assert "标题顶部任务元信息必须使用顶部容器完整宽度" in skill_text
-    assert "主标题默认回到左侧标题列" in skill_text
-    assert "不得横跨或占用右侧交付栏宽度" in skill_text
-    assert "右上角交付卡片必须与主标题所在内容列顶部对齐" in skill_text
-    assert "候选切换按钮必须放在左侧标题列内部，并紧跟描述下方" in skill_text
-    assert "不得为了等待右侧交付卡片高度而在左侧描述和候选按钮之间留下大块空白" in skill_text
-    assert "`title-meta` 必须使用 `display:grid`" in skill_text
-    assert "`grid-template-columns:auto minmax(0,1fr)`" in skill_text
-    assert "`skill-strip` 必须使用单行省略防溢出" in skill_text
+    assert "标题顶部只保留任务编码" in skill_text
+    assert "不要生成 skill 使用清单" in skill_text
+    assert "不要生成标题顶部第二枚长胶囊" in skill_text
+    assert "不再生成右上角交付信息卡片" in skill_text
+    assert "交付动作、验证、风险和未覆盖点必须并入主图或正文区域" in skill_text
     assert "任务编码只显示编码值" in skill_text
     assert "不得写成 `任务编码：TASK_xxx`" in skill_text
-    assert "右上角固定任务交付信息卡片" in skill_text
-    assert "每个字段都必须是独立小卡片" in skill_text
-    assert "右上角不再重复任务编码和本次使用的skill" in skill_text
-    assert "右上角卡片必须一行一个" in skill_text
-    assert "grid-template-columns: 1fr" in skill_text
-    assert "本次修改的影响功能点" in skill_text
-    assert "待用户执行事项" in skill_text
-    assert "不得只在最终聊天收尾字段里说明" in skill_text
-    assert "标题顶部任务元信息是否使用顶部容器完整宽度" in self_check
-    assert "主标题是否回到左侧标题列" in self_check
-    assert "是否没有横跨或占用右侧交付栏宽度" in self_check
-    assert "右上角交付卡片是否与主标题所在内容列顶部对齐" in self_check
-    assert "候选切换按钮是否放在左侧标题列内部并紧跟描述下方" in self_check
-    assert "是否没有为了等待右侧交付卡片高度而留下左侧大块空白" in self_check
-    assert "`skill-strip` 是否单行省略且通过 `title` 或等效可访问属性保留完整 skill 文本" in self_check
-
+    assert "任务编码和本次使用的skill必须放在标题顶部" not in skill_text
+    assert "任务编码和本次使用的skill必须在同一行" not in skill_text
+    assert "`skill-strip` 必须" not in skill_text
+    assert "右上角固定任务交付信息卡片" not in skill_text
+    assert "每个字段都必须是独立小卡片" not in skill_text
+    assert "本次修改的影响功能点" not in skill_text
+    assert "待用户执行事项" not in skill_text
+    assert "是否没有生成 skill 使用清单" in self_check
+    assert "是否没有生成右上角交付信息卡片" in self_check
+    assert "skill-strip" not in self_check
+    assert "右上角交付卡片" not in self_check
 
 def test_task_20260701_fault_html_uses_tabs_and_top_right_handoff_meta() -> None:
     """故障排查候选全集样例应可通过按钮切换，并在右上角外显交付信息。"""
@@ -496,7 +518,10 @@ def test_vibe_diagram_html_only_delivery_envelope_contract() -> None:
     assert "禁止在普通文本回复中展开分析、方案、证据链、测试矩阵、风险回滚或验收总结" in skill_text
     assert "阻塞性澄清问题" in skill_text
     assert "HTML 交付信封" in skill_text
-    assert "[打开 HTML](file:///绝对路径/xxx.html)" in skill_text
+    assert "[交付验收：移除阶段确认回退门禁](file:///绝对路径/xxx.html)" in skill_text
+    assert "链接文字必须使用 HTML 内部 `<h1>` 主标题" in skill_text
+    assert "不要写成固定的“打开 HTML”" in skill_text
+    assert "[打开 HTML](file:///绝对路径/xxx.html)" not in skill_text
     assert "只输出项目内 `.html/.htm` 文件路径" in skill_text
     assert "若无法写入 HTML 文件，才允许输出完整 HTML 代码块" in skill_text
 
@@ -508,6 +533,7 @@ def test_vibe_diagram_delivery_reply_must_stay_concise() -> None:
 
     assert "## HTML 图交付后的文本压缩规则" in skill_text
     assert "生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作" in skill_text
+    assert "链接文字必须使用 HTML 内部 `<h1>` 主标题" in skill_text
     assert "验证摘要" not in skill_text
     assert "不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚" in skill_text
     assert "HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复" in skill_text
@@ -785,7 +811,7 @@ def test_vibe_diagram_multi_candidate_rules_cover_all_diagram_types() -> None:
     assert "页面设计稿：首选页面线框 / artboard" in skill_text
     assert "技术设计图：首选模块 / 契约 / 数据 / 发布回滚拓扑" in skill_text
     assert "需求 / 决策沟通图：首选决策树" in skill_text
-    assert "交付验收图：首选需求到证据的验收轨道" in skill_text
+    assert "交付验收图：首选验收账本 / 需求到证据签收表" in skill_text
     assert "Web 端多候选优先纵向展开" in skill_text
     assert "窄移动稿可在桌面视口横向 filmstrip 对比" in skill_text
     assert "真实移动端不得把横向滚动作为唯一阅读路径" in skill_text
@@ -823,13 +849,57 @@ def test_vibe_diagram_delivery_acceptance_uses_requirement_evidence_track() -> N
     assert "references/delivery-acceptance.md" in core_text
     assert "## 交付验收图专用骨架" in delivery_text
     assert "交付验收图必须默认回答“原始要求是否逐条满足、证据是否足够、还剩什么动作”" in delivery_text
-    assert "需求验收轨道：原始要求 → 交付变更 → 验证证据 → 验收判定 → 待执行 / 回滚" in delivery_text
+    assert "验收账本：原始要求 → 交付变更 → 验证证据 → 验收判定 → 待执行 / 回滚" in delivery_text
     assert "每一条用户需求或 AC 都必须拥有独立 R# 泳道" in delivery_text
     assert "验证命令、测试结果、截图核对和打包门禁必须贴在对应 R# 泳道内" in delivery_text
     assert "不得把“验证闭环”“代码影响点”“保留与回滚”拆成彼此等权重的底部卡片区" in delivery_text
     assert "如果读者需要在需求卡、代码卡、验证卡之间来回跳读才能判断某条需求是否通过，必须重画" in delivery_text
     assert "pass / warn / fail / blocked 必须同时使用文字标签和形状或图标" in delivery_text
     assert "交付验收图规则" in skill_text
+
+
+def test_vibe_diagram_delivery_acceptance_preserves_tabs_and_requires_readable_internal_layouts() -> None:
+    """交付验收图应保留候选按钮，但每个面板内部必须换成清晰布局图。"""
+
+    core_text = _read_vibe_diagram_core()
+    delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
+
+    assert "交付验收图保留候选切换入口" in core_text
+    assert "不要用移除按钮或删除面板来解决可读性问题" in core_text
+    assert "每个候选面板内部必须包含主结论、阅读顺序和关系结构" in core_text
+    assert "首选候选：验收账本 / 需求到证据签收表" in delivery_text
+    assert "证据泳道图" in delivery_text
+    assert "风险动作板" in delivery_text
+    assert "交付时间线" in delivery_text
+    assert "保留候选按钮，但按钮只是入口；面板内部必须独立可读" in delivery_text
+    assert "不得通过删除候选按钮、删除面板或只保留单一账本来回应可读性问题" in delivery_text
+
+
+def test_task_20260701_012_delivery_html_preserves_tabs_with_readable_panel_layouts() -> None:
+    """当前交付 HTML 应保留按钮，并把四个面板改成不同的清晰布局。"""
+
+    html_text = (ROOT / "docs" / "TASK_20260701_012_HTML交付链接使用主标题.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'role="tablist"' in html_text
+    assert html_text.count('role="tab"') >= 4
+    assert html_text.count('role="tabpanel"') >= 4
+    assert "candidate-panel" in html_text
+    assert "selectPanel" in html_text
+    assert "acceptance-ledger" in html_text
+    assert "evidence-lanes" in html_text
+    assert "risk-action-board" in html_text
+    assert "delivery-timeline" in html_text
+    assert html_text.count("panel-summary") >= 4
+    assert html_text.count("reading-order") >= 4
+    assert "签收账本" in html_text
+    assert "证据泳道" in html_text
+    assert "风险动作板" in html_text
+    assert "交付时间线" in html_text
+    assert "移除按钮" not in html_text
+    assert "证据矩阵热区" not in html_text
+    assert "地铁验收线路" not in html_text
 
 
 def test_vibe_diagram_delivery_acceptance_must_expose_change_user_action_and_entry_impact() -> None:
@@ -852,24 +922,27 @@ def test_vibe_diagram_delivery_acceptance_must_expose_change_user_action_and_ent
 
 
 def test_vibe_diagram_delivery_acceptance_rejects_card_pile_sample() -> None:
-    """交付验收图样例应是一张站点线路图，而不是矩形卡片线路图。"""
+    """交付验收图应在每个面板内部使用清晰结构，而不是低信息密度卡片线路图。"""
 
     delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
-    html_text = (ROOT / "docs" / "TASK_20260630_024_vibe-diagram交付验收图直观化.html").read_text(
+    html_text = (ROOT / "docs" / "TASK_20260701_012_HTML交付链接使用主标题.html").read_text(
         encoding="utf-8"
     )
 
     assert "交付说明栏不能做成 5 张等权重卡片" in delivery_text
     assert "必须收敛成一条横向或纵向连通的信息带" in delivery_text
     assert "旧图问题只能作为旁注或反例标记" in delivery_text
-    assert "主图第一视觉必须是验收线路、验收看板或证据矩阵热区" in delivery_text
+    assert "主图第一视觉必须是当前面板的关系结构" in delivery_text
     assert "交付验收主画布不得再用矩形卡片节点承载每一步" in delivery_text
-    assert "优先使用地铁图 / 站点图 / 状态热区" in delivery_text
-    assert "acceptance-subway" in html_text
-    assert "handoff-timeline" in html_text
-    assert "subway-station" in html_text
-    assert "desktop-subway" in html_text
-    assert "mobile-subway" in html_text
+    assert "不要用移除按钮或删除面板来解决可读性问题" in delivery_text
+    assert 'role="tablist"' in html_text
+    assert "candidate-panel" in html_text
+    assert "acceptance-ledger" in html_text
+    assert "evidence-lanes" in html_text
+    assert "risk-action-board" in html_text
+    assert "delivery-timeline" in html_text
+    assert "acceptance-subway" not in html_text
+    assert "subway-station" not in html_text
     assert "acceptance-board" not in html_text
     assert "handoff-rail" not in html_text
     assert "evidence-map" not in html_text
@@ -1158,8 +1231,8 @@ def test_vibe_diagram_title_must_start_with_generated_diagram_type() -> None:
     assert "vibe-diagram 不是换皮卡片" not in html_text
 
 
-def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> None:
-    """同步全局 AGENTS 时，应注入 vibe-diagram 薄内核与 reference 索引。"""
+def test_sync_agents_block_embeds_builtin_vibe_diagram_skill_index_only(tmp_path: Path) -> None:
+    """同步全局 AGENTS 时，只应注入 vibe-diagram 索引，不应常驻完整正文。"""
 
     target = tmp_path / "AGENTS.md"
     env = os.environ.copy()
@@ -1192,45 +1265,29 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill(tmp_path: Path) -> 
     assert "<!-- vibego-agents:start -->" in synced_text
     assert "# Vibego 内置 Skills" in synced_text
     assert "## Skill: vibe-diagram" in synced_text
-    assert "当用户要求画系统架构图、业务流程图、代码时序图、故障排查图、页面设计稿" in synced_text
-    assert "最终必须直接发送 `.html` 文件" in synced_text
-    assert "必须作为文件附件发送" in synced_text
-    assert "## 自动路由规则" in synced_text
-    assert "业务架构图 / 领域地图" in synced_text
-    assert "状态 / 数据模型图" in synced_text
-    assert "技术设计图" in synced_text
-    assert "## AGENTS 配合协议" in synced_text
-    assert "## HTML-only 交付信封模式" in synced_text
-    assert "文本通道只做交付信封" in synced_text
-    assert "所有实质内容必须写入项目内单文件自包含 HTML" in synced_text
-    assert "高亮根因节点" in synced_text
-    assert "卡片堆积不是图" in synced_text
-    assert "卡片不是全局禁用，但必须限用" in synced_text
-    assert "宽度服务阅读，长度服务推理" in synced_text
-    assert "移动端不能把整张 SVG 等比缩成缩略图" in synced_text
-    assert "顶部标题必须以触发的生图类型开头" in synced_text
-    assert "不要把 skill 名称写成页面主标题" in synced_text
-    assert "节点优先承载关键信息" in synced_text
-    assert "弹窗不得承载唯一信息源" in synced_text
-    assert "HTML 图交付后的文本压缩规则" in synced_text
-    assert "SVG 节点文字规则" in synced_text
-    assert "禁止交付原始工程草图感的 SVG" in synced_text
-    assert "浅色背景默认以白色为主色" in synced_text
-    assert "白色背景不能是扁平纯白" in synced_text
-    assert "参考业务架构图配色系统" in synced_text
-    assert "--paper: #fbfdff" in synced_text
-    assert "radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem)" in synced_text
-    assert "背景纹理必须全局统一" in synced_text
-    assert "## 图型规则索引" in synced_text
-    assert "选择图型后必须读取对应 reference" in synced_text
-    assert "读取失败必须 fail-closed" in synced_text
-    assert "references/system-architecture.md" in synced_text
-    assert "references/business-architecture.md" in synced_text
-    assert "references/fault-debugging.md" in synced_text
-    assert "references/page-mockup.md" in synced_text
-    assert "箭头只能连接节点边缘锚点" in synced_text
-    assert "如果任一节点重叠、线穿字、文字溢出，必须重排" in synced_text
-    assert "状态色只能用于描边、角标、少量状态章" in synced_text
+    assert "name: vibe-diagram" in synced_text
+    assert "description: Use when the user asks to draw" in synced_text
+    assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" in synced_text
+    assert "若读取失败，必须 fail-closed" in synced_text
+    assert "当用户要求画系统架构图、业务流程图、代码时序图、故障排查图、页面设计稿" not in synced_text
+    assert "最终必须直接发送 `.html` 文件" not in synced_text
+    assert "## 自动路由规则" not in synced_text
+    assert "## AGENTS 配合协议" not in synced_text
+    assert "## HTML-only 交付信封模式" not in synced_text
+    assert "卡片堆积不是图" not in synced_text
+    assert "宽度服务阅读，长度服务推理" not in synced_text
+    assert "移动端不能把整张 SVG 等比缩成缩略图" not in synced_text
+    assert "顶部标题必须以触发的生图类型开头" not in synced_text
+    assert "参考业务架构图配色系统" not in synced_text
+    assert "--paper: #fbfdff" not in synced_text
+    assert "## 图型规则索引" not in synced_text
+    assert "references/system-architecture.md" not in synced_text
+    assert "references/business-architecture.md" not in synced_text
+    assert "references/fault-debugging.md" not in synced_text
+    assert "references/page-mockup.md" not in synced_text
+    assert "箭头只能连接节点边缘锚点" not in synced_text
+    assert "如果任一节点重叠、线穿字、文字溢出，必须重排" not in synced_text
+    assert "状态色只能用于描边、角标、少量状态章" not in synced_text
     assert "系统架构图默认优先采用 007 宏观拓扑基线" not in synced_text
     assert "故障排查图必须先画当前现状链路，再画根因和修法" not in synced_text
     assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" not in synced_text

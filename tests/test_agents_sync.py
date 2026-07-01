@@ -68,6 +68,9 @@ def test_sync_agents_writes_override_and_targets(tmp_path: Path) -> None:
         assert "<!-- vibego-agents:end -->" in text
         assert "# 模板 v1" in text
         assert "## Skill: vibe-diagram" in text
+        assert "description: draw diagrams" in text
+        assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" in text
+        assert "# 图形协议" not in text
 
 
 def test_sync_agents_preserves_user_content_and_replaces_managed_block(tmp_path: Path) -> None:

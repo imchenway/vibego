@@ -149,8 +149,25 @@ builtin_skills_dir = Path(sys.argv[5]).expanduser()
 timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def extract_skill_index(skill_file: Path) -> tuple[str, str]:
+    """从 SKILL.md frontmatter 提取索引信息，不把正文常驻注入 AGENTS。"""
+
+    text = skill_file.read_text(encoding="utf-8")
+    skill_name = skill_file.parent.name
+    description = ""
+    if text.startswith("---\n"):
+        _, frontmatter, _ = text.split("---", 2)
+        for raw_line in frontmatter.splitlines():
+            line = raw_line.strip()
+            if line.startswith("name:"):
+                skill_name = line.removeprefix("name:").strip().strip('"').strip("'") or skill_name
+            elif line.startswith("description:"):
+                description = line.removeprefix("description:").strip().strip('"').strip("'")
+    return skill_name, description
+
+
 def render_builtin_skills(skills_dir: Path) -> str:
-    """把 vibego 内置 skill 合并进 AGENTS，确保全局 Codex 也能被触发。"""
+    """把 vibego 内置 skill 索引合并进 AGENTS，确保全局 Codex 也能发现。"""
 
     if not skills_dir.is_dir():
         return ""
@@ -161,20 +178,26 @@ def render_builtin_skills(skills_dir: Path) -> str:
     lines = [
         "# Vibego 内置 Skills",
         "",
-        "以下技能包由 vibego 在同步 AGENTS 时自动注入，与本文件其他全局规约同级生效。",
-        "当用户需求命中某个 skill 的 description 或正文触发词时，必须执行该 skill 的规则。",
+        "以下技能包由 vibego 在同步 AGENTS 时自动注入索引，与本文件其他全局规约同级生效。",
+        "当用户需求命中某个 skill 的 name/description 时，必须先读取对应 SKILL.md 全文，再执行该 skill 的规则。",
+        "AGENTS 只保留索引，不常驻注入完整 skill 正文，避免提示词膨胀。",
         "",
     ]
     for skill_file in skill_files:
-        skill_name = skill_file.parent.name
-        skill_text = skill_file.read_text(encoding="utf-8").strip()
+        skill_name, description = extract_skill_index(skill_file)
         lines.extend(
             [
                 f"## Skill: {skill_name}",
                 "",
                 f"<!-- vibego-skill-source: {skill_file} -->",
                 "",
-                skill_text,
+                "```yaml",
+                f"name: {skill_name}",
+                f"description: {description}",
+                "```",
+                "",
+                "- 命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文。",
+                "- 若读取失败，必须 fail-closed，不得凭索引内容继续执行。",
                 "",
             ]
         )

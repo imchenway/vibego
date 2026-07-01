@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>交付验收：全局提示词已禁止可选评论</title>
+    <style>
+        :root {
+            --ink: #102033;
+            --muted: #5a6c80;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .9);
+            --line: #8db3d8;
+            --blue: #1f6fb2;
+            --blue-soft: #e8f3ff;
+            --green: #17785a;
+            --green-soft: #e9f8f2;
+            --amber: #986506;
+            --amber-soft: #fff6de;
+            --red: #a63a3a;
+            --red-soft: #fff0f0;
+            --violet: #6254ad;
+            --violet-soft: #f1efff;
+            --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+            --radius: 20px;
+            --rail: #c8d9ea;
+        }
+
+        * {
+            box-sizing: border-box;
+            overflow-wrap: anywhere;
+        }
+
+        html {
+            color: var(--ink);
+        }
+
+        body {
+            margin: 0;
+            min-width: 0;
+            font: 14px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            background: radial-gradient(circle at 18% 3%, rgba(214, 233, 255, .78), transparent 30rem),
+            radial-gradient(circle at 78% 6%, rgba(228, 246, 239, .8), transparent 28rem),
+            linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        a {
+            color: var(--blue);
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: .92em;
+        }
+
+        .page {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 28px 22px 44px;
+        }
+
+        .title-meta {
+            width: 100%;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 10px;
+            align-items: center;
+            padding: 8px 12px;
+            border: 1px solid rgba(31, 111, 178, .14);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .78);
+            box-shadow: var(--shadow);
+            margin-bottom: 16px;
+        }
+
+        .task-code {
+            font-weight: 800;
+            color: var(--blue);
+            letter-spacing: .01em;
+            white-space: nowrap;
+        }
+
+        .skill-strip {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--muted);
+        }
+
+        .top-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 318px;
+            gap: 20px;
+            align-items: start;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(24px, 2.8vw, 32px);
+            line-height: 1.18;
+            letter-spacing: -.025em;
+        }
+
+        .subtitle {
+            margin: 12px 0 0;
+            max-width: 740px;
+            color: var(--muted);
+            font-size: 15px;
+        }
+
+        .facts {
+            margin: 14px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .delivery-card {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .mini-card {
+            background: var(--panel);
+            border: 1px solid rgba(141, 179, 216, .38);
+            border-radius: 16px;
+            padding: 12px 14px;
+            box-shadow: var(--shadow);
+        }
+
+        .mini-card strong {
+            display: block;
+            color: var(--ink);
+            font-size: 12px;
+            letter-spacing: .04em;
+        }
+
+        .mini-card span {
+            display: block;
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .tabs {
+            margin-top: 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tabs [role="tab"] {
+            border: 1px solid rgba(31, 111, 178, .22);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .84);
+            color: var(--blue);
+            padding: 8px 12px;
+            font-weight: 750;
+            cursor: pointer;
+        }
+
+        .tabs [role="tab"][aria-selected="true"] {
+            background: var(--blue);
+            color: #fff;
+            border-color: var(--blue);
+            box-shadow: 0 10px 22px rgba(31, 111, 178, .18);
+        }
+
+        button:focus-visible, a:focus-visible {
+            outline: 3px solid rgba(31, 111, 178, .35);
+            outline-offset: 3px;
+        }
+
+        .candidate-panel {
+            margin-top: 18px;
+        }
+
+        .js .candidate-panel {
+            display: none;
+        }
+
+        .js .candidate-panel.active {
+            display: block;
+        }
+
+        .panel-shell {
+            background: rgba(255, 255, 255, .76);
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 18px;
+        }
+
+        .panel-head {
+            display: flex;
+            gap: 12px;
+            align-items: baseline;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(141, 179, 216, .32);
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+        }
+
+        .panel-head h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .recommend {
+            color: var(--green);
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .control-axis {
+            display: grid;
+            grid-template-columns: 150px minmax(0, 1fr);
+            gap: 10px 14px;
+            max-width: 880px;
+            margin-bottom: 18px;
+            padding: 12px;
+            border-left: 4px solid var(--blue);
+            background: rgba(232, 243, 255, .62);
+            border-radius: 16px;
+        }
+
+        .control-axis b {
+            color: var(--blue);
+        }
+
+        .control-axis span {
+            color: var(--muted);
+        }
+
+        .rail-grid {
+            position: relative;
+            display: grid;
+            grid-template-columns: 1.05fr 1.12fr 1.18fr .9fr 1fr;
+            gap: 14px;
+            padding: 10px;
+        }
+
+        .rail-grid::before {
+            content: "";
+            position: absolute;
+            left: 6%;
+            right: 6%;
+            top: 54px;
+            height: 2px;
+            background: var(--rail);
+            z-index: 0;
+        }
+
+        .col-head {
+            position: relative;
+            z-index: 1;
+            font-weight: 850;
+            color: var(--muted);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }
+
+        .track-row {
+            display: contents;
+        }
+
+        .station {
+            position: relative;
+            z-index: 1;
+            min-height: 96px;
+            padding: 14px 14px 13px 18px;
+            border: 1px solid rgba(141, 179, 216, .36);
+            border-radius: 18px;
+            background: #fff;
+            box-shadow: 0 10px 28px rgba(20, 57, 92, .06);
+        }
+
+        .station::before {
+            content: "";
+            position: absolute;
+            left: -8px;
+            top: 22px;
+            width: 14px;
+            height: 14px;
+            border-radius: 999px;
+            background: #fff;
+            border: 3px solid var(--blue);
+        }
+
+        .station.pass::before {
+            border-color: var(--green);
+        }
+
+        .station.warn::before {
+            border-color: var(--amber);
+            border-radius: 3px;
+            transform: rotate(45deg);
+        }
+
+        .station h3 {
+            margin: 0 0 6px;
+            font-size: 14px;
+            line-height: 1.28;
+        }
+
+        .station p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12.5px;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-bottom: 6px;
+            padding: 3px 7px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .status.pass {
+            background: var(--green-soft);
+            color: var(--green);
+        }
+
+        .status.warn {
+            background: var(--amber-soft);
+            color: var(--amber);
+        }
+
+        .status.blocked {
+            background: var(--red-soft);
+            color: var(--red);
+        }
+
+        .board {
+            display: grid;
+            grid-template-columns: 160px repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .board .cell {
+            min-height: 82px;
+            padding: 12px;
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: 16px;
+            background: #fff;
+        }
+
+        .board .lane {
+            background: var(--blue-soft);
+            border-color: rgba(31, 111, 178, .28);
+            font-weight: 850;
+            color: var(--blue);
+        }
+
+        .board .head {
+            min-height: auto;
+            background: rgba(255, 255, 255, .64);
+            color: var(--muted);
+            font-weight: 850;
+            font-size: 12px;
+        }
+
+        .heatmap {
+            display: grid;
+            grid-template-columns: 1.2fr repeat(5, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .heatmap div {
+            padding: 12px;
+            border-radius: 15px;
+            border: 1px solid rgba(141, 179, 216, .34);
+            background: #fff;
+            min-height: 58px;
+        }
+
+        .heatmap .h {
+            background: rgba(232, 243, 255, .75);
+            color: var(--blue);
+            font-weight: 850;
+        }
+
+        .heatmap .ok {
+            background: var(--green-soft);
+            border-color: rgba(23, 120, 90, .25);
+        }
+
+        .heatmap .warn {
+            background: var(--amber-soft);
+            border-color: rgba(152, 101, 6, .22);
+        }
+
+        .subway {
+            display: grid;
+            gap: 18px;
+            padding: 10px 2px 4px;
+        }
+
+        .line {
+            display: grid;
+            grid-template-columns: 128px minmax(0, 1fr);
+            gap: 12px;
+            align-items: center;
+        }
+
+        .line-name {
+            font-weight: 850;
+            color: var(--blue);
+        }
+
+        .stops {
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .stops::before {
+            content: "";
+            position: absolute;
+            left: 3%;
+            right: 3%;
+            top: 20px;
+            height: 3px;
+            background: var(--line);
+            border-radius: 999px;
+        }
+
+        .stop {
+            position: relative;
+            z-index: 1;
+            min-height: 84px;
+            padding-top: 42px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .stop::before {
+            content: "";
+            position: absolute;
+            top: 10px;
+            left: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            border: 4px solid var(--blue);
+            background: #fff;
+        }
+
+        .stop.ok::before {
+            border-color: var(--green);
+        }
+
+        .stop.warn::before {
+            border-color: var(--amber);
+            border-radius: 4px;
+            transform: rotate(45deg);
+        }
+
+        .compare {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .compare .mini-card {
+            box-shadow: none;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        @media (max-width: 860px) {
+            .page {
+                padding: 18px 12px 30px;
+            }
+
+            .top-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .rail-grid, .board, .heatmap {
+                display: block;
+            }
+
+            .rail-grid::before {
+                display: none;
+            }
+
+            .col-head {
+                margin: 14px 0 8px;
+            }
+
+            .station, .board .cell, .heatmap div {
+                margin-bottom: 10px;
+            }
+
+            .control-axis {
+                grid-template-columns: 1fr;
+            }
+
+            .compare {
+                grid-template-columns: 1fr;
+            }
+
+            .line {
+                grid-template-columns: 1fr;
+            }
+
+            .stops {
+                grid-template-columns: 1fr;
+            }
+
+            .stops::before {
+                left: 10px;
+                right: auto;
+                top: 0;
+                bottom: 0;
+                width: 3px;
+                height: auto;
+            }
+
+            .stop {
+                padding: 6px 0 10px 42px;
+                min-height: auto;
+            }
+
+            .stop::before {
+                top: 6px;
+                left: 0;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                scroll-behavior: auto !important;
+                transition: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <div class="title-meta" aria-label="任务元信息">
+        <div class="task-code">TASK_20260701_008</div>
+        <div class="skill-strip"
+             title="本次使用的skill：superpowers:brainstorming、superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion">
+            本次使用的skill：superpowers:brainstorming、superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion
+        </div>
+    </div>
+
+    <section class="top-grid">
+        <div>
+            <h1>交付验收：全局提示词已禁止可选评论</h1>
+            <p class="subtitle">围绕用户原始要求“在全局提示词里加上一条：<code>DO NOT send optional commentary</code>”，本图按交付验收图候选全集呈现：需求、变更、证据、判定和剩余动作逐条绑定。
+            </p>
+            <p class="facts">事实来源：<code>AGENTS-template.md</code>、<code>/Users/david/.config/vibego/agents/current/AGENTS-template.md</code>、<code>tests/test_agents_template_migration.py</code>、本轮验证命令输出。
+            </p>
+            <div class="tabs" role="tablist" aria-label="交付验收图候选切换">
+                <button id="tab-a" role="tab" aria-selected="true" aria-controls="panel-a" data-target="panel-a">候选
+                    A：需求到证据轨道 🌟
+                </button>
+                <button id="tab-b" role="tab" aria-selected="false" aria-controls="panel-b" data-target="panel-b">候选
+                    B：R# 泳道看板
+                </button>
+                <button id="tab-c" role="tab" aria-selected="false" aria-controls="panel-c" data-target="panel-c">候选
+                    C：证据矩阵热区
+                </button>
+                <button id="tab-d" role="tab" aria-selected="false" aria-controls="panel-d" data-target="panel-d">候选
+                    D：地铁验收线路
+                </button>
+            </div>
+        </div>
+        <aside class="delivery-card" aria-label="任务交付信息">
+            <div class="mini-card"><strong>本次修改的影响功能点</strong><span>全局 AGENTS 模板规约；影响后续同步/注入出的提示词行为；本轮已更新 codex/claude/gemini/vibego 受管目标，无业务 Bot 指令变更。</span>
+            </div>
+            <div class="mini-card"><strong>待用户执行事项</strong><span>无需再执行同步脚本；本轮已执行 agents-sync。本轮未重启长期 worker；若需要已运行 worker 立即读取新规约，请按现有运维流程重启对应 worker。</span>
+            </div>
+            <div class="mini-card"><strong>验证方式</strong><span>模板聚焦回归、仓库模板与活跃模板一致性检查、agents-sync 输出、diff 空白检查。</span>
+            </div>
+            <div class="mini-card"><strong>剩余未覆盖点</strong><span>未执行全量测试与实际 worker 重启观察；本轮变更仅触达模板、同步目标与模板测试。</span>
+            </div>
+        </aside>
+    </section>
+
+    <section id="panel-a" class="candidate-panel active" role="tabpanel" aria-labelledby="tab-a" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>候选 A：需求到证据的验收轨道</h2><span
+                    class="recommend">推荐首选：逐条验收最直接</span></div>
+            <div class="control-axis" aria-label="交付说明轴">
+                <b>改了什么</b><span>根模板与本机活跃模板新增硬边界：<code>DO NOT send optional commentary</code>；新增模板测试。</span>
+                <b>影响入口</b><span>后续 AGENTS 同步/注入出的全局提示词；本轮同步到 codex/claude/gemini/vibego 受管目标；无用户业务入口变化。</span>
+                <b>验证方式</b><span><code>tests/test_agents_template_migration.py</code> 聚焦回归 14 项通过；模板同步检查通过。</span>
+                <b>脚本 /
+                    重启</b><span>已执行 agents-sync；无需用户再同步。若要长期 worker 即时加载，需用户按现有流程重启。</span>
+                <b>未覆盖点</b><span>未做全量测试、未启动/重启 worker 做运行时观察。</span>
+            </div>
+            <div class="rail-grid" aria-label="需求到证据验收轨道">
+                <div class="col-head">原始要求 / AC</div>
+                <div class="col-head">交付变更</div>
+                <div class="col-head">验证证据</div>
+                <div class="col-head">验收判定</div>
+                <div class="col-head">动作 / 回滚</div>
+                <div class="track-row">
+                    <div class="station pass"><h3>R1 加入指定提示词</h3>
+                        <p>用户原话：在全局提示词加入 <code>DO NOT send optional commentary</code>。</p></div>
+                    <div class="station pass"><h3>根模板写入硬边界</h3>
+                        <p><code>AGENTS-template.md</code> 的 <code>## Hard boundaries</code> 下新增英文约束。</p></div>
+                    <div class="station pass"><h3>测试固定文本存在</h3>
+                        <p><code>test_agents_template_forbids_optional_commentary</code> 断言模板包含该句。</p></div>
+                    <div class="station pass"><span class="status pass">● pass</span>
+                        <h3>通过</h3>
+                        <p>聚焦测试和模板测试文件均通过。</p></div>
+                    <div class="station warn"><h3>回滚路径</h3>
+                        <p>删除该 bullet，并移除新增测试断言。</p></div>
+                </div>
+                <div class="track-row">
+                    <div class="station pass"><h3>R2 作用到本机全局模板</h3>
+                        <p>用户说“全局提示词”，需同步到活跃模板源。</p></div>
+                    <div class="station pass"><h3>活跃模板同步</h3>
+                        <p><code>/Users/david/.config/vibego/agents/current/AGENTS-template.md</code> 同步同一行。</p>
+                    </div>
+                    <div class="station pass"><h3>一致性与同步检查</h3>
+                        <p><code>cmp</code> 输出 <code>template synced</code>；<code>agents-sync</code> 输出 <code>ok:
+                            true</code> 且 4 个 target 为 <code>updated</code>。</p></div>
+                    <div class="station pass"><span class="status pass">● pass</span>
+                        <h3>通过</h3>
+                        <p>仓库模板与活跃模板内容一致。</p></div>
+                    <div class="station warn"><h3>运行中会话</h3>
+                        <p>已运行 worker 是否热读取待确认；需即时生效可重启。</p></div>
+                </div>
+                <div class="track-row">
+                    <div class="station pass"><h3>R3 不引入旧回复风格</h3>
+                        <p>避免回退到额外聊天样式或冗余收尾口径。</p></div>
+                    <div class="station pass"><h3>只加单条硬边界</h3>
+                        <p>未恢复 <code>Reply contract</code>，未加入额外回复模板。</p></div>
+                    <div class="station pass"><h3>旧模式反查</h3>
+                        <p>模板测试仍断言不含 <code>## Reply contract</code> 等旧字段。</p></div>
+                    <div class="station pass"><span class="status pass">● pass</span>
+                        <h3>通过</h3>
+                        <p><code>tests/test_agents_template_migration.py</code> 14 项通过。</p></div>
+                    <div class="station pass"><h3>无需动作</h3>
+                        <p>当前无需额外处理；后续若改回复风格需继续补测试。</p></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="panel-b" class="candidate-panel" role="tabpanel" aria-labelledby="tab-b" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>候选 B：R# 泳道验收看板</h2><span class="recommend">适合快速扫状态</span></div>
+            <div class="board" aria-label="R 编号泳道验收看板">
+                <div class="cell head">R#</div>
+                <div class="cell head">要求</div>
+                <div class="cell head">变更</div>
+                <div class="cell head">证据</div>
+                <div class="cell head">判定 / 动作</div>
+                <div class="cell lane">R1</div>
+                <div class="cell">加入 <code>DO NOT send optional commentary</code>。</div>
+                <div class="cell"><code>AGENTS-template.md</code> 硬边界新增。</div>
+                <div class="cell">新增测试先失败后通过；模板测试 14 项通过。</div>
+                <div class="cell"><span class="status pass">● pass</span> 可回滚为删除 bullet + 测试。</div>
+                <div class="cell lane">R2</div>
+                <div class="cell">同步本机全局模板。</div>
+                <div class="cell">活跃 <code>current/AGENTS-template.md</code> 与 codex/claude/gemini/vibego 目标同步。
+                </div>
+                <div class="cell"><code>cmp -s</code> 输出 <code>template synced</code>；<code>agents-sync</code> 输出
+                    <code>ok: true</code>。
+                </div>
+                <div class="cell"><span class="status pass">● pass</span> 运行中 worker 即时加载待用户决定。</div>
+                <div class="cell lane">R3</div>
+                <div class="cell">不带回旧式可选评论/回复风格。</div>
+                <div class="cell">只新增一条硬边界。</div>
+                <div class="cell">既有“无 Reply contract”测试继续通过。</div>
+                <div class="cell"><span class="status pass">● pass</span> 无额外动作。</div>
+            </div>
+        </div>
+    </section>
+
+    <section id="panel-c" class="candidate-panel" role="tabpanel" aria-labelledby="tab-c" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>候选 C：证据矩阵热区</h2><span class="recommend">适合审计覆盖面</span></div>
+            <div class="heatmap" aria-label="证据矩阵热区">
+                <div class="h">需求</div>
+                <div class="h">仓库模板</div>
+                <div class="h">活跃模板</div>
+                <div class="h">测试</div>
+                <div class="h">旧模式反查</div>
+                <div class="h">运行时</div>
+                <div class="h">R1 指定文本</div>
+                <div class="ok">已写入根模板。</div>
+                <div class="ok">已同步同一句。</div>
+                <div class="ok">新测试覆盖。</div>
+                <div class="ok">未恢复 Reply contract。</div>
+                <div class="warn">未重启 worker。</div>
+                <div class="h">R2 全局生效源</div>
+                <div class="ok">源模板存在。</div>
+                <div class="ok"><code>cmp</code> 一致；<code>agents-sync</code> updated。</div>
+                <div class="ok">模板测试通过。</div>
+                <div class="ok">无运行入口文案新增。</div>
+                <div class="warn">已运行会话热加载待确认。</div>
+                <div class="h">R3 可回归</div>
+                <div class="ok">文本锚点明确。</div>
+                <div class="ok">同步源明确。</div>
+                <div class="ok">14 项通过。</div>
+                <div class="ok">旧禁用断言仍在。</div>
+                <div class="warn">无需本轮运行时验证。</div>
+            </div>
+        </div>
+    </section>
+
+    <section id="panel-d" class="candidate-panel" role="tabpanel" aria-labelledby="tab-d" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>候选 D：地铁站点式验收线路</h2><span class="recommend">适合移动端讲清路径</span>
+            </div>
+            <div class="subway" aria-label="地铁站点式验收线路">
+                <div class="line">
+                    <div class="line-name">R1 指定约束线</div>
+                    <div class="stops">
+                        <div class="stop ok">需求：加入指定英文句子</div>
+                        <div class="stop ok">变更：根模板硬边界</div>
+                        <div class="stop ok">证据：新增测试</div>
+                        <div class="stop ok">判定：pass</div>
+                        <div class="stop warn">回滚：删 bullet 和测试</div>
+                    </div>
+                </div>
+                <div class="line">
+                    <div class="line-name">R2 活跃同步线</div>
+                    <div class="stops">
+                        <div class="stop ok">需求：全局提示词</div>
+                        <div class="stop ok">变更：current 模板</div>
+                        <div class="stop ok">证据：cmp synced + agents-sync ok</div>
+                        <div class="stop ok">判定：pass</div>
+                        <div class="stop warn">动作：运行中 worker 可选重启</div>
+                    </div>
+                </div>
+                <div class="line">
+                    <div class="line-name">R3 旧模式防回退线</div>
+                    <div class="stops">
+                        <div class="stop ok">需求：不加可选评论</div>
+                        <div class="stop ok">变更：只加一条硬边界</div>
+                        <div class="stop ok">证据：模板回归</div>
+                        <div class="stop ok">判定：pass</div>
+                        <div class="stop ok">动作：无需额外脚本</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="compare" aria-label="候选对比矩阵">
+        <div class="mini-card"><strong>A 可读性</strong><span>最强，按需求→证据→判定逐行验收，推荐。</span></div>
+        <div class="mini-card"><strong>B 事实承载</strong><span>适合快速审阅 R# 状态，但细节略压缩。</span></div>
+        <div class="mini-card"><strong>C 适用边界</strong><span>适合审计覆盖空洞，移动端可读性一般。</span></div>
+        <div class="mini-card"><strong>D 风险</strong><span>路径感强，但承载命令输出不如 A。</span></div>
+    </section>
+</main>
+<script>
+    (function () {
+        document.documentElement.classList.remove('no-js');
+        document.documentElement.classList.add('js');
+        var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+        var panels = Array.prototype.slice.call(document.querySelectorAll('[role="tabpanel"]'));
+
+        function activate(tab, updateHash) {
+            tabs.forEach(function (t) {
+                t.setAttribute('aria-selected', String(t === tab));
+                t.tabIndex = t === tab ? 0 : -1;
+            });
+            panels.forEach(function (p) {
+                p.classList.toggle('active', p.id === tab.dataset.target);
+            });
+            if (updateHash) history.replaceState(null, '', '#' + tab.dataset.target);
+        }
+
+        tabs.forEach(function (tab, index) {
+            tab.addEventListener('click', function () {
+                activate(tab, true);
+            });
+            tab.addEventListener('keydown', function (event) {
+                var next = index;
+                if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+                else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+                else if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = tabs.length - 1;
+                else return;
+                event.preventDefault();
+                tabs[next].focus();
+                activate(tabs[next], true);
+            });
+        });
+        var hash = location.hash ? location.hash.slice(1) : 'panel-a';
+        var selected = tabs.find(function (tab) {
+            return tab.dataset.target === hash;
+        }) || tabs[0];
+        activate(selected, false);
+    })();
+</script>
+</body>
+</html>

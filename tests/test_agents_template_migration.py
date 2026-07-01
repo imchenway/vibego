@@ -98,18 +98,19 @@ def test_agents_template_uses_global_skill_kernel_without_plan_develop_phases() 
     assert "vibe -> design -> develop" not in template_text
 
 
-def test_agents_template_requires_brainstorming_stage_gate_and_task_reset() -> None:
-    """AGENTS 模板应强制下一阶段前先做 brainstorming，并在任务闭环后复位边界。"""
+def test_agents_template_removes_brainstorming_stage_gate_and_task_reset() -> None:
+    """AGENTS 模板不应保留阶段确认门禁、确认复用和任务回退逻辑。"""
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "任何任务进入方案、计划、实现或验证等下一阶段前，必须先使用 superpowers:brainstorming" in template_text
-    assert "先通过 superpowers:brainstorming 明确目标、范围、关键约束、验收口径和下一阶段" in template_text
-    assert "只有用户明确确认方案或确认进入下一阶段后，才结束交互问答" in template_text
-    assert "若当前线程已完成同一目标的 brainstorming 并获得用户确认" in template_text
-    assert "修改类动作完成并完成验证/交付后，必须视为该任务闭环" in template_text
-    assert "即使仍在同一会话内，也必须回到新的交互式起点" in template_text
-    assert "不得把上一任务的确认跨任务复用" in template_text
+    assert "需求、方案、行为变更、复杂设计：使用 superpowers:brainstorming" in template_text
+    assert "任何任务进入方案、计划、实现或验证等下一阶段前，必须先使用 superpowers:brainstorming" not in template_text
+    assert "先通过 superpowers:brainstorming 明确目标、范围、关键约束、验收口径和下一阶段" not in template_text
+    assert "只有用户明确确认方案或确认进入下一阶段后，才结束交互问答" not in template_text
+    assert "若当前线程已完成同一目标的 brainstorming 并获得用户确认" not in template_text
+    assert "修改类动作完成并完成验证/交付后，必须视为该任务闭环" not in template_text
+    assert "即使仍在同一会话内，也必须回到新的交互式起点" not in template_text
+    assert "不得把上一任务的确认跨任务复用" not in template_text
     assert "明确说“按推荐做 / 开始修复 / 直接实现”时，可以进入实现" not in template_text
 
 
@@ -158,6 +159,14 @@ def test_agents_template_does_not_keep_extra_reply_style_prompts() -> None:
     assert "现象 -> 影响 -> 根因 -> 修法 -> 验证" not in template_text
 
 
+def test_agents_template_forbids_optional_commentary() -> None:
+    """AGENTS 模板应明确禁止发送可选评论。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "DO NOT send optional commentary" in template_text
+
+
 def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks() -> None:
     """AGENTS 模板应把 HTML 图形沟通提升为几乎所有实质会话的默认协议。"""
 
@@ -193,5 +202,7 @@ def test_agents_template_compresses_text_after_html_delivery() -> None:
     template_text = _read_text("AGENTS-template.md")
 
     assert "生成 HTML 后聊天只给链接/路径和下一步" in template_text
+    assert "链接文字必须使用 HTML 内部 `<h1>` 主标题" in template_text
+    assert "不要写成固定的“打开 HTML”" in template_text
     assert "验证摘要" not in template_text
     assert "分析、证据链、测试矩阵和风险回滚写入 HTML 或 docs" in template_text

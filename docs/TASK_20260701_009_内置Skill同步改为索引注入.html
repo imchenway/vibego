@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>交付验收：内置 Skill 同步已改为索引注入</title>
+    <style>
+        :root {
+            --ink: #102033;
+            --muted: #5a6c80;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .9);
+            --line: #8db3d8;
+            --blue: #1f6fb2;
+            --blue-soft: #e8f3ff;
+            --green: #17785a;
+            --green-soft: #e9f8f2;
+            --amber: #986506;
+            --amber-soft: #fff6de;
+            --red: #a63a3a;
+            --red-soft: #fff0f0;
+            --violet: #6254ad;
+            --violet-soft: #f1efff;
+            --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+            --radius: 20px;
+            --rail: #c8d9ea;
+        }
+
+        * {
+            box-sizing: border-box;
+            overflow-wrap: anywhere;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 14px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            background: radial-gradient(circle at 18% 3%, rgba(214, 233, 255, .78), transparent 30rem),
+            radial-gradient(circle at 78% 6%, rgba(228, 246, 239, .8), transparent 28rem),
+            linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: .92em;
+        }
+
+        .page {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 28px 22px 46px;
+        }
+
+        .title-meta {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 10px;
+            align-items: center;
+            width: 100%;
+            margin-bottom: 16px;
+            min-width: 0;
+        }
+
+        .meta-pill {
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            padding: 7px 12px;
+            border: 1px solid rgba(31, 111, 178, .18);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .82);
+            box-shadow: 0 10px 26px rgba(20, 57, 92, .06);
+        }
+
+        .task-code {
+            flex: 0 0 auto;
+            white-space: nowrap;
+            color: var(--blue);
+            font-weight: 850;
+        }
+
+        .skill-strip {
+            flex: 0 1 auto;
+            min-width: 0;
+            max-width: min(760px, 72vw);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--muted);
+        }
+
+        .top-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 330px;
+            gap: 20px;
+            align-items: start;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(24px, 2.8vw, 32px);
+            line-height: 1.18;
+            letter-spacing: -.025em;
+        }
+
+        .subtitle {
+            margin: 12px 0 0;
+            max-width: 760px;
+            color: var(--muted);
+        }
+
+        .facts {
+            margin: 12px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .delivery-card {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .mini-card {
+            background: var(--panel);
+            border: 1px solid rgba(141, 179, 216, .38);
+            border-radius: 16px;
+            padding: 12px 14px;
+            box-shadow: var(--shadow);
+        }
+
+        .mini-card strong {
+            display: block;
+            font-size: 12px;
+            letter-spacing: .04em;
+        }
+
+        .mini-card span {
+            display: block;
+            color: var(--muted);
+            margin-top: 5px;
+            font-size: 13px;
+        }
+
+        .tabs {
+            margin-top: 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tabs [role="tab"] {
+            border: 1px solid rgba(31, 111, 178, .22);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .84);
+            color: var(--blue);
+            padding: 8px 12px;
+            font-weight: 780;
+            cursor: pointer;
+        }
+
+        .tabs [role="tab"][aria-selected="true"] {
+            background: var(--blue);
+            color: #fff;
+            border-color: var(--blue);
+            box-shadow: 0 10px 22px rgba(31, 111, 178, .18);
+        }
+
+        button:focus-visible, a:focus-visible {
+            outline: 3px solid rgba(31, 111, 178, .35);
+            outline-offset: 3px;
+        }
+
+        .candidate-panel {
+            margin-top: 18px;
+        }
+
+        .js .candidate-panel {
+            display: none;
+        }
+
+        .js .candidate-panel.active {
+            display: block;
+        }
+
+        .panel-shell {
+            background: rgba(255, 255, 255, .76);
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 18px;
+        }
+
+        .panel-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: baseline;
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(141, 179, 216, .32);
+        }
+
+        .panel-head h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .recommend {
+            color: var(--green);
+            font-weight: 850;
+            white-space: nowrap;
+        }
+
+        .control-axis {
+            display: grid;
+            grid-template-columns: 160px minmax(0, 1fr);
+            gap: 10px 14px;
+            max-width: 920px;
+            margin-bottom: 18px;
+            padding: 12px;
+            border-left: 4px solid var(--blue);
+            background: rgba(232, 243, 255, .62);
+            border-radius: 16px;
+        }
+
+        .control-axis b {
+            color: var(--blue);
+        }
+
+        .control-axis span {
+            color: var(--muted);
+        }
+
+        .rail-grid {
+            position: relative;
+            display: grid;
+            grid-template-columns: 1.05fr 1.2fr 1.25fr .86fr 1fr;
+            gap: 14px;
+            padding: 10px;
+        }
+
+        .rail-grid::before {
+            content: "";
+            position: absolute;
+            left: 6%;
+            right: 6%;
+            top: 54px;
+            height: 2px;
+            background: var(--rail);
+            z-index: 0;
+        }
+
+        .col-head {
+            position: relative;
+            z-index: 1;
+            color: var(--muted);
+            font-weight: 850;
+            font-size: 12px;
+            letter-spacing: .04em;
+        }
+
+        .track-row {
+            display: contents;
+        }
+
+        .station {
+            position: relative;
+            z-index: 1;
+            min-height: 104px;
+            padding: 14px 14px 13px 18px;
+            border: 1px solid rgba(141, 179, 216, .36);
+            border-radius: 18px;
+            background: #fff;
+            box-shadow: 0 10px 28px rgba(20, 57, 92, .06);
+        }
+
+        .station::before {
+            content: "";
+            position: absolute;
+            left: -8px;
+            top: 22px;
+            width: 14px;
+            height: 14px;
+            border-radius: 999px;
+            background: #fff;
+            border: 3px solid var(--blue);
+        }
+
+        .station.pass::before {
+            border-color: var(--green);
+        }
+
+        .station.warn::before {
+            border-color: var(--amber);
+            border-radius: 3px;
+            transform: rotate(45deg);
+        }
+
+        .station h3 {
+            margin: 0 0 6px;
+            font-size: 14px;
+            line-height: 1.28;
+        }
+
+        .station p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12.5px;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-bottom: 6px;
+            padding: 3px 7px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        .status.pass {
+            background: var(--green-soft);
+            color: var(--green);
+        }
+
+        .status.warn {
+            background: var(--amber-soft);
+            color: var(--amber);
+        }
+
+        .board {
+            display: grid;
+            grid-template-columns: 150px repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .cell {
+            min-height: 82px;
+            padding: 12px;
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: 16px;
+            background: #fff;
+        }
+
+        .head, .lane {
+            background: var(--blue-soft);
+            color: var(--blue);
+            font-weight: 850;
+        }
+
+        .heatmap {
+            display: grid;
+            grid-template-columns: 1.2fr repeat(5, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .heatmap div {
+            min-height: 58px;
+            padding: 12px;
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: 15px;
+            background: #fff;
+        }
+
+        .heatmap .h {
+            background: rgba(232, 243, 255, .75);
+            color: var(--blue);
+            font-weight: 850;
+        }
+
+        .heatmap .ok {
+            background: var(--green-soft);
+            border-color: rgba(23, 120, 90, .25);
+        }
+
+        .heatmap .warn {
+            background: var(--amber-soft);
+            border-color: rgba(152, 101, 6, .22);
+        }
+
+        .subway {
+            display: grid;
+            gap: 18px;
+            padding: 8px 0;
+        }
+
+        .line {
+            display: grid;
+            grid-template-columns: 150px minmax(0, 1fr);
+            gap: 12px;
+            align-items: start;
+        }
+
+        .line-name {
+            color: var(--blue);
+            font-weight: 850;
+            padding-top: 10px;
+        }
+
+        .stops {
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .stops::before {
+            content: "";
+            position: absolute;
+            left: 3%;
+            right: 3%;
+            top: 20px;
+            height: 3px;
+            background: var(--line);
+            border-radius: 999px;
+        }
+
+        .stop {
+            position: relative;
+            z-index: 1;
+            min-height: 86px;
+            padding-top: 42px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .stop::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 10px;
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            border: 4px solid var(--blue);
+            background: #fff;
+        }
+
+        .stop.ok::before {
+            border-color: var(--green);
+        }
+
+        .stop.warn::before {
+            border-color: var(--amber);
+            border-radius: 4px;
+            transform: rotate(45deg);
+        }
+
+        .compare {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .compare .mini-card {
+            box-shadow: none;
+        }
+
+        @media (max-width: 860px) {
+            .page {
+                padding: 18px 12px 30px;
+            }
+
+            .top-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .control-axis {
+                grid-template-columns: 1fr;
+            }
+
+            .rail-grid, .board, .heatmap {
+                display: block;
+            }
+
+            .rail-grid::before {
+                display: none;
+            }
+
+            .col-head {
+                margin: 14px 0 8px;
+            }
+
+            .station, .cell, .heatmap div {
+                margin-bottom: 10px;
+            }
+
+            .compare {
+                grid-template-columns: 1fr;
+            }
+
+            .line {
+                grid-template-columns: 1fr;
+            }
+
+            .stops {
+                grid-template-columns: 1fr;
+            }
+
+            .stops::before {
+                left: 10px;
+                right: auto;
+                top: 0;
+                bottom: 0;
+                width: 3px;
+                height: auto;
+            }
+
+            .stop {
+                min-height: auto;
+                padding: 6px 0 10px 42px;
+            }
+
+            .stop::before {
+                top: 6px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                scroll-behavior: auto !important;
+                transition: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <div class="title-meta" aria-label="任务元信息">
+        <div class="meta-pill task-code">TASK_20260701_009</div>
+        <div class="meta-pill skill-strip"
+             title="本次使用的skill：superpowers:brainstorming、superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion">
+            本次使用的skill：superpowers:brainstorming、superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion
+        </div>
+    </div>
+    <section class="top-grid">
+        <div>
+            <h1>交付验收：内置 Skill 同步已改为索引注入</h1>
+            <p class="subtitle">验收口径：R1-R4 有直接证据通过；R5 为运行中 worker 即时加载待用户选择。旧模式“把 SKILL.md
+                全文塞进 AGENTS”已通过测试和全局目标反查阻断。</p>
+            <p class="facts">
+                事实来源：<code>scripts/models/common.sh</code>、<code>vibego_cli/agents_sync.py</code>、<code>tests/test_agents_sync.py</code>、<code>tests/test_builtin_skills_injection.py</code>、<code>AGENTS.md</code>、本轮同步输出。
+            </p>
+            <div class="tabs" role="tablist" aria-label="交付验收图切换">
+                <button id="tab-a" role="tab" aria-selected="true" aria-controls="panel-a" data-target="panel-a">需求到证据轨道
+                    🌟
+                </button>
+                <button id="tab-b" role="tab" aria-selected="false" aria-controls="panel-b" data-target="panel-b">R#
+                    泳道看板
+                </button>
+                <button id="tab-c" role="tab" aria-selected="false" aria-controls="panel-c" data-target="panel-c">
+                    证据矩阵热区
+                </button>
+                <button id="tab-d" role="tab" aria-selected="false" aria-controls="panel-d" data-target="panel-d">
+                    地铁验收线路
+                </button>
+            </div>
+        </div>
+        <aside class="delivery-card" aria-label="任务交付信息">
+            <div class="mini-card"><strong>本次修改的影响功能点</strong><span>AGENTS/Skills 同步链路：worker 重启、start_tmux_codex、vibego agents-sync、Master 同步按钮产出的受管块。</span>
+            </div>
+            <div class="mini-card"><strong>待用户执行事项</strong><span>无需再执行同步脚本；本轮已更新本机全局目标。若要已运行 worker 立即使用新规约，请重启对应 worker。</span>
+            </div>
+            <div class="mini-card">
+                <strong>验证方式</strong><span>TDD 红绿、60 项相关回归、agents-sync 输出、4 个全局目标旧模式反查。</span>
+            </div>
+            <div class="mini-card">
+                <strong>剩余未覆盖点</strong><span>未执行全量测试；未重启长期 worker 做运行时观察。</span></div>
+        </aside>
+    </section>
+
+    <section id="panel-a" class="candidate-panel active" role="tabpanel" aria-labelledby="tab-a" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>需求到证据的验收轨道</h2><span class="recommend">最贴合逐条签收</span></div>
+            <div class="control-axis">
+                <b>改了什么</b><span>Shell 与 Python 同步器从全文拼接改为 frontmatter 索引 + source 路径 + 按需读取说明。</span>
+                <b>影响入口</b><span>正常重启 worker、Codex tmux 启动、CLI/Master 同步命令产出的 AGENTS 块。</span>
+                <b>验证方式</b><span>聚焦测试 2 项、相关回归 60 项、真实 agents-sync 和 4 个目标文件反查。</span>
+                <b>脚本 / 重启</b><span>本轮已执行 agents-sync；无需再同步。已运行 worker 即时加载需重启。</span>
+                <b>未覆盖点</b><span>未跑全量 pytest；未做长期 worker 重启后的现场观察。</span>
+            </div>
+            <div class="rail-grid">
+                <div class="col-head">原始要求 / AC</div>
+                <div class="col-head">交付变更</div>
+                <div class="col-head">验证证据</div>
+                <div class="col-head">验收判定</div>
+                <div class="col-head">动作 / 回滚</div>
+                <div class="track-row">
+                    <div class="station pass"><h3>R1 不再全文注入</h3>
+                        <p>用户指出当前实现错误：不能把 skill 正文常驻进 AGENTS。</p></div>
+                    <div class="station pass"><h3>同步器输出短索引</h3>
+                        <p><code>render_builtin_skills</code> 只输出 <code>name</code>、<code>description</code>、<code>vibego-skill-source</code>。
+                        </p></div>
+                    <div class="station pass"><h3>旧正文反查</h3>
+                        <p>测试断言不含 <code>## 自动路由规则</code>、<code>卡片堆积不是图</code>、<code>--paper:
+                            #fbfdff</code>。</p></div>
+                    <div class="station pass"><span class="status pass">● pass</span>
+                        <h3>通过</h3>
+                        <p>相关回归 60 项通过。</p></div>
+                    <div class="station warn"><h3>回滚</h3>
+                        <p>恢复全文读取逻辑与旧测试断言，再重新同步。</p></div>
+                </div>
+                <div class="track-row">
+                    <div class="station pass"><h3>R2 保持稳定触发</h3>
+                        <p>参考 superpowers：用 name/description 做发现，命中后读正文。</p></div>
+                    <div class="station pass"><h3>按需读取说明</h3>
+                        <p>AGENTS 明确“命中后读取 SKILL.md 全文；失败 fail-closed”。</p></div>
+                    <div class="station pass"><h3>路径存在</h3>
+                        <p>同步块保留 <code>vibego-skill-source</code> 指向 current 目录中的 <code>SKILL.md</code>。</p>
+                    </div>
+                    <div class="station pass"><span class="status pass">● pass</span>
+                        <h3>通过</h3>
+                        <p>4 个全局目标均保留索引与路径。</p></div>
+                    <div class="station warn"><h3>注意</h3>
+                        <p>平台原生 skill 注册仍是后续更优方向；本轮先修 AGENTS 膨胀。</p></div>
+                </div>
+                <div class="track-row">
+                    <div class="station pass"><h3>R3 正常重启链路也变瘦</h3>
+                        <p>用户关心正常 worker 重启是否仍生成大 AGENTS。</p></div>
+                    <div class="station pass"><h3>Shell 链路同步</h3>
+                        <p><code>scripts/models/common.sh</code> 的 worker/start_tmux 共用函数已改。</p></div>
+                    <div class="station pass"><h3>Shell 测试</h3>
+                        <p><code>test_sync_agents_block_embeds_builtin_vibe_diagram_skill_index_only</code> 覆盖该路径。
+                        </p></div>
+                    <div class="station pass"><span class="status pass">● pass</span>
+                        <h3>通过</h3>
+                        <p>正常启动同步将生成短索引。</p></div>
+                    <div class="station warn"><h3>待用户</h3>
+                        <p>已运行 worker 如需立刻切换，请重启。</p></div>
+                </div>
+                <div class="track-row">
+                    <div class="station pass"><h3>R4 CLI/Master 同步也一致</h3>
+                        <p>避免按钮同步和 worker 重启两套口径漂移。</p></div>
+                    <div class="station pass"><h3>Python 链路同步</h3>
+                        <p><code>vibego_cli/agents_sync.py</code> 使用同一索引规则。</p></div>
+                    <div class="station pass"><h3>真实同步</h3>
+                        <p><code>agents-sync --source-root ... --json</code> 输出 <code>ok: true</code>，4 个 target
+                            updated。</p></div>
+                    <div class="station pass"><span class="status pass">● pass</span>
+                        <h3>通过</h3>
+                        <p>Codex/Claude/Gemini/Vibego 目标均已更新。</p></div>
+                    <div class="station pass"><h3>无需动作</h3>
+                        <p>无需再执行同步脚本。</p></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="panel-b" class="candidate-panel" role="tabpanel" aria-labelledby="tab-b" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>R# 泳道验收看板</h2><span class="recommend">适合快速扫状态</span></div>
+            <div class="board">
+                <div class="cell head">R#</div>
+                <div class="cell head">要求</div>
+                <div class="cell head">变更</div>
+                <div class="cell head">证据</div>
+                <div class="cell head">判定 / 动作</div>
+                <div class="cell lane">R1</div>
+                <div class="cell">不要全文注入。</div>
+                <div class="cell">两条同步器改为索引。</div>
+                <div class="cell">测试禁止正文规则出现在 AGENTS。</div>
+                <div class="cell"><span class="status pass">● pass</span></div>
+                <div class="cell lane">R2</div>
+                <div class="cell">保持触发稳定。</div>
+                <div class="cell">保留 name/description/source。</div>
+                <div class="cell">真实目标可见 source 路径。</div>
+                <div class="cell"><span class="status pass">● pass</span></div>
+                <div class="cell lane">R3</div>
+                <div class="cell">正常重启链路也变瘦。</div>
+                <div class="cell">shell sync 函数已改。</div>
+                <div class="cell">shell 同步测试通过。</div>
+                <div class="cell"><span class="status pass">● pass</span> 重启可选。</div>
+                <div class="cell lane">R4</div>
+                <div class="cell">CLI/Master 同步一致。</div>
+                <div class="cell">Python agents_sync 已改。</div>
+                <div class="cell">agents-sync 输出 ok。</div>
+                <div class="cell"><span class="status pass">● pass</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="panel-c" class="candidate-panel" role="tabpanel" aria-labelledby="tab-c" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>证据矩阵热区</h2><span class="recommend">适合审计覆盖面</span></div>
+            <div class="heatmap">
+                <div class="h">需求</div>
+                <div class="h">Shell 链路</div>
+                <div class="h">Python 链路</div>
+                <div class="h">测试</div>
+                <div class="h">真实目标</div>
+                <div class="h">未覆盖</div>
+                <div class="h">R1 禁全文</div>
+                <div class="ok">index only</div>
+                <div class="ok">index only</div>
+                <div class="ok">正文反查</div>
+                <div class="ok">未见旧规则</div>
+                <div class="warn">未全量 pytest</div>
+                <div class="h">R2 稳触发</div>
+                <div class="ok">name/description</div>
+                <div class="ok">name/description</div>
+                <div class="ok">source 断言</div>
+                <div class="ok">source 可见</div>
+                <div class="warn">原生 plugin 化待后续</div>
+                <div class="h">R3 正常重启</div>
+                <div class="ok">run_bot 共用</div>
+                <div class="ok">不涉及</div>
+                <div class="ok">shell test</div>
+                <div class="ok">已同步</div>
+                <div class="warn">未重启 worker</div>
+                <div class="h">R4 CLI/Master</div>
+                <div class="ok">不涉及</div>
+                <div class="ok">agents_sync</div>
+                <div class="ok">agents_sync tests</div>
+                <div class="ok">4 targets updated</div>
+                <div class="warn">无</div>
+            </div>
+        </div>
+    </section>
+
+    <section id="panel-d" class="candidate-panel" role="tabpanel" aria-labelledby="tab-d" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>地铁站点式验收线路</h2><span class="recommend">适合移动端读路径</span></div>
+            <div class="subway">
+                <div class="line">
+                    <div class="line-name">旧模式切除线</div>
+                    <div class="stops">
+                        <div class="stop ok">发现：全文注入错层</div>
+                        <div class="stop ok">测试：先红</div>
+                        <div class="stop ok">实现：索引注入</div>
+                        <div class="stop ok">验证：60 过</div>
+                        <div class="stop warn">回滚：恢复全文拼接</div>
+                    </div>
+                </div>
+                <div class="line">
+                    <div class="line-name">触发保留线</div>
+                    <div class="stops">
+                        <div class="stop ok">索引：name</div>
+                        <div class="stop ok">索引：description</div>
+                        <div class="stop ok">路径：source</div>
+                        <div class="stop ok">规则：按需读取</div>
+                        <div class="stop warn">后续：原生 skill 注册</div>
+                    </div>
+                </div>
+                <div class="line">
+                    <div class="line-name">同步生效线</div>
+                    <div class="stops">
+                        <div class="stop ok">源码同步器</div>
+                        <div class="stop ok">agents-sync</div>
+                        <div class="stop ok">4 targets updated</div>
+                        <div class="stop ok">旧正文未命中</div>
+                        <div class="stop warn">worker 重启可选</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="compare" aria-label="验收图对比矩阵">
+        <div class="mini-card"><strong>需求轨道可读性</strong><span>逐条需求绑定证据与动作，推荐作为默认入口。</span>
+        </div>
+        <div class="mini-card"><strong>R# 看板事实承载</strong><span>适合快速确认 R# 状态。</span></div>
+        <div class="mini-card"><strong>矩阵热区适用边界</strong><span>适合审计两条同步链路是否都覆盖。</span></div>
+        <div class="mini-card"><strong>地铁线路风险</strong><span>移动端读序强，但命令细节承载较少。</span></div>
+    </section>
+</main>
+<script>
+    (function () {
+        document.documentElement.classList.remove('no-js');
+        document.documentElement.classList.add('js');
+        var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+        var panels = Array.prototype.slice.call(document.querySelectorAll('[role="tabpanel"]'));
+
+        function activate(tab, updateHash) {
+            tabs.forEach(function (t) {
+                t.setAttribute('aria-selected', String(t === tab));
+                t.tabIndex = t === tab ? 0 : -1;
+            });
+            panels.forEach(function (p) {
+                p.classList.toggle('active', p.id === tab.dataset.target);
+            });
+            if (updateHash) history.replaceState(null, '', '#' + tab.dataset.target);
+        }
+
+        tabs.forEach(function (tab, index) {
+            tab.addEventListener('click', function () {
+                activate(tab, true);
+            });
+            tab.addEventListener('keydown', function (event) {
+                var next = index;
+                if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+                else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+                else if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = tabs.length - 1;
+                else return;
+                event.preventDefault();
+                tabs[next].focus();
+                activate(tabs[next], true);
+            });
+        });
+        var hash = location.hash ? location.hash.slice(1) : 'panel-a';
+        var selected = tabs.find(function (tab) {
+            return tab.dataset.target === hash;
+        }) || tabs[0];
+        activate(selected, false);
+    })();
+</script>
+</body>
+</html>

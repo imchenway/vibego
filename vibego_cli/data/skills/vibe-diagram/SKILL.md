@@ -1,18 +1,17 @@
 ---
 name: vibe-diagram
-description: Use when the user asks to draw, diagram, visualize, finalize, or communicate system architecture, business/domain architecture, workflows, code sequence, state/data models, incidents/debugging, page mockups, technical design, requirements, decisions, delivery acceptance, or any one-picture visual explanation; triggers include 画图, 架构图, 业务架构图, 流程图, 时序图, 状态图, 故障排查图, 交付验收图, 设计稿, HTML 图, 一图胜千言.
+description: Use when the user asks to draw, diagram, visualize, finalize, or communicate architecture, workflows, code sequence, state/data models, debugging, page mockups, technical design, requirements, decisions, delivery acceptance, or any one-picture explanation; triggers include 画图, 架构图, 流程图, 时序图, 状态图, 交付验收图, 设计稿, HTML 图, 一图胜千言.
 ---
 
 # HTML 图形表达协议（薄内核）
 
-当用户要求画系统架构图、业务流程图、代码时序图、故障排查图、页面设计稿，或希望用图沟通需求、设计、代码逻辑、故障链路时，必须优先生成**单文件 HTML 图**。目标是“一图胜千言”：打开即能读懂，关键细节直接可见，点击只做补充，截图也能阅读。
+用图沟通架构、流程、时序、状态、故障、页面、技术设计、需求决策或交付验收时，优先生成**单文件 HTML 图**：打开即懂，关键细节可见，点击只补充。
 
 ## AGENTS 配合协议
 
-- 当 AGENTS 要求默认通过 HTML 图沟通时，本 skill 负责把任务阶段转换成可读的单文件 HTML 图；AGENTS 只判断何时触发，具体制图规则以
-  vibe-diagram 为准。
+- 当 AGENTS 要求默认通过 HTML 图沟通时，AGENTS 只判断何时触发；本 skill 决定单文件 HTML 图规则。
 - 每个 HTML 图都必须能脱离聊天记录独立阅读：标题、目标、主路径、关键结论、证据/待确认项必须在图内自解释。
-- 缺陷排查的根因节点只有证据成立后才能标为“根因”；证据不足时只能高亮为“可疑节点”或“待验证”。
+- 根因只有证据成立后才能标为“根因”；不足时标“可疑节点”或“待验证”。
 
 | 任务阶段        | 默认图型                         | 必须表达                                 |
 |-------------|------------------------------|--------------------------------------|
@@ -24,16 +23,18 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 
 ## 交付铁律
 
-1. 单 HTML 内必须包含 `<!doctype html>`、内联 CSS、少量原生 JS；禁止外部 CDN、npm 包、远程字体、远程图片和构建工具。
-2. Codex 默认场景：最终回复必须给一个可点击的 Markdown `file://` 链接，例如 `[打开 HTML 图](file:///绝对路径/xxx.html)`
-   ，并保留绝对路径兜底。
-3. Telegram 来源场景：最终必须直接发送 `.html` 文件，必须作为文件附件发送；用户侧交付标准是 Telegram 中必须看到文件卡片，不要把 `file://` 作为 Telegram 主入口。
-4. 不需要 PNG；只有用户明确要求图片预览时，PNG 才能作为 fallback，且不能替代 HTML 文件。
-5. 禁止只发送 Markdown 链接、截图预览、文件路径或“打开 HTML”文字；这些只能作为对应平台主交付之外的补充说明。
+1. 单 HTML 必须含 `<!doctype html>`、内联 CSS、少量原生 JS；禁止外部 CDN、npm 包、远程字体/图片和构建工具。
+2. Codex 最终回复给可点击 Markdown `file://` 链接；链接文字必须使用 HTML 内部 `<h1>` 主标题，例如
+   `[交付验收：移除阶段确认回退门禁](file:///绝对路径/xxx.html)`，并保留绝对路径兜底。不要写成固定的“打开 HTML”。
+3. Telegram 来源必须直接发送 `.html` 文件，必须作为文件附件发送；用户侧交付标准是 Telegram 中必须看到文件卡片，不要把
+   `file://` 作为 Telegram 主入口。
+4. 不需要 PNG；仅用户明确要求图片预览时可作 fallback，不能替代 HTML。
+5. 禁止只发送 Markdown 链接、截图、路径或“打开 HTML”文字；只能作平台主交付的补充。
 
 ## HTML 图交付后的文本压缩规则
 
-- 生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作。
+- 生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作；Markdown 链接文字必须使用 HTML 内部 `<h1>`
+  主标题，不要写成固定的“打开 HTML”。
 - 不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚。
 - HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复。
 
@@ -41,42 +42,47 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 
 - 文本通道只做交付信封；所有实质内容必须写入项目内单文件自包含 HTML。
 - 禁止在普通文本回复中展开分析、方案、证据链、测试矩阵、风险回滚或验收总结。
-- 允许的文本只有阻塞性澄清问题和 HTML 交付信封；Codex 信封示例：`[打开 HTML](file:///绝对路径/xxx.html)`。
+- 仅允许阻塞性澄清问题和 HTML 交付信封；Codex 示例必须用 HTML 内部 `<h1>` 主标题作链接文字，如
+  `[交付验收：移除阶段确认回退门禁](file:///绝对路径/xxx.html)`，不要写成固定的“打开 HTML”。
 - Telegram 来源只输出项目内 `.html/.htm` 文件路径；若无法写入 HTML 文件，才允许输出完整 HTML 代码块。
 
 ## 候选全集校准模式
 
-当前处于临时“候选全集校准模式”，直到用户逐类确认首选后再回退为默认单首选图。每次只对当前命中的生图类型生成候选全集，不把 11 类全部塞进一个 HTML。
+临时“候选全集校准模式”：每次只对当前命中的生图类型生成候选全集，不把 11 类全部塞进一个 HTML。
 
-- HTML 内必须同时生成该类型的**首选候选图型 + 全部备选候选图型**；顶部必须写明本次图型、事实来源、候选索引和推荐首选。
-- 候选全集默认用候选切换按钮承载：顶部候选索引必须是可点击按钮而不是普通锚点，默认只显示当前按钮对应候选；所有候选仍必须完整生成在 HTML DOM 中。
-- 候选按钮必须使用无依赖原生 JS + 可访问 tab 语义：容器 `role="tablist"`，按钮 `role="tab"`、`aria-selected`、`aria-controls`，候选面板 `role="tabpanel"`；支持 URL hash 深链、左右方向键切换候选、Home/End 跳转首尾。
+- HTML 内必须同时生成该类型的**首选候选图型 + 全部备选候选图型**；顶部写明图型、事实来源、候选索引和推荐首选。
+- 交付验收图保留候选切换入口；不要用移除按钮或删除面板来解决可读性问题。每个候选面板内部必须包含主结论、阅读顺序和关系结构；旧
+  R# 泳道 / 证据矩阵 / 地铁线路不清晰时，可换为验收账本、证据泳道图、风险动作板、交付时间线。
+- 候选全集默认用候选切换按钮承载：默认只显示当前按钮对应候选；所有候选仍必须完整生成在 HTML DOM 中。
+- 候选按钮用原生 JS + 可访问 tab 语义：`role="tablist"` / `role="tab"` / `aria-selected` / `aria-controls` /
+  `role="tabpanel"`；支持 URL hash 深链、左右方向键切换候选、Home/End。
+- 候选切换按钮和候选面板可见标题只显示图名本身，不得显示 `候选 A：`、`候选 B：`、`方案 A：`、`方案 B：`、`验收视图：`、`验收图层：`
+  ；内部 DOM id、hash、aria-controls 可继续使用稳定编号；推荐、首选、适用边界等说明只能放在按钮旁的辅助文案、面板右侧说明或说明栏。该规则适用于所有生图类型。
 - 关闭 JavaScript 或脚本失败时必须降级为全部纵向展开；禁止因默认隐藏或 `display:none` 写死导致无 JS 时只剩一个候选。
 - 主体必须按候选 A/B/C/D… 生成完整面板；每个候选都必须是真图，有自己的主图语法、方向、线、泳道/时序/状态/轨道，不得用候选卡片简介代替图。
-- 底部允许放候选对比矩阵，但候选对比矩阵只比较“可读性、事实承载、适用边界、风险”，不得替代主体候选图。
-- 信息不足时也必须生成该备选候选，用“待确认节点”标明缺口；不能因为材料不足省略候选。
-- 候选全集仍只服务一个核心问题：先按自动路由选择唯一生图类型，再在该类型内生成首选与备选候选全集。
+- 候选对比矩阵只比较“可读性、事实承载、适用边界、风险”；信息不足时也必须生成该备选候选，用“待确认节点”标明缺口。
 
+标题顶部只保留任务编码小胶囊，且在 `<h1>` 之前；不要生成 skill 使用清单、使用 skill 条、不要生成标题顶部第二枚长胶囊或标题区任务交付卡片。任务编码只显示编码值，如
+`TASK_20260701_004`，不得写成 `任务编码：TASK_xxx` 或混入任务名。主标题使用主内容宽度；候选切换按钮紧跟标题说明，顶部不得因辅助信息留大空白。
 
-标题顶部任务元信息与紧凑双列抬头：每个 HTML 的主标题上方必须有一行任务元信息，任务编码和本次使用的skill必须放在标题顶部，且必须在 `<h1>` 之前。标题顶部任务元信息必须使用顶部容器完整宽度，不得被右侧交付栏挤压；应放在 `top-grid` 之前，或等效使用 `grid-column: 1 / -1` 跨满顶部容器。主标题默认回到左侧标题列，不得横跨或占用右侧交付栏宽度；右上角交付卡片必须与主标题所在内容列顶部对齐，用右侧交付栏弥补标题右侧空间。候选切换按钮必须放在左侧标题列内部，并紧跟描述下方；顶部区域不得为了等待右侧交付卡片高度而在左侧描述和候选按钮之间留下大块空白。任务编码和本次使用的skill必须在同一行，不得因为 skill 文本较长而换到第二行或溢出容器；`title-meta` 必须使用 `display:grid` 和 `grid-template-columns:auto minmax(0,1fr)`，`skill-strip` 必须使用单行省略防溢出（`min-width:0`、`overflow:hidden`、`text-overflow:ellipsis`、`white-space:nowrap`），并用 `title` 或等效可访问属性保留完整 skill 文本。任务编码只显示编码值，例如 `TASK_20260701_004`，不得写成 `任务编码：TASK_xxx`，也不得再跟任务名称混在一起；本次使用的skill可带标签，但必须与任务编码同处标题顶部元信息区。
-
-右上角固定任务交付信息卡片：每个 HTML 顶部右上角必须有任务交付信息区，且每个字段都必须是独立小卡片，不得把字段塞进同一个 `dl`、表格或长段落。右上角不再重复任务编码和本次使用的skill，只保留 `本次修改的影响功能点`、`待用户执行事项` 等交付动作字段。右上角卡片必须一行一个，交付区默认使用 `grid-template-columns: 1fr`，禁止为了节省高度改成两列小卡片。该块不得只在最终聊天收尾字段里说明；移动端可折到标题下方，但仍必须出现在首屏附近。
+交付动作信息承载：不再生成右上角交付信息卡片；交付动作、验证、风险和未覆盖点必须并入主图或正文区域，不得放成标题区右侧独立
+aside。
 
 候选全集清单（各 reference 必须重复声明并细化执行）：
 
-| 生图类型 | 首选候选 | 必生成备选候选 |
-|---|---|---|
-| 系统架构图 | 北向南分层拓扑 | 主请求中轴 + 控制/数据/兜底泳道；运行时依赖拓扑 |
-| 业务架构 / 领域地图 | 能力层 + 领域对象关系图 | 参与方边界图；规则约束热区图；价值链地图 |
-| 业务流程图 | BPMN-light 流程图 | 泳道流程图；阶段轨道图；异常分支流程图 |
-| 代码时序图 | 参与者列 + 时间向下时序图 | 异步回调时序图；事务边界时序图；重试/异常返回时序图 |
-| 状态 / 数据模型图 | 状态机图 | ER-lite；生命周期轨道；数据流图；状态-事件矩阵热区 |
-| 故障排查图 | 排障时序图 | 因果链图；BPMN-light 排查流程；before/after 流程化对照；状态/数据断点图 |
-| 功能迭代 / 开发设计图 | 当前流程 vs 目标流程的流程化对照 | current/target 技术时序；差异热区；发布回滚轨道 |
-| 页面设计稿 | 页面线框 / artboard | 多候选 artboard filmstrip；响应式状态板；主路径页面流 |
-| 技术设计图 | 模块 / 契约 / 数据 / 发布回滚拓扑 | API 契约泳道；数据流 + 一致性边界；发布切换轨道 |
-| 需求 / 决策沟通图 | 决策树 | 方案矩阵 + 主路径绑定；取舍象限；推荐路径图 |
-| 交付验收图 | 需求到证据的验收轨道 | R# 泳道验收看板；证据矩阵热区；地铁站点式验收线路 |
+| 生图类型         | 首选候选                  | 必生成备选候选                                          |
+|--------------|-----------------------|--------------------------------------------------|
+| 系统架构图        | 北向南分层拓扑               | 主请求中轴 + 控制/数据/兜底泳道；运行时依赖拓扑                       |
+| 业务架构 / 领域地图  | 能力层 + 领域对象关系图         | 参与方边界图；规则约束热区图；价值链地图                             |
+| 业务流程图        | BPMN-light 流程图        | 泳道流程图；阶段轨道图；异常分支流程图                              |
+| 代码时序图        | 参与者列 + 时间向下时序图        | 异步回调时序图；事务边界时序图；重试/异常返回时序图                       |
+| 状态 / 数据模型图   | 状态机图                  | ER-lite；生命周期轨道；数据流图；状态-事件矩阵热区                    |
+| 故障排查图        | 排障时序图                 | 因果链图；BPMN-light 排查流程；before/after 流程化对照；状态/数据断点图 |
+| 功能迭代 / 开发设计图 | 当前流程 vs 目标流程的流程化对照    | current/target 技术时序；差异热区；发布回滚轨道                  |
+| 页面设计稿        | 页面线框 / artboard       | 多候选 artboard filmstrip；响应式状态板；主路径页面流             |
+| 技术设计图        | 模块 / 契约 / 数据 / 发布回滚拓扑 | API 契约泳道；数据流 + 一致性边界；发布切换轨道                      |
+| 需求 / 决策沟通图   | 决策树                   | 方案矩阵 + 主路径绑定；取舍象限；推荐路径图                          |
+| 交付验收图        | 验收账本 / 需求到证据签收表       | 证据泳道图；风险动作板；交付时间线                                |
 
 ## 自动路由规则
 
@@ -102,20 +108,11 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 
 ## 图型规则索引
 
-选择图型后必须读取对应 reference；读取失败必须 fail-closed，不得只凭内核或记忆画图。引用文件路径相对
-`vibego_cli/data/skills/vibe-diagram/`：
-
-- 系统架构图：`references/system-architecture.md`
-- 业务架构图 / 领域地图：`references/business-architecture.md`
-- 业务流程图：`references/business-flow.md`
-- 代码时序图：`references/code-sequence.md`
-- 状态 / 数据模型图：`references/state-data-model.md`
-- 故障排查图：`references/fault-debugging.md`
-- 功能迭代 / 开发设计图：`references/feature-iteration.md`
-- 页面设计稿：`references/page-mockup.md`
-- 技术设计图：`references/technical-design.md`
-- 需求 / 决策沟通图：`references/decision-communication.md`
-- 交付验收图：`references/delivery-acceptance.md`
+选择图型后必须读取对应 reference；读取失败必须 fail-closed，不得只凭内核或记忆画图。路径：
+`references/system-architecture.md`、`references/business-architecture.md`、`references/business-flow.md`、
+`references/code-sequence.md`、`references/state-data-model.md`、`references/fault-debugging.md`、
+`references/feature-iteration.md`、`references/page-mockup.md`、`references/technical-design.md`、
+`references/decision-communication.md`、`references/delivery-acceptance.md`。
 
 ## 共性图形语法门禁
 
@@ -130,32 +127,30 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 
 ## 布局、箭头与防重叠门禁
 
-宽度服务阅读，长度服务推理；默认采用正常页面宽度 + 北向南主线 + 局部横向关系。
+宽度服务阅读，长度服务推理；默认正常页面宽度 + 北向南主线 + 局部横向关系。
 
-1. 画布先分配主轴和泳道，再放节点，最后连线；宽度用于承载泳道、参与者列、before/after 或局部对照；高度用于承载时间、阶段、因果递进和证据展开。
-2. 节点先排版后连线；节点间距不得小于 16px，主路径阶段间距不得小于 28px。
-3. 箭头只能连接节点边缘锚点；北向南主线使用下边缘到上边缘锚点；代码时序图消息箭头必须连接参与者生命线中心或消息端点。
-4. 箭头标签不压正文；连线层必须低于节点层；禁止箭头穿过节点正文、标题、图例、交互按钮或弹窗触发区。
-5. 节点正文必须使用 HTML/CSS 可换行容器；必须通过 max-width、min-height、height:auto、line-height、overflow-wrap:anywhere 和合理
-   padding 保证文本可读。
-6. 不得用固定高度裁切文字，不得用 `white-space: nowrap` 承载正文，禁止用 line-clamp、max-height 或 overflow:hidden 裁掉节点正文。
-7. 如果任一节点重叠、线穿字、文字溢出，必须重排；必须用桌面宽度和 390px 宽度分别检查。
+1. 先分配主轴和泳道，再放节点，最后连线；宽度承载泳道/参与者/before-after，长度承载时间/阶段/因果/证据。
+2. 节点间距 ≥16px，主路径阶段间距 ≥28px；箭头只连边缘锚点。
+3. 箭头标签不压正文；连线层低于节点层；禁止箭头穿过节点正文、标题、图例、交互按钮或弹窗。
+4. 节点正文必须用 HTML/CSS 可换行容器；max-width、min-height、height:auto、line-height、overflow-wrap:anywhere 和 padding
+   保证可读。
+5. 不得用固定高度裁切文字，不得用 `white-space: nowrap` 承载正文，禁止 line-clamp、max-height 或 overflow:hidden 裁字。
+6. 任一节点重叠、线穿字、文字溢出，必须重排；桌面宽度和 390px 宽度都要检查。
 
 ## 节点信息承载与证据详情
 
-- 节点优先承载关键信息；关键细节必须直接呈现在对应节点内部，至少也要紧邻节点可见。
-- 不要为了保持两行节点而把信息拆到底部证据卡片；节点可以限制宽度，但高度必须随内容自动增长。
-- 优先增高节点和自动换行，而不是把关键细节挪到图外底部卡片；证据、风险、测试、回滚默认写入对应主路径节点。
-- 原始证据默认进入对应节点的点击详情；节点内静态展示证据编号、结论、可信度或状态即可。
-- 不要默认在底部铺完整证据卡片；底部证据区只用于跨节点冲突裁决、全局证据索引或测试矩阵。
+- 节点优先承载关键信息；关键细节直接写在对应节点内部或紧邻节点。
+- 不要为保持两行节点把信息拆到底部；优先增高节点和自动换行。证据、风险、测试、回滚默认写入对应主路径节点。
+- 原始证据默认进入对应节点的点击详情；节点内静态展示证据编号、结论、可信度或状态即可。底部证据区只放冲突裁决、全局证据索引或测试矩阵。
 - 点击详情可以承载文件路径、行号、日志片段、SQL、JSON、命令输出和截图说明；点击详情里的换行必须使用真实换行、`&#10;`
-  或渲染前归一化，禁止让用户看到字面量 `\n`。
-- 点击交互是可选增强，不是信息主入口；弹窗不得承载唯一信息源，关闭 JavaScript 或不点击任何节点仍必须读懂主结论。
+  或渲染前归一化，禁止字面量 `\n`。
+- 点击详情只能用于补充、放大或复制主图已可见的信息；关闭 JS 或不点击仍能读懂主结论。
 
 ## 视觉、CSS 与可访问性规则
 
-- 禁止交付原始工程草图感的 SVG；视觉质量必须服务流程阅读，使用统一的线宽、字号、留白、层级和图例。
-- 浅色背景默认以白色为主色，但白色背景不能是扁平纯白；固化为参考业务架构图配色系统，必须与参考文件逐项对齐。基础 token 必须按以下值原样写入（可在后面追加语义别名，但不得改这些值和空格口径）：
+- 禁止原始工程草图感 SVG；视觉服务流程阅读，统一线宽、字号、留白、层级和图例。
+- 浅色背景默认以白色为主色，但白色背景不能是扁平纯白；固化参考业务架构图配色系统，必须与参考文件逐项对齐。基础 token
+  必须按以下值原样写入（可追加语义别名，不得改值和空格）：
   ```css
   --ink: #102033;
   --muted: #5a6c80;
@@ -188,8 +183,10 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
   ```
   形成 28px 低对比工程网格。
 - 背景纹理必须全局统一；HTML body、SVG 主画布和弹窗遮罩以外的页面区域应共享同一背景系统，不要只在主画布局部铺网格或局部底纹；禁止 body 一个背景、SVG/主画布另一个背景；背景只能提供质感和空间层次，不得抢主线。
-- 主画布可叠加局部低对比网格：`linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px)`、`linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px)`，网格尺寸 22px；但背景线不得穿过标题、节点正文或箭头标签，节点正文区域必须使用不透明白底或等效遮罩，状态色只能用于描边、角标、少量状态章，不能污染背景系统。
-- 标题字体默认使用 `clamp(24px, 2.8vw, 32px)`、`line-height: 1.18`、`letter-spacing: -.025em`；除非用户明确要求海报式大标题，不要回到 40px+ 的大标题。
+- 主画布可叠加局部低对比网格，网格尺寸 22px：`linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px)`、
+  `linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px)`
+  ；背景线不得穿过标题、节点正文或箭头标签，节点正文区域必须使用不透明白底或等效遮罩，状态色只能用于描边、角标、少量状态章。
+- 标题字体默认使用 `clamp(24px, 2.8vw, 32px)`、`line-height: 1.18`、`letter-spacing: -.025em`；不要回到 40px+。
 - 必须满足或等价实现：`box-sizing: border-box`、`overflow-wrap: anywhere`、正文字号不小于 12px、交互元素有 `:focus-visible`、支持 `prefers-reduced-motion`。
 - SVG 节点文字规则：优先使用 HTML/CSS 节点承载可换行正文；若使用 SVG `<text>`，必须使用 `<tspan>` 分行、`foreignObject` 或缩短为编号标签；禁止把长句直接放进单个 SVG `<text>` 节点。
 - 移动端不允许横向溢出；移动端不能把整张 SVG 等比缩成缩略图，必须改为纵向流程、分段 SVG 或可读的阶段轨道。
@@ -202,19 +199,17 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 
 ## 输出前自检
 
-- 是否只生成一个单文件 HTML？是否没有外部依赖？是否已按自动路由规则选择唯一主图型？
-- 是否已经读取本次图型对应 reference？读取失败是否 fail-closed？
-- 顶部标题是否以本次触发的生图类型开头，而不是以 skill 名称开头？
-- 是否已生成当前图型的首选候选 + 全部备选候选？每个候选是否都是真图，而不是候选卡片简介？
-- 候选全集是否使用候选切换按钮、`role="tablist"` / `role="tab"` / `aria-selected` / `role="tabpanel"`，并支持 hash 深链、左右方向键和无 JS 全部展开降级？
-- 标题顶部任务元信息是否在 `<h1>` 之前外显任务编码和本次使用的skill？标题顶部任务元信息是否使用顶部容器完整宽度？主标题是否回到左侧标题列，是否没有横跨或占用右侧交付栏宽度？右上角交付卡片是否与主标题所在内容列顶部对齐，并用右侧交付栏弥补标题右侧空间？候选切换按钮是否放在左侧标题列内部并紧跟描述下方，是否没有为了等待右侧交付卡片高度而留下左侧大块空白？任务编码是否只显示编码值，未写成 `任务编码：TASK_xxx` 或混入任务名称？任务编码和本次使用的skill是否保持同一行不溢出，`skill-strip` 是否单行省略且通过 `title` 或等效可访问属性保留完整 skill 文本？
-- 右上角固定任务交付信息卡片是否只外显本次修改的影响功能点、待用户执行事项等交付动作字段？是否确认右上角不再重复任务编码和本次使用的skill，且每个字段都是独立小卡片？
-- 背景是否命中参考业务架构图配色系统：`--paper: #fbfdff`、`--panel: rgba(255,255,255,.9)`、`--blue: #1f6fb2`、双 `radial-gradient` 柔光、28px 低对比工程网格，以及 `background-size: auto, auto, 28px 28px, 28px 28px, auto`？
-- 交付前必须反查旧版 `--paper: #fbfaf7`、24px + 96px 黑绿网格、body 与主画布背景割裂；是否确认不存在？
-- 是否节点文字不溢出、无背景线穿字、无横向溢出？
-- 节点是否承载足够信息，而不是只有两行标题再把关键证据/风险/回滚拆到底部卡片？
-- 若提供点击弹窗，弹窗是否只做补充且空白/Esc 可关闭，不会自动滚动页面？
-- Codex 默认场景是否提供可点击 `file://` HTML 链接和绝对路径兜底？
-- Telegram 来源场景是否能看到 `.html` 文件卡片，而不是只有 Markdown 链接或路径文字？
+- 单文件 HTML、无外部依赖、已按自动路由选择唯一主图型，并读取对应 reference；失败则 fail-closed。
+- 标题以生图类型开头；标题顶部只外显任务编码，是否没有生成 skill 使用清单、使用 skill 条、第二枚长胶囊或标题区任务交付卡片。
+- 已生成首选 + 全部备选；每个候选是真图。交付验收图是否保留候选切换入口，而不是通过删除按钮或面板解决可读性问题；每个面板是否有主结论、阅读顺序和关系结构。
+- 候选切换使用 `role="tablist"` / `role="tab"` / `aria-selected` / `role="tabpanel"`，支持 hash、左右键、无 JS 纵向展开；图名标题无
+  `候选 A：`、`方案 A：`、`验收视图：`、`验收图层：`。
+- 是否没有生成右上角交付信息卡片或标题区右侧独立 aside；交付动作、验证、风险、未覆盖点已并入主图或正文。
+- 背景命中参考业务架构图配色系统：`--paper: #fbfdff`、`--panel: rgba(255,255,255,.9)`、`--blue: #1f6fb2`、双
+  `radial-gradient`、28px 工程网格、`background-size: auto, auto, 28px 28px, 28px 28px, auto`；并反查无旧版
+  `--paper: #fbfaf7`、24px+96px 黑绿网格、body 与主画布背景割裂。
+- 节点文字不溢出、无背景线穿字、无横向溢出；节点承载足够信息，不把关键证据/风险/回滚拆到底部卡片。
+- 点击弹窗只补充，空白/Esc 可关闭，不自动滚动页面；Codex 链接文字使用 HTML 内部 `<h1>` 主标题且没有写成固定的“打开
+  HTML”；Telegram 看到 `.html` 文件卡片。
 
 最终回复要短，只说明 HTML 已生成/已发送；不要输出冗长过程日志。

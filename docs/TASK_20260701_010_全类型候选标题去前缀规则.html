@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>交付验收：全类型候选标题去前缀规则</title>
+    <style>
+        :root {
+            --ink: #102033;
+            --muted: #5a6c80;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .9);
+            --line: #8db3d8;
+            --blue: #1f6fb2;
+            --blue-soft: #e8f3ff;
+            --green: #17785a;
+            --green-soft: #e9f8f2;
+            --amber: #986506;
+            --amber-soft: #fff6de;
+            --red: #a63a3a;
+            --red-soft: #fff0f0;
+            --violet: #6254ad;
+            --violet-soft: #f1efff;
+            --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+            --radius: 20px;
+        }
+
+        * {
+            box-sizing: border-box;
+            overflow-wrap: anywhere;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font: 14px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: radial-gradient(circle at 18% 3%, rgba(214, 233, 255, .78), transparent 30rem), radial-gradient(circle at 78% 6%, rgba(228, 246, 239, .8), transparent 28rem), linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px), linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: .92em;
+        }
+
+        .page {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 28px 22px 46px;
+        }
+
+        .title-meta {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            width: 100%;
+            margin-bottom: 16px;
+            min-width: 0;
+        }
+
+        .meta-pill {
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            padding: 7px 12px;
+            border: 1px solid rgba(31, 111, 178, .18);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .82);
+            box-shadow: 0 10px 26px rgba(20, 57, 92, .06);
+        }
+
+        .task-code {
+            flex: 0 0 auto;
+            color: var(--blue);
+            font-weight: 850;
+            white-space: nowrap;
+        }
+
+        .skill-strip {
+            flex: 0 1 auto;
+            min-width: 0;
+            max-width: min(760px, 72vw);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--muted);
+        }
+
+        .top-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 330px;
+            gap: 20px;
+            align-items: start;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(24px, 2.8vw, 32px);
+            line-height: 1.18;
+            letter-spacing: -.025em;
+        }
+
+        .subtitle, .facts {
+            color: var(--muted);
+            max-width: 780px;
+        }
+
+        .delivery-card {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .mini-card {
+            background: var(--panel);
+            border: 1px solid rgba(141, 179, 216, .38);
+            border-radius: 16px;
+            padding: 12px 14px;
+            box-shadow: var(--shadow);
+        }
+
+        .mini-card strong {
+            display: block;
+            font-size: 12px;
+            letter-spacing: .04em;
+        }
+
+        .mini-card span {
+            display: block;
+            color: var(--muted);
+            margin-top: 5px;
+            font-size: 13px;
+        }
+
+        .tabs {
+            margin-top: 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tabs [role="tab"] {
+            border: 1px solid rgba(31, 111, 178, .22);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .84);
+            color: var(--blue);
+            padding: 8px 12px;
+            font-weight: 780;
+            cursor: pointer;
+        }
+
+        .tabs [role="tab"][aria-selected="true"] {
+            background: var(--blue);
+            color: #fff;
+            border-color: var(--blue);
+            box-shadow: 0 10px 22px rgba(31, 111, 178, .18);
+        }
+
+        button:focus-visible, a:focus-visible {
+            outline: 3px solid rgba(31, 111, 178, .35);
+            outline-offset: 3px;
+        }
+
+        .candidate-panel {
+            margin-top: 18px;
+        }
+
+        .js .candidate-panel {
+            display: none;
+        }
+
+        .js .candidate-panel.active {
+            display: block;
+        }
+
+        .panel-shell {
+            background: rgba(255, 255, 255, .76);
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 18px;
+        }
+
+        .panel-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: baseline;
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(141, 179, 216, .32);
+        }
+
+        .panel-head h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .note {
+            color: var(--green);
+            font-weight: 850;
+            white-space: nowrap;
+        }
+
+        .track {
+            display: grid;
+            grid-template-columns: 1.05fr 1.15fr 1.2fr .85fr 1fr;
+            gap: 12px;
+        }
+
+        .head {
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        .cell {
+            min-height: 92px;
+            padding: 13px;
+            border: 1px solid rgba(141, 179, 216, .36);
+            border-radius: 16px;
+            background: #fff;
+            box-shadow: 0 10px 24px rgba(20, 57, 92, .055);
+        }
+
+        .cell h3 {
+            margin: 0 0 6px;
+            font-size: 14px;
+        }
+
+        .cell p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12.5px;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 7px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 850;
+            background: var(--green-soft);
+            color: var(--green);
+        }
+
+        .matrix {
+            display: grid;
+            grid-template-columns: 1.15fr repeat(4, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .matrix div {
+            min-height: 58px;
+            padding: 12px;
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: 15px;
+            background: #fff;
+        }
+
+        .matrix .h {
+            background: var(--blue-soft);
+            color: var(--blue);
+            font-weight: 850;
+        }
+
+        .matrix .ok {
+            background: var(--green-soft);
+        }
+
+        .compare {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .compare .mini-card {
+            box-shadow: none;
+        }
+
+        @media (max-width: 860px) {
+            .page {
+                padding: 18px 12px 30px;
+            }
+
+            .top-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .title-meta {
+                flex-wrap: wrap;
+            }
+
+            .track, .matrix, .compare {
+                display: block;
+            }
+
+            .head, .cell, .matrix div, .compare .mini-card {
+                margin-bottom: 10px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                scroll-behavior: auto !important;
+                transition: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <div class="title-meta" aria-label="任务元信息">
+        <div class="meta-pill task-code">TASK_20260701_010</div>
+        <div class="meta-pill skill-strip"
+             title="本次使用的skill：superpowers:brainstorming、superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion">
+            本次使用的skill：superpowers:brainstorming、superpowers:test-driven-development、vibe-diagram、superpowers:verification-before-completion
+        </div>
+    </div>
+    <section class="top-grid">
+        <div>
+            <h1>交付验收：全类型候选标题去前缀规则</h1>
+            <p class="subtitle">验收口径：已把“按钮和面板标题只显示图名本身”的规则沉淀到 <code>vibe-diagram</code>
+                共性提示词，覆盖所有生图类型；编号只允许留在内部 id/hash/aria-controls。</p>
+            <p class="facts">事实来源：<code>vibego_cli/data/skills/vibe-diagram/SKILL.md</code>、<code>tests/test_builtin_skills_injection.py</code>、<code>AGENTS.md</code>、本轮同步和验证输出。
+            </p>
+            <div class="tabs" role="tablist" aria-label="交付验收图切换">
+                <button id="tab-a" role="tab" aria-selected="true" aria-controls="panel-a" data-target="panel-a">
+                    需求到证据轨道
+                </button>
+                <button id="tab-b" role="tab" aria-selected="false" aria-controls="panel-b" data-target="panel-b">R#
+                    泳道看板
+                </button>
+                <button id="tab-c" role="tab" aria-selected="false" aria-controls="panel-c" data-target="panel-c">
+                    证据矩阵热区
+                </button>
+                <button id="tab-d" role="tab" aria-selected="false" aria-controls="panel-d" data-target="panel-d">
+                    地铁验收线路
+                </button>
+            </div>
+        </div>
+        <aside class="delivery-card" aria-label="任务交付信息">
+            <div class="mini-card">
+                <strong>本次修改的影响功能点</strong><span>后续所有 vibe-diagram 生图类型的切换按钮与面板标题命名。</span>
+            </div>
+            <div class="mini-card"><strong>待用户执行事项</strong><span>无需再同步；本轮已执行 agents-sync。已运行 worker 如需立刻使用新 skill，请重启。</span>
+            </div>
+            <div class="mini-card">
+                <strong>验证方式</strong><span>新增测试红绿、54 项内置 skill 回归、活跃 skill 文件反查。</span></div>
+            <div class="mini-card">
+                <strong>剩余未覆盖点</strong><span>未执行全量 pytest；未重启长期 worker 做现场观察。</span></div>
+        </aside>
+    </section>
+
+    <section id="panel-a" class="candidate-panel active" role="tabpanel" aria-labelledby="tab-a" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>需求到证据轨道</h2><span class="note">默认入口：逐条签收</span></div>
+            <div class="track">
+                <div class="head">原始要求</div>
+                <div class="head">交付变更</div>
+                <div class="head">验证证据</div>
+                <div class="head">判定</div>
+                <div class="head">动作</div>
+                <div class="cell"><h3>标题不要带前缀</h3>
+                    <p>按钮和面板标题只展示图名本身。</p></div>
+                <div class="cell"><h3>写入共性规则</h3>
+                    <p><code>SKILL.md</code> 候选全集规则新增全类型约束。</p></div>
+                <div class="cell"><h3>测试固定</h3>
+                    <p>新增测试断言禁用分组词前缀，允许内部 id 编号。</p></div>
+                <div class="cell"><span class="status">● pass</span>
+                    <p>聚焦测试与相关回归通过。</p></div>
+                <div class="cell"><h3>后续</h3>
+                    <p>新 HTML 必须按该规则命名。</p></div>
+            </div>
+        </div>
+    </section>
+    <section id="panel-b" class="candidate-panel" role="tabpanel" aria-labelledby="tab-b" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>R# 泳道看板</h2><span class="note">快速扫状态</span></div>
+            <div class="matrix">
+                <div class="h">R#</div>
+                <div class="h">规则</div>
+                <div class="h">测试</div>
+                <div class="h">同步</div>
+                <div class="h">状态</div>
+                <div class="h">R1</div>
+                <div class="ok">只显示图名</div>
+                <div class="ok">新增测试</div>
+                <div class="ok">已同步</div>
+                <div class="ok">pass</div>
+            </div>
+        </div>
+    </section>
+    <section id="panel-c" class="candidate-panel" role="tabpanel" aria-labelledby="tab-c" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>证据矩阵热区</h2><span class="note">审计覆盖</span></div>
+            <div class="matrix">
+                <div class="h">覆盖项</div>
+                <div class="h">系统架构</div>
+                <div class="h">流程/时序</div>
+                <div class="h">页面/技术</div>
+                <div class="h">交付验收</div>
+                <div class="h">标题规则</div>
+                <div class="ok">适用</div>
+                <div class="ok">适用</div>
+                <div class="ok">适用</div>
+                <div class="ok">适用</div>
+            </div>
+        </div>
+    </section>
+    <section id="panel-d" class="candidate-panel" role="tabpanel" aria-labelledby="tab-d" tabindex="0">
+        <div class="panel-shell">
+            <div class="panel-head"><h2>地铁验收线路</h2><span class="note">移动端读序</span></div>
+            <div class="track">
+                <div class="cell"><h3>红灯</h3>
+                    <p>新增测试先失败。</p></div>
+                <div class="cell"><h3>规则</h3>
+                    <p>写入共性 skill。</p></div>
+                <div class="cell"><h3>同步</h3>
+                    <p>agents-sync 更新 current。</p></div>
+                <div class="cell"><h3>反查</h3>
+                    <p>HTML 自身按钮无前缀。</p></div>
+                <div class="cell"><span class="status">● pass</span></div>
+            </div>
+        </div>
+    </section>
+    <section class="compare" aria-label="交付验收图对比矩阵">
+        <div class="mini-card"><strong>需求轨道</strong><span>用于逐条签收。</span></div>
+        <div class="mini-card"><strong>R# 看板</strong><span>用于快速扫状态。</span></div>
+        <div class="mini-card"><strong>矩阵热区</strong><span>用于看全类型覆盖。</span></div>
+        <div class="mini-card"><strong>地铁线路</strong><span>用于移动端读序。</span></div>
+    </section>
+</main>
+<script>
+    (function () {
+        document.documentElement.classList.remove('no-js');
+        document.documentElement.classList.add('js');
+        var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+        var panels = Array.prototype.slice.call(document.querySelectorAll('[role="tabpanel"]'));
+
+        function activate(tab, updateHash) {
+            tabs.forEach(function (t) {
+                t.setAttribute('aria-selected', String(t === tab));
+                t.tabIndex = t === tab ? 0 : -1;
+            });
+            panels.forEach(function (p) {
+                p.classList.toggle('active', p.id === tab.dataset.target);
+            });
+            if (updateHash) history.replaceState(null, '', '#' + tab.dataset.target);
+        }
+
+        tabs.forEach(function (tab, index) {
+            tab.addEventListener('click', function () {
+                activate(tab, true);
+            });
+            tab.addEventListener('keydown', function (e) {
+                var next = index;
+                if (e.key === 'ArrowRight') next = (index + 1) % tabs.length; else if (e.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length; else if (e.key === 'Home') next = 0; else if (e.key === 'End') next = tabs.length - 1; else return;
+                e.preventDefault();
+                tabs[next].focus();
+                activate(tabs[next], true);
+            });
+        });
+        var selected = tabs.find(function (tab) {
+            return tab.dataset.target === location.hash.slice(1);
+        }) || tabs[0];
+        activate(selected, false);
+    })();
+</script>
+</body>
+</html>
