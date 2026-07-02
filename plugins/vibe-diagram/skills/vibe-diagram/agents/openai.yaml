@@ -1,4 +1,4 @@
 interface:
-  display_name: "Vibe 图形表达"
+  display_name: "vibe-diagram"
   short_description: "把架构、流程、时序、故障和页面设计沟通转成单文件 HTML 图。"
   default_prompt: "请使用 vibe-diagram 图形表达协议生成一个可直接打开的单文件 HTML 图，并按来源直接交付可预览文件。"

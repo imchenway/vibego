@@ -59,6 +59,15 @@ def test_vibe_diagram_plugin_skill_tree_mirrors_builtin_skill_source() -> None:
     assert plugin_files == source_files
 
 
+def test_vibe_diagram_native_skill_display_name_matches_invocation_name() -> None:
+    """Native skill UI should show the callable skill name, not a localized title."""
+
+    openai_metadata = (SOURCE_SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
+
+    assert 'display_name: "vibe-diagram"' in openai_metadata
+    assert "Vibe 图形表达" not in openai_metadata
+
+
 def test_repo_marketplace_exposes_vibe_diagram_plugin_entry() -> None:
     """A repo marketplace lets other users add the repo then install the plugin by name."""
 
