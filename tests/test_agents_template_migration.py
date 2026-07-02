@@ -130,7 +130,7 @@ def test_agents_template_routes_openai_product_design_with_gates() -> None:
     assert "不得从文字 brief 直接实现" in template_text
     assert "落地代码仍遵守 superpowers:test-driven-development、frontend-skill、impeccable、accessibility" in template_text
     assert "Product Design 仅负责产品设计前置、视觉探索、原型化和视觉 QA" in template_text
-    assert "全局 HTML-first 交付优先级高于 Product Design 的普通聊天输出格式" in template_text
+    assert "若产出需要视觉化交付，仍遵守本仓 HTML 图交付规则" in template_text
 
 
 def test_agents_template_keeps_runtime_entry_prompts_out() -> None:
@@ -167,44 +167,48 @@ def test_agents_template_forbids_optional_commentary() -> None:
     assert "DO NOT send optional commentary" in template_text
 
 
-def test_agents_template_prefers_html_visual_communication_for_non_trivial_tasks() -> None:
-    """AGENTS 模板应把 HTML 图形沟通提升为几乎所有实质会话的默认协议。"""
+def test_agents_template_scopes_vibe_diagram_to_explicit_visual_or_logic_visualization() -> None:
+    """AGENTS 模板只应在明确视觉化或复杂逻辑可视化时触发 vibe-diagram。"""
 
     template_text = _read_text("AGENTS-template.md")
 
     assert "## Visual and frontend contract" in template_text
-    assert "几乎所有需要解释、判断、设计、排障、复盘、代码逻辑说明或交付验收的会话都应优先触发 vibe-diagram" in template_text
+    assert "明确要求画图、图形化、HTML 图" in template_text
+    assert "需要把复杂技术/业务逻辑、关系结构或状态流转可视化" in template_text
+    assert "使用 vibe-diagram" in template_text
     assert "一图胜千言" in template_text
-    assert "AGENTS 只判断何时触发，具体制图规则以 vibe-diagram 为准" in template_text
-    assert "HTML-only" in template_text
-    assert "所有实质内容写入项目内单文件 HTML" in template_text
+    assert "普通概念问答、安装升级说明、轻量决策和非视觉化追问默认使用简洁文本" in template_text
     assert "平台或入口侧要求由发送侧提示词前缀或运行时适配层注入" in template_text
+    assert "几乎所有需要解释、判断、设计、排障、复盘、代码逻辑说明或交付验收的会话都应优先触发 vibe-diagram" not in template_text
 
 
-def test_agents_template_requires_html_first_interaction_contract() -> None:
-    """AGENTS 模板应把全程 HTML 交互作为默认，而不是只在非琐碎画图任务中触发。"""
+def test_agents_template_uses_html_only_when_visual_delivery_is_needed() -> None:
+    """AGENTS 模板不应把普通实质沟通强制改成 HTML。"""
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "## HTML-first interaction contract" in template_text
-    assert "默认所有实质沟通都使用单文件 HTML 与用户交互" in template_text
-    assert "聊天通道默认只做交付信封" in template_text
-    assert "分析、设计、排障、方案、决策、验收、总结、代码逻辑说明、证据链、风险、回滚、测试矩阵" in template_text
-    assert "不要把 HTML 只限定为非琐碎任务" in template_text
-    assert "本节只定义何时调用 vibe-diagram 做图形化表达，不得把 HTML 限定在这些场景" in template_text
-    assert "阻塞性澄清问题、极短确认、简单命令结果、用户明确不要 HTML" in template_text
+    assert "## HTML / visual delivery contract" in template_text
+    assert "用户明确要求 HTML/图形化" in template_text
+    assert "确实需要用图表达复杂关系" in template_text
+    assert "才生成或更新项目内单文件 HTML" in template_text
+    assert "普通概念问答、安装升级说明、轻量决策和非视觉化追问默认使用简洁文本" in template_text
     assert "docs 做长期沉淀；HTML 是主交互界面" in template_text
+    assert "默认所有实质沟通都使用单文件 HTML 与用户交互" not in template_text
+    assert "聊天通道默认只做交付信封" not in template_text
+    assert "不要把 HTML 只限定为非琐碎任务" not in template_text
+    assert "本节只定义何时调用 vibe-diagram 做图形化表达，不得把 HTML 限定在这些场景" not in template_text
 
 
-def test_agents_template_routes_substantive_why_how_answers_to_vibe_diagram() -> None:
-    """HTML-first 不应只靠画图关键词触发；解释原因和修复建议也要走 HTML。"""
+def test_agents_template_does_not_route_plain_why_how_answers_to_vibe_diagram() -> None:
+    """普通为什么/怎么做追问不应仅因是实质沟通就触发 HTML 图。"""
 
     template_text = _read_text("AGENTS-template.md")
 
-    assert "HTML-first 实质沟通、原因解释、方案建议、修复说明、验收收口：使用 vibe-diagram" in template_text
-    assert "用户问“为什么 / 怎么做 / 需要怎么做”也属于实质沟通" in template_text
-    assert "不得因为用户没有说“画图”就退回普通聊天长文" in template_text
-    assert "除阻塞性澄清、极短确认、简单命令结果或用户明确不要 HTML 外" in template_text
+    assert "HTML-first 实质沟通、原因解释、方案建议、修复说明、验收收口：使用 vibe-diagram" not in template_text
+    assert "用户问“为什么 / 怎么做 / 需要怎么做”也属于实质沟通" not in template_text
+    assert "不得因为用户没有说“画图”就退回普通聊天长文" not in template_text
+    assert "除阻塞性澄清、极短确认、简单命令结果或用户明确不要 HTML 外" not in template_text
+    assert "普通为什么/怎么做追问默认简洁文本回答" in template_text
 
 
 def test_agents_template_compresses_text_after_html_delivery() -> None:

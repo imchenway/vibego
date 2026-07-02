@@ -177,28 +177,35 @@ def test_vibe_diagram_prompt_compaction_preserves_recent_feedback_rules() -> Non
     assert "不要生成 skill 使用清单" in core_text
     assert "不再生成右上角交付信息卡片" in core_text
     assert "候选切换按钮和候选面板可见标题只显示图名本身" in core_text
-    assert "交付验收图保留候选切换入口" in core_text
+    assert "tabs / role=tablist 只能用于同一图型的候选布局" in core_text
+    assert "不得把步骤、补充问答、发布说明或普通章节导航做成 tab" in core_text
+    assert "交付验收图保留候选切换入口" not in core_text
     assert "不要用移除按钮或删除面板来解决可读性问题" in delivery_text
     assert "证据泳道图" in delivery_text
     assert "风险动作板" in delivery_text
     assert "交付时间线" in delivery_text
 
 
-def test_vibe_diagram_description_covers_html_first_substantive_replies() -> None:
-    """skill 索引描述必须覆盖 HTML-first 实质回复，避免只在画图关键词下触发。"""
+def test_vibe_diagram_description_is_scoped_to_visual_and_logic_diagrams() -> None:
+    """skill 索引描述只覆盖显式视觉化和复杂逻辑结构说明。"""
 
     core_text = _read_vibe_diagram_core()
     frontmatter = core_text.split("---", 2)[1]
 
     assert "description: Use when" in frontmatter
-    assert "HTML-first" in frontmatter
-    assert "substantive answer" in frontmatter
-    assert "why/how explanations" in frontmatter
-    assert "delivery envelope" in frontmatter
+    assert "complex logic" in frontmatter
+    assert "visual explanation" in frontmatter
     assert "triggers include" in frontmatter
-    assert "为什么" in frontmatter
-    assert "怎么做" in frontmatter
-    assert "实质沟通" in frontmatter
+    assert "画图" in frontmatter
+    assert "逻辑结构" in frontmatter
+    assert "HTML-first" not in frontmatter
+    assert "substantive answer" not in frontmatter
+    assert "why/how explanations" not in frontmatter
+    assert "delivery envelope" not in frontmatter
+    assert "为什么" not in frontmatter
+    assert "怎么做" not in frontmatter
+    assert "实质沟通" not in frontmatter
+    assert "交付信封" not in frontmatter
 
 
 def test_vibe_diagram_candidate_atlas_mode_is_required_for_calibration() -> None:
@@ -215,7 +222,9 @@ def test_vibe_diagram_candidate_atlas_mode_is_required_for_calibration() -> None
     assert "信息不足时也必须生成该备选候选" in core_text
     assert "待确认节点" in core_text
     assert "候选对比矩阵只比较“可读性、事实承载、适用边界、风险”" in core_text
-    assert "交付验收图保留候选切换入口" in core_text
+    assert "tabs / role=tablist 只能用于同一图型的候选布局" in core_text
+    assert "单一结论页用普通标题、目录或章节" in core_text
+    assert "交付验收图保留候选切换入口" not in core_text
 
     for _reference_name, (_diagram_type, preferred, alternatives) in CANDIDATE_ATLAS_EXPECTATIONS.items():
         assert preferred in all_rule_text
@@ -514,7 +523,7 @@ def test_vibe_diagram_skill_pack_exists_and_is_packaged() -> None:
     assert "页面设计稿规则" in all_rule_text
     assert "技术设计与需求决策图规则" in all_rule_text
     assert "## AGENTS 配合协议" in all_rule_text
-    assert "当 AGENTS 要求默认通过 HTML 图沟通时" in all_rule_text
+    assert "当 AGENTS 或用户要求通过 HTML 图沟通时" in all_rule_text
     assert "功能迭代 / 开发设计" in all_rule_text
     assert "前后差异对比图" in all_rule_text
     assert "缺陷排查 / 故障分析" in all_rule_text
@@ -525,23 +534,21 @@ def test_vibe_diagram_skill_pack_exists_and_is_packaged() -> None:
     assert "data/skills/*/agents/*.yaml" in pyproject_text
     assert "recursive-include vibego_cli/data/skills" in manifest_text
 
-def test_vibe_diagram_html_only_delivery_envelope_contract() -> None:
-    """vibe-diagram 应支持 HTML-only 信封模式，避免文本通道承载实质内容。"""
+def test_vibe_diagram_html_delivery_envelope_is_scoped_to_generated_html() -> None:
+    """vibe-diagram 只在已经生成 HTML 图后压缩文本，不把普通问答强制成信封。"""
 
     skill_text = _read_vibe_diagram_all_rules()
 
-    assert "## HTML-only 交付信封模式" in skill_text
-    assert "文本通道只做交付信封" in skill_text
-    assert "所有实质内容必须写入项目内单文件自包含 HTML" in skill_text
-    assert "禁止在普通文本回复中展开分析、方案、证据链、测试矩阵、风险回滚或验收总结" in skill_text
-    assert "阻塞性澄清问题" in skill_text
-    assert "HTML 交付信封" in skill_text
+    assert "## HTML 图交付后的文本压缩规则" in skill_text
+    assert "仅当本轮已经生成或修改 HTML 图时" in skill_text
+    assert "普通问答不要套用 HTML-only 或交付信封口径" in skill_text
+    assert "不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚" in skill_text
     assert "[交付验收：移除阶段确认回退门禁](file:///绝对路径/xxx.html)" in skill_text
     assert "链接文字必须使用 HTML 内部 `<h1>` 主标题" in skill_text
     assert "不要写成固定的“打开 HTML”" in skill_text
     assert "[打开 HTML](file:///绝对路径/xxx.html)" not in skill_text
-    assert "只输出项目内 `.html/.htm` 文件路径" in skill_text
-    assert "若无法写入 HTML 文件，才允许输出完整 HTML 代码块" in skill_text
+    assert "## HTML-only 交付信封模式" not in skill_text
+    assert "所有实质内容必须写入项目内单文件自包含 HTML" not in skill_text
 
 
 def test_vibe_diagram_delivery_reply_must_stay_concise() -> None:
@@ -550,11 +557,11 @@ def test_vibe_diagram_delivery_reply_must_stay_concise() -> None:
     skill_text = _read_vibe_diagram_all_rules()
 
     assert "## HTML 图交付后的文本压缩规则" in skill_text
-    assert "生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作" in skill_text
+    assert "仅当本轮已经生成或修改 HTML 图时，最终回复只保留 HTML 路径/链接和待执行动作" in skill_text
     assert "链接文字必须使用 HTML 内部 `<h1>` 主标题" in skill_text
     assert "验证摘要" not in skill_text
     assert "不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚" in skill_text
-    assert "HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复" in skill_text
+    assert "普通问答不要套用 HTML-only 或交付信封口径" in skill_text
 
 
 def test_vibe_diagram_svg_text_wrapping_rules() -> None:
@@ -876,21 +883,23 @@ def test_vibe_diagram_delivery_acceptance_uses_requirement_evidence_track() -> N
     assert "交付验收图规则" in skill_text
 
 
-def test_vibe_diagram_delivery_acceptance_preserves_tabs_and_requires_readable_internal_layouts() -> None:
-    """交付验收图应保留候选按钮，但每个面板内部必须换成清晰布局图。"""
+def test_vibe_diagram_delivery_acceptance_tabs_are_only_for_candidate_layouts() -> None:
+    """交付验收图只有在展示多个候选布局时才使用 tabs，不能把问答步骤做成 tabs。"""
 
     core_text = _read_vibe_diagram_core()
     delivery_text = _read_vibe_diagram_reference("delivery-acceptance.md")
 
-    assert "交付验收图保留候选切换入口" in core_text
+    assert "tabs / role=tablist 只能用于同一图型的候选布局" in core_text
+    assert "不得把步骤、补充问答、发布说明或普通章节导航做成 tab" in core_text
     assert "不要用移除按钮或删除面板来解决可读性问题" in core_text
-    assert "每个候选面板内部必须包含主结论、阅读顺序和关系结构" in core_text
+    assert "若只交付一个结论或单页说明，不得生成候选按钮" in core_text
     assert "首选候选：验收账本 / 需求到证据签收表" in delivery_text
     assert "证据泳道图" in delivery_text
     assert "风险动作板" in delivery_text
     assert "交付时间线" in delivery_text
-    assert "保留候选按钮，但按钮只是入口；面板内部必须独立可读" in delivery_text
-    assert "不得通过删除候选按钮、删除面板或只保留单一账本来回应可读性问题" in delivery_text
+    assert "多个候选布局可使用候选按钮" in delivery_text
+    assert "不得把用户追问、安装升级解释、发布说明或普通章节导航追加成新候选按钮" in delivery_text
+    assert "交付验收图保留候选切换入口" not in delivery_text
 
 
 def test_task_20260701_012_delivery_html_preserves_tabs_with_readable_panel_layouts() -> None:
@@ -918,6 +927,24 @@ def test_task_20260701_012_delivery_html_preserves_tabs_with_readable_panel_layo
     assert "移除按钮" not in html_text
     assert "证据矩阵热区" not in html_text
     assert "地铁验收线路" not in html_text
+
+
+def test_task_20260701_014_delivery_html_is_single_page_not_followup_tabs() -> None:
+    """TASK_014 是单页说明，不应把追问答复堆成 tab 导航。"""
+
+    html_text = (
+        ROOT / "docs" / "TASK_20260701_014_vibe_diagram独立Skill发布方案.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'role="tablist"' not in html_text
+    assert 'role="tab"' not in html_text
+    assert 'role="tabpanel"' not in html_text
+    assert "selectPanel" not in html_text
+    assert "button class=\"tab" not in html_text
+    button_text = "\n".join(re.findall(r"<button[^>]*>(.*?)</button>", html_text, flags=re.S))
+    assert "发布到市场" not in button_text
+    assert "自动升级" not in button_text
+    assert "插件与 Skill 区别" not in button_text
 
 
 def test_vibe_diagram_delivery_acceptance_must_expose_change_user_action_and_entry_impact() -> None:
@@ -1356,12 +1383,18 @@ def test_sync_agents_block_can_emit_legacy_vibe_diagram_skill_index(tmp_path: Pa
 
     synced_text = target.read_text(encoding="utf-8")
 
+    skill_index = synced_text.split("## Skill: vibe-diagram", 1)[1]
+
     assert "# Vibego 内置 Skills" in synced_text
     assert "## Skill: vibe-diagram" in synced_text
-    assert "HTML-first substantive answer" in synced_text
-    assert "why/how explanations" in synced_text
-    assert "为什么" in synced_text
-    assert "怎么做" in synced_text
-    assert "实质沟通" in synced_text
-    assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" in synced_text
+    assert "complex logic" in skill_index
+    assert "visual explanation" in skill_index
+    assert "逻辑结构" in skill_index
+    assert "HTML-first substantive answer" not in skill_index
+    assert "why/how explanations" not in skill_index
+    assert "delivery envelope" not in skill_index
+    assert "为什么" not in skill_index
+    assert "怎么做" not in skill_index
+    assert "实质沟通" not in skill_index
+    assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" in skill_index
     assert "## HTML-only 交付信封模式" not in synced_text

@@ -54,6 +54,45 @@ vibego start         # 启动 master 服务
 
 然后在 telegram 创建的 bot中点击`/statr`，enjoy it！
 
+### Codex Skill / Plugin 与 vibe-diagram
+
+vibego 会随 `agents-sync` 同步内置 `vibe-diagram` skill；同时仓库也提供 `plugins/vibe-diagram`，可作为 Codex plugin / repo
+marketplace 分发给其他人使用。
+
+**触发边界**
+
+- `vibe-diagram` 只在明确要求画图、图形化、HTML 图，或需要把复杂技术/业务逻辑、关系结构或状态流转可视化时自动使用。
+- 架构图、流程图、时序图、状态图、故障排查图、页面设计稿、技术设计图、需求决策图、交付验收图属于适用场景。
+- 普通概念问答、安装升级说明、轻量决策和非视觉化追问默认使用简洁文本，不再强制生成 HTML。
+- HTML 顶部 tabs / role=tablist 只用于同一图型的多个候选布局；不得把追问、步骤、发布说明或普通章节导航追加成按钮。
+
+**本机同步 / 更新**
+
+```bash
+pipx upgrade vibego
+vibego agents-sync --json
+```
+
+`agents-sync` 会更新 AGENTS 目标文件，并把内置 skill 同步到本机 native skill 目录（如 `~/.codex/skills/vibe-diagram` 与
+`~/.agents/skills/vibe-diagram`）。长期运行的 Codex / worker 若需要立即读取新 skill，建议重启对应进程。
+
+**通过 repo marketplace 安装 / 升级 plugin**
+
+```bash
+codex plugin marketplace add /path/to/vibego
+codex plugin add vibe-diagram@vibego
+```
+
+上游更新后，已安装用户需要手动刷新/重装：
+
+```bash
+codex plugin marketplace upgrade vibego
+codex plugin add vibe-diagram@vibego
+```
+
+> native skill 是本机能力目录；plugin 是 Codex 可安装/分发单位。Superpowers 这类能力通常以 plugin 分发，plugin 内部再包含多个
+> skills。`vibe-diagram` 同时支持本机 native skill 同步和 repo marketplace plugin 分发。
+
 ## 目录结构
 
 - `bot.py`：aiogram 3 worker，支持多模型会话解析（Codex / ClaudeCode / Gemini / Copilot）。
