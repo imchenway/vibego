@@ -46,6 +46,24 @@ class TargetSyncStatus:
 
 
 @dataclass(frozen=True)
+class NativeSkillSyncStatus:
+    """单个 native skill 目录的同步结果。"""
+
+    path: Path
+    status: str
+    skill_count: int
+
+    def to_dict(self) -> dict[str, str | int]:
+        """转换为可 JSON 序列化的字典。"""
+
+        return {
+            "path": str(self.path),
+            "status": self.status,
+            "skill_count": self.skill_count,
+        }
+
+
+@dataclass(frozen=True)
 class AgentsSyncResult:
     """AGENTS/Skills 同步的总结果。"""
 
@@ -55,6 +73,7 @@ class AgentsSyncResult:
     skills_dir: Path
     manifest_file: Path
     target_statuses: Mapping[str, TargetSyncStatus]
+    native_skill_statuses: Mapping[str, NativeSkillSyncStatus]
     skill_count: int
     synced_at: str
 
@@ -71,6 +90,9 @@ class AgentsSyncResult:
             "skill_count": self.skill_count,
             "synced_at": self.synced_at,
             "targets": {key: status.to_dict() for key, status in self.target_statuses.items()},
+            "native_skill_targets": {
+                key: status.to_dict() for key, status in self.native_skill_statuses.items()
+            },
         }
 
 
@@ -78,6 +100,12 @@ def _utc_timestamp() -> str:
     """返回统一的 UTC 时间戳，便于日志与 manifest 对齐。"""
 
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _env_flag(env: Mapping[str, str], name: str) -> bool:
+    """按常见真值解析环境变量开关。"""
+
+    return str(env.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _expand_path(path: str | Path) -> Path:
@@ -248,12 +276,14 @@ def _render_managed_block(
     skills_dir: Path,
     source_root: Path,
     synced_at: str,
+    include_skill_index: bool,
 ) -> str:
     """生成可替换的 AGENTS managed block。"""
 
     body = template_file.read_text(encoding="utf-8").rstrip()
-    skills_block = render_builtin_skills(skills_dir)
-    body = body + "\n\n" + skills_block
+    if include_skill_index:
+        skills_block = render_builtin_skills(skills_dir)
+        body = body + "\n\n" + skills_block
     return "\n".join(
         [
             VIBEGO_AGENTS_MARKER_START,
@@ -313,12 +343,27 @@ def default_agents_targets(
 
     config_root = _expand_path(config_root or config.CONFIG_ROOT)
     env = env or os.environ
-    home = Path.home()
+    home = Path(env.get("HOME") or Path.home()).expanduser()
     return {
         "codex": Path(env.get("CODEX_AGENTS_FILE") or home / ".codex" / "AGENTS.md").expanduser(),
         "claude": Path(env.get("CLAUDE_AGENTS_FILE") or home / ".claude" / "CLAUDE.md").expanduser(),
         "gemini": Path(env.get("GEMINI_AGENTS_FILE") or home / ".gemini" / "GEMINI.md").expanduser(),
         "vibego": Path(env.get("VIBEGO_AGENTS_FILE") or config_root / "AGENTS.md").expanduser(),
+    }
+
+
+def default_native_skill_targets(env: Mapping[str, str] | None = None) -> dict[str, Path]:
+    """解析默认 native skill 安装目录。"""
+
+    env = env or os.environ
+    home = Path(env.get("HOME") or Path.home()).expanduser()
+    return {
+        "codex": Path(
+            env.get("VIBEGO_CODEX_SKILLS_DIR")
+            or env.get("CODEX_SKILLS_DIR")
+            or home / ".codex" / "skills"
+        ).expanduser(),
+        "agents": Path(env.get("VIBEGO_AGENTS_SKILLS_DIR") or home / ".agents" / "skills").expanduser(),
     }
 
 
@@ -359,6 +404,52 @@ def _write_source_record(config_root: Path, source_root: Path, synced_at: str) -
     )
 
 
+def _replace_tree_atomically(source_dir: Path, target_dir: Path) -> None:
+    """用 staging 目录原子替换目标目录。"""
+
+    target_dir = Path(target_dir).expanduser()
+    parent = target_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    staging = parent / f".{target_dir.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    previous = parent / f".{target_dir.name}.prev-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        shutil.copytree(source_dir, staging)
+        if target_dir.exists():
+            target_dir.rename(previous)
+        try:
+            staging.rename(target_dir)
+        except OSError:
+            if previous.exists() and not target_dir.exists():
+                previous.rename(target_dir)
+            raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(previous, ignore_errors=True)
+
+
+def publish_native_skills(
+    skills_dir: Path,
+    targets: Mapping[str, Path],
+) -> dict[str, NativeSkillSyncStatus]:
+    """把内置 skills 发布到 Codex/agents native skill 目录。"""
+
+    skill_dirs = sorted(path for path in Path(skills_dir).expanduser().iterdir() if (path / "SKILL.md").is_file())
+    if not skill_dirs:
+        raise AgentsSyncError(f"native skills 源目录未发现 SKILL.md：{skills_dir}")
+
+    statuses: dict[str, NativeSkillSyncStatus] = {}
+    for key, target_root in targets.items():
+        target_root = Path(target_root).expanduser()
+        for skill_dir in skill_dirs:
+            _replace_tree_atomically(skill_dir, target_root / skill_dir.name)
+        statuses[key] = NativeSkillSyncStatus(
+            path=target_root,
+            status="updated",
+            skill_count=len(skill_dirs),
+        )
+    return statuses
+
+
 def _publish_override_copy(
     *,
     config_root: Path,
@@ -367,6 +458,7 @@ def _publish_override_copy(
     skills_dir: Path,
     skill_count: int,
     target_keys: list[str],
+    native_skill_targets: Mapping[str, Path],
     synced_at: str,
 ) -> tuple[Path, Path, Path]:
     """复制模板与 skills 到稳定 override 目录，并写入 manifest。"""
@@ -393,6 +485,10 @@ def _publish_override_copy(
                     "skills_dir": str(override_skills_dir),
                     "skill_count": skill_count,
                     "synced_at": synced_at,
+                    "native_skill_targets": {
+                        key: str(Path(path).expanduser())
+                        for key, path in native_skill_targets.items()
+                    },
                     "targets": {key: None for key in target_keys},
                 },
                 ensure_ascii=False,
@@ -431,6 +527,7 @@ def sync_agents(
     resolved_source = resolve_source_root(source_root, config_root=config_root, env=env)
     template_file, skills_dir, skill_files = _validate_source_root(resolved_source)
     target_map = dict(targets or default_agents_targets(config_root=config_root, env=env))
+    native_skill_targets = default_native_skill_targets(env)
     synced_at = _utc_timestamp()
 
     override_root, override_template, override_skills_dir = _publish_override_copy(
@@ -440,14 +537,17 @@ def sync_agents(
         skills_dir=skills_dir,
         skill_count=len(skill_files),
         target_keys=list(target_map.keys()),
+        native_skill_targets=native_skill_targets,
         synced_at=synced_at,
     )
+    native_skill_statuses = publish_native_skills(override_skills_dir, native_skill_targets)
 
     block = _render_managed_block(
         template_file=override_template,
         skills_dir=override_skills_dir,
         source_root=resolved_source,
         synced_at=synced_at,
+        include_skill_index=_env_flag(env, "VIBEGO_AGENTS_LEGACY_SKILL_INDEX"),
     )
     target_statuses = {
         key: update_managed_block(Path(target_path), block)
@@ -462,6 +562,7 @@ def sync_agents(
         skills_dir=override_skills_dir,
         manifest_file=override_root / MANIFEST_NAME,
         target_statuses=target_statuses,
+        native_skill_statuses=native_skill_statuses,
         skill_count=len(skill_files),
         synced_at=synced_at,
     )

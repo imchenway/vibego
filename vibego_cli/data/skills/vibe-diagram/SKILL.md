@@ -1,11 +1,11 @@
 ---
 name: vibe-diagram
-description: Use when the user asks to draw, diagram, visualize, finalize, or communicate architecture, workflows, code sequence, state/data models, debugging, page mockups, technical design, requirements, decisions, delivery acceptance, or any one-picture explanation; triggers include 画图, 架构图, 流程图, 时序图, 状态图, 交付验收图, 设计稿, HTML 图, 一图胜千言.
+description: Use when the user asks to draw, diagram, visualize, finalize, or communicate architecture, workflows, code sequence, state/data models, debugging, page mockups, technical design, requirements, decisions, delivery acceptance, HTML-first substantive answer, why/how explanations, delivery envelope, or any one-picture explanation; triggers include 画图, 架构图, 流程图, 时序图, 状态图, 交付验收图, 设计稿, HTML 图, HTML-only, 交付信封, 为什么, 怎么做, 实质沟通, 一图胜千言.
 ---
 
 # HTML 图形表达协议（薄内核）
 
-用图沟通架构、流程、时序、状态、故障、页面、技术设计、需求决策或交付验收时，优先生成**单文件 HTML 图**：打开即懂，关键细节可见，点击只补充。
+用图沟通架构、流程、时序、状态、故障、页面、技术设计、需求决策、交付验收，或承接 HTML-first 实质回复时，优先生成**单文件 HTML 图**：打开即懂，关键细节可见，点击只补充。
 
 ## AGENTS 配合协议
 
@@ -26,15 +26,13 @@ description: Use when the user asks to draw, diagram, visualize, finalize, or co
 1. 单 HTML 必须含 `<!doctype html>`、内联 CSS、少量原生 JS；禁止外部 CDN、npm 包、远程字体/图片和构建工具。
 2. Codex 最终回复给可点击 Markdown `file://` 链接；链接文字必须使用 HTML 内部 `<h1>` 主标题，例如
    `[交付验收：移除阶段确认回退门禁](file:///绝对路径/xxx.html)`，并保留绝对路径兜底。不要写成固定的“打开 HTML”。
-3. Telegram 来源必须直接发送 `.html` 文件，必须作为文件附件发送；用户侧交付标准是 Telegram 中必须看到文件卡片，不要把
-   `file://` 作为 Telegram 主入口。
+3. Telegram 来源必须直接发送 `.html` 文件，必须作为文件附件发送；用户侧交付标准是 Telegram 中必须看到文件卡片，不要把 `file://` 作为 Telegram 主入口。
 4. 不需要 PNG；仅用户明确要求图片预览时可作 fallback，不能替代 HTML。
 5. 禁止只发送 Markdown 链接、截图、路径或“打开 HTML”文字；只能作平台主交付的补充。
 
 ## HTML 图交付后的文本压缩规则
 
-- 生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作；Markdown 链接文字必须使用 HTML 内部 `<h1>`
-  主标题，不要写成固定的“打开 HTML”。
+- 生成或修改 HTML 图后，最终回复只保留 HTML 路径/链接和待执行动作；Markdown 链接文字必须使用 HTML 内部 `<h1>` 主标题，不要写成固定的“打开 HTML”。
 - 不得在聊天里重复展开 HTML 已承载的分析、证据链、测试矩阵、风险回滚。
 - HTML-only 是更严格的信封模式；普通 HTML 图交付也必须默认短回复。
 

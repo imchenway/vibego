@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>交付验收：vibe-diagram 已改为 Native Skill 发布</title>
+  <script>document.documentElement.classList.remove('no-js');document.documentElement.classList.add('js');</script>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+      --border: rgba(112,151,190,.38);
+    }
+    * { box-sizing: border-box; }
+    html { min-height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font: 14px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      overflow-wrap: anywhere;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    a { color: var(--blue); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .92em;
+      background: rgba(31,111,178,.08);
+      border: 1px solid rgba(31,111,178,.16);
+      border-radius: 8px;
+      padding: .08rem .32rem;
+    }
+    .page { width: min(1160px, calc(100vw - 40px)); margin: 24px auto 72px; }
+    .task-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255,255,255,.88);
+      box-shadow: 0 8px 22px rgba(31,111,178,.08);
+      color: var(--blue);
+      font-weight: 800;
+      letter-spacing: .01em;
+    }
+    h1 {
+      margin: 16px 0 10px;
+      font-size: clamp(24px, 2.8vw, 32px);
+      line-height: 1.18;
+      letter-spacing: -.025em;
+    }
+    .lead { max-width: 900px; margin: 0 0 18px; color: #41566d; }
+    .top-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 20px;
+    }
+    .notice,
+    .panel,
+    .mini-card,
+    .legend,
+    .rail-card,
+    .evidence-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .notice { padding: 18px; }
+    .notice strong { color: var(--green); }
+    .quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .mini-card { padding: 13px 14px; box-shadow: none; }
+    .mini-card .k { color: var(--muted); font-size: 12px; font-weight: 800; margin-bottom: 4px; }
+    .mini-card .v { font-weight: 800; }
+    .tabs {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      gap: 10px;
+      padding: 10px 0 14px;
+      margin: 8px 0 0;
+      background:
+        linear-gradient(rgba(251,253,255,.95), rgba(251,253,255,.72));
+      backdrop-filter: blur(8px);
+      overflow-x: auto;
+    }
+    .tab {
+      appearance: none;
+      border: 1px solid rgba(31,111,178,.28);
+      background: rgba(255,255,255,.9);
+      color: var(--blue);
+      padding: 9px 14px;
+      border-radius: 999px;
+      font-weight: 850;
+      cursor: pointer;
+      white-space: nowrap;
+      box-shadow: 0 8px 20px rgba(31,111,178,.08);
+    }
+    .tab[aria-selected="true"] { background: var(--blue); color: #fff; border-color: var(--blue); }
+    :focus-visible { outline: 3px solid rgba(31,111,178,.32); outline-offset: 3px; }
+    .panel { margin-top: 18px; padding: 20px; }
+    .js .panel:not(.active) { display: none; }
+    .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid rgba(141,179,216,.32); padding-bottom: 12px; margin-bottom: 18px; }
+    .panel h2 { margin: 0; font-size: clamp(19px, 2vw, 24px); letter-spacing: -.02em; }
+    .panel-note { color: var(--green); font-weight: 800; }
+    .topology {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 64px minmax(220px, 1fr) 64px minmax(220px, 1fr);
+      gap: 0;
+      align-items: stretch;
+    }
+    .node {
+      position: relative;
+      min-height: 138px;
+      padding: 16px;
+      border: 1px solid rgba(141,179,216,.55);
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: 0 10px 24px rgba(31,111,178,.06);
+    }
+    .node h3 { margin: 0 0 8px; font-size: 16px; }
+    .node p { margin: 0; color: #41566d; }
+    .node ul { margin: 8px 0 0 18px; padding: 0; color: #41566d; }
+    .node.source { border-left: 5px solid var(--violet); }
+    .node.sync { border-left: 5px solid var(--blue); }
+    .node.target { border-left: 5px solid var(--green); }
+    .arrow {
+      display: grid;
+      place-items: center;
+      color: var(--blue);
+      font-weight: 900;
+      font-size: 24px;
+    }
+    .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+    .legend { padding: 14px; box-shadow: none; }
+    .legend h3 { margin: 0 0 10px; font-size: 15px; }
+    .legend-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+    .legend-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: start; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; margin-top: 4px; background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
+    .dot.blue { background: var(--blue); box-shadow: 0 0 0 4px var(--blue-soft); }
+    .dot.amber { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft); }
+    .ledger { display: grid; grid-template-columns: 1.1fr 1.1fr 1fr .85fr; gap: 12px; }
+    .ledger-head { color: var(--muted); font-size: 12px; font-weight: 900; padding: 0 6px; }
+    .req-card {
+      position: relative;
+      min-height: 124px;
+      padding: 14px;
+      border: 1px solid rgba(141,179,216,.52);
+      border-radius: 16px;
+      background: #fff;
+    }
+    .req-card::before {
+      content: "";
+      position: absolute;
+      left: -7px;
+      top: 18px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #fff;
+      border: 3px solid var(--green);
+    }
+    .req-card h3 { margin: 0 0 7px; font-size: 14px; }
+    .req-card p { margin: 0; color: #41566d; }
+    .pass { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-weight: 900; }
+    .pass::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+    .heatmap { display: grid; grid-template-columns: 170px repeat(4, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+    .heat-cell, .heat-head, .heat-axis {
+      min-height: 66px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(141,179,216,.45);
+      background: #fff;
+    }
+    .heat-head, .heat-axis { font-weight: 900; color: #31516d; background: rgba(232,243,255,.72); }
+    .heat-cell.ok { background: var(--green-soft); border-color: rgba(23,120,90,.25); }
+    .heat-cell.warn { background: var(--amber-soft); border-color: rgba(152,101,6,.24); }
+    .heat-cell .small { display: block; margin-top: 4px; color: #41566d; font-size: 12px; }
+    .rails { display: grid; gap: 14px; }
+    .rail {
+      display: grid;
+      grid-template-columns: 155px minmax(0, 1fr) 160px;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .rail-label {
+      display: grid;
+      place-items: center;
+      min-height: 96px;
+      border-radius: 16px;
+      background: rgba(232,243,255,.72);
+      border: 1px solid rgba(141,179,216,.45);
+      font-weight: 900;
+    }
+    .rail-track {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      position: relative;
+    }
+    .rail-track::before {
+      content: "";
+      position: absolute;
+      left: 8%; right: 8%; top: 50%;
+      height: 2px;
+      background: rgba(31,111,178,.22);
+      z-index: 0;
+    }
+    .rail-card { position: relative; z-index: 1; padding: 13px; box-shadow: none; background: #fff; }
+    .rail-card h3 { margin: 0 0 6px; font-size: 14px; }
+    .rail-card p { margin: 0; color: #41566d; }
+    .rail-action {
+      border: 1px solid rgba(152,101,6,.28);
+      background: var(--amber-soft);
+      border-radius: 16px;
+      padding: 13px;
+    }
+    .rail-action h3 { margin: 0 0 6px; font-size: 14px; color: var(--amber); }
+    .rail-action p { margin: 0; color: #41566d; }
+    .evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .evidence-card { padding: 14px; box-shadow: none; }
+    .evidence-card h3 { margin: 0 0 8px; font-size: 15px; }
+    .evidence-card pre {
+      margin: 8px 0 0;
+      padding: 12px;
+      border-radius: 12px;
+      background: #f5f9ff;
+      border: 1px solid rgba(141,179,216,.35);
+      overflow-x: auto;
+      white-space: pre-wrap;
+      color: #2e4a63;
+      font-size: 12px;
+    }
+    @media (max-width: 860px) {
+      .page { width: min(100% - 24px, 760px); margin-top: 16px; }
+      .top-summary, .split, .evidence-grid { grid-template-columns: 1fr; }
+      .quick-grid { grid-template-columns: 1fr; }
+      .topology { grid-template-columns: 1fr; gap: 10px; }
+      .arrow { transform: rotate(90deg); height: 32px; }
+      .ledger { grid-template-columns: 1fr; }
+      .ledger-head { display: none; }
+      .heatmap { grid-template-columns: 1fr; }
+      .rail { grid-template-columns: 1fr; }
+      .rail-track { grid-template-columns: 1fr; }
+      .rail-track::before { display: none; }
+      .tabs { position: static; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="task-chip">TASK_20260701_014</div>
+    <h1>交付验收：vibe-diagram 已改为 Native Skill 发布</h1>
+    <p class="lead">结论：默认 AGENTS 只保留全局协作规约，不再内嵌 vibe-diagram 索引；同步流程会把完整 <code>vibe-diagram/</code> skill 发布到 Codex 可发现的 native skill 目录，并保留 legacy 开关给非 native 入口兜底。</p>
+
+    <section class="top-summary" aria-label="交付摘要">
+      <div class="notice">
+        <strong>本轮处理完成的主变化：</strong> Python <code>agents-sync</code> 与 worker shell 兜底链路都从“AGENTS 索引注入”改成“native skill 目录发布”。页面顶部也不再展示 skill 长条和右侧交付卡片，避免把交付页变成模板噪音。
+      </div>
+      <div class="quick-grid">
+        <div class="mini-card"><div class="k">默认 AGENTS</div><div class="v">无内置 skill 索引</div></div>
+        <div class="mini-card"><div class="k">Native 目录</div><div class="v">Codex + .agents 双目标</div></div>
+        <div class="mini-card"><div class="k">兜底开关</div><div class="v"><code>VIBEGO_AGENTS_LEGACY_SKILL_INDEX=1</code></div></div>
+        <div class="mini-card"><div class="k">回归结果</div><div class="v">82 passed</div></div>
+      </div>
+    </section>
+
+    <nav class="tabs" role="tablist" aria-label="交付验收视图">
+      <button class="tab" id="tab-topology" role="tab" aria-selected="true" aria-controls="panel-topology" data-target="panel-topology">总览拓扑</button>
+      <button class="tab" id="tab-ledger" role="tab" aria-selected="false" aria-controls="panel-ledger" data-target="panel-ledger">需求证据台账</button>
+      <button class="tab" id="tab-heatmap" role="tab" aria-selected="false" aria-controls="panel-heatmap" data-target="panel-heatmap">同步结果热区</button>
+      <button class="tab" id="tab-actions" role="tab" aria-selected="false" aria-controls="panel-actions" data-target="panel-actions">动作与回滚轨道</button>
+      <button class="tab" id="tab-visibility" role="tab" aria-selected="false" aria-controls="panel-visibility" data-target="panel-visibility">可见性与更新</button>
+    </nav>
+
+    <section class="panel active" id="panel-topology" role="tabpanel" aria-labelledby="tab-topology" tabindex="0">
+      <div class="panel-head"><h2>总览拓扑：从仓库 skill 源发布到 native skill registry</h2><span class="panel-note">推荐阅读起点</span></div>
+      <div class="topology" aria-label="native skill 发布拓扑">
+        <article class="node source">
+          <h3>1. 仓库内唯一来源</h3>
+          <p><code>vibego_cli/data/skills/vibe-diagram/</code> 保存 <code>SKILL.md</code> 与 <code>references/*.md</code>，仍是同步和测试的唯一事实源。</p>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="node sync">
+          <h3>2. 两条同步链路</h3>
+          <ul>
+            <li><code>vibego_cli/agents_sync.py</code>：CLI / Master 同步。</li>
+            <li><code>scripts/models/common.sh</code>：worker 启动兜底。</li>
+          </ul>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="node target">
+          <h3>3. Native skill 目标</h3>
+          <p>完整目录发布到 <code>~/.codex/skills/vibe-diagram</code> 与 <code>~/.agents/skills/vibe-diagram</code>，让 Codex 按原生 skill 发现机制触发。</p>
+        </article>
+      </div>
+      <div class="split">
+        <aside class="legend">
+          <h3>AGENTS 的新职责</h3>
+          <ul class="legend-list">
+            <li><span class="dot blue"></span><span>默认只承载全局协作规约与 HTML-first 合约。</span></li>
+            <li><span class="dot"></span><span>不再塞入 vibe-diagram 的 frontmatter、source 注释或长索引块。</span></li>
+            <li><span class="dot amber"></span><span>只有 legacy 开关打开时，才恢复旧索引用作兼容兜底。</span></li>
+          </ul>
+        </aside>
+        <aside class="legend">
+          <h3>为什么这次能像 superpowers 一样稳定触发</h3>
+          <ul class="legend-list">
+            <li><span class="dot"></span><span>skill 以目录形式发布到 Codex 会话会扫描的 skill 根目录。</span></li>
+            <li><span class="dot blue"></span><span>触发依赖原生 skills registry，而不是靠 AGENTS 里人为提示“看到关键词就去读”。</span></li>
+            <li><span class="dot amber"></span><span>旧入口仍能通过环境变量回退，不会一次性切断兼容路径。</span></li>
+          </ul>
+        </aside>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-ledger" role="tabpanel" aria-labelledby="tab-ledger" tabindex="0">
+      <div class="panel-head"><h2>需求证据台账：原始问题逐条闭环</h2><span class="panel-note">R1-R5 全部通过</span></div>
+      <div class="ledger" aria-label="需求到证据台账">
+        <div class="ledger-head">原始诉求</div><div class="ledger-head">实现变更</div><div class="ledger-head">验证证据</div><div class="ledger-head">判定</div>
+
+        <article class="req-card"><h3>R1 不再把大段 skill 索引写进 AGENTS</h3><p>默认目标 AGENTS 已移除内置 skill 索引与 source 注释。</p></article>
+        <article class="req-card"><h3>条件拼接</h3><p><code>_render_managed_block()</code> 只有在 legacy 开关开启时才追加旧索引。</p></article>
+        <article class="req-card"><h3>目标反查</h3><p>Codex / Claude / Gemini / Vibego 目标均为 <code>has_index=False</code>、<code>has_source=False</code>。</p></article>
+        <article class="req-card"><h3><span class="pass">pass</span></h3><p>默认路径不再提示词膨胀。</p></article>
+
+        <article class="req-card"><h3>R2 vibe-diagram 单独发布</h3><p>像 superpowers 一样以 native skill 目录出现。</p></article>
+        <article class="req-card"><h3>原子复制完整目录</h3><p>发布 <code>SKILL.md</code> 与 <code>references/</code>，不是只复制 frontmatter。</p></article>
+        <article class="req-card"><h3>文件存在 + cmp</h3><p><code>.codex/skills/vibe-diagram/SKILL.md</code> 存在，且与仓库源一致。</p></article>
+        <article class="req-card"><h3><span class="pass">pass</span></h3><p>native registry 可发现。</p></article>
+
+        <article class="req-card"><h3>R3 保留兼容兜底</h3><p>非 native 入口不被一次性切断。</p></article>
+        <article class="req-card"><h3>legacy 环境变量</h3><p><code>VIBEGO_AGENTS_LEGACY_SKILL_INDEX=1</code> 时恢复旧索引。</p></article>
+        <article class="req-card"><h3>新增回归测试</h3><p>Python 和 shell 两条链路都覆盖 legacy fallback。</p></article>
+        <article class="req-card"><h3><span class="pass">pass</span></h3><p>可回滚、可兼容。</p></article>
+
+        <article class="req-card"><h3>R4 shell worker 启动也一致</h3><p>正常重启 worker 后不应回到旧 AGENTS。</p></article>
+        <article class="req-card"><h3>同步 shell 兜底</h3><p><code>sync_agents_block()</code> 默认安装 native skill，默认不写旧索引。</p></article>
+        <article class="req-card"><h3>shell 聚焦测试</h3><p><code>test_sync_agents_block_installs_native...</code> 通过。</p></article>
+        <article class="req-card"><h3><span class="pass">pass</span></h3><p>重启链路保持一致。</p></article>
+
+        <article class="req-card"><h3>R5 本机已实际同步</h3><p>不是只改测试或文档。</p></article>
+        <article class="req-card"><h3>执行 agents-sync</h3><p>JSON 输出新增 <code>native_skill_targets</code>，两个目标均 updated。</p></article>
+        <article class="req-card"><h3>回归套件</h3><p><code>tests/test_agents_sync.py</code>、<code>tests/test_builtin_skills_injection.py</code>、<code>tests/test_agents_template_migration.py</code> 通过。</p></article>
+        <article class="req-card"><h3><span class="pass">pass</span></h3><p>交付已落地。</p></article>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-heatmap" role="tabpanel" aria-labelledby="tab-heatmap" tabindex="0">
+      <div class="panel-head"><h2>同步结果热区：哪些目标已经变成新模式</h2><span class="panel-note">实际同步证据</span></div>
+      <div class="heatmap" aria-label="同步结果热区">
+        <div class="heat-head">检查项</div><div class="heat-head">Codex</div><div class="heat-head">Claude</div><div class="heat-head">Gemini</div><div class="heat-head">Vibego</div>
+        <div class="heat-axis">默认 AGENTS 无内置索引</div>
+        <div class="heat-cell ok">通过<span class="small">目标文件已反查</span></div>
+        <div class="heat-cell ok">通过<span class="small">目标文件已反查</span></div>
+        <div class="heat-cell ok">通过<span class="small">目标文件已反查</span></div>
+        <div class="heat-cell ok">通过<span class="small">目标文件已反查</span></div>
+        <div class="heat-axis">Native skill 发布</div>
+        <div class="heat-cell ok">通过<span class="small"><code>~/.codex/skills</code></span></div>
+        <div class="heat-cell warn">不适用<span class="small">保留 AGENTS 模板</span></div>
+        <div class="heat-cell warn">不适用<span class="small">保留 AGENTS 模板</span></div>
+        <div class="heat-cell ok">通过<span class="small"><code>~/.agents/skills</code></span></div>
+        <div class="heat-axis">References 完整性</div>
+        <div class="heat-cell ok">通过<span class="small"><code>delivery-acceptance.md</code> 存在且 cmp 一致</span></div>
+        <div class="heat-cell warn">待入口能力<span class="small">无 native skill registry 证据</span></div>
+        <div class="heat-cell warn">待入口能力<span class="small">无 native skill registry 证据</span></div>
+        <div class="heat-cell ok">通过<span class="small">完整目录发布</span></div>
+        <div class="heat-axis">Legacy fallback</div>
+        <div class="heat-cell ok">可开启<span class="small">环境变量回退</span></div>
+        <div class="heat-cell ok">可开启<span class="small">环境变量回退</span></div>
+        <div class="heat-cell ok">可开启<span class="small">环境变量回退</span></div>
+        <div class="heat-cell ok">可开启<span class="small">环境变量回退</span></div>
+      </div>
+      <div class="evidence-grid" style="margin-top:16px">
+        <article class="evidence-card"><h3>本轮核心命令</h3><pre>python3.11 -m pytest -q tests/test_agents_sync.py tests/test_builtin_skills_injection.py tests/test_agents_template_migration.py
+python3.11 -m vibego_cli agents-sync --source-root /Users/david/hypha/tools/vibego --json</pre></article>
+        <article class="evidence-card"><h3>同步输出关键字段</h3><pre>native_skill_targets:
+  codex:  /Users/david/.codex/skills  updated
+  agents: /Users/david/.agents/skills updated
+regression: 82 passed</pre></article>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-actions" role="tabpanel" aria-labelledby="tab-actions" tabindex="0">
+      <div class="panel-head"><h2>动作与回滚轨道：后续怎么生效、怎么兜底</h2><span class="panel-note">只剩运行时动作</span></div>
+      <div class="rails" aria-label="动作与回滚轨道">
+        <div class="rail">
+          <div class="rail-label">立即可见</div>
+          <div class="rail-track">
+            <article class="rail-card"><h3>代码已改</h3><p>Python 同步器和 shell 兜底链路已切到 native 发布。</p></article>
+            <article class="rail-card"><h3>本机已同步</h3><p>当前全局 AGENTS 目标已变成无索引版本。</p></article>
+            <article class="rail-card"><h3>skill 已安装</h3><p>Codex 与 .agents native skill 目录已有完整 <code>vibe-diagram</code>。</p></article>
+          </div>
+          <div class="rail-action"><h3>用户无需执行</h3><p>当前机器已经运行过同步。</p></div>
+        </div>
+        <div class="rail">
+          <div class="rail-label">长期 worker</div>
+          <div class="rail-track">
+            <article class="rail-card"><h3>旧会话可能缓存</h3><p>已启动很久的 worker 可能仍持有旧上下文。</p></article>
+            <article class="rail-card"><h3>重启后读取</h3><p>重启 worker 会读取新的 AGENTS 与 native skill registry。</p></article>
+            <article class="rail-card"><h3>现场观察</h3><p>后续可观察 Available skills 是否出现 <code>vibe-diagram</code>。</p></article>
+          </div>
+          <div class="rail-action"><h3>建议动作</h3><p>需要立即生效时，重启对应 worker。</p></div>
+        </div>
+        <div class="rail">
+          <div class="rail-label">回滚 / 兼容</div>
+          <div class="rail-track">
+            <article class="rail-card"><h3>保留源目录</h3><p>仓库与 override 里的完整 skill 没有删除。</p></article>
+            <article class="rail-card"><h3>打开 legacy</h3><p>设置环境变量即可恢复旧 AGENTS 索引。</p></article>
+            <article class="rail-card"><h3>重新同步</h3><p>再次执行 agents-sync 或重启 worker 兜底同步。</p></article>
+          </div>
+          <div class="rail-action"><h3>回滚命令口径</h3><p><code>VIBEGO_AGENTS_LEGACY_SKILL_INDEX=1</code> 后重新同步。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-visibility" role="tabpanel" aria-labelledby="tab-visibility" tabindex="0">
+      <div class="panel-head"><h2>可见性与更新：别人能不能搜到、以后怎么同步</h2><span class="panel-note">结论先行</span></div>
+      <div class="evidence-grid" aria-label="可见性与更新说明">
+        <article class="evidence-card">
+          <h3>别人现在能搜到吗？</h3>
+          <p><strong>不能理解成“全网/所有 Codex 用户都能搜到”。</strong>当前实现是把 <code>vibe-diagram</code> 发布到本机 native skill 目录：<code>/Users/david/.codex/skills/vibe-diagram</code> 与 <code>/Users/david/.agents/skills/vibe-diagram</code>。这意味着本机新的 Codex/agent 会话可按 native skill registry 发现；其他人的机器只有在安装/更新 vibego 并执行同步后才会看到。</p>
+        </article>
+        <article class="evidence-card">
+          <h3>如果要“别人搜索可安装”</h3>
+          <p>还需要单独做发布渠道：例如把 <code>vibe-diagram</code> 做成可安装的 Codex skill / plugin 包，并发布到对应技能源或插件市场。本轮交付只完成本机 native 发布与 vibego 同步链路，不等同于公开市场发布。</p>
+        </article>
+        <article class="evidence-card">
+          <h3>以后怎么更新 skill 内容</h3>
+          <p>改仓库事实源 <code>vibego_cli/data/skills/vibe-diagram/SKILL.md</code> 或 <code>references/*.md</code>，跑相关测试，然后执行 <code>python3.11 -m vibego_cli agents-sync --source-root /Users/david/hypha/tools/vibego --json</code>。同步会把新版本复制到 override 目录和 native skill 目录。</p>
+        </article>
+        <article class="evidence-card">
+          <h3>其他用户/worker 怎么拿到更新</h3>
+          <p>其他用户需要先更新 vibego 仓库或安装包，再运行 <code>agents-sync</code> 或重启 worker 触发 <code>sync_agents_block()</code>。已经运行很久的 worker 可能有旧上下文；需要立即生效时重启对应 worker。</p>
+        </article>
+      </div>
+      <div class="split" style="margin-top:16px">
+        <aside class="legend">
+          <h3>证据锚点</h3>
+          <ul class="legend-list">
+            <li><span class="dot blue"></span><span><code>vibego_cli/agents_sync.py:355</code>：默认 native skill 目标解析为 <code>~/.codex/skills</code> 与 <code>~/.agents/skills</code>。</span></li>
+            <li><span class="dot"></span><span><code>vibego_cli/agents_sync.py:430</code>：<code>publish_native_skills()</code> 把完整 skill 目录发布到目标根目录。</span></li>
+            <li><span class="dot amber"></span><span><code>scripts/models/common.sh:250</code>、<code>:264</code>：worker 启动兜底也会发布 native skill。</span></li>
+          </ul>
+        </aside>
+        <aside class="legend">
+          <h3>一句话口径</h3>
+          <ul class="legend-list">
+            <li><span class="dot"></span><span>本机：能被 native skill registry 发现。</span></li>
+            <li><span class="dot amber"></span><span>别人：安装/同步后能发现，不是自动全网可搜。</span></li>
+            <li><span class="dot blue"></span><span>更新：改仓库源 → 测试 → agents-sync → 重启长期 worker。</span></li>
+          </ul>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+      const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
+      function activate(id, pushHash) {
+        const target = document.getElementById(id) ? id : 'panel-topology';
+        tabs.forEach(tab => {
+          const selected = tab.dataset.target === target;
+          tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+          tab.tabIndex = selected ? 0 : -1;
+        });
+        panels.forEach(panel => panel.classList.toggle('active', panel.id === target));
+        if (pushHash) history.replaceState(null, '', '#' + target);
+      }
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => activate(tab.dataset.target, true));
+        tab.addEventListener('keydown', event => {
+          let next = index;
+          if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+          else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === 'Home') next = 0;
+          else if (event.key === 'End') next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          tabs[next].focus();
+          activate(tabs[next].dataset.target, true);
+        });
+      });
+      const fromHash = location.hash ? location.hash.slice(1) : 'panel-topology';
+      activate(fromHash, false);
+      window.addEventListener('hashchange', () => activate(location.hash.slice(1), false));
+    }());
+  </script>
+</body>
+</html>

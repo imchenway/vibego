@@ -183,6 +183,24 @@ def test_vibe_diagram_prompt_compaction_preserves_recent_feedback_rules() -> Non
     assert "风险动作板" in delivery_text
     assert "交付时间线" in delivery_text
 
+
+def test_vibe_diagram_description_covers_html_first_substantive_replies() -> None:
+    """skill 索引描述必须覆盖 HTML-first 实质回复，避免只在画图关键词下触发。"""
+
+    core_text = _read_vibe_diagram_core()
+    frontmatter = core_text.split("---", 2)[1]
+
+    assert "description: Use when" in frontmatter
+    assert "HTML-first" in frontmatter
+    assert "substantive answer" in frontmatter
+    assert "why/how explanations" in frontmatter
+    assert "delivery envelope" in frontmatter
+    assert "triggers include" in frontmatter
+    assert "为什么" in frontmatter
+    assert "怎么做" in frontmatter
+    assert "实质沟通" in frontmatter
+
+
 def test_vibe_diagram_candidate_atlas_mode_is_required_for_calibration() -> None:
     """校准期每次命中图型都必须生成首选候选与全部备选候选。"""
 
@@ -1231,13 +1249,14 @@ def test_vibe_diagram_title_must_start_with_generated_diagram_type() -> None:
     assert "vibe-diagram 不是换皮卡片" not in html_text
 
 
-def test_sync_agents_block_embeds_builtin_vibe_diagram_skill_index_only(tmp_path: Path) -> None:
-    """同步全局 AGENTS 时，只应注入 vibe-diagram 索引，不应常驻完整正文。"""
+def test_sync_agents_block_installs_native_vibe_diagram_skill_without_default_index(tmp_path: Path) -> None:
+    """shell 同步默认安装 native skill，不再把 vibe-diagram 索引写入 AGENTS。"""
 
     target = tmp_path / "AGENTS.md"
     env = os.environ.copy()
     env.update(
         {
+            "HOME": str(tmp_path / "home"),
             "PYTHON_EXEC": sys.executable,
             "TARGET_AGENTS_FILE": str(target),
         }
@@ -1263,12 +1282,22 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill_index_only(tmp_path
     synced_text = target.read_text(encoding="utf-8")
 
     assert "<!-- vibego-agents:start -->" in synced_text
-    assert "# Vibego 内置 Skills" in synced_text
-    assert "## Skill: vibe-diagram" in synced_text
-    assert "name: vibe-diagram" in synced_text
-    assert "description: Use when the user asks to draw" in synced_text
-    assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" in synced_text
-    assert "若读取失败，必须 fail-closed" in synced_text
+    assert "# Vibego 内置 Skills" not in synced_text
+    assert "## Skill: vibe-diagram" not in synced_text
+    assert "name: vibe-diagram" not in synced_text
+    assert "description: Use when the user asks to draw" not in synced_text
+    assert "vibego-skill-source" not in synced_text
+    assert (tmp_path / "home" / ".codex" / "skills" / "vibe-diagram" / "SKILL.md").exists()
+    assert (
+        tmp_path
+        / "home"
+        / ".codex"
+        / "skills"
+        / "vibe-diagram"
+        / "references"
+        / "delivery-acceptance.md"
+    ).exists()
+    assert (tmp_path / "home" / ".agents" / "skills" / "vibe-diagram" / "SKILL.md").exists()
     assert "当用户要求画系统架构图、业务流程图、代码时序图、故障排查图、页面设计稿" not in synced_text
     assert "最终必须直接发送 `.html` 文件" not in synced_text
     assert "## 自动路由规则" not in synced_text
@@ -1292,3 +1321,47 @@ def test_sync_agents_block_embeds_builtin_vibe_diagram_skill_index_only(tmp_path
     assert "故障排查图必须先画当前现状链路，再画根因和修法" not in synced_text
     assert "功能迭代图必须先画当前功能和当前实现，再画目标和差异" not in synced_text
     assert "<!-- vibego-agents:end -->" in synced_text
+
+
+def test_sync_agents_block_can_emit_legacy_vibe_diagram_skill_index(tmp_path: Path) -> None:
+    """显式 legacy 开关打开时，shell 同步仍可写旧索引。"""
+
+    target = tmp_path / "AGENTS.md"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PYTHON_EXEC": sys.executable,
+            "TARGET_AGENTS_FILE": str(target),
+            "VIBEGO_AGENTS_LEGACY_SKILL_INDEX": "1",
+        }
+    )
+
+    subprocess.run(
+        [
+            "bash",
+            "-lc",
+            (
+                "set -euo pipefail; "
+                "source scripts/models/common.sh; "
+                'sync_agents_block "$TARGET_AGENTS_FILE" AGENTS-template.md >/dev/null'
+            ),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+        env=env,
+    )
+
+    synced_text = target.read_text(encoding="utf-8")
+
+    assert "# Vibego 内置 Skills" in synced_text
+    assert "## Skill: vibe-diagram" in synced_text
+    assert "HTML-first substantive answer" in synced_text
+    assert "why/how explanations" in synced_text
+    assert "为什么" in synced_text
+    assert "怎么做" in synced_text
+    assert "实质沟通" in synced_text
+    assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" in synced_text
+    assert "## HTML-only 交付信封模式" not in synced_text

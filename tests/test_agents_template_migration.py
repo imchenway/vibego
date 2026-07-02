@@ -196,6 +196,17 @@ def test_agents_template_requires_html_first_interaction_contract() -> None:
     assert "docs 做长期沉淀；HTML 是主交互界面" in template_text
 
 
+def test_agents_template_routes_substantive_why_how_answers_to_vibe_diagram() -> None:
+    """HTML-first 不应只靠画图关键词触发；解释原因和修复建议也要走 HTML。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "HTML-first 实质沟通、原因解释、方案建议、修复说明、验收收口：使用 vibe-diagram" in template_text
+    assert "用户问“为什么 / 怎么做 / 需要怎么做”也属于实质沟通" in template_text
+    assert "不得因为用户没有说“画图”就退回普通聊天长文" in template_text
+    assert "除阻塞性澄清、极短确认、简单命令结果或用户明确不要 HTML 外" in template_text
+
+
 def test_agents_template_compresses_text_after_html_delivery() -> None:
     """生成 HTML 图后，AGENTS 应要求聊天回复只保留交付信封和下一步。"""
 

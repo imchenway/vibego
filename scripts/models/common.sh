@@ -138,7 +138,7 @@ sync_agents_block() {
   local py_bin
   py_bin="$(_vibego_python_bin)"
   "$py_bin" - "$target_file" "$template_file" "$marker_start" "$marker_end" "$builtin_skills_dir" <<'PY'
-import sys, shutil, datetime
+import sys, shutil, datetime, os, uuid
 from pathlib import Path
 
 target = Path(sys.argv[1]).expanduser()
@@ -204,8 +204,65 @@ def render_builtin_skills(skills_dir: Path) -> str:
     return "\n".join(lines).rstrip()
 
 
+def env_flag(name: str) -> bool:
+    """按常见真值解析环境变量开关。"""
+
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def native_skill_targets() -> dict[str, Path]:
+    """返回 Codex/agents native skill 目标目录。"""
+
+    home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
+    return {
+        "codex": Path(
+            os.environ.get("VIBEGO_CODEX_SKILLS_DIR")
+            or os.environ.get("CODEX_SKILLS_DIR")
+            or home / ".codex" / "skills"
+        ).expanduser(),
+        "agents": Path(os.environ.get("VIBEGO_AGENTS_SKILLS_DIR") or home / ".agents" / "skills").expanduser(),
+    }
+
+
+def replace_tree_atomically(source_dir: Path, target_dir: Path) -> None:
+    """用 staging 目录原子替换目标目录。"""
+
+    target_dir = target_dir.expanduser()
+    parent = target_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    staging = parent / f".{target_dir.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    previous = parent / f".{target_dir.name}.prev-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        shutil.copytree(source_dir, staging)
+        if target_dir.exists():
+            target_dir.rename(previous)
+        try:
+            staging.rename(target_dir)
+        except OSError:
+            if previous.exists() and not target_dir.exists():
+                previous.rename(target_dir)
+            raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(previous, ignore_errors=True)
+
+
+def publish_native_skills(skills_dir: Path) -> None:
+    """把内置 skills 发布到 native skill 目录。"""
+
+    if not skills_dir.is_dir():
+        return
+    skill_dirs = sorted(path for path in skills_dir.iterdir() if (path / "SKILL.md").is_file())
+    if not skill_dirs:
+        return
+    for target_root in native_skill_targets().values():
+        for skill_dir in skill_dirs:
+            replace_tree_atomically(skill_dir, target_root / skill_dir.name)
+
+
 body = template.read_text(encoding="utf-8").rstrip()
-skills_block = render_builtin_skills(builtin_skills_dir)
+publish_native_skills(builtin_skills_dir)
+skills_block = render_builtin_skills(builtin_skills_dir) if env_flag("VIBEGO_AGENTS_LEGACY_SKILL_INDEX") else ""
 if skills_block:
     body = body + "\n\n" + skills_block
 block_lines = [
@@ -250,6 +307,7 @@ msg = f"[agents-sync] {status} {target}"
 if backup_path:
     msg += f" (backup={backup_path})"
 print(msg)
+
 PY
 }
 

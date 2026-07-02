@@ -19,6 +19,7 @@
 - 代码实现或修复：使用 superpowers:test-driven-development。
 - 收尾声明前：使用 superpowers:verification-before-completion。
 - 系统、业务、流程、时序、状态、故障、技术设计、需求决策等视觉沟通：使用 vibe-diagram。
+- HTML-first 实质沟通、原因解释、方案建议、修复说明、验收收口：使用 vibe-diagram；用户问“为什么 / 怎么做 / 需要怎么做”也属于实质沟通，不得因为用户没有说“画图”就退回普通聊天长文。
 - 前端页面、组件、布局、样式、交互：使用 frontend-skill + impeccable + accessibility。
 - 产品体验、UX 研究、用户流程审计、视觉方向探索、原型/重设计/URL 克隆、截图/Figma/ImageGen 到可交互原型、原型视觉 QA：若当前环境已提供 OpenAI Product Design，则按需使用；不会因本模板自动安装，缺失时不得假装可用，应回退到现有前端/视觉链路；使用时必须先确认 brief，缺少视觉目标时先生成 3 个方向并等待用户选择，不得从文字 brief 直接实现；落地代码仍遵守 superpowers:test-driven-development、frontend-skill、impeccable、accessibility 与本仓库验证门禁。
 - 高级视觉、记忆点、沉浸式体验：按需使用 premium-frontend-ui。
@@ -36,6 +37,7 @@
 
 - 默认所有实质沟通都使用单文件 HTML 与用户交互；聊天通道默认只做交付信封：HTML 链接/路径和下一步动作。
 - 分析、设计、排障、方案、决策、验收、总结、代码逻辑说明、证据链、风险、回滚、测试矩阵都必须写入 HTML；docs 做长期沉淀；HTML 是主交互界面。
+- 除阻塞性澄清、极短确认、简单命令结果或用户明确不要 HTML 外，原因解释、方案建议、修复说明和“为什么 / 怎么做 / 需要怎么做”类答复都属于实质沟通，必须生成或更新 HTML。
 - 不要把 HTML 只限定为非琐碎任务；除非是阻塞性澄清问题、极短确认、简单命令结果、用户明确不要 HTML，否则默认生成或更新项目内单文件
   HTML。
 - Codex 默认给可点击 `file://` 链接和绝对路径兜底；链接文字必须使用 HTML 内部 `<h1>` 主标题，不要写成固定的“打开
