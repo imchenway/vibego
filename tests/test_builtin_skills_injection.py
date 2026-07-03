@@ -1198,6 +1198,24 @@ def test_vibe_diagram_system_architecture_has_architecture_archetype_and_evidenc
     assert "文件路径、行号、命令输出和长证据只能放入点击详情" in system_text
 
 
+def test_vibe_diagram_system_architecture_locks_polished_presentation_micro_rules() -> None:
+    """系统架构图应把本次复刻版反馈沉淀成稳定的提示词契约。"""
+
+    system_text = _read_vibe_diagram_reference("system-architecture.md")
+
+    assert "## 系统架构图 presentation 版式锁定" in system_text
+    assert "左侧入口 rail + 中央应用层 + 南向能力/数据/基础设施 + 右侧管理/运维/兜底侧栏" in system_text
+    assert "节点内部内容必须作为一个整体自动水平居中和垂直居中" in system_text
+    assert "高节点默认图标在上、文案在下" in system_text
+    assert "紧凑节点默认图标在左、文案在右" in system_text
+    assert "优先使用 `foreignObject` + HTML/CSS `grid`/`flex` 承载节点内容" in system_text
+    assert "不得因为局部图例丑就全局去掉 emoji" in system_text
+    assert "每条箭头必须有明确源节点、目标节点、边缘锚点和关系标签" in system_text
+    assert "如果读者会问“这个箭头指向哪里”，必须改名或重连" in system_text
+    assert "浏览器标注反馈默认只修改用户选中区域及直接相邻关系" in system_text
+    assert "横向滚动条、节点内滚动条、文字溢出、图标/文案未居中、箭头穿字、孤立箭头标签均为失败" in system_text
+
+
 def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_presentation(
     tmp_path: Path,
 ) -> None:
@@ -1231,7 +1249,7 @@ def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_p
 
     assert bad.returncode == 1
     assert "普通系统架构图不得生成候选 tab" in bad.stdout
-    assert "系统架构图必须包含 SVG 主画布或 data-diagram-grammar 标记" in bad.stdout
+    assert "系统架构图必须包含真实 SVG 主画布" in bad.stdout
 
     good_html = tmp_path / "good.html"
     good_html.write_text(
@@ -1240,6 +1258,9 @@ def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_p
               data-diagram-grammar="system-architecture-presentation"
               data-arch-archetype="entry-rail-application-capability-data-infra-ops">
           <svg aria-label="客服智能体系统架构图">
+            <foreignObject x="0" y="0" width="220" height="80">
+              <div class="node-content">🤖 客服智能体 AI Agent</div>
+            </foreignObject>
             <text>用户接入 rail → 智能体应用层 → 能力支撑层 → 数据层 → 基础设施层 → 管理/运维侧栏</text>
             <path data-flow="主请求流"></path>
             <path data-flow="数据读写流"></path>
@@ -1257,6 +1278,87 @@ def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_p
 
     assert good.returncode == 0
     assert "OK" in good.stdout
+
+
+def test_vibe_diagram_system_architecture_lint_rejects_marker_only_card_canvas(
+    tmp_path: Path,
+) -> None:
+    """不能只贴 presentation 标记；没有真实 SVG/图标/连线层的节点网格仍应失败。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    marker_only_html = tmp_path / "marker_only.html"
+    marker_only_html.write_text(
+        """<!doctype html><html><body>
+        <section class="architecture-canvas"
+                 data-diagram-type="system-architecture"
+                 data-diagram-grammar="system-architecture-presentation">
+          <div class="rail">入口 Web APP 微信</div>
+          <section class="flow-stack">
+            <button class="node">应用 Agent 会话服务</button>
+            <button class="node">能力支撑 RAG LLM 工具 插件</button>
+            <button class="node">数据 知识库 会话数据 用户数据</button>
+            <button class="node">基础设施 云 存储 网络 安全 监控</button>
+            <button class="node">管理 运维 权限 审计 评估</button>
+          </section>
+          <button class="evidence-button">证据索引 文件路径</button>
+          <p>主请求流 → 数据读写流 → 反馈流</p>
+        </section></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(marker_only_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "系统架构图必须包含真实 SVG 主画布" in result.stdout
+    assert "presentation 标记不能替代图形层" in result.stdout
+
+
+def test_vibe_diagram_system_architecture_lint_rejects_scroll_canvas_raw_svg_text_and_ambiguous_arrow(
+    tmp_path: Path,
+) -> None:
+    """复刻版暴露的横向滚动、未自居中节点和孤立箭头标签应进入产物级门禁。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    bad_html = tmp_path / "scroll_and_raw_text.html"
+    bad_html.write_text(
+        """<!doctype html><html><head><style>
+        .canvas-wrap { overflow: auto; min-width: 1530px; }
+        </style></head><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation">
+          <section class="canvas-wrap">
+            <svg aria-label="系统架构图">
+              <g class="node">
+                <rect x="10" y="10" width="120" height="48"></rect>
+                <text x="18" y="32">📱</text>
+                <text x="44" y="32">入口 Web APP 微信</text>
+              </g>
+              <text>主请求入口</text>
+              <path data-flow="主请求流"></path>
+              <path data-flow="数据读写流"></path>
+            </svg>
+          </section>
+          <section>入口 接入 用户 渠道 应用 Agent 智能体 会话 能力支撑 RAG LLM 大模型 工具 插件 数据 知识库 会话数据 用户数据 运营数据 基础设施 云 存储 网络 安全 监控 管理 运维 权限 审计 评估</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(bad_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "系统架构图主画布不得依赖横向滚动或超大 min-width" in result.stdout
+    assert "系统架构图节点内容必须使用 foreignObject 或自居中 HTML 容器" in result.stdout
+    assert "检测到含糊箭头标签“主请求入口”" in result.stdout
 
 
 def test_vibe_diagram_system_architecture_supports_plane_swimlanes_for_medium_complexity() -> None:

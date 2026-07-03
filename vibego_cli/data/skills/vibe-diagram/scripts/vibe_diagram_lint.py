@@ -58,6 +58,20 @@ SOURCE_PATH_RE = re.compile(
     r"(?:/Users/|/src/|/tmp/|[A-Za-z0-9_./-]+\.(?:py|ts|tsx|js|java|md|sql):\d+)"
 )
 EVIDENCE_RE = re.compile(r"\bE\d{1,3}\b")
+HORIZONTAL_CANVAS_SCROLL_RE = re.compile(
+    r"(?:canvas|svg|architecture|canvas-wrap|arch)[^{]{0,120}\{[^}]*overflow(?:-x)?\s*:\s*(?:auto|scroll)",
+    re.IGNORECASE | re.DOTALL,
+)
+OVERSIZED_MIN_WIDTH_RE = re.compile(r"[{;]\s*min-width\s*:\s*(?:1[3-9]\d{2}|[2-9]\d{3})px", re.IGNORECASE)
+AUTO_CENTERED_NODE_MARKERS = (
+    "<foreignobject",
+    "data-node-layout=\"auto-centered\"",
+    "data-node-content=\"auto-centered\"",
+    "class=\"node-content\"",
+    "class=\"node-content ",
+    "class='node-content'",
+    "class='node-content ",
+)
 
 
 SYSTEM_ARCH_REQUIRED_SEMANTICS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -81,20 +95,35 @@ def lint_system_architecture(html: str, *, allow_candidates: bool = False) -> li
         errors.append("普通系统架构图不得生成候选 tab；只有显式校准模式可使用 role=tablist。")
 
     grammars = " ".join(parser.attr_values("data-diagram-grammar"))
-    if parser.tag_counts.get("svg", 0) == 0 and "system-architecture-presentation" not in grammars:
-        errors.append("系统架构图必须包含 SVG 主画布或 data-diagram-grammar 标记。")
+    svg_count = parser.tag_counts.get("svg", 0)
+    if svg_count == 0:
+        errors.append("系统架构图必须包含真实 SVG 主画布；presentation 标记不能替代图形层。")
+
+    html_lower = html.lower()
+    if HORIZONTAL_CANVAS_SCROLL_RE.search(html) or OVERSIZED_MIN_WIDTH_RE.search(html):
+        errors.append("系统架构图主画布不得依赖横向滚动或超大 min-width；应压缩空白并在正常页面宽度内可读。")
+    if svg_count > 0 and not any(marker in html_lower for marker in AUTO_CENTERED_NODE_MARKERS):
+        errors.append("系统架构图节点内容必须使用 foreignObject 或自居中 HTML 容器，避免图标/文案固定坐标错位。")
+    if "主请求入口" in text and not _contains_any(text, ("入口汇聚", "入口汇入", "入口进入", "入口接入")):
+        errors.append("检测到含糊箭头标签“主请求入口”；每条箭头必须有明确源节点、目标节点和关系标签。")
 
     for label, words in SYSTEM_ARCH_REQUIRED_SEMANTICS:
         if not _contains_any(text + " " + html, words):
             errors.append(f"系统架构图缺少{label}语义。")
 
-    node_like_count = sum(1 for class_name in parser.classes if class_name in {"node", "card", "evidence", "fact-card"})
+    node_like_count = sum(
+        1
+        for class_name in parser.classes
+        if class_name in {"node", "card", "evidence", "evidence-button", "fact-card"}
+    )
     evidence_count = len(EVIDENCE_RE.findall(text + " " + html))
     source_path_count = len(SOURCE_PATH_RE.findall(text + " " + html))
-    has_presentation_grammar = "system-architecture-presentation" in grammars or parser.tag_counts.get("svg", 0) > 0
+    has_presentation_grammar = "system-architecture-presentation" in grammars and svg_count > 0
 
     if node_like_count >= 18 and not has_presentation_grammar:
         errors.append("节点/卡片数量过多且缺少 presentation 图形语法，疑似卡片堆叠报告。")
+    if svg_count == 0 and node_like_count >= 6:
+        errors.append("检测到 marker-only 节点网格；必须重画为含图标、边界和连线层的架构画布。")
     if evidence_count > 12:
         errors.append("主图证据编号过多；系统架构图应把长证据放入点击详情或附录。")
     if source_path_count > 6:

@@ -53,3 +53,37 @@
 ## 7. 剩余边界
 
 当前第一阶段是 skill 规则 + 产物 lint + 分发同步；还没有引入完整 DSL renderer，也没有把所有历史 HTML 样例重画。后续若继续优化，可补“架构图样例库 + visual QA 截图判分 + 自动修复建议”。
+
+## 8. 2026-07-03 二次修正：marker-only 退化样例
+
+用户复核最新产物 `/Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图.html` 后指出仍然“差远了”。现场复核结果：该 HTML 已包含 `data-diagram-grammar="system-architecture-presentation"`，没有候选 tab，但 `<svg>` 数量为 0，主体仍是 `.node` 节点网格与证据按钮。因此第一阶段 lint 存在漏洞：允许用 presentation 标记替代真实图形层。
+
+本次修正：
+
+1. `tests/test_builtin_skills_injection.py` 新增 marker-only 红灯测试：带 presentation 标记但没有真实 SVG/图标/连线层的系统架构 HTML 必须失败。
+2. `vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py` 改为要求系统架构图必须包含真实 SVG 主画布；`presentation` 标记不能替代图形层。
+3. `vibego_cli/data/skills/vibe-diagram/references/system-architecture.md` 同步修改 lint 门禁：`data-diagram-grammar` 只是机读标记，不等于架构图。
+4. 已同步 `plugins/vibe-diagram/skills/vibe-diagram/`，并执行 `python3.11 -m vibego_cli agents-sync --source-root /Users/david/hypha/tools/vibego --json` 更新本机 `~/.codex/skills`、`~/.agents/skills` 和 vibego override。
+
+二次验证：
+
+- `python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k "system_architecture_lint_rejects"` → 2 passed。
+- `python3.11 vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py --type system-architecture /Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图.html` → 预期失败，错误包括“系统架构图必须包含真实 SVG 主画布；presentation 标记不能替代图形层”。
+
+## 9. 2026-07-03 三次修正：复刻版细节沉淀为稳定样式契约
+
+用户确认重画复刻版整体“对味”后，继续指出横向滚动条、空白过多、局部图标丑、emoji 被误删、图标与文案未居中、孤立箭头标签含义不清等细节问题。本次把这些反馈收敛为系统架构图的 presentation 微规则，而不是只修单个 HTML。
+
+本次修正：
+
+1. `tests/test_builtin_skills_injection.py` 新增两类回归测试：一类锁定系统架构图提示词必须包含版式锁定、节点自居中、emoji 局部替换、箭头反歧义和局部反馈编辑规则；另一类用退化 HTML 证明横向滚动、固定坐标 SVG 文案和“主请求入口”孤立标签会被 lint 拦截。
+2. `vibego_cli/data/skills/vibe-diagram/references/system-architecture.md` 新增“系统架构图 presentation 版式锁定”，固定默认布局为左侧入口 rail、中央应用层、南向能力/数据/基础设施和右侧管理/运维/兜底侧栏，并要求节点内部内容整体水平/垂直居中。
+3. `vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py` 新增三项产物级门禁：主画布不得依赖横向滚动或超大 `min-width`；节点内容必须使用 `foreignObject` 或自居中 HTML 容器；含糊箭头标签“主请求入口”必须失败。
+4. `plugins/vibe-diagram/skills/vibe-diagram/` 已同步内置 skill，保持插件分发不漂移；并执行 `python3.11 -m vibego_cli agents-sync --source-root /Users/david/hypha/tools/vibego --json` 更新本机 native skills。
+
+三次验证：
+
+- 红灯：`python3.11 -m pytest -q tests/test_builtin_skills_injection.py -k "locks_polished_presentation_micro_rules or rejects_scroll_canvas_raw_svg_text"` 先失败 2 个，证明原规则还没有覆盖本轮反馈。
+- 绿灯：`python3.11 -m pytest -q tests/test_builtin_skills_injection.py tests/test_vibe_diagram_plugin_distribution.py` → 72 passed。
+- 正向样例：`python3.11 vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py --type system-architecture /Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图_重画复刻版.html` → OK。
+- 反向样例：`python3.11 vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py --type system-architecture /Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图.html` → 预期失败，错误包括“真实 SVG 主画布”“marker-only 节点网格”。

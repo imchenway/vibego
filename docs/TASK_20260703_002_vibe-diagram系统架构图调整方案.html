@@ -190,6 +190,44 @@
       </div>
     </div>
   </section>
+
+  <section class="section" aria-labelledby="fix2-title">
+    <h2 id="fix2-title">二次修正：presentation 标记不能替代真实图形层</h2>
+    <div class="accept">
+      <div class="ledger">
+        <div class="ledger-row"><b>现场复核</b><span>用户指出的新产物有 <code>data-diagram-grammar</code>，但 <code>&lt;svg&gt;</code> 数量为 0，主体仍是节点网格。</span></div>
+        <div class="ledger-row"><b>根因</b><span>第一阶段 lint 允许“SVG 或 presentation 标记”二选一，导致模型可以贴标绕过真实图形层。</span></div>
+        <div class="ledger-row"><b>修正</b><span>系统架构图现在必须包含真实 SVG 主画布；presentation 标记只是机读标记，不能替代图标、边界和连线层。</span></div>
+        <div class="ledger-row"><b>同步</b><span>已执行 <code>agents-sync</code>，同步到 <code>~/.codex/skills</code>、<code>~/.agents/skills</code> 与 vibego override。</span></div>
+      </div>
+      <div class="evidence">
+        <div class="ev"><strong>红灯测试</strong><code>tests/test_builtin_skills_injection.py</code> 新增 marker-only 退化样例。</div>
+        <div class="ev"><strong>真实样例</strong><code>/Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图.html</code> 现在被 lint 预期拒绝。</div>
+        <div class="ev"><strong>错误口径</strong><code>系统架构图必须包含真实 SVG 主画布；presentation 标记不能替代图形层。</code></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="fix3-title">
+    <h2 id="fix3-title">三次修正：把复刻版细节沉淀成稳定样式契约</h2>
+    <div class="accept">
+      <div class="ledger">
+        <div class="ledger-row"><b>触发反馈</b><span>横向滚动条、空白过多、局部图标丑、emoji 被误删、图标/文案未居中、孤立箭头标签含义不清。</span></div>
+        <div class="ledger-row"><b>提示词契约</b><span>新增 presentation 版式锁定：左侧入口 rail、中央应用层、南向能力/数据/基础设施、右侧管理/运维/兜底侧栏。</span></div>
+        <div class="ledger-row"><b>节点规则</b><span>节点内容必须整体水平/垂直居中；高节点图标在上、文案在下；紧凑节点图标在左、文案在右；优先使用 <code>foreignObject</code> + HTML/CSS 自居中容器。</span></div>
+        <div class="ledger-row"><b>反馈边界</b><span>浏览器标注默认只改选中区域及直接相邻关系；不得把局部图例问题理解成全图去掉 emoji。</span></div>
+        <div class="ledger-row"><b>lint 门禁</b><span>横向滚动/超大 <code>min-width</code>、缺少自居中节点容器、含糊箭头标签“主请求入口”均判失败。</span></div>
+      </div>
+      <div class="evidence">
+        <div class="ev"><strong>红灯测试</strong><code>locks_polished_presentation_micro_rules or rejects_scroll_canvas_raw_svg_text</code> 先失败 2 个。</div>
+        <div class="ev"><strong>绿灯验证</strong><code>python3.11 -m pytest -q tests/test_builtin_skills_injection.py tests/test_vibe_diagram_plugin_distribution.py</code> → 72 passed。</div>
+        <div class="ev"><strong>正向样例</strong>复刻版 HTML 通过 <code>system-architecture</code> lint。</div>
+        <div class="ev"><strong>反向样例</strong>旧退化样例被 lint 拒绝：真实 SVG 主画布 / marker-only 节点网格。</div>
+        <div class="ev"><strong>同步</strong><code>agents-sync --json</code> 已更新 <code>~/.codex/skills</code>、<code>~/.agents/skills</code> 与 vibego override。</div>
+      </div>
+    </div>
+  </section>
+
 </main>
 </body>
 </html>
