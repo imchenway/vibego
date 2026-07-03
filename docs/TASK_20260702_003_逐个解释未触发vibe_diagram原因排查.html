@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>故障排查：逐个解释文件作用未触发 vibe-diagram 的原因</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+      --card: rgba(255,255,255,.94);
+      --border: rgba(80, 124, 168, .22);
+      --focus: #0b6fb8;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.58;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    a { color: var(--blue); }
+    a:focus-visible, button:focus-visible { outline: 3px solid rgba(31,111,178,.35); outline-offset: 3px; }
+    .page { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 34px 0 56px; }
+    .task-code { display:inline-flex; align-items:center; gap:8px; color:var(--blue); background:var(--blue-soft); border:1px solid rgba(31,111,178,.18); border-radius:999px; padding:6px 12px; font-weight:800; font-size:13px; }
+    h1 { margin: 18px 0 8px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }
+    .lead { max-width: 920px; color: var(--muted); margin: 0 0 18px; font-size: 15px; }
+    .verdict {
+      display:grid; grid-template-columns: 1.1fr .9fr; gap:16px; align-items: stretch; margin: 18px 0 22px;
+    }
+    .panel {
+      background: var(--panel); border:1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding:18px;
+    }
+    .stamp { display:inline-flex; align-items:center; gap:7px; border-radius:999px; padding:5px 10px; font-weight:800; font-size:12px; }
+    .stamp.green { background:var(--green-soft); color:var(--green); border:1px solid rgba(23,120,90,.22); }
+    .stamp.amber { background:var(--amber-soft); color:var(--amber); border:1px solid rgba(152,101,6,.22); }
+    .stamp.red { background:var(--red-soft); color:var(--red); border:1px solid rgba(166,58,58,.22); }
+    .big { font-size: 18px; font-weight: 900; margin: 9px 0 4px; }
+    .small { color: var(--muted); font-size: 13px; margin: 0; }
+    .trigger-list { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+    .nav { display:flex; flex-wrap:wrap; gap:8px; margin: 14px 0 22px; }
+    .nav a { text-decoration:none; border:1px solid rgba(31,111,178,.18); background:rgba(255,255,255,.78); border-radius:999px; padding:8px 12px; font-weight:800; font-size:13px; }
+    h2 { margin: 34px 0 12px; font-size: 22px; line-height:1.2; }
+    h3 { margin: 0 0 8px; font-size: 17px; }
+    .diagram { margin: 16px 0 26px; }
+    .diagram-title { display:flex; align-items:center; justify-content:space-between; gap:14px; margin: 0 0 10px; }
+    .diagram-title p { margin:0; color:var(--muted); font-size:13px; }
+    .canvas {
+      position: relative;
+      background:
+        linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px),
+        rgba(255,255,255,.86);
+      background-size: 22px 22px, 22px 22px, auto;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 20px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .timeline { display:grid; grid-template-columns: repeat(5, 1fr); gap:14px; align-items:stretch; }
+    .node { position:relative; background:var(--card); border:1px solid var(--border); border-radius:18px; padding:14px; min-height: 142px; overflow-wrap:anywhere; }
+    .node:after { content:""; position:absolute; right:-16px; top:50%; width:18px; height:2px; background:var(--line); transform: translateY(-50%); }
+    .node:before { content:""; position:absolute; right:-17px; top:calc(50% - 4px); border-left:8px solid var(--line); border-top:5px solid transparent; border-bottom:5px solid transparent; z-index:2; }
+    .node:last-child:after, .node:last-child:before { display:none; }
+    .node strong { display:block; font-size:15px; margin:6px 0 6px; }
+    .node p { margin:0; color:var(--muted); font-size:13px; }
+    .evidence { display:inline-block; font-size:11px; font-weight:900; color:var(--blue); background:var(--blue-soft); border:1px solid rgba(31,111,178,.18); border-radius:999px; padding:3px 7px; }
+    .root { border-color: rgba(23,120,90,.45); box-shadow: inset 0 0 0 2px rgba(23,120,90,.08); }
+    .cause-chain { display:grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap:12px; align-items:center; }
+    .pillbox { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:16px; min-height:128px; }
+    .arrow { color:var(--line); font-size:28px; font-weight:900; text-align:center; }
+    .bpmn { display:grid; grid-template-columns: 1fr; gap:10px; }
+    .step { display:grid; grid-template-columns: 120px 1fr; gap:12px; align-items:center; }
+    .gate { width: 86px; height: 86px; margin: 0 auto; transform: rotate(45deg); background:var(--amber-soft); border:1px solid rgba(152,101,6,.28); display:flex; align-items:center; justify-content:center; }
+    .gate span { transform: rotate(-45deg); display:block; text-align:center; font-weight:900; color:var(--amber); font-size:12px; line-height:1.25; }
+    .lane { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:14px; }
+    .compare { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .compare .lane:first-child { border-color:rgba(152,101,6,.28); background:rgba(255,246,222,.55); }
+    .compare .lane:last-child { border-color:rgba(23,120,90,.28); background:rgba(233,248,242,.62); }
+    .flow { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
+    .flow .mini { background:rgba(255,255,255,.9); border:1px solid var(--border); border-radius:14px; padding:10px; font-size:13px; color:var(--muted); }
+    .matrix { overflow-x:auto; border:1px solid var(--border); border-radius:18px; background:rgba(255,255,255,.88); }
+    table { width:100%; border-collapse:collapse; min-width:760px; }
+    th, td { padding:12px; border-bottom:1px solid rgba(141,179,216,.24); text-align:left; vertical-align:top; font-size:13px; }
+    th { color:var(--ink); background:rgba(232,243,255,.72); }
+    td { color:var(--muted); }
+    tr:last-child td { border-bottom:0; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: rgba(16,32,51,.06); padding: 1px 5px; border-radius: 6px; }
+    .evidence-grid { display:grid; grid-template-columns: repeat(2, 1fr); gap:12px; }
+    .ev { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:12px; }
+    .ev b { display:block; margin-bottom:5px; }
+    .ev p { margin:0; color:var(--muted); font-size:12px; }
+    .footer { margin-top: 34px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 900px) {
+      .verdict, .timeline, .cause-chain, .compare, .evidence-grid { grid-template-columns:1fr; }
+      .node:after, .node:before { display:none; }
+      .arrow { transform: rotate(90deg); }
+      .step { grid-template-columns:1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <span class="task-code">TASK_20260702_003</span>
+    <h1 id="title">故障排查：逐个解释文件作用未触发 vibe-diagram 的原因</h1>
+    <p class="lead">结论先行：这次不是同步失效，也不是 HTML 附件发送链路失效；当前证据指向“原始请求落在轻量文件作用解释分支”，没有命中现有强制图形化触发边界。</p>
+
+    <section class="verdict" aria-label="结论摘要">
+      <div class="panel">
+        <span class="stamp green">已确认根因 R1</span>
+        <p class="big">原始 prompt 是“逐个解释其作用”，不是“画图 / 完整逻辑 / 调用链 / 故障为什么”。</p>
+        <p class="small">它虽然包含“更新”，但没有要求理解前后差异，也没有要求把多个文件关系可视化；按当前 AGENTS 边界，文本表格回答不违规。</p>
+      </div>
+      <div class="panel">
+        <span class="stamp amber">策略缺口 H1</span>
+        <p class="big">如果希望“解释多个文件更新”默认画图，需要新增触发规则。</p>
+        <ul class="trigger-list">
+          <li>例如：多文件 diff / 页面四件套 / 模块改造说明 → 默认技术设计图或功能迭代图。</li>
+          <li>这属于行为策略变更，不是当前实现已经证明出错。</li>
+        </ul>
+      </div>
+    </section>
+
+    <nav class="nav" aria-label="图形索引">
+      <a href="#a">排障时序图</a>
+      <a href="#b">因果链图</a>
+      <a href="#c">BPMN-light 排查流程</a>
+      <a href="#d">before/after 对照</a>
+      <a href="#e">状态/数据断点图</a>
+      <a href="#evidence">证据索引</a>
+    </nav>
+
+    <section id="a" class="diagram">
+      <div class="diagram-title">
+        <h2>排障时序图</h2>
+        <p>现象 → 规则加载 → 意图分类 → skill 未命中 → 文本回答</p>
+      </div>
+      <div class="canvas">
+        <div class="timeline">
+          <article class="node">
+            <span class="evidence">E1</span>
+            <strong>用户输入</strong>
+            <p>“这个包下有四个文件更新，给我逐个解释其作用。”没有显式画图词，也没有“完整逻辑/调用链/状态流转”。</p>
+          </article>
+          <article class="node">
+            <span class="evidence">E2</span>
+            <strong>AGENTS 已加载</strong>
+            <p>session_meta 里已包含最新 Skill routing；因此不是旧模板未同步导致。</p>
+          </article>
+          <article class="node">
+            <span class="evidence">E3</span>
+            <strong>规则分流</strong>
+            <p>模板一边要求复杂关系可视化触发图，一边保留普通/轻量/非视觉化追问文本回答。</p>
+          </article>
+          <article class="node root">
+            <span class="evidence">R1</span>
+            <strong>分类结果</strong>
+            <p>“逐个解释文件作用”更像轻量文件职责说明；“更新”不足以等同“前后差异可视化”。</p>
+          </article>
+          <article class="node">
+            <span class="evidence">E4</span>
+            <strong>最终输出</strong>
+            <p>模型返回四行文本表格，没有生成项目内 HTML；这与当前触发边界一致。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="b" class="diagram">
+      <div class="diagram-title">
+        <h2>因果链图</h2>
+        <p>为什么“看起来应该画图”的请求被当成普通解释</p>
+      </div>
+      <div class="canvas">
+        <div class="cause-chain">
+          <div class="pillbox">
+            <span class="stamp amber">触发表象</span>
+            <h3>多文件更新</h3>
+            <p class="small">材料里有四个文件、diff、页面四件套，确实存在可视化价值。</p>
+          </div>
+          <div class="arrow">→</div>
+          <div class="pillbox root">
+            <span class="stamp green">裁决点</span>
+            <h3>用户动作是“逐个解释作用”</h3>
+            <p class="small">当前规则没有把“解释多个文件作用”列成强制图形化信号。</p>
+          </div>
+          <div class="arrow">→</div>
+          <div class="pillbox">
+            <span class="stamp green">结果</span>
+            <h3>vibe-diagram 未触发</h3>
+            <p class="small">模型选择表格总结，属于现有文本分支；若要改变，需要扩展触发策略。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="c" class="diagram">
+      <div class="diagram-title">
+        <h2>BPMN-light 排查流程</h2>
+        <p>按当前规则判断一条 prompt 是否应默认画图</p>
+      </div>
+      <div class="canvas">
+        <div class="bpmn">
+          <div class="step"><div class="stamp green">开始</div><div class="lane">读取原始 prompt：逐个解释四个文件更新的作用。</div></div>
+          <div class="step"><div class="gate"><span>有显式画图/HTML？</span></div><div class="lane">否。未出现“画图、图形化、HTML 图、流程图、关系图”等。</div></div>
+          <div class="step"><div class="gate"><span>有强逻辑信号？</span></div><div class="lane">否/不足。未要求完整逻辑、调用链、状态流转、数据口径、证据链；“更新”未明确为前后差异分析。</div></div>
+          <div class="step"><div class="gate"><span>是故障为什么？</span></div><div class="lane">否。不是“没反应/失败/没生效/走错/变慢/不一致”的运行现场追问。</div></div>
+          <div class="step"><div class="stamp amber">当前分支</div><div class="lane">归入非视觉化轻量解释：允许简洁文本或表格。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="d" class="diagram">
+      <div class="diagram-title">
+        <h2>before/after 流程化对照</h2>
+        <p>当前提示词 vs 会稳定触发的提示词</p>
+      </div>
+      <div class="canvas">
+        <div class="compare">
+          <article class="lane">
+            <span class="stamp amber">before：截图里的问法</span>
+            <div class="flow">
+              <div class="mini">输入：这个包下有四个文件更新，逐个解释其作用。</div>
+              <div class="mini">路由：没有显式视觉化；没有完整逻辑/调用链/故障为什么。</div>
+              <div class="mini">输出：文本表格解释各文件职责。</div>
+            </div>
+          </article>
+          <article class="lane">
+            <span class="stamp green">after：若要稳定画图</span>
+            <div class="flow">
+              <div class="mini">“把这四个文件更新前后差异画成一张 HTML 图。”</div>
+              <div class="mini">“画出这个客服分包从入口参数到 SDK 组件的调用链。”</div>
+              <div class="mini">“用 vibe-diagram 解释这次页面四件套改造后的主路径和影响面。”</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="e" class="diagram">
+      <div class="diagram-title">
+        <h2>状态/数据断点图</h2>
+        <p>从“已同步”到“未生成 HTML”的断点位置</p>
+      </div>
+      <div class="canvas">
+        <div class="matrix">
+          <table>
+            <thead><tr><th>断点</th><th>状态</th><th>证据</th><th>裁决</th></tr></thead>
+            <tbody>
+              <tr><td>AGENTS 是否最新</td><td>通过</td><td>session_meta 和当前模板均含 2026-07-02 触发规则。</td><td>不是模板未加载。</td></tr>
+              <tr><td>native skill 是否存在</td><td>通过</td><td><code>~/.codex/skills/vibe-diagram/SKILL.md</code> 存在。</td><td>不是 skill 文件缺失。</td></tr>
+              <tr><td>prompt 是否命中 skill frontmatter</td><td>未命中</td><td>frontmatter 主要覆盖 draw/diagram/visualize/complex logic 等信号。</td><td>“逐个解释作用”弱于视觉触发。</td></tr>
+              <tr><td>AGENTS 是否强制所有解释 HTML</td><td>否</td><td>测试明确保留普通问答/非视觉化追问文本分支。</td><td>文本回答符合边界。</td></tr>
+              <tr><td>产品期望是否覆盖“多文件更新解释”</td><td>待决策</td><td>当前规则未把该短语列为强触发。</td><td>如需默认画图，应新增策略。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="evidence" class="diagram">
+      <div class="diagram-title">
+        <h2>证据索引</h2>
+        <p>所有结论均锚到文件路径与行号；未覆盖项单独标注</p>
+      </div>
+      <div class="evidence-grid">
+        <div class="ev"><b>E1 原始输入</b><p><code>/Users/david/.codex/sessions/2026/07/02/rollout-2026-07-02T16-34-12-019f21f6-d4fb-7e01-a15c-ace54fc6a01a.jsonl:6</code></p></div>
+        <div class="ev"><b>E2 AGENTS 触发规则</b><p><code>/Users/david/.config/vibego/agents/current/AGENTS-template.md:21-25</code>、<code>:49-51</code></p></div>
+        <div class="ev"><b>E3 README 用户可见边界</b><p><code>/Users/david/hypha/tools/vibego/README.md:64-68</code></p></div>
+        <div class="ev"><b>E4 文本回答现场</b><p><code>/Users/david/.codex/sessions/2026/07/02/rollout-2026-07-02T16-34-12-019f21f6-d4fb-7e01-a15c-ace54fc6a01a.jsonl:42-43</code></p></div>
+        <div class="ev"><b>E5 不是所有解释都 HTML</b><p><code>/Users/david/hypha/tools/vibego/tests/test_agents_template_migration.py:170-198</code>、<code>:202-219</code></p></div>
+        <div class="ev"><b>E6 skill 触发描述</b><p><code>/Users/david/.codex/skills/vibe-diagram/SKILL.md:1-3</code></p></div>
+        <div class="ev"><b>E7 native skill 同步</b><p><code>/Users/david/hypha/tools/vibego/vibego_cli/agents_sync.py:430-450</code>、<code>/Users/david/hypha/tools/vibego/tests/test_builtin_skills_injection.py:1279-1350</code></p></div>
+        <div class="ev"><b>E8 Telegram 前缀含义</b><p><code>/Users/david/hypha/tools/vibego/bot.py:471-473</code>、<code>:3303-3306</code>：只定义 HTML 生成后的 Telegram 附件口径。</p></div>
+      </div>
+    </section>
+
+    <section class="panel footer">
+      <span class="stamp amber">未改源码</span>
+      <p>本轮只做现场排查、任务文档与 HTML 图。未执行回归测试；没有声称已修复。若下一步要让“多文件更新解释”默认触发图形化，需要新增策略、补测试，再改模板/README/同步产物。</p>
+    </section>
+  </main>
+</body>
+</html>

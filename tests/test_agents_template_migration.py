@@ -177,7 +177,7 @@ def test_agents_template_scopes_vibe_diagram_to_explicit_visual_or_logic_visuali
     assert "需要把复杂技术/业务逻辑、关系结构或状态流转可视化" in template_text
     assert "使用 vibe-diagram" in template_text
     assert "一图胜千言" in template_text
-    assert "普通概念问答、安装升级说明、轻量决策和非视觉化追问默认使用简洁文本" in template_text
+    assert "纯概念定义、翻译改写、一句话答案、简单命令" in template_text
     assert "平台或入口侧要求由发送侧提示词前缀或运行时适配层注入" in template_text
     assert "几乎所有需要解释、判断、设计、排障、复盘、代码逻辑说明或交付验收的会话都应优先触发 vibe-diagram" not in template_text
 
@@ -190,8 +190,8 @@ def test_agents_template_uses_html_only_when_visual_delivery_is_needed() -> None
     assert "## HTML / visual delivery contract" in template_text
     assert "用户明确要求 HTML/图形化" in template_text
     assert "确实需要用图表达复杂关系" in template_text
-    assert "才生成或更新项目内单文件 HTML" in template_text
-    assert "普通概念问答、安装升级说明、轻量决策和非视觉化追问默认使用简洁文本" in template_text
+    assert "生成或更新项目内单文件 HTML" in template_text
+    assert "纯概念定义、翻译改写、一句话答案、简单命令" in template_text
     assert "docs 做长期沉淀；HTML 是主交互界面" in template_text
     assert "默认所有实质沟通都使用单文件 HTML 与用户交互" not in template_text
     assert "聊天通道默认只做交付信封" not in template_text
@@ -199,16 +199,35 @@ def test_agents_template_uses_html_only_when_visual_delivery_is_needed() -> None
     assert "本节只定义何时调用 vibe-diagram 做图形化表达，不得把 HTML 限定在这些场景" not in template_text
 
 
-def test_agents_template_does_not_route_plain_why_how_answers_to_vibe_diagram() -> None:
-    """普通为什么/怎么做追问不应仅因是实质沟通就触发 HTML 图。"""
+def test_agents_template_routes_runtime_why_questions_to_vibe_diagram() -> None:
+    """现场行为/故障成因类为什么应默认触发 HTML 图，而概念问答仍可文本回答。"""
 
     template_text = _read_text("AGENTS-template.md")
 
     assert "HTML-first 实质沟通、原因解释、方案建议、修复说明、验收收口：使用 vibe-diagram" not in template_text
-    assert "用户问“为什么 / 怎么做 / 需要怎么做”也属于实质沟通" not in template_text
-    assert "不得因为用户没有说“画图”就退回普通聊天长文" not in template_text
     assert "除阻塞性澄清、极短确认、简单命令结果或用户明确不要 HTML 外" not in template_text
-    assert "普通为什么/怎么做追问默认简洁文本回答" in template_text
+    assert "概念为什么" in template_text
+    assert "行为/故障为什么" in template_text
+    assert "为什么没反应" in template_text
+    assert "为什么失败" in template_text
+    assert "为什么没生效" in template_text
+    assert "为什么走错" in template_text
+    assert "为什么变慢" in template_text
+    assert "为什么不一致" in template_text
+    assert "默认使用 vibe-diagram 生成单文件 HTML 图" in template_text
+    assert "完整逻辑、调用链、状态流转、数据口径、前后差异、根因链路、证据链" in template_text
+    assert "普通为什么/怎么做追问默认简洁文本回答" not in template_text
+
+
+def test_agents_template_routes_concrete_object_explanations_to_vibe_diagram() -> None:
+    """解释具体对象、文件更新或 diff 时应默认用图，而不是退回纯文本表格。"""
+
+    template_text = _read_text("AGENTS-template.md")
+
+    assert "解释具体对象、代码、文件更新、diff、模块、页面、接口、配置、数据、功能入口或运行结果时" in template_text
+    assert "默认使用 vibe-diagram 生成单文件 HTML 图" in template_text
+    assert "只在纯概念定义、翻译改写、一句话答案、简单命令或用户明确不要图时" in template_text
+    assert "逐个解释文件作用默认简洁文本" not in template_text
 
 
 def test_agents_template_compresses_text_after_html_delivery() -> None:

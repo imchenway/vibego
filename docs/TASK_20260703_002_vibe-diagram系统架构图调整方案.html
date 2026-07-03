@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>技术设计：vibe-diagram 系统架构图调整方案</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.92);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    .page { width: min(1220px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 64px; }
+    .task-code { display:inline-flex; margin-bottom:12px; padding:5px 10px; border-radius:999px; border:1px solid rgba(31,111,178,.18); color:var(--blue); background:rgba(232,243,255,.72); font-size:12px; font-weight:800; }
+    h1 { margin:0; font-size:clamp(24px,2.8vw,32px); line-height:1.18; letter-spacing:-.025em; }
+    .lead { margin:12px 0 20px; max-width:920px; color:var(--muted); font-size:15px; }
+    .hero { border:1px solid rgba(141,179,216,.58); border-radius:24px; background:var(--panel); box-shadow:var(--shadow); padding:18px; }
+    .hero h2, .section h2 { margin:0 0 14px; font-size:22px; letter-spacing:-.018em; }
+    .flow { display:grid; grid-template-columns: 1fr 70px 1.15fr 70px 1fr; gap:0; align-items:stretch; }
+    .box { border:1px solid rgba(141,179,216,.58); border-radius:20px; background:#fff; padding:15px; min-height:360px; display:grid; gap:12px; align-content:start; }
+    .box.now { background:linear-gradient(180deg,#fff 0%, var(--red-soft) 100%); border-color:rgba(166,58,58,.24); }
+    .box.fix { background:linear-gradient(180deg,#fff 0%, var(--green-soft) 100%); border-color:rgba(23,120,90,.24); }
+    .box.engine { background:linear-gradient(180deg,#fff 0%, var(--blue-soft) 100%); }
+    .title { display:flex; align-items:center; gap:10px; font-weight:900; }
+    .icon { width:34px; height:34px; border-radius:12px; display:grid; place-items:center; background:var(--blue-soft); color:var(--blue); border:1px solid rgba(31,111,178,.22); font-size:18px; flex:0 0 auto; }
+    .now .icon { background:var(--red-soft); color:var(--red); border-color:rgba(166,58,58,.22); }
+    .fix .icon { background:var(--green-soft); color:var(--green); border-color:rgba(23,120,90,.22); }
+    .mini { display:grid; gap:8px; }
+    .mini-row { display:grid; grid-template-columns: 42px 1fr; gap:8px; align-items:center; border:1px solid rgba(141,179,216,.46); border-radius:14px; background:rgba(255,255,255,.82); padding:8px; }
+    .mini-row span:first-child { display:grid; place-items:center; width:34px; height:34px; border-radius:10px; background:rgba(31,111,178,.09); }
+    .mini-row b { display:block; font-size:13px; }
+    .mini-row small { display:block; color:var(--muted); font-size:12px; }
+    .arrow { position:relative; display:grid; place-items:center; color:var(--muted); }
+    .arrow svg { width:70px; height:100%; min-height:230px; }
+    .arrow path { stroke:var(--line); stroke-width:3; fill:none; marker-end:url(#arrowhead); }
+    .arrow-label { position:absolute; top:45%; transform:translateY(-50%); padding:5px 9px; border-radius:999px; border:1px solid rgba(141,179,216,.5); background:#fff; color:var(--blue); font-size:12px; font-weight:900; white-space:nowrap; }
+    .spec { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:8px; }
+    .spec-item { border:1px solid rgba(141,179,216,.46); border-radius:14px; background:#fff; padding:9px; font-size:13px; }
+    .spec-item b { display:block; margin-bottom:3px; }
+    .spec-item code { background:rgba(16,32,51,.055); padding:1px 5px; border-radius:6px; }
+    .section { margin-top:22px; border:1px solid rgba(141,179,216,.58); border-radius:24px; background:var(--panel); box-shadow:var(--shadow); padding:18px; }
+    .options { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:12px; }
+    .option { border:1px solid rgba(141,179,216,.52); border-radius:18px; background:#fff; padding:14px; min-height:180px; position:relative; }
+    .option.reco { border-color:rgba(23,120,90,.34); background:linear-gradient(180deg,#fff 0%, var(--green-soft) 100%); }
+    .badge { display:inline-flex; margin-bottom:8px; padding:3px 8px; border-radius:999px; color:var(--green); background:var(--green-soft); border:1px solid rgba(23,120,90,.2); font-size:12px; font-weight:900; }
+    .option h3 { margin:0 0 8px; font-size:16px; }
+    .option p, .rule p { margin:0; color:var(--muted); font-size:13px; }
+    .rules { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:10px; }
+    .rule { border:1px solid rgba(141,179,216,.48); border-radius:16px; background:#fff; padding:12px; min-height:134px; }
+    .rule h3 { margin:0 0 6px; font-size:14px; }
+    .rule .num { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; color:#fff; background:var(--blue); font-weight:900; margin-bottom:8px; }
+    .accept { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .ledger { border:1px solid rgba(141,179,216,.52); border-radius:18px; background:#fff; overflow:hidden; }
+    .ledger-row { display:grid; grid-template-columns: 120px 1fr; border-bottom:1px solid rgba(141,179,216,.28); }
+    .ledger-row:last-child { border-bottom:0; }
+    .ledger-row b { padding:10px 12px; background:var(--blue-soft); color:var(--blue); }
+    .ledger-row span { padding:10px 12px; color:var(--muted); font-size:13px; }
+    .evidence { display:grid; gap:8px; }
+    .ev { border:1px solid rgba(141,179,216,.48); border-radius:14px; background:#fff; padding:10px; color:var(--muted); font-size:13px; }
+    .ev strong { color:var(--ink); display:block; margin-bottom:3px; }
+    .ev code { color:var(--ink); background:rgba(16,32,51,.055); border-radius:6px; padding:1px 5px; }
+    @media (max-width: 960px) {
+      .flow, .options, .rules, .accept { grid-template-columns:1fr; }
+      .arrow { min-height:52px; }
+      .arrow svg { width:100%; height:52px; min-height:52px; transform:rotate(90deg); }
+      .arrow-label { position:static; transform:none; }
+      .spec { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+<main class="page">
+  <div class="task-code">TASK_20260703_002</div>
+  <h1>技术设计：vibe-diagram 系统架构图调整方案</h1>
+  <p class="lead">推荐调整方向：不要继续只叠“别用卡片”的提示词，而是把系统架构图改成“先出结构化图谱规格，再套大众架构图模板，最后用产物级 lint 阻断退化”。默认用户交付图只给一张定稿图，证据和候选进入调试/附录。</p>
+
+  <section class="hero" aria-labelledby="main-design">
+    <h2 id="main-design">推荐主线：从证据卡片页改成架构图生产流水线</h2>
+    <svg width="0" height="0" aria-hidden="true"><defs><marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8db3d8"></path></marker></defs></svg>
+    <div class="flow">
+      <section class="box now">
+        <div class="title"><span class="icon">🧾</span><span>现在：直接写 HTML</span></div>
+        <div class="mini">
+          <div class="mini-row"><span>📚</span><div><b>规则太多</b><small>候选、证据、验收、待确认同时压进主图。</small></div></div>
+          <div class="mini-row"><span>▦</span><div><b>DOM 退化</b><small>模型安全地生成 layer/node grid，而不是真实架构画布。</small></div></div>
+          <div class="mini-row"><span>E#</span><div><b>证据外泄</b><small>E#、源码路径、缺口标签让节点变成审计摘要。</small></div></div>
+          <div class="mini-row"><span>🧩</span><div><b>缺模板</b><small>没有固定大众架构图版式，只有抽象“北向南”。</small></div></div>
+        </div>
+      </section>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 70 300"><path d="M8 150 C26 150 42 150 62 150"></path></svg><span class="arrow-label">新增中间层</span></div>
+      <section class="box engine">
+        <div class="title"><span class="icon">⚙️</span><span>新增：DiagramSpec + 模板路由</span></div>
+        <div class="spec">
+          <div class="spec-item"><b>mode</b><code>presentation</code> 默认用户交付；<code>audit</code> 才外显证据。</div>
+          <div class="spec-item"><b>archetype</b>系统架构模板：总体 / RAG / 多 Agent / 数据流。</div>
+          <div class="spec-item"><b>layers</b>入口、应用、能力、数据、基础设施、管理侧栏。</div>
+          <div class="spec-item"><b>flows</b>主请求流、数据读写流、反馈流、人工兜底流。</div>
+          <div class="spec-item"><b>visual vocabulary</b>用户、服务、Agent、DB、RAG、LLM、工具、监控等图标。</div>
+          <div class="spec-item"><b>evidence placement</b>主图只留状态角标；证据进入 details / 附录。</div>
+        </div>
+      </section>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 70 300"><path d="M8 150 C26 150 42 150 62 150"></path></svg><span class="arrow-label">lint 放行</span></div>
+      <section class="box fix">
+        <div class="title"><span class="icon">🧭</span><span>目标：大众认知系统架构图</span></div>
+        <div class="mini">
+          <div class="mini-row"><span>🚪</span><div><b>入口 rail</b><small>Web/H5、APP、小程序、企业微信、电话、邮件。</small></div></div>
+          <div class="mini-row"><span>🤖</span><div><b>智能体应用层</b><small>会话入口、AI Agent、人工协同。</small></div></div>
+          <div class="mini-row"><span>🧠</span><div><b>能力支撑层</b><small>RAG、LLM、工具中心、工作流。</small></div></div>
+          <div class="mini-row"><span>🗄️</span><div><b>数据与基础设施</b><small>知识库、会话数据、用户数据、监控、安全、CI/CD。</small></div></div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="options-title">
+    <h2 id="options-title">三种调整方案</h2>
+    <div class="options">
+      <article class="option"><h3>方案 A：只改 skill 文案</h3><p>把“默认关闭候选”“证据不要抢主图”“必须有图标”继续写进 reference。成本最低，但仍依赖模型自觉，容易复发。</p></article>
+      <article class="option reco"><span class="badge">🌟 推荐</span><h3>方案 B：规格 + 模板 + lint</h3><p>先生成 DiagramSpec，再按系统架构模板渲染，最后静态检查 HTML 是否像架构图。成本中等，能把偏好变成门禁。</p></article>
+      <article class="option"><h3>方案 C：完整 DSL/Renderer</h3><p>把所有图型做成模板渲染器，模型只填数据。最稳，但开发成本高；建议作为 B 稳定后的第二阶段。</p></article>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="rules-title">
+    <h2 id="rules-title">具体要改的 5 条规则</h2>
+    <div class="rules">
+      <article class="rule"><div class="num">1</div><h3>默认交付模式</h3><p>普通系统架构图只出一张定稿；候选全集改为显式“校准/对比”模式。</p></article>
+      <article class="rule"><div class="num">2</div><h3>架构模板库</h3><p>新增总体架构、RAG 增强、Multi-Agent、端到端数据流四类 archetype。</p></article>
+      <article class="rule"><div class="num">3</div><h3>图标语义表</h3><p>用户、端、网关、Agent、LLM、RAG、DB、工具、人工、运维必须有固定符号。</p></article>
+      <article class="rule"><div class="num">4</div><h3>证据预算</h3><p>主图不展示源码路径；E#、待确认、验证命令默认进 details 或附录。</p></article>
+      <article class="rule"><div class="num">5</div><h3>产物级 lint</h3><p>检查 SVG/连线层、图标覆盖、节点字数、证据密度、tab 使用、纯网格退化。</p></article>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="impl-title">
+    <h2 id="impl-title">2026-07-03 已实施的第一阶段</h2>
+    <div class="rules">
+      <article class="rule"><div class="num">✓</div><h3>显式候选模式</h3><p><code>SKILL.md</code> 已改为：候选全集只在用户明确要求多候选、校准、对比、视觉探索或任务文档明确要求时启用；普通单图请求只出一张 presentation 图。</p></article>
+      <article class="rule"><div class="num">✓</div><h3>系统架构 DiagramSpec</h3><p><code>system-architecture.md</code> 新增 <code>mode=presentation</code>、大众架构 archetype、图标语义、主请求流 / 数据读写流和证据预算。</p></article>
+      <article class="rule"><div class="num">✓</div><h3>产物级 lint</h3><p>新增 <code>scripts/vibe_diagram_lint.py</code>，拦截普通系统架构图里的候选 tab、缺少 SVG/图形语法、证据密度过高与源码路径外露。</p></article>
+      <article class="rule"><div class="num">✓</div><h3>插件分发同步</h3><p><code>plugins/vibe-diagram/skills/vibe-diagram/</code> 已同步内置 skill，<code>pyproject.toml</code> 已把 skill scripts 纳入包数据。</p></article>
+    </div>
+  </section>
+
+
+  <section class="section" aria-labelledby="accept-title">
+    <h2 id="accept-title">验收口径与证据</h2>
+    <div class="accept">
+      <div class="ledger">
+        <div class="ledger-row"><b>R1 默认图</b><span>“给我一个系统架构图”默认无候选 tab，首屏就是一张架构图。</span></div>
+        <div class="ledger-row"><b>R2 结构</b><span>入口 rail、应用层、能力层、数据层、基础设施、管理侧栏必须齐全或显式说明不适用。</span></div>
+        <div class="ledger-row"><b>R3 图形</b><span>主图必须有 SVG / line layer / edge map；不能只有 CSS grid 的节点堆。</span></div>
+        <div class="ledger-row"><b>R4 信息密度</b><span>节点主文案短；证据密度受控；源码路径不出现在首屏主图。</span></div>
+        <div class="ledger-row"><b>R5 回归</b><span>现有退化样例应被 lint 拦截：无 SVG、node 多、evidence 标签密。</span></div>
+      </div>
+      <div class="evidence">
+        <div class="ev"><strong>实现锚点</strong><code>vibego_cli/data/skills/vibe-diagram/SKILL.md</code>：普通单图请求默认只生成一张首选 presentation 图。</div>
+        <div class="ev"><strong>规则锚点</strong><code>vibego_cli/data/skills/vibe-diagram/references/system-architecture.md</code>：DiagramSpec、archetype、证据预算和产物级 lint 门禁已落地。</div>
+        <div class="ev"><strong>脚本锚点</strong><code>vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py</code>：可拦截候选 tab + 证据卡片页退化样式。</div>
+        <div class="ev"><strong>验证</strong><code>python3.11 -m pytest -q tests/test_builtin_skills_injection.py</code> → 63 passed；<code>python3.11 -m pytest -q tests/test_vibe_diagram_plugin_distribution.py</code> → 6 passed；合并执行 → 69 passed；退化样例 lint 预期拒绝。</div>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

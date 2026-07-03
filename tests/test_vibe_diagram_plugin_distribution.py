@@ -108,7 +108,11 @@ def test_readme_documents_vibe_diagram_distribution_and_trigger_scope() -> None:
     assert "Codex Skill / Plugin 与 vibe-diagram" in readme_text
     assert "明确要求画图、图形化、HTML 图" in readme_text
     assert "复杂技术/业务逻辑、关系结构或状态流转可视化" in readme_text
-    assert "普通概念问答、安装升级说明、轻量决策和非视觉化追问默认使用简洁文本" in readme_text
+    assert "行为/故障为什么默认生成 HTML 图" in readme_text
+    assert "为什么没反应 / 为什么失败 / 为什么没生效 / 为什么走错 / 为什么变慢 / 为什么不一致" in readme_text
+    assert "解释具体对象、代码、文件更新、diff、模块、页面、接口、配置、数据、功能入口或运行结果" in readme_text
+    assert "只在纯概念定义、翻译改写、一句话答案、简单命令或用户明确不要图时" in readme_text
+    assert "安装升级说明、轻量决策也可简洁文本" in readme_text
     assert "tabs / role=tablist 只用于同一图型的多个候选布局" in readme_text
     assert "不得把追问、步骤、发布说明或普通章节导航追加成按钮" in readme_text
     assert "codex plugin marketplace add /path/to/vibego" in readme_text

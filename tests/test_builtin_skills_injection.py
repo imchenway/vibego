@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VIBE_DIAGRAM_DIR = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram"
 VIBE_DIAGRAM_SKILL = VIBE_DIAGRAM_DIR / "SKILL.md"
 VIBE_DIAGRAM_REFERENCES = VIBE_DIAGRAM_DIR / "references"
+VIBE_DIAGRAM_SCRIPTS = VIBE_DIAGRAM_DIR / "scripts"
 
 
 def _read_vibe_diagram_core() -> str:
@@ -159,6 +160,7 @@ def test_vibe_diagram_reference_files_exist_and_are_packaged() -> None:
     assert VIBE_DIAGRAM_REFERENCES.is_dir()
     assert {path.name for path in VIBE_DIAGRAM_REFERENCES.glob("*.md")} == expected
     assert "data/skills/*/references/*.md" in pyproject_text
+    assert "data/skills/*/scripts/*.py" in pyproject_text
 
 
 
@@ -208,14 +210,17 @@ def test_vibe_diagram_description_is_scoped_to_visual_and_logic_diagrams() -> No
     assert "交付信封" not in frontmatter
 
 
-def test_vibe_diagram_candidate_atlas_mode_is_required_for_calibration() -> None:
-    """校准期每次命中图型都必须生成首选候选与全部备选候选。"""
+def test_vibe_diagram_candidate_atlas_mode_is_explicit_calibration_only() -> None:
+    """候选全集只能服务显式校准/对比，不应让普通架构图默认退化成 tab 页。"""
 
     core_text = _read_vibe_diagram_core()
     all_rule_text = _read_vibe_diagram_all_rules()
 
     assert "## 候选全集校准模式" in core_text
-    assert "每次只对当前命中的生图类型生成候选全集" in core_text
+    assert "候选全集只在用户明确要求多候选、校准、对比、视觉探索或任务文档明确要求候选全集时启用" in core_text
+    assert "普通单图请求默认只生成一张首选 presentation 图" in core_text
+    assert "不得因为 reference 列出备选候选就自动生成 tabs" in core_text
+    assert "校准模式启用后，每次只对当前命中的生图类型生成候选全集" in core_text
     assert "首选候选图型 + 全部备选候选图型" in core_text
     assert "候选 A/B/C/D" in core_text
     assert "每个候选都必须是真图" in core_text
@@ -1154,6 +1159,104 @@ def test_vibe_diagram_system_architecture_must_read_as_global_topology_not_layer
     assert "同层节点只保留组件名、职责、协议/接口、运行状态和关键约束" in skill_text
     assert "源码证据、文件路径和长说明进入该节点点击详情" in skill_text
     assert "如果第一眼只能看到多列卡片和证据文字，看不出入口到数据面的流向，必须重画" in skill_text
+
+
+def test_vibe_diagram_system_architecture_defaults_to_single_presentation_diagramspec() -> None:
+    """普通系统架构图默认应输出一张 presentation 定稿图，并先形成 DiagramSpec。"""
+
+    core_text = _read_vibe_diagram_core()
+    system_text = _read_vibe_diagram_reference("system-architecture.md")
+
+    assert "普通单图请求默认只生成一张首选 presentation 图" in core_text
+    assert "系统架构普通请求默认只生成一张 presentation 定稿图" in system_text
+    assert "mode=presentation" in system_text
+    assert "DiagramSpec" in system_text
+    assert "diagram_type=system-architecture" in system_text
+    assert "audience=大众认知架构图读者" in system_text
+    assert "不得生成候选 tab、候选 panel 或候选对比矩阵" in system_text
+    assert "入口 rail + 智能体应用层 + 能力支撑层 + 数据层 + 基础设施层 + 管理/运维侧栏" in system_text
+
+
+def test_vibe_diagram_system_architecture_has_architecture_archetype_and_evidence_budget() -> None:
+    """系统架构 reference 应内置大众架构图模板、图标语义和主图证据预算。"""
+
+    system_text = _read_vibe_diagram_reference("system-architecture.md")
+
+    assert "## 大众系统架构 archetype 模板" in system_text
+    assert "外部入口 rail" in system_text
+    assert "用户/渠道入口必须画成左侧竖向 rail" in system_text
+    assert "核心应用层必须是主视觉中心" in system_text
+    assert "能力支撑层必须用图标 + 短标签" in system_text
+    assert "数据层必须区分知识库、会话数据、用户数据、运营数据" in system_text
+    assert "基础设施层必须横向铺成底座" in system_text
+    assert "管理/运维侧栏必须靠右收纳" in system_text
+    assert "主请求流用实线箭头" in system_text
+    assert "数据读写流用双向或下沉箭头" in system_text
+    assert "证据预算" in system_text
+    assert "主图节点禁止展示源码路径、E# 证据列表或长运行验证命令" in system_text
+    assert "每个节点主文案最多 3 行" in system_text
+    assert "文件路径、行号、命令输出和长证据只能放入点击详情" in system_text
+
+
+def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_presentation(
+    tmp_path: Path,
+) -> None:
+    """产物级 lint 应拦截候选 tab + 证据卡片页，并放行一张 presentation 架构图。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    assert lint_script.is_file()
+
+    bad_html = tmp_path / "bad.html"
+    bad_html.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture">
+          <div role="tablist"><button role="tab">分层图</button></div>
+          <section id="panel-layered">
+            <article class="node">入口 E1 /tmp/src/app.py:10</article>
+            <article class="node">应用 E2 /tmp/src/app.py:20</article>
+            <article class="node">数据 E3 /tmp/src/db.py:30</article>
+            <article class="evidence">E4 文件路径与命令输出</article>
+            <article class="evidence">E5 文件路径与命令输出</article>
+            <article class="evidence">E6 文件路径与命令输出</article>
+          </section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+    bad = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(bad_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert bad.returncode == 1
+    assert "普通系统架构图不得生成候选 tab" in bad.stdout
+    assert "系统架构图必须包含 SVG 主画布或 data-diagram-grammar 标记" in bad.stdout
+
+    good_html = tmp_path / "good.html"
+    good_html.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation"
+              data-arch-archetype="entry-rail-application-capability-data-infra-ops">
+          <svg aria-label="客服智能体系统架构图">
+            <text>用户接入 rail → 智能体应用层 → 能力支撑层 → 数据层 → 基础设施层 → 管理/运维侧栏</text>
+            <path data-flow="主请求流"></path>
+            <path data-flow="数据读写流"></path>
+          </svg>
+          <section>网页/H5 APP 微信 入口 接入 会话入口 客服智能体 AI Agent RAG LLM 工具中心 API 插件 数据层 知识库 会话数据 用户数据 运营数据 基础设施 云计算 存储 网络安全 监控告警 管理 运维</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+    good = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(good_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert good.returncode == 0
+    assert "OK" in good.stdout
 
 
 def test_vibe_diagram_system_architecture_supports_plane_swimlanes_for_medium_complexity() -> None:

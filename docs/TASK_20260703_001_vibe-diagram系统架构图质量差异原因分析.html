@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>故障排查：系统架构图为何退化为证据卡片页</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.92);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: light; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    .page { width: min(1200px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 64px; }
+    .task-code { display:inline-flex; margin-bottom:12px; padding:5px 10px; border-radius:999px; border:1px solid rgba(31,111,178,.18); color:var(--blue); background:rgba(232,243,255,.72); font-size:12px; font-weight:800; }
+    h1 { margin:0; font-size:clamp(24px,2.8vw,32px); line-height:1.18; letter-spacing:-.025em; }
+    .lead { margin:12px 0 18px; max-width:900px; color:var(--muted); font-size:15px; }
+    .verdict { display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; align-items:stretch; margin:18px 0 22px; }
+    .verdict-main, .evidence-note { border:1px solid rgba(141,179,216,.55); border-radius:var(--radius); background:var(--panel); box-shadow:var(--shadow); padding:16px; }
+    .verdict-main strong { color:var(--red); }
+    .evidence-note { color:var(--muted); font-size:13px; }
+    .evidence-note code { color:var(--ink); background:rgba(16,32,51,.055); border-radius:6px; padding:1px 5px; }
+    .map { position:relative; border:1px solid rgba(141,179,216,.58); border-radius:24px; background:rgba(255,255,255,.84); box-shadow:var(--shadow); padding:18px; overflow:hidden; }
+    .map h2 { margin:0 0 14px; font-size:22px; letter-spacing:-.018em; }
+    .flow { position:relative; display:grid; grid-template-columns: 1fr 72px 1fr 72px 1fr; gap:0; align-items:stretch; min-height:430px; }
+    .lane { border:1px solid rgba(141,179,216,.6); border-radius:20px; background:#fff; padding:14px; position:relative; z-index:2; display:grid; grid-template-rows:auto 1fr; gap:12px; }
+    .lane.good { background:linear-gradient(180deg,#fff 0%, var(--green-soft) 100%); border-color:rgba(23,120,90,.28); }
+    .lane.bad { background:linear-gradient(180deg,#fff 0%, var(--red-soft) 100%); border-color:rgba(166,58,58,.3); }
+    .lane.root { background:linear-gradient(180deg,#fff 0%, var(--amber-soft) 100%); border-color:rgba(152,101,6,.28); }
+    .lane-title { display:flex; align-items:center; gap:10px; font-weight:900; color:var(--ink); }
+    .icon { width:34px; height:34px; border-radius:12px; display:grid; place-items:center; font-size:19px; background:var(--blue-soft); color:var(--blue); border:1px solid rgba(31,111,178,.22); flex:0 0 auto; }
+    .good .icon { background:var(--green-soft); color:var(--green); border-color:rgba(23,120,90,.22); }
+    .bad .icon { background:var(--red-soft); color:var(--red); border-color:rgba(166,58,58,.22); }
+    .root .icon { background:var(--amber-soft); color:var(--amber); border-color:rgba(152,101,6,.22); }
+    .mini-arch { display:grid; grid-template-columns: 72px 1fr 72px; grid-template-rows: repeat(4, minmax(44px, auto)); gap:8px; align-content:start; }
+    .railbox, .layerbar, .sidebox, .auditbox { border:1px solid rgba(141,179,216,.52); border-radius:12px; background:rgba(255,255,255,.82); padding:8px; font-size:12px; color:var(--muted); text-align:center; display:grid; place-items:center; min-height:44px; }
+    .layerbar { color:var(--blue); font-weight:800; background:var(--blue-soft); }
+    .layerbar.green { color:var(--green); background:var(--green-soft); }
+    .layerbar.violet { color:var(--violet); background:var(--violet-soft); }
+    .sidebox { color:var(--amber); background:var(--amber-soft); }
+    .audit-stack { display:grid; gap:8px; align-content:start; }
+    .auditbox { color:var(--red); background:#fff; text-align:left; display:block; }
+    .auditbox b { display:block; color:var(--ink); margin-bottom:2px; }
+    .arrow { display:grid; place-items:center; color:var(--muted); z-index:1; }
+    .arrow svg { width:72px; height:100%; min-height:160px; }
+    .arrow path { stroke:var(--line); stroke-width:3; fill:none; marker-end:url(#arrowhead); }
+    .arrow-label { position:absolute; margin-top:-170px; padding:5px 9px; border-radius:999px; background:#fff; border:1px solid rgba(141,179,216,.48); font-size:12px; font-weight:800; color:var(--blue); white-space:nowrap; }
+    .root-list { display:grid; gap:10px; align-content:start; }
+    .root-row { display:grid; grid-template-columns:34px 1fr; gap:10px; align-items:start; }
+    .num { width:28px; height:28px; border-radius:50%; background:var(--amber); color:#fff; display:grid; place-items:center; font-weight:900; font-size:13px; }
+    .root-row b { display:block; font-size:14px; }
+    .root-row span { color:var(--muted); font-size:13px; }
+    .takeaway { margin-top:18px; display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:12px; }
+    .take { border:1px solid rgba(141,179,216,.52); border-radius:16px; background:#fff; padding:13px; min-height:112px; }
+    .take h3 { margin:0 0 6px; font-size:15px; }
+    .take p { margin:0; color:var(--muted); font-size:13px; }
+    .compare { margin-top:22px; border:1px solid rgba(141,179,216,.52); border-radius:var(--radius); background:var(--panel); box-shadow:var(--shadow); padding:16px; }
+    .compare h2 { margin:0 0 12px; font-size:20px; }
+    .matrix { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .col { border-radius:18px; border:1px solid rgba(141,179,216,.55); background:#fff; padding:14px; }
+    .col h3 { margin:0 0 10px; font-size:16px; color:var(--blue); }
+    .col ul { margin:0; padding-left:20px; color:var(--muted); font-size:13px; }
+    .col li + li { margin-top:6px; }
+    .evidence { margin-top:22px; border:1px solid rgba(141,179,216,.52); border-radius:var(--radius); background:var(--panel); box-shadow:var(--shadow); padding:16px; }
+    .evidence h2 { margin:0 0 10px; font-size:20px; }
+    .evidence-grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px; }
+    .ev { border:1px solid rgba(141,179,216,.52); border-radius:14px; background:#fff; padding:11px; font-size:13px; color:var(--muted); }
+    .ev strong { display:block; color:var(--ink); margin-bottom:4px; }
+    .ev code { color:var(--ink); background:rgba(16,32,51,.055); border-radius:6px; padding:1px 5px; }
+    @media (max-width: 900px) {
+      .verdict, .takeaway, .matrix, .evidence-grid { grid-template-columns:1fr; }
+      .flow { grid-template-columns:1fr; gap:12px; }
+      .arrow { min-height:48px; }
+      .arrow svg { width:100%; height:48px; min-height:48px; transform:rotate(90deg); }
+      .arrow-label { position:static; margin:0; justify-self:center; }
+      .mini-arch { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+<main class="page">
+  <div class="task-code">TASK_20260703_001</div>
+  <h1>故障排查：系统架构图为何退化为证据卡片页</h1>
+  <p class="lead">结论：差异不是模型“不会画”，而是当前 vibe-diagram 的目标函数与系统架构图的常识模板错位。GPT 直接生成时调用的是“大众架构图先验”；vibe-diagram 则被推向“严格证据审计 + 多候选 HTML 页面”，主图自然变得文本密、证据重、图标弱。</p>
+
+  <section class="verdict" aria-label="根因结论">
+    <div class="verdict-main"><strong>最高可疑根因 R1：</strong>当前系统架构图规则把“准确、可追溯、候选齐全”放在“架构图第一眼可读”之前；同时缺少可执行的架构图模板和产物级视觉 lint，所以模型选择了最安全的实现：分层节点网格 + E# 证据 + 折叠详情。</div>
+    <div class="evidence-note">本轮未安装新依赖、未修改业务代码；判断基于附件视觉观察、目标 HTML 静态 DOM/CSS、vibe-diagram skill 和 system-architecture reference。</div>
+  </section>
+
+  <section class="map" data-diagram-grammar="cause-chain" aria-labelledby="cause-title">
+    <h2 id="cause-title">成因链路：同一个“系统架构图”请求如何走向两种输出</h2>
+    <svg width="0" height="0" aria-hidden="true"><defs><marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8db3d8"></path></marker></defs></svg>
+    <div class="flow">
+      <section class="lane good" aria-label="附件图路径">
+        <div class="lane-title"><span class="icon">🧭</span><span>GPT 直接生成：调用大众架构图先验</span></div>
+        <div class="mini-arch" aria-label="大众系统架构图语法示意">
+          <div class="railbox" style="grid-row:1 / span 3">用户接入<br>📱 💬 ☎️</div>
+          <div class="layerbar">智能体应用层</div>
+          <div class="sidebox" style="grid-row:1 / span 3">运营管理<br>👤 📊 🔐</div>
+          <div class="layerbar green">能力支撑层：RAG / LLM / 工具 / 工作流</div>
+          <div class="layerbar violet">数据层：知识库 / 会话 / 用户 / 运营</div>
+          <div class="layerbar">基础设施层：算力 / 存储 / 安全 / 监控</div>
+        </div>
+      </section>
+
+      <div class="arrow" aria-hidden="true">
+        <svg viewBox="0 0 72 360"><path d="M8 180 C28 180 42 180 64 180"></path></svg>
+        <span class="arrow-label">换成 vibe-diagram 协议</span>
+      </div>
+
+      <section class="lane root" aria-label="根因堆栈">
+        <div class="lane-title"><span class="icon">⚙️</span><span>vibe-diagram 指令堆栈：把设计任务改写成审计任务</span></div>
+        <div class="root-list">
+          <div class="root-row"><span class="num">1</span><div><b>候选全集模式</b><span>同一 HTML 必须放首选 + 备选，用户先面对 tab 和候选索引。</span></div></div>
+          <div class="root-row"><span class="num">2</span><div><b>严格证据模式</b><span>每个节点背 E#、文件路径、待确认，信息密度从“结构”转向“证明”。</span></div></div>
+          <div class="root-row"><span class="num">3</span><div><b>缺少标准架构模板</b><span>规则说“北向南分层”，但没有固定“入口 rail / 应用层 / 能力层 / 数据层 / 运维侧栏 / 数据流”这种模板。</span></div></div>
+          <div class="root-row"><span class="num">4</span><div><b>无产物级视觉 lint</b><span>没有检查图标覆盖率、连线语义、证据密度、首屏架构可读性。</span></div></div>
+        </div>
+      </section>
+
+      <div class="arrow" aria-hidden="true">
+        <svg viewBox="0 0 72 360"><path d="M8 180 C28 180 42 180 64 180"></path></svg>
+        <span class="arrow-label">模型安全落地</span>
+      </div>
+
+      <section class="lane bad" aria-label="退化结果">
+        <div class="lane-title"><span class="icon">🧾</span><span>实际输出：证据卡片页，而不是大众架构图</span></div>
+        <div class="audit-stack">
+          <div class="auditbox"><b>页面骨架</b>3 个候选 tab + 说明 + 证据索引 + 验收区。</div>
+          <div class="auditbox"><b>主图形态</b>CSS grid 的 layer/node 网格；目标 HTML 中 `<svg>` 数量为 0。</div>
+          <div class="auditbox"><b>信息密度</b>23 个 `.node`、75 个 evidence 标签、25 个 details，节点像审计摘要。</div>
+          <div class="auditbox"><b>感知结果</b>正确但不好读；读者先读文字和证据，而不是沿图标、边界、箭头理解系统。</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="takeaway">
+      <article class="take"><h3>不是“没有规则”</h3><p>现有规则已经写了“不是组件清单”“不是卡片目录”，但没有把大众系统架构图的视觉模板固化成可执行约束。</p></article>
+      <article class="take"><h3>不是“证据不重要”</h3><p>证据重要，但应进入附录或点击详情；默认主图应先完成抽象分层、边界和流向。</p></article>
+      <article class="take"><h3>不是“HTML 做不到”</h3><p>HTML 可以内联 SVG、图标和版式模板；问题是当前生成路径允许 div 网格替代架构画布。</p></article>
+    </div>
+  </section>
+
+  <section class="compare" aria-labelledby="compare-title">
+    <h2 id="compare-title">两种输出的核心差异</h2>
+    <div class="matrix">
+      <div class="col"><h3>附件图强在哪里</h3><ul><li>先给总体架构，再给 RAG、多 Agent、数据流变体，符合常见架构图阅读顺序。</li><li>用户接入、应用层、能力层、数据层、基础设施、运营管理有稳定空间位置。</li><li>图标承担类别识别，节点短文本只做补充。</li><li>箭头表达系统边界、调用方向和反馈环，而不是只做层间装饰。</li></ul></div>
+      <div class="col"><h3>vibe-diagram 输出弱在哪里</h3><ul><li>把“源码事实覆盖”优先级抬得过高，架构抽象被组件清单挤掉。</li><li>候选全集让图像变成可切换报告，而不是一个定稿架构图。</li><li>节点内容接近审计段落，读者需要逐卡阅读。</li><li>缺少图标语义和经典架构图骨架，第一眼无法形成大众认知里的系统地图。</li></ul></div>
+    </div>
+  </section>
+
+  <section class="evidence" aria-labelledby="evidence-title">
+    <h2 id="evidence-title">证据锚点</h2>
+    <div class="evidence-grid">
+      <div class="ev"><strong>附件图视觉观察</strong><code>/Users/david/Library/Containers/com.wiheads.paste/Data/tmp/images/ChatGPT 2026-07-03 09.33.42.png</code>：可见总体架构、RAG 架构、多 Agent 架构、端到端数据流四块。</div>
+      <div class="ev"><strong>目标 HTML 结构</strong><code>/Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图.html:533-608</code>：首选面板是 layer + node 网格，并带大量 E# evidence 标签。</div>
+      <div class="ev"><strong>目标 HTML DOM 统计</strong>本轮静态解析：`&lt;svg&gt;` 为 0；`.node` 为 23；evidence 标签为 75；details 为 25。说明它更接近证据化 HTML 报告。</div>
+      <div class="ev"><strong>vibe-diagram 候选模式</strong><code>/Users/david/.agents/skills/vibe-diagram/SKILL.md:39-53</code>：要求当前图型命中后生成首选 + 全部备选候选。</div>
+      <div class="ev"><strong>系统架构 reference</strong><code>/Users/david/.agents/skills/vibe-diagram/references/system-architecture.md:27-48</code>：要求覆盖组件、入口、控制面、工作面、运行中间件、数据证据等，容易把主图推向事实枚举。</div>
+      <div class="ev"><strong>触发协议</strong><code>/Users/david/hypha/tools/vibego/AGENTS-template.md:40-53</code>：解释具体对象和运行结果时会触发单文件 HTML，分析与证据链写入 HTML。</div>
+    </div>
+  </section>
+</main>
+</body>
+</html>
