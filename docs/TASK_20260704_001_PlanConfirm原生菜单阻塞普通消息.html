@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>故障排查：PlanConfirm 原生菜单吞掉 Telegram 普通消息</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: light; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font: 14px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      overflow-wrap: anywhere;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    }
+    main { width: min(1180px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 44px; }
+    .task-code {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(31,111,178,.18);
+      background: rgba(255,255,255,.78); color: var(--blue); font-weight: 700; font-size: 12px;
+    }
+    h1 { margin: 12px 0 8px; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; }
+    .lead { max-width: 920px; color: var(--muted); margin: 0 0 20px; }
+    .summary {
+      display: grid; grid-template-columns: 1.1fr .9fr; gap: 16px; margin: 18px 0 20px;
+    }
+    .panel {
+      background: var(--panel); border: 1px solid rgba(141,179,216,.38); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 18px;
+    }
+    .panel h2, .panel h3 { margin: 0 0 10px; line-height: 1.25; }
+    .panel h2 { font-size: 18px; }
+    .panel h3 { font-size: 15px; color: var(--blue); }
+    .status-line { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .pill { border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; border: 1px solid transparent; }
+    .pill.red { background: var(--red-soft); color: var(--red); border-color: rgba(166,58,58,.18); }
+    .pill.green { background: var(--green-soft); color: var(--green); border-color: rgba(23,120,90,.18); }
+    .pill.amber { background: var(--amber-soft); color: var(--amber); border-color: rgba(152,101,6,.18); }
+    .pill.blue { background: var(--blue-soft); color: var(--blue); border-color: rgba(31,111,178,.18); }
+    .canvas {
+      position: relative; padding: 20px; border-radius: calc(var(--radius) + 4px);
+      background:
+        linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px),
+        rgba(255,255,255,.72);
+      background-size: 22px 22px, 22px 22px, auto;
+      border: 1px solid rgba(141,179,216,.42); box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+    .node {
+      position: relative; min-height: 154px; padding: 14px 14px 12px; border-radius: 18px;
+      border: 1px solid rgba(141,179,216,.46); background: rgba(255,255,255,.96);
+      box-shadow: 0 10px 28px rgba(20,57,92,.07);
+    }
+    .node:not(:last-child)::after {
+      content: ""; position: absolute; right: -16px; top: 50%; transform: translateY(-50%);
+      width: 16px; height: 2px; background: var(--line); z-index: 0;
+    }
+    .node:not(:last-child)::before {
+      content: ""; position: absolute; right: -18px; top: calc(50% - 4px);
+      width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid var(--line);
+    }
+    .node .tag { display: inline-block; margin-bottom: 8px; font-weight: 800; font-size: 12px; letter-spacing: .02em; }
+    .node h3 { margin: 0 0 8px; font-size: 15px; color: var(--ink); }
+    .node p { margin: 0; color: var(--muted); font-size: 13px; }
+    .node ul { margin: 8px 0 0; padding-left: 17px; color: var(--muted); font-size: 13px; }
+    .node.problem { border-color: rgba(166,58,58,.34); background: linear-gradient(180deg, #fff, var(--red-soft)); }
+    .node.evidence { border-color: rgba(31,111,178,.34); background: linear-gradient(180deg, #fff, var(--blue-soft)); }
+    .node.root { border: 2px solid rgba(166,58,58,.72); background: linear-gradient(180deg, #fff, var(--red-soft)); }
+    .node.fix { border-color: rgba(23,120,90,.42); background: linear-gradient(180deg, #fff, var(--green-soft)); }
+    .node.verify { border-color: rgba(98,84,173,.34); background: linear-gradient(180deg, #fff, var(--violet-soft)); }
+    .evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+    .evidence-card {
+      background: rgba(255,255,255,.93); border: 1px solid rgba(141,179,216,.36); border-radius: 16px; padding: 14px;
+    }
+    .evidence-card strong { color: var(--blue); }
+    .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+    .lane { border-radius: var(--radius); padding: 16px; border: 1px solid rgba(141,179,216,.38); background: rgba(255,255,255,.86); }
+    .lane.before { border-left: 5px solid var(--red); }
+    .lane.after { border-left: 5px solid var(--green); }
+    .lane ol { margin: 8px 0 0; padding-left: 22px; }
+    .lane li { margin: 8px 0; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; background: rgba(31,111,178,.08); padding: 1px 4px; border-radius: 6px; }
+    details { margin-top: 14px; }
+    summary { cursor: pointer; font-weight: 800; color: var(--blue); }
+    pre { white-space: pre-wrap; margin: 10px 0 0; padding: 12px; border-radius: 14px; background: #0f1b2a; color: #e7f1ff; font-size: 12px; overflow-x: auto; }
+    .tests { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+    .testbox { background: rgba(255,255,255,.94); border: 1px solid rgba(141,179,216,.36); border-radius: 16px; padding: 14px; }
+    .testbox b { color: var(--green); }
+    .footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+    button, summary { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, summary:focus-visible { outline: 3px solid rgba(31,111,178,.35); outline-offset: 3px; border-radius: 10px; }
+    @media (max-width: 900px) {
+      main { width: min(100vw - 22px, 720px); padding-top: 18px; }
+      .summary, .compare, .evidence-grid, .tests { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .node { min-height: auto; }
+      .node:not(:last-child)::after { right: auto; left: 22px; top: auto; bottom: -16px; width: 2px; height: 16px; transform: none; }
+      .node:not(:last-child)::before { right: auto; left: 18px; top: auto; bottom: -20px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid var(--line); border-bottom: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="task-code">TASK_20260704_001</span>
+    <h1>故障排查：PlanConfirm 原生菜单吞掉 Telegram 普通消息</h1>
+    <p class="lead">结论：这不是 Codex 仍在思考，而是计划收口后终端停在原生 <code>Implement this plan?</code> 选择菜单；Telegram 又把普通文本或旧快捷回复当业务 prompt 投递进 tmux，输入无法写入 JSONL，用户侧却看到“思考中”。</p>
+
+    <section class="summary">
+      <article class="panel">
+        <h2>现象 / 影响</h2>
+        <p>FawnStudio worker 在 11:43 输出 <code>&lt;proposed_plan&gt;</code> 后，11:46 用户发送 <code>?</code>，Bot 回复正在监听；tmux 实际仍停在 Codex 原生 Yes / Fresh / No 菜单。</p>
+        <div class="status-line">
+          <span class="pill red">用户误以为卡在 Yes</span>
+          <span class="pill amber">普通消息未被 JSONL 消费</span>
+          <span class="pill blue">同源 session 已确认</span>
+        </div>
+      </article>
+      <article class="panel">
+        <h2>修复判定</h2>
+        <p>已改为 fail-closed：PlanConfirm 待处理时，普通消息 / 快捷回复不再进入 tmux；<code>&lt;proposed_plan&gt;</code> 输出也不再挂通用“全部按推荐”按钮，避免和 PlanConfirm 决策冲突。</p>
+        <div class="status-line">
+          <span class="pill green">3 个回归测试新增/调整</span>
+          <span class="pill green">相关测试 23 passed</span>
+          <span class="pill green">plan_progress 41 passed</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="canvas" aria-label="故障故事线">
+      <div class="flow">
+        <article class="node problem">
+          <span class="tag">P1 现象</span>
+          <h3>Telegram 显示“思考中”</h3>
+          <p>用户发 <code>?</code> 后收到 session ack，但没有新模型输出。</p>
+          <ul><li>E1 截图：11:46 状态消息</li><li>E2 run_bot：ack sent</li></ul>
+        </article>
+        <article class="node">
+          <span class="tag">C1 当前链路</span>
+          <h3>计划输出完成</h3>
+          <p>JSONL 已出现 <code>item_completed Plan</code> 与 <code>task_complete</code>，该轮不是还在生成。</p>
+          <ul><li>E3 JSONL 03:43:45Z</li></ul>
+        </article>
+        <article class="node evidence">
+          <span class="tag">C2 当前链路</span>
+          <h3>终端留在原生菜单</h3>
+          <p>tmux capture 显示 <code>Implement this plan?</code>，光标在 <code>No</code>，等待 Enter / Esc。</p>
+          <ul><li>E4 tmux capture</li></ul>
+        </article>
+        <article class="node problem">
+          <span class="tag">C3 故障触发</span>
+          <h3>普通 prompt 仍被投递</h3>
+          <p><code>_handle_prompt_dispatch</code> 未检查待处理 PlanConfirm，继续调用 <code>_dispatch_prompt_to_model</code>。</p>
+          <ul><li>E5 11:46:06 未确认消费</li></ul>
+        </article>
+        <article class="node root">
+          <span class="tag">根因 R1</span>
+          <h3>缺少 PlanConfirm 待处理门禁</h3>
+          <p>因为 E3 + E4 + E5 成立：终端在菜单态，Telegram 投递层却按普通业务输入处理。</p>
+          <ul><li>置信度：高</li><li>验证状态：已用失败测试复现</li></ul>
+        </article>
+        <article class="node fix">
+          <span class="tag">修法 F1 / 验证 V1</span>
+          <h3>菜单态 fail-closed</h3>
+          <p>阻断普通消息和旧快捷回复；计划输出不再挂通用快捷回复。相关测试与编译检查已执行。</p>
+          <ul><li>23 passed + py_compile</li><li>41 passed</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="compare" aria-label="前后对照">
+      <article class="lane before">
+        <h2>Before：故障逻辑</h2>
+        <ol>
+          <li>模型输出 <code>&lt;proposed_plan&gt;</code>，Bot 同时发送通用快捷回复。</li>
+          <li>Codex TUI 自动显示原生 <code>Implement this plan?</code> 菜单。</li>
+          <li>用户发普通文本或点旧快捷回复。</li>
+          <li>Bot 继续 tmux 投递并回 session ack。</li>
+          <li>Codex 菜单不产生用户消息 JSONL，用户看到“思考中”。</li>
+        </ol>
+      </article>
+      <article class="lane after">
+        <h2>After：修复逻辑</h2>
+        <ol>
+          <li>模型输出 <code>&lt;proposed_plan&gt;</code> 时，不再挂通用快捷回复。</li>
+          <li>PlanConfirm 待处理 token 仍在时，普通业务 prompt 先 fail-closed。</li>
+          <li>旧快捷回复也提示先处理 Plan 确认菜单，不投递 tmux。</li>
+          <li>用户只能通过 Yes / Fresh / No 决策，或先 No 再补充。</li>
+          <li>不再产生“tmux 成功但 JSONL 未消费”的误导性思考中状态。</li>
+        </ol>
+      </article>
+    </section>
+
+    <section class="panel" style="margin-top:16px">
+      <h2>证据阶梯</h2>
+      <div class="evidence-grid">
+        <div class="evidence-card"><strong>E1 截图</strong><br>附件 <code>20260704_034636687-36d0d234e366.jpg</code> 显示计划后出现 <code>Implement this plan?</code>，用户 11:46 发 <code>?</code> 后收到“思考中”。</div>
+        <div class="evidence-card"><strong>E2 worker 日志</strong><br><code>run_bot.log</code> 11:43:47 记录“已发送 Plan 结束确认按钮”；11:46:06 记录 JSONL 未确认消费 prompt。</div>
+        <div class="evidence-card"><strong>E3 JSONL</strong><br><code>rollout-2026-07-04T11-38-06...</code> 在 03:43:45Z 已 <code>task_complete</code>，不是模型仍在本轮思考。</div>
+        <div class="evidence-card"><strong>E4 tmux capture</strong><br><code>vibe-fawnstudio:0.0</code> 停在原生菜单，提示 <code>Press enter to confirm or esc to go back</code>。</div>
+      </div>
+      <details>
+        <summary>点击查看关键日志片段</summary>
+        <pre>2026-07-04 11:43:47 ... 已发送 Plan 结束确认按钮
+2026-07-04 11:43:47 ... 模型输出已发送且计划完成
+2026-07-04 11:46:04 ... cancel previous watcher
+2026-07-04 11:46:06 ... Codex session JSONL 未确认消费 prompt，但 tmux send 已成功；跳过自动重试以避免重复排队
+
+tmux:
+Implement this plan?
+1. Yes, implement this plan          Switch to Default and start coding.
+2. Yes, clear context and implement  Fresh thread. Context: 53% used.
+› 3. No, stay in Plan mode             Continue planning with the model.
+Press enter to confirm or esc to go back</pre>
+      </details>
+    </section>
+
+    <section class="panel" style="margin-top:16px">
+      <h2>代码改动与验证闭环</h2>
+      <div class="tests">
+        <div class="testbox"><b>测试 T1</b><br><code>test_deliver_pending_messages_triggers_plan_confirm</code><br>确认 proposed_plan 不再挂通用快捷回复。</div>
+        <div class="testbox"><b>测试 T2</b><br><code>test_direct_prompt_blocks_while_plan_confirm_pending</code><br>确认普通文本不会进入 tmux 菜单。</div>
+        <div class="testbox"><b>测试 T3</b><br><code>test_quick_reply_all_blocks_while_plan_confirm_pending</code><br>确认旧快捷回复不再派发。</div>
+      </div>
+      <details>
+        <summary>点击查看验证命令</summary>
+        <pre>python3.11 -m pytest -q tests/test_plan_confirm_bridge.py tests/test_task_description.py::test_handle_prompt_dispatch_uses_current_terminal_mode tests/test_task_description.py::test_handle_prompt_dispatch_ignores_chat_action_failure tests/test_tmux_send_line.py::test_dispatch_prompt_does_not_retry_codex_when_jsonl_not_confirmed && python3.11 -m py_compile bot.py
+# 结果：23 passed, 2 warnings；py_compile 退出码 0
+
+python3.11 -m pytest -q tests/test_plan_progress.py
+# 结果：41 passed</pre>
+      </details>
+      <p class="footer">剩余风险：本轮未重启实际 FawnStudio worker，因此线上 Telegram 进程仍需升级 / 重启后才会应用此修复；当前 tmux 现场仍停在原生菜单，需要人工选择或通过 PlanConfirm 按钮处理。</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -1152,9 +1152,9 @@ def test_vibe_diagram_system_architecture_must_read_as_global_topology_not_layer
 
     skill_text = _read_vibe_diagram_all_rules()
 
-    assert "系统架构图不是组件清单、证据清单或分层卡片目录" in skill_text
-    assert "首屏必须出现一张北向南全局拓扑总览" in skill_text
-    assert "外部入口、接入/网关、业务服务/Agent、工具与中间件、状态/数据/观测按层成带状排列" in skill_text
+    assert "系统架构图不是组件清单、证据清单、编号实现分层或接口调用链" in skill_text
+    assert "首屏必须出现一张宽画布架构拓扑总览" in skill_text
+    assert "入口、应用、支撑能力、数据面、基础设施和管理侧栏如何协作" in skill_text
     assert "层间必须画出主请求流、控制流、数据读写流或兜底流" in skill_text
     assert "同层节点只保留组件名、职责、协议/接口、运行状态和关键约束" in skill_text
     assert "源码证据、文件路径和长说明进入该节点点击详情" in skill_text
@@ -1214,6 +1214,20 @@ def test_vibe_diagram_system_architecture_locks_polished_presentation_micro_rule
     assert "如果读者会问“这个箭头指向哪里”，必须改名或重连" in system_text
     assert "浏览器标注反馈默认只修改用户选中区域及直接相邻关系" in system_text
     assert "横向滚动条、节点内滚动条、文字溢出、图标/文案未居中、箭头穿字、孤立箭头标签均为失败" in system_text
+
+
+def test_vibe_diagram_system_architecture_presentation_overrides_007_runtime_pipeline() -> None:
+    """最新复核表明 007 编号实现分层会把系统架构图拉回代码链路图，应降级为例外。"""
+
+    system_text = _read_vibe_diagram_reference("system-architecture.md")
+
+    assert "presentation 版式锁定优先级高于 007 宏观拓扑基线" in system_text
+    assert "007 仅作为内部运行时证据架构的例外形态" in system_text
+    assert "普通系统架构图不得使用 `1.`、`2.`、`3.` 编号 lane 作为主层标题" in system_text
+    assert "SDK 表现层、HTTP 接入、Controller、Facade、Handler、DTO 等实现名只能进入节点详情" in system_text
+    assert "不得把主画布标题写成接口调用链或代码流水线" in system_text
+    assert "系统架构图默认优先采用 007 宏观拓扑基线" not in system_text
+    assert "不要因为“还有优化空间”就自动升级为多泳道、五列表格或分段故事线" not in system_text
 
 
 def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_presentation(
@@ -1361,6 +1375,48 @@ def test_vibe_diagram_system_architecture_lint_rejects_scroll_canvas_raw_svg_tex
     assert "检测到含糊箭头标签“主请求入口”" in result.stdout
 
 
+def test_vibe_diagram_system_architecture_lint_rejects_numbered_runtime_pipeline_canvas(
+    tmp_path: Path,
+) -> None:
+    """最新失败样式有 SVG/foreignObject，但仍是窄画布 + 编号实现流水线，lint 必须拦截。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    bad_html = tmp_path / "numbered_pipeline.html"
+    bad_html.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation">
+          <svg viewBox="0 0 1180 860" aria-label="系统架构图">
+            <text class="canvas-title" x="28" y="42">主请求流：入口 → SDK → /api/cs/v1/* → Facade → Agent → 数据/兜底</text>
+            <text class="lane-label" x="228" y="120">1. 小程序接入 / SDK 表现层</text>
+            <text class="lane-label" x="228" y="254">2. HTTP 接入 / Gateway</text>
+            <text class="lane-label" x="228" y="388">3. 应用层 / 会话编排</text>
+            <foreignObject x="40" y="140" width="140" height="70">
+              <button xmlns="http://www.w3.org/1999/xhtml" class="node-content"><span>📱</span><strong>入口 rail</strong></button>
+            </foreignObject>
+            <foreignObject x="220" y="140" width="170" height="70">
+              <button xmlns="http://www.w3.org/1999/xhtml" class="node-content"><span>🤖</span><strong>应用 Agent 智能体 会话</strong></button>
+            </foreignObject>
+            <path data-flow="主请求流"></path><path data-flow="数据读写流"></path>
+          </svg>
+          <section>入口 接入 用户 渠道 应用 Agent 智能体 会话 能力支撑 RAG LLM 大模型 工具 插件 数据 知识库 会话数据 用户数据 运营数据 基础设施 云 存储 网络 安全 监控 管理 运维 权限 审计 评估</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(bad_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "普通系统架构图不得退化为编号实现分层" in result.stdout
+    assert "系统架构图 presentation 画布过窄" in result.stdout
+    assert "不得把主画布标题写成接口调用链或代码流水线" in result.stdout
+
+
 def test_vibe_diagram_system_architecture_supports_plane_swimlanes_for_medium_complexity() -> None:
     """中等复杂系统架构可用主请求中轴 + 控制/数据/兜底泳道，而不是继续堆卡片。"""
 
@@ -1386,30 +1442,30 @@ def test_vibe_diagram_system_architecture_swimlanes_must_preserve_readability() 
     assert "侧向泳道只能服务当前主线阶段，不得形成第二张需要逐格阅读的矩阵" in skill_text
 
 
-def test_vibe_diagram_system_architecture_prefers_007_macro_topology_baseline() -> None:
-    """用户评审确认 007 宏观拓扑布局是当前最佳基线，应作为系统架构图默认形态。"""
+def test_vibe_diagram_system_architecture_demotes_007_to_internal_runtime_exception() -> None:
+    """用户复核确认 007 会诱导编号实现分层，普通系统架构图应优先 presentation 模板。"""
 
     skill_text = _read_vibe_diagram_all_rules()
 
-    assert "系统架构图默认优先采用 007 宏观拓扑基线" in skill_text
+    assert "presentation 版式锁定优先级高于 007 宏观拓扑基线" in skill_text
+    assert "007 仅作为内部运行时证据架构的例外形态" in skill_text
+    assert "普通系统架构图不得使用 `1.`、`2.`、`3.` 编号 lane 作为主层标题" in skill_text
     assert "北向南层级 + 层间流向分隔条 + 节点内摘要 + 点击详情证据" in skill_text
-    assert "不要因为“还有优化空间”就自动升级为多泳道、五列表格或分段故事线" in skill_text
-    assert "只有当 007 基线无法表达清楚两个以上独立平面时，才考虑侧向泳道" in skill_text
-    assert "泳道和分段图是例外补救形态，不是系统架构图的默认升级方向" in skill_text
+    assert "系统架构图默认优先采用 007 宏观拓扑基线" not in skill_text
 
 
 def test_vibe_diagram_system_architecture_rule_priority_keeps_swimlanes_as_exception() -> None:
-    """系统架构图规则必须先讲 007 默认基线，再讲泳道例外，避免未来误读成优先升级。"""
+    """系统架构图规则必须先讲 presentation 默认，再讲泳道/007 例外。"""
 
     skill_text = _read_vibe_diagram_all_rules()
 
-    baseline_index = skill_text.index("系统架构图默认优先采用 007 宏观拓扑基线")
+    baseline_index = skill_text.index("presentation 版式锁定优先级高于 007 宏观拓扑基线")
     exception_index = skill_text.index("系统架构图例外形态")
 
     assert baseline_index < exception_index
     assert "系统架构图例外形态不是优化方向" in skill_text
-    assert "除非用户明确要求或 007 基线验证失败，否则不要使用泳道或分段故事线" in skill_text
-    assert "007 基线验证失败" in skill_text
+    assert "除非用户明确要求或 presentation 模板无法区分两个以上独立平面" in skill_text
+    assert "为什么大众架构图模板不够用" in skill_text
     assert "不要把 010/011 当作推荐模板" in skill_text
 
 

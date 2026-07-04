@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>系统架构模板：可变槽位版预览</title>
+  <style>
+    :root{--ink:#102033;--muted:#5a6c80;--paper:#fbfdff;--panel:rgba(255,255,255,.9);--line:#8db3d8;--blue:#1f6fb2;--blue-soft:#e8f3ff;--green:#17785a;--green-soft:#e9f8f2;--amber:#986506;--amber-soft:#fff6de;--red:#a63a3a;--red-soft:#fff0f0;--violet:#6254ad;--violet-soft:#f1efff;--shadow:0 16px 42px rgba(20,57,92,.085);--radius:20px}
+    *{box-sizing:border-box} html,body{overflow-x:hidden} body{margin:0;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",Arial,sans-serif;background:radial-gradient(circle at 18% 3%,rgba(214,233,255,.78),transparent 30rem),radial-gradient(circle at 78% 6%,rgba(228,246,239,.8),transparent 28rem),linear-gradient(rgba(93,133,173,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(93,133,173,.045) 1px,transparent 1px),linear-gradient(180deg,#fff 0%,#f7fbff 54%,#fbfdff 100%);background-size:auto,auto,28px 28px,28px 28px,auto}
+    main{max-width:1640px;margin:0 auto;padding:16px 14px 24px}.task-chip{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid rgba(31,111,178,.18);border-radius:999px;background:rgba(255,255,255,.72);color:var(--blue);font-size:12px;font-weight:800}h1{margin:10px 0 4px;font-size:clamp(24px,2.8vw,34px);line-height:1.16;letter-spacing:-.025em}.subtitle{margin:0 0 12px;color:var(--muted);font-size:15px;max-width:1120px;line-height:1.7}.canvas-wrap{background:rgba(255,255,255,.82);border:1px solid rgba(93,133,173,.20);border-radius:22px;box-shadow:var(--shadow);padding:8px;overflow:hidden}
+    svg{display:block;width:100%;max-width:100%;height:auto;text-rendering:geometricPrecision;background:linear-gradient(rgba(38,102,154,.043) 1px,transparent 1px),linear-gradient(90deg,rgba(38,102,154,.043) 1px,transparent 1px),linear-gradient(180deg,rgba(255,255,255,.96),rgba(247,251,255,.92));background-size:22px 22px,22px 22px,auto;border-radius:20px}.caption{font-size:17px;font-weight:850;fill:var(--ink)}.tiny{font-size:12.2px;fill:var(--muted);font-weight:650}.label{font-size:12.4px;fill:var(--muted);font-weight:760}.template-tag{font-size:11px;font-weight:850;fill:var(--blue)}.solid{stroke:#607f9f;stroke-width:2.15;fill:none;marker-end:url(#arrow)}.soft{stroke:#8db3d8;stroke-width:1.8;fill:none;marker-end:url(#arrowSoft)}.dash{stroke:#a9782a;stroke-width:2;stroke-dasharray:7 6;fill:none;marker-end:url(#arrowAmber)}.data{stroke:#6254ad;stroke-width:1.9;stroke-dasharray:3 5;fill:none;marker-end:url(#arrowViolet)}.layer-blue{fill:#f2f8ff;stroke:#7db0de}.layer-green{fill:#effaf5;stroke:#8bcdb6}.layer-violet{fill:#f5f3ff;stroke:#afa7e0}.layer-gray{fill:#fbfdff;stroke:#bfd0df}.layer-amber{fill:#fffaf0;stroke:#efbd71}.module{fill:white;stroke:#b9d2e8;stroke-width:1.15;filter:url(#softShadow)}.module-green{stroke:#9ed8c3}.module-violet{stroke:#bdb5ec}.module-amber{stroke:#e0bf72}.module-dashed{fill:rgba(255,255,255,.74);stroke:#b9d2e8;stroke-width:1.25;stroke-dasharray:7 5}.label-bg{fill:rgba(255,255,255,.92);stroke:rgba(141,179,216,.24)}.legend-box{fill:rgba(255,255,255,.86);stroke:#d6e4f1}.legend-text{font-size:12.2px;fill:#496075;font-weight:820}.legend-title{font-size:12.8px;fill:#1f6fb2;font-weight:900}.node-fo{overflow:visible}.node-content{width:100%;height:100%;display:flex;align-items:center;justify-content:center}.node-inline{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;column-gap:10px;row-gap:1px;align-items:center;justify-content:center;text-align:left;max-width:100%;padding:0 10px}.node-icon{grid-row:1/3;min-width:28px;height:28px;border-radius:10px;border:1px solid rgba(141,179,216,.34);background:rgba(232,243,255,.72);display:flex;align-items:center;justify-content:center;font-size:10px;line-height:1;color:var(--blue);font-weight:900}.node-title{font-size:14px;line-height:1.15;font-weight:850;color:#102033;overflow-wrap:anywhere}.node-sub{font-size:11.6px;line-height:1.15;font-weight:650;color:#5a6c80;overflow-wrap:anywhere}.node-stack{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:2px;width:100%;height:100%;padding:0 8px}.node-stack .node-icon{width:auto;min-width:34px;height:22px;padding:0 6px}.node-stack .node-title{font-size:14px;line-height:1.12;font-weight:850;color:#102033;overflow-wrap:anywhere}.node-stack .node-sub{font-size:11.6px;line-height:1.12;font-weight:650;color:#5a6c80;overflow-wrap:anywhere}.optional{font-size:11px;fill:#986506;font-weight:850}.note{margin:14px 2px 0;color:var(--muted);font-size:13px;line-height:1.7}.note strong{color:var(--ink)}details{margin-top:14px;background:rgba(255,255,255,.72);border:1px solid rgba(93,133,173,.18);border-radius:18px;padding:12px 14px}summary{cursor:pointer;font-weight:850;color:var(--blue)}.slot-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}.slot-grid div{border:1px solid rgba(141,179,216,.25);border-radius:14px;background:white;padding:10px;font-size:12px;line-height:1.55;color:var(--muted);overflow-wrap:anywhere}.slot-grid b{display:block;color:var(--ink);margin-bottom:4px}@media(max-width:760px){main{padding:12px 8px}.canvas-wrap{padding:6px}.subtitle{font-size:13px}.slot-grid{grid-template-columns:1fr}svg{min-width:0}}
+  </style>
+</head>
+<body>
+<main>
+  <span class="task-chip">TASK_20260703_003 · flexible template preview</span>
+  <h1>系统架构模板：可变槽位版预览</h1>
+  <p class="subtitle">本版不再固定 emoji、业务文案或“Agent / RAG / LLM”类结构；只固定视觉语法：边界、分区、箭头、图例和信息密度。每个节点的图标、名称、职责、分组名称都由数据槽决定，可按系统类型隐藏或替换。</p>
+  <section class="canvas-wrap" aria-label="系统架构可变模板主图容器">
+    <svg viewBox="30 58 1640 850" role="img" aria-labelledby="arch-title arch-desc" data-diagram-type="system-architecture" data-diagram-grammar="system-architecture-presentation" data-template-id="system-architecture-flex-v2" data-arch-archetype="flexible-entry-core-support-data-infra-ops">
+      <title id="arch-title">系统架构可变槽位模板</title>
+      <desc id="arch-desc">模板只约束空间关系与图形语法；入口、核心层、支撑层、数据层、基础设施和侧栏均可按系统类型改名、增删或隐藏。</desc>
+      <defs>
+        <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 Z" fill="#607f9f"/></marker>
+        <marker id="arrowSoft" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 Z" fill="#8db3d8"/></marker>
+        <marker id="arrowAmber" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 Z" fill="#986506"/></marker>
+        <marker id="arrowViolet" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 Z" fill="#6254ad"/></marker>
+        <filter id="softShadow" x="-18%" y="-18%" width="136%" height="136%"><feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#14395c" flood-opacity=".08"/></filter>
+        <linearGradient id="coreHead" x1="0" x2="1"><stop offset="0" stop-color="#2f79d7"/><stop offset="1" stop-color="#2356bd"/></linearGradient>
+      </defs>
+
+      <rect x="30" y="58" width="1640" height="850" rx="22" fill="rgba(255,255,255,.42)" stroke="#d6e4f1"/>
+      <text x="64" y="96" class="caption">{{system.title}}</text>
+      <text x="64" y="120" class="tiny">{{system.summary：说明系统边界、主关系、当前视角；禁止写成接口调用链}}</text>
+      <text x="1510" y="97" text-anchor="end" class="template-tag">template: system-architecture-flex-v2</text>
+
+      <rect x="44" y="142" width="166" height="594" rx="18" class="layer-gray"/>
+      <text x="127" y="174" text-anchor="middle" class="caption">{{entryRail.title}}</text>
+      <text x="127" y="196" text-anchor="middle" class="tiny">可隐藏 / 可改名</text>
+      <g transform="translate(68,218)">
+        <g><rect width="126" height="66" rx="13" class="module"/><foreignObject x="0" y="0" width="126" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{entry[0].name}}</span><span class="node-sub">{{entry[0].role}}</span></div></div></foreignObject></g>
+        <g transform="translate(0,84)"><rect width="126" height="66" rx="13" class="module"/><foreignObject x="0" y="0" width="126" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{entry[1].name}}</span><span class="node-sub">{{entry[1].role}}</span></div></div></foreignObject></g>
+        <g transform="translate(0,168)"><rect width="126" height="66" rx="13" class="module"/><foreignObject x="0" y="0" width="126" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{entry[2].name}}</span><span class="node-sub">{{entry[2].role}}</span></div></div></foreignObject></g>
+        <g transform="translate(0,252)"><rect width="126" height="66" rx="13" class="module-dashed"/><foreignObject x="0" y="0" width="126" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">opt</span><span class="node-title">{{entry.optional}}</span><span class="node-sub">可选入口</span></div></div></foreignObject></g>
+      </g>
+
+      <rect x="244" y="142" width="980" height="450" rx="20" fill="#f7fbff" stroke="#77a9dd" stroke-width="1.4"/>
+      <text x="734" y="174" text-anchor="middle" class="caption" fill="#1f6fb2">{{coreBoundary.title}}</text>
+      <text x="734" y="197" text-anchor="middle" class="tiny">{{coreBoundary.summary：按系统类型命名，可是业务系统/数据平台/基础设施/AI/中台}}</text>
+
+      <rect x="278" y="226" width="250" height="144" rx="16" class="layer-blue"/>
+      <text x="403" y="254" text-anchor="middle" class="caption">{{northWestGroup.title}}</text>
+      <text x="403" y="272" text-anchor="middle" class="optional">可为接入、上游、客户端、触发源</text>
+      <g transform="translate(302,292)">
+        <rect width="202" height="46" rx="11" class="module"/><foreignObject x="0" y="0" width="202" height="46" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{node.A1}}</span><span class="node-sub">{{职责/协议}}</span></div></div></foreignObject>
+      </g>
+
+      <rect x="584" y="226" width="306" height="144" rx="16" class="layer-green"/>
+      <text x="737" y="254" text-anchor="middle" class="caption">{{coreGroup.title}}</text>
+      <text x="737" y="272" text-anchor="middle" class="optional">核心域、服务群、控制器、处理器均可</text>
+      <g transform="translate(614,292)">
+        <rect width="116" height="46" rx="11" class="module module-green"/><foreignObject x="0" y="0" width="116" height="46" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{node.B1}}</span><span class="node-sub">{{职责}}</span></div></div></foreignObject>
+        <g transform="translate(132,0)"><rect width="116" height="46" rx="11" class="module module-green"/><foreignObject x="0" y="0" width="116" height="46" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{node.B2}}</span><span class="node-sub">{{职责}}</span></div></div></foreignObject></g>
+      </g>
+
+      <rect x="928" y="226" width="250" height="144" rx="16" class="layer-blue"/>
+      <text x="1053" y="254" text-anchor="middle" class="caption">{{eastGroup.title}}</text>
+      <text x="1053" y="272" text-anchor="middle" class="optional">可隐藏；外部系统/下游/协作方</text>
+      <g transform="translate(952,292)">
+        <rect width="202" height="46" rx="11" class="module module-amber"/><foreignObject x="0" y="0" width="202" height="46" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{node.C1}}</span><span class="node-sub">{{关系/协议}}</span></div></div></foreignObject>
+      </g>
+
+      <rect x="326" y="410" width="820" height="132" rx="17" class="layer-violet"/>
+      <rect x="326" y="410" width="820" height="30" rx="17" fill="url(#coreHead)"/>
+      <text x="736" y="431" text-anchor="middle" fill="white" font-size="14" font-weight="900">{{supportBand.title}} · 可选支撑层</text>
+      <g transform="translate(356,462)">
+        <g><rect width="142" height="58" rx="12" class="module module-violet"/><foreignObject x="0" y="0" width="142" height="58" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{support[0]}}</span><span class="node-sub">{{语义}}</span></div></div></foreignObject></g>
+        <g transform="translate(158,0)"><rect width="142" height="58" rx="12" class="module module-violet"/><foreignObject x="0" y="0" width="142" height="58" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{support[1]}}</span><span class="node-sub">{{语义}}</span></div></div></foreignObject></g>
+        <g transform="translate(316,0)"><rect width="142" height="58" rx="12" class="module module-amber"/><foreignObject x="0" y="0" width="142" height="58" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{support[2]}}</span><span class="node-sub">{{语义}}</span></div></div></foreignObject></g>
+        <g transform="translate(474,0)"><rect width="142" height="58" rx="12" class="module module-green"/><foreignObject x="0" y="0" width="142" height="58" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{support[3]}}</span><span class="node-sub">{{语义}}</span></div></div></foreignObject></g>
+        <g transform="translate(632,0)"><rect width="116" height="58" rx="12" class="module-dashed"/><foreignObject x="0" y="0" width="116" height="58" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">opt</span><span class="node-title">{{more}}</span><span class="node-sub">可增减</span></div></div></foreignObject></g>
+      </g>
+
+      <rect x="244" y="596" width="980" height="142" rx="18" class="layer-violet"/>
+      <text x="734" y="628" text-anchor="middle" class="caption">{{stateOrDataBand.title}}</text>
+      <text x="734" y="648" text-anchor="middle" class="optional">可为数据、状态、缓存、队列、文件、配置、观测</text>
+      <g transform="translate(300,668)">
+        <g><rect width="176" height="50" rx="12" class="module module-green"/><foreignObject x="0" y="0" width="176" height="50" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{state[0]}}</span><span class="node-sub">{{口径}}</span></div></div></foreignObject></g>
+        <g transform="translate(208,0)"><rect width="176" height="50" rx="12" class="module module-violet"/><foreignObject x="0" y="0" width="176" height="50" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{state[1]}}</span><span class="node-sub">{{口径}}</span></div></div></foreignObject></g>
+        <g transform="translate(416,0)"><rect width="176" height="50" rx="12" class="module module-amber"/><foreignObject x="0" y="0" width="176" height="50" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{state[2]}}</span><span class="node-sub">{{口径}}</span></div></div></foreignObject></g>
+        <g transform="translate(624,0)"><rect width="176" height="50" rx="12" class="module module-violet"/><foreignObject x="0" y="0" width="176" height="50" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{observe}}</span><span class="node-sub">{{日志/指标}}</span></div></div></foreignObject></g>
+      </g>
+
+      <rect x="1284" y="142" width="370" height="596" rx="18" class="layer-amber"/>
+      <text x="1469" y="174" text-anchor="middle" class="caption" fill="#986506">{{sideRail.title|旁路 / 管理/运维 / 治理槽位}}</text>
+      <text x="1469" y="196" text-anchor="middle" class="tiny">可隐藏 / 可换成管控、治理、外部依赖、风险栏</text>
+      <g transform="translate(1322,226)">
+        <g><rect width="294" height="66" rx="13" class="module module-violet"/><foreignObject x="0" y="0" width="294" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{side[0]}}</span><span class="node-sub">{{影响关系}}</span></div></div></foreignObject></g>
+        <g transform="translate(0,88)"><rect width="294" height="66" rx="13" class="module module-green"/><foreignObject x="0" y="0" width="294" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{side[1]}}</span><span class="node-sub">{{影响关系}}</span></div></div></foreignObject></g>
+        <g transform="translate(0,176)"><rect width="294" height="66" rx="13" class="module module-violet"/><foreignObject x="0" y="0" width="294" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">icon</span><span class="node-title">{{side[2]}}</span><span class="node-sub">{{影响关系}}</span></div></div></foreignObject></g>
+        <g transform="translate(0,264)"><rect width="294" height="66" rx="13" class="module-dashed"/><foreignObject x="0" y="0" width="294" height="66" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-stack"><span class="node-icon">opt</span><span class="node-title">{{side.optional}}</span><span class="node-sub">可选侧向能力</span></div></div></foreignObject></g>
+      </g>
+
+      <rect x="244" y="782" width="1410" height="104" rx="18" class="layer-blue"/>
+      <text x="949" y="813" text-anchor="middle" class="caption">{{foundation.title}}</text>
+      <text x="949" y="833" text-anchor="middle" class="optional">可为基础设施、运行环境、平台服务、底层依赖；也可隐藏</text>
+      <g transform="translate(306,850)">
+        <g><rect width="178" height="30" rx="10" class="module"/><foreignObject x="0" y="0" width="178" height="30" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{base[0]}}</span></div></div></foreignObject></g>
+        <g transform="translate(202,0)"><rect width="178" height="30" rx="10" class="module"/><foreignObject x="0" y="0" width="178" height="30" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{base[1]}}</span></div></div></foreignObject></g>
+        <g transform="translate(404,0)"><rect width="178" height="30" rx="10" class="module"/><foreignObject x="0" y="0" width="178" height="30" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{base[2]}}</span></div></div></foreignObject></g>
+        <g transform="translate(606,0)"><rect width="178" height="30" rx="10" class="module"/><foreignObject x="0" y="0" width="178" height="30" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{base[3]}}</span></div></div></foreignObject></g>
+        <g transform="translate(808,0)"><rect width="178" height="30" rx="10" class="module"/><foreignObject x="0" y="0" width="178" height="30" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">icon</span><span class="node-title">{{base[4]}}</span></div></div></foreignObject></g>
+        <g transform="translate(1010,0)"><rect width="178" height="30" rx="10" class="module-dashed"/><foreignObject x="0" y="0" width="178" height="30" class="node-fo"><div xmlns="http://www.w3.org/1999/xhtml" class="node-content"><div class="node-inline"><span class="node-icon">opt</span><span class="node-title">{{base.more}}</span></div></div></foreignObject></g>
+      </g>
+
+      <path d="M210 334 C238 334 246 314 278 314" class="solid"/><rect x="198" y="318" width="118" height="20" rx="8" class="label-bg"/><text x="257" y="332" text-anchor="middle" class="label">{{flow.main}}</text>
+      <path d="M528 314 H584" class="solid"/><path d="M890 314 H928" class="solid"/>
+      <path d="M737 370 V410" class="solid"/><rect x="756" y="383" width="92" height="20" rx="8" class="label-bg"/><text x="802" y="397" text-anchor="middle" class="label">{{flow.support}}</text>
+      <path d="M612 520 C608 556 604 574 604 596" class="data"/><path d="M872 520 C900 558 914 574 916 596" class="data"/><rect x="682" y="558" width="112" height="20" rx="8" class="label-bg"/><text x="738" y="572" text-anchor="middle" class="label" fill="#6254ad">{{flow.state}}</text>
+      <path d="M1120 476 C1180 476 1238 492 1284 540" class="dash"/><rect x="1152" y="486" width="92" height="20" rx="8" class="label-bg"/><text x="1198" y="500" text-anchor="middle" class="label" fill="#986506">{{flow.side}}</text>
+      <path d="M1284 314 C1240 314 1206 310 1178 314" class="data"/><rect x="1190" y="326" width="96" height="20" rx="8" class="label-bg"/><text x="1238" y="340" text-anchor="middle" class="label" fill="#6254ad">{{flow.control}}</text>
+      <path d="M734 738 V782" class="soft"/><path d="M949 738 V782" class="soft"/>
+
+      <g transform="translate(66,790)"><rect width="205" height="88" rx="14" class="legend-box"/><text x="18" y="23" class="legend-title">流向图例</text><line x1="20" y1="42" x2="58" y2="42" stroke="#607f9f" stroke-width="3" stroke-linecap="round"/><circle cx="62" cy="42" r="4" fill="#607f9f"/><text x="76" y="46" class="legend-text">主请求流 / 主关系</text><line x1="20" y1="61" x2="58" y2="61" stroke="#6254ad" stroke-width="2.8" stroke-linecap="round" stroke-dasharray="4 4"/><circle cx="62" cy="61" r="4" fill="#6254ad"/><text x="76" y="65" class="legend-text">数据读写/控制</text><line x1="20" y1="80" x2="58" y2="80" stroke="#986506" stroke-width="2.8" stroke-linecap="round" stroke-dasharray="7 5"/><circle cx="62" cy="80" r="4" fill="#986506"/><text x="76" y="84" class="legend-text">旁路/例外/外部</text></g>
+    </svg>
+  </section>
+  <p class="note"><strong>模板原则：</strong>固定的是视觉语法，不是架构答案。每个区域都可以改名、隐藏、拆分或合并；图标使用 <code>icon</code> 槽，由生成时按实际系统选择 emoji、SVG 小图标、字母徽标或留空。</p>
+  <details open><summary>可变槽位契约</summary><div class="slot-grid"><div><b>layout.profile</b>可选：业务应用、数据平台、基础设施、AI 系统、集成网关、中台/平台。profile 只影响命名和默认区域，不改变视觉质量门禁。</div><div><b>regions[]</b>每个区域有 <code>title</code>、<code>visible</code>、<code>role</code>、<code>nodes[]</code>；入口 rail、侧栏、支撑层、底座都可隐藏。</div><div><b>nodes[]</b>节点只固定 <code>icon/title/subtitle/tone/detail</code> 槽；图标不是预设业务语义，可用 emoji、SVG、缩写或空。</div><div><b>flows[]</b>只要求源、目标、类型和标签；不预设必须是“Agent/RAG/LLM”链路。</div><div><b>naming</b>“核心应用区”“支撑层”“数据层”只是默认显示名，可替换为“控制平面 / 数据平面 / 执行平面 / 运行环境”等。</div><div><b>constraints</b>禁止接口流水线标题、编号实现分层、源码路径堆主图；允许按系统事实重命名与删减区域。</div><div><b>optional</b>虚线节点和 <code>opt</code> 图标表示可选槽，不代表具体业务能力。</div><div><b>quality</b>仍需保留宽画布、清晰边界、节点居中、箭头有源有目标、无横向滚动。</div></div></details>
+</main>
+</body>
+</html>

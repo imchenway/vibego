@@ -58,6 +58,9 @@ SOURCE_PATH_RE = re.compile(
     r"(?:/Users/|/src/|/tmp/|[A-Za-z0-9_./-]+\.(?:py|ts|tsx|js|java|md|sql):\d+)"
 )
 EVIDENCE_RE = re.compile(r"\bE\d{1,3}\b")
+VIEWBOX_RE = re.compile(r"<svg\b[^>]*\bviewBox=[\"']\s*[-\d.]+\s+[-\d.]+\s+([\d.]+)\s+([\d.]+)[\"']", re.IGNORECASE)
+NUMBERED_LANE_RE = re.compile(r">\s*[1-9]\d*\.\s*(?:小程序接入|HTTP\s*接入|应用层|领域智能体|数据层|基础设施|SDK|Gateway)", re.IGNORECASE)
+PIPELINE_TITLE_RE = re.compile(r"(?:主请求流|请求流)[^<]{0,40}(?:SDK|/api/|Controller|Facade|Handler|DTO)[^<]{0,80}(?:Facade|Agent|数据|兜底)", re.IGNORECASE)
 HORIZONTAL_CANVAS_SCROLL_RE = re.compile(
     r"(?:canvas|svg|architecture|canvas-wrap|arch)[^{]{0,120}\{[^}]*overflow(?:-x)?\s*:\s*(?:auto|scroll)",
     re.IGNORECASE | re.DOTALL,
@@ -102,10 +105,23 @@ def lint_system_architecture(html: str, *, allow_candidates: bool = False) -> li
     html_lower = html.lower()
     if HORIZONTAL_CANVAS_SCROLL_RE.search(html) or OVERSIZED_MIN_WIDTH_RE.search(html):
         errors.append("系统架构图主画布不得依赖横向滚动或超大 min-width；应压缩空白并在正常页面宽度内可读。")
+    for width_text, height_text in VIEWBOX_RE.findall(html):
+        try:
+            width = float(width_text)
+            height = float(height_text)
+        except ValueError:
+            continue
+        if width < 1400 and height >= 700:
+            errors.append("系统架构图 presentation 画布过窄；默认应使用 1500-1700 左右逻辑宽度再用 CSS 等比缩放。")
+            break
     if svg_count > 0 and not any(marker in html_lower for marker in AUTO_CENTERED_NODE_MARKERS):
         errors.append("系统架构图节点内容必须使用 foreignObject 或自居中 HTML 容器，避免图标/文案固定坐标错位。")
     if "主请求入口" in text and not _contains_any(text, ("入口汇聚", "入口汇入", "入口进入", "入口接入")):
         errors.append("检测到含糊箭头标签“主请求入口”；每条箭头必须有明确源节点、目标节点和关系标签。")
+    if NUMBERED_LANE_RE.search(html):
+        errors.append("普通系统架构图不得退化为编号实现分层；主层标题应使用入口、应用、能力、数据、基础设施、管理侧栏等大众语义。")
+    if PIPELINE_TITLE_RE.search(text):
+        errors.append("不得把主画布标题写成接口调用链或代码流水线；标题应概括系统架构关系。")
 
     for label, words in SYSTEM_ARCH_REQUIRED_SEMANTICS:
         if not _contains_any(text + " " + html, words):

@@ -525,6 +525,12 @@ PLAN_CONFIRM_ACTION_YES = "yes"
 PLAN_CONFIRM_ACTION_FRESH = "fresh"
 PLAN_CONFIRM_ACTION_NO = "no"
 PLAN_IMPLEMENT_PROMPT = "Implement the plan."
+PLAN_CONFIRM_PENDING_INPUT_NOTICE = (
+    "⚠️ 当前终端停在 Codex Plan 确认菜单，普通消息暂未发送到 tmux，"
+    "以避免输入卡在 Yes/No 菜单里。\n"
+    "请先点击刚才 “Implement this plan?” 消息下方的 Yes / Fresh / No 按钮；"
+    "如果想补充计划，请先选择 No 留在 Plan 模式后再发送。"
+)
 # Codex 原生 fresh context 菜单会把上一轮计划作为新线程输入；历史重启实现才需要显式携带计划正文。
 PLAN_IMPLEMENT_FRESH_CONTEXT_PROMPT_PREFIX = (
     "A previous agent produced the plan below to accomplish the user's task. "
@@ -5777,6 +5783,10 @@ async def _handle_prompt_dispatch(
                 exc,
                 extra={**_session_extra(), "chat": message.chat.id},
             )
+
+    if _should_block_business_prompt_for_pending_plan_confirm(message.chat.id):
+        await message.answer(PLAN_CONFIRM_PENDING_INPUT_NOTICE)
+        return
 
     bot = current_bot()
     # typing 只是 Telegram 侧的体验提示，不能影响核心 prompt 投递；
@@ -14388,6 +14398,31 @@ def _find_plan_confirm_tokens(chat_id: int, *, session_key: Optional[str] = None
     return matched_tokens
 
 
+def _active_plan_confirm_session_for_chat(chat_id: int) -> Optional[PlanConfirmSession]:
+    """返回当前 chat 最新待处理的 PlanConfirm 会话。"""
+
+    token = (CHAT_ACTIVE_PLAN_CONFIRM_TOKENS.get(chat_id) or "").strip()
+    if not token:
+        return None
+    return PLAN_CONFIRM_SESSIONS.get(token)
+
+
+def _should_block_business_prompt_for_pending_plan_confirm(chat_id: int) -> bool:
+    """Codex 原生 PlanConfirm 未处理时，普通业务 prompt 必须先 fail-closed。"""
+
+    if not _is_codex_model():
+        return False
+    return _active_plan_confirm_session_for_chat(chat_id) is not None
+
+
+async def _answer_pending_plan_confirm_callback(callback: CallbackQuery) -> None:
+    """提示用户先处理 PlanConfirm，避免快捷回复误入 Codex 原生菜单。"""
+
+    await callback.answer("请先处理 Plan 确认菜单", show_alert=True)
+    if callback.message is not None:
+        await callback.message.answer(PLAN_CONFIRM_PENDING_INPUT_NOTICE)
+
+
 def _drop_plan_confirm_sessions_for_session(chat_id: int, session_key: Optional[str]) -> None:
     """仅删除指定 chat + session_key 的 PlanConfirm，会保留其他并存会话。"""
 
@@ -15420,6 +15455,7 @@ async def _deliver_pending_messages_locked(
             session_path=session_path,
             session_cwd=native_session_cwd,
         )
+        should_prompt_plan_confirm = _contains_proposed_plan_block(text_to_send)
         message_task_id = parallel_task_id or _peek_pending_session_task_binding(session_key) or bound_task_id
         native_quick_reply_payload = None
         native_commit_callback_payload = None
@@ -15436,8 +15472,7 @@ async def _deliver_pending_messages_locked(
             parallel_callback_payload=parallel_callback_payload,
             native_quick_reply_payload=native_quick_reply_payload,
             native_commit_callback_payload=native_commit_callback_payload,
-        )
-        should_prompt_plan_confirm = _contains_proposed_plan_block(text_to_send)
+        ) if not should_prompt_plan_confirm else None
         # 根据轮询阶段决定是否添加完成前缀
         formatted_text = _prepend_completion_header(text_to_send) if add_completion_header else text_to_send
         payload_for_hash = _prepare_model_payload(formatted_text)
@@ -20539,6 +20574,10 @@ async def on_model_quick_reply_all(callback: CallbackQuery) -> None:
                 )
             return
 
+    if _should_block_business_prompt_for_pending_plan_confirm(chat_id):
+        await _answer_pending_plan_confirm_callback(callback)
+        return
+
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": origin_message,
         "ack_immediately": False,
@@ -20630,6 +20669,10 @@ async def on_model_quick_reply_partial(callback: CallbackQuery, state: FSMContex
                 "该消息所属会话已失效，请在最新会话中重试。",
                 reply_markup=_build_worker_main_keyboard(),
             )
+        return
+
+    if _should_block_business_prompt_for_pending_plan_confirm(chat_id):
+        await _answer_pending_plan_confirm_callback(callback)
         return
 
     await state.clear()
@@ -21103,6 +21146,10 @@ async def on_model_quick_reply_partial_supplement(message: Message, state: FSMCo
                 reply_markup=_build_worker_main_keyboard(),
             )
             return
+    if _should_block_business_prompt_for_pending_plan_confirm(chat_id):
+        await state.clear()
+        await message.answer(PLAN_CONFIRM_PENDING_INPUT_NOTICE)
+        return
     dispatch_kwargs: dict[str, Any] = {
         "reply_to": origin_message,
         "ack_immediately": False,

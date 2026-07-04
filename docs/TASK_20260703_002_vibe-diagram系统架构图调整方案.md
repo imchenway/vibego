@@ -87,3 +87,33 @@
 - 绿灯：`python3.11 -m pytest -q tests/test_builtin_skills_injection.py tests/test_vibe_diagram_plugin_distribution.py` → 72 passed。
 - 正向样例：`python3.11 vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py --type system-architecture /Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图_重画复刻版.html` → OK。
 - 反向样例：`python3.11 vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py --type system-architecture /Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图.html` → 预期失败，错误包括“真实 SVG 主画布”“marker-only 节点网格”。
+
+## 10. 2026-07-03 四次修正：排查为什么最新 skill 仍诱导退化文件
+
+用户指出：应该排查 skill 为什么导致 `/Users/david/cckg/tcapp/Back-End/css/docs/TASK_20260703_002_系统架构图.html` 的问题，而不是直接修改生成文件。本轮没有修改该生成文件，改为追溯 skill 规则与门禁。
+
+证据：
+
+1. 退化文件虽然带有 `data-diagram-grammar="system-architecture-presentation"`，也包含 `<svg>` 与 `foreignObject`，因此旧 lint 会通过。
+2. 退化文件的主画布标题是 `主请求流：入口 → SDK → /api/cs/v1/* → Facade → Agent → 数据/兜底`，已经从系统架构图退化为接口/代码流水线。
+3. 退化文件 lane 标题包含 `1. 小程序接入 / SDK 表现层`、`2. HTTP 接入 / Gateway`、`3. 应用层 / 会话编排` 等编号实现分层，说明模型被旧规则里的 007 宏观拓扑/运行时链路口径拉偏。
+4. 本地已安装的 `~/.codex/skills/vibe-diagram/references/system-architecture.md` 与 `~/.agents/skills/...` 在同步前仍含“系统架构图默认优先采用 007 宏观拓扑基线”，与源码中新加的 presentation 版式锁定发生优先级冲突。
+
+根因：
+
+- **规则冲突**：同一 reference 同时写了“presentation 大众架构图模板”和“007 宏观拓扑默认优先”。模型选择了后者，于是生成编号 lane + SDK/API/Facade 的实现流水线。
+- **门禁漏洞**：lint 只拦截无 SVG、无 foreignObject、候选 tab、证据密度等粗粒度问题，没有识别“有 SVG 但语义仍是代码调用链”的伪架构图。
+- **同步窗口**：源码修正后，如果没有重新 `agents-sync`，活跃 native skill 仍可能使用旧 reference。
+
+本次只修 skill/门禁，不修生成文件：
+
+1. `system-architecture.md` 明确：`presentation 版式锁定优先级高于 007 宏观拓扑基线`；007 降级为“内部运行时证据架构”的例外形态。
+2. 普通系统架构图禁止 `1.` / `2.` / `3.` 编号 lane 作为主层标题；SDK 表现层、HTTP 接入、Controller、Facade、Handler、DTO 等实现名只能进详情。
+3. `vibe_diagram_lint.py` 新增三类拦截：画布逻辑宽度过窄、编号实现分层、主画布标题为接口调用链/代码流水线。
+4. 重新同步插件副本与 native skills。
+
+验证：
+
+- `python3.11 -m pytest -q tests/test_builtin_skills_injection.py tests/test_vibe_diagram_plugin_distribution.py` → 74 passed。
+- 退化文件 lint 现在预期失败，错误包括：`presentation 画布过窄`、`不得退化为编号实现分层`、`不得把主画布标题写成接口调用链或代码流水线`。
+- `python3.11 -m vibego_cli agents-sync --source-root /Users/david/hypha/tools/vibego --json` 已同步到 `~/.codex/skills` 与 `~/.agents/skills`。

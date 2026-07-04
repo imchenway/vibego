@@ -103,8 +103,10 @@ def test_deliver_pending_messages_triggers_plan_confirm(monkeypatch: pytest.Monk
         encoding="utf-8",
     )
     bot.SESSION_OFFSETS[str(session_file)] = 0
+    reply_calls: list[dict] = []
 
     async def fake_reply_large_text(chat_id: int, text: str, **kwargs):
+        reply_calls.append(kwargs)
         return text
 
     async def fake_handle_model_response(**kwargs):
@@ -128,6 +130,88 @@ def test_deliver_pending_messages_triggers_plan_confirm(monkeypatch: pytest.Monk
 
     assert delivered is True
     assert confirm_calls == [(chat_id, str(session_file), "<proposed_plan>\nhello\n</proposed_plan>")]
+    assert reply_calls
+    assert reply_calls[-1].get("reply_markup") is None
+    assert reply_calls[-1].get("attachment_reply_markup") is None
+
+
+def test_direct_prompt_blocks_while_plan_confirm_pending(monkeypatch: pytest.MonkeyPatch):
+    """Codex 原生 PlanConfirm 未处理时，普通文本不能继续送入 tmux 菜单。"""
+
+    chat_id = 188
+    token = "pending-plan"
+    session_key = "/tmp/pending-plan.jsonl"
+    bot.PLAN_CONFIRM_SESSIONS[token] = bot.PlanConfirmSession(
+        token=token,
+        chat_id=chat_id,
+        session_key=session_key,
+        user_id=9,
+        created_at=time.monotonic(),
+    )
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = token
+    bot.CHAT_SESSION_MAP[chat_id] = session_key
+
+    message = DummyMessage(chat_id=chat_id)
+    message.from_user = SimpleNamespace(id=9)
+
+    class DummyAiogram:
+        async def send_chat_action(self, chat_id: int, action: str):
+            raise AssertionError("PlanConfirm 待处理时不应发送 typing 或继续派发")
+
+    bot._bot = DummyAiogram()
+
+    async def should_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("PlanConfirm 待处理时不应向 tmux 投递普通文本")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", should_not_dispatch)
+
+    asyncio.run(bot._handle_prompt_dispatch(message, "?"))
+
+    assert message.answers
+    assert "Plan 确认" in message.answers[-1][0]
+    assert token in bot.PLAN_CONFIRM_SESSIONS
+    assert bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] == token
+
+
+def test_quick_reply_all_blocks_while_plan_confirm_pending(monkeypatch: pytest.MonkeyPatch):
+    """计划确认未处理时，旧快捷回复不能把“全部按推荐”送进原生 Yes/No 菜单。"""
+
+    chat_id = 189
+    plan_token = "pending-plan"
+    session_key = "session-current"
+    bot.PLAN_CONFIRM_SESSIONS[plan_token] = bot.PlanConfirmSession(
+        token=plan_token,
+        chat_id=chat_id,
+        session_key=session_key,
+        user_id=9,
+        created_at=time.monotonic(),
+    )
+    bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] = plan_token
+    bot.CHAT_SESSION_MAP[chat_id] = session_key
+    bot.SESSION_QUICK_REPLY_CALLBACK_BINDINGS["quicktok"] = bot.SessionQuickReplyBinding(
+        token="quicktok",
+        task_id="TASK_0300",
+        session_key=session_key,
+    )
+
+    async def should_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("PlanConfirm 待处理时快捷回复不应派发")
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", should_not_dispatch)
+
+    callback = DummyCallback(
+        f"{bot.MODEL_QUICK_REPLY_ALL_SESSION_PREFIX}TASK_0300:quicktok",
+        message=DummyMessage(chat_id=chat_id),
+        user_id=9,
+    )
+
+    asyncio.run(bot.on_model_quick_reply_all(callback))
+
+    assert callback.answers[-1] == ("请先处理 Plan 确认菜单", True)
+    assert callback.message.answers
+    assert "Plan 确认" in callback.message.answers[-1][0]
+    assert plan_token in bot.PLAN_CONFIRM_SESSIONS
+    assert bot.CHAT_ACTIVE_PLAN_CONFIRM_TOKENS[chat_id] == plan_token
 
 
 def test_deliver_pending_messages_skips_plan_confirm_for_normal_message(
@@ -332,7 +416,7 @@ def test_dispatch_prompt_to_model_continues_when_session_ack_fails(monkeypatch: 
 
     asyncio.run(scenario())
 
-    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n\npwd"]
+    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n{bot.TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\npwd"]
     assert 3210 in bot.CHAT_WATCHERS
 
     for coro in created_tasks:
