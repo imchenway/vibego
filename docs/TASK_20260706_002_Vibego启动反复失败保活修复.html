@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>故障排查：Vibego 启动不再反复失败</title>
+  <style>
+    :root{--ink:#102033;--muted:#5a6c80;--paper:#fbfdff;--panel:rgba(255,255,255,.9);--blue:#1f6fb2;--green:#17785a;--amber:#986506;--red:#a63a3a;--violet:#6254ad;--line:#8db3d8;--shadow:0 16px 42px rgba(20,57,92,.085);--radius:22px}
+    *{box-sizing:border-box}html,body{margin:0;overflow-x:hidden}body{color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",Arial,sans-serif;background:radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),linear-gradient(rgba(93,133,173,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(93,133,173,.045) 1px,transparent 1px),linear-gradient(180deg,#fff 0%,#f7fbff 54%,#fbfdff 100%);background-size:auto,auto,28px 28px,28px 28px,auto}.wrap{max-width:1260px;margin:auto;padding:20px 16px 40px}.task{display:inline-flex;padding:6px 10px;border:1px solid rgba(31,111,178,.18);border-radius:999px;background:rgba(255,255,255,.76);color:var(--blue);font-size:12px;font-weight:850}h1{margin:10px 0 8px;font-size:clamp(24px,2.8vw,32px);letter-spacing:-.02em;line-height:1.15}.lead{margin:0 0 18px;color:var(--muted);line-height:1.75}.hero{display:grid;grid-template-columns:1.05fr .95fr;gap:14px;margin-bottom:16px}.card{background:var(--panel);border:1px solid rgba(93,133,173,.22);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}.card h2{margin:0 0 10px;font-size:19px}.card p{margin:0;color:var(--muted);line-height:1.7}.bad{color:var(--red);font-weight:850}.good{color:var(--green);font-weight:850}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric b{display:block;font-size:22px}.metric span{display:block;color:var(--muted);font-size:13px;line-height:1.55}.section{margin-top:18px}.flow{position:relative;display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:16px;align-items:stretch}.node{position:relative;min-height:134px;border:1px solid rgba(141,179,216,.35);background:#fff;border-radius:18px;padding:14px;box-shadow:0 10px 24px rgba(20,57,92,.055)}.node:not(:last-child)::after{content:"";position:absolute;right:-16px;top:50%;width:16px;border-top:2px solid #8db3d8}.node:not(:last-child)::before{content:"";position:absolute;right:-17px;top:calc(50% - 5px);width:10px;height:10px;border-top:2px solid #8db3d8;border-right:2px solid #8db3d8;transform:rotate(45deg);z-index:2}.node h3{margin:0 0 8px;font-size:15px}.node p{margin:0;color:var(--muted);font-size:13px;line-height:1.55}.node.danger{border-color:rgba(166,58,58,.38);background:#fff8f8}.node.warn{border-color:rgba(152,101,6,.35);background:#fffaf0}.node.ok{border-color:rgba(23,120,90,.35);background:#f4fbf8}.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}.list{margin:0;padding-left:18px;color:var(--muted);line-height:1.75}.list strong{color:var(--ink)}.evidence{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border-radius:16px;border:1px solid rgba(93,133,173,.22);background:white}.evidence th,.evidence td{padding:10px 12px;text-align:left;vertical-align:top;border-bottom:1px solid rgba(93,133,173,.16);font-size:13px;line-height:1.55}.evidence th{background:#eef6ff;color:#24415a;font-weight:850}.evidence tr:last-child td{border-bottom:0}code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#f3f7fb;border:1px solid #dce9f4;border-radius:7px;padding:1px 5px}.compare{display:grid;grid-template-columns:1fr 1fr;gap:14px}.rail{display:grid;gap:10px}.step{border-radius:16px;padding:12px;border:1px solid rgba(93,133,173,.2);background:#fff}.step b{display:block}.step span{display:block;color:var(--muted);font-size:13px;line-height:1.55;margin-top:4px}.footer{color:var(--muted);font-size:13px;line-height:1.7}@media(max-width:980px){.hero,.split,.compare{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.flow{grid-template-columns:1fr}.node:not(:last-child)::after,.node:not(:last-child)::before{display:none}}@media(max-width:560px){.grid{grid-template-columns:1fr}.wrap{padding:14px 10px 30px}.card{padding:14px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <span class="task">TASK_20260706_002</span>
+  <h1>故障排查：Vibego 启动不再反复失败</h1>
+  <p class="lead">这次不是“日志误报”。现场显示 worker 在 Telegram 初始握手 30 秒超时后真实退出；修复目标是把偶发代理/Telegram 不可达从“硬失败 + 可重复点击启动”改成“worker 保活 + 后台重试 + 列表保持启动中”。</p>
+
+  <section class="hero">
+    <div class="card">
+      <h2>根因一句话</h2>
+      <p><span class="bad">旧逻辑：</span><code>bot.get_me()</code> 启动前 30 秒不返回就 <code>SystemExit(1)</code>，Master 把状态写回 <code>stopped</code>，用户只能继续点启动，于是反复失败。</p>
+    </div>
+    <div class="card">
+      <h2>修复一句话</h2>
+      <p><span class="good">新逻辑：</span>初始握手失败只降级为 warning，worker 进入带重试的长轮询与后台重试；即使 aiogram <code>start_polling()</code> 启动前 <code>bot.me()</code> 再次遇到网络错误，也保持进程存活。Master 看到 pid + tmux 存活时保持 <code>starting</code>，不再报硬失败。</p>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card metric"><b>2 次</b><span>09:02:50 与 09:03:37 连续启动，均 30 秒后失败。</span></div>
+    <div class="card metric"><b>95660</b><span><code>bot.pid</code> 指向该进程，但现场 <code>ps</code> 已查不到。</span></div>
+    <div class="card metric"><b>1 个 tmux</b><span><code>vibe-vibego</code> 仍残留，形成半启动现场。</span></div>
+    <div class="card metric"><b>starting</b><span>修复后网络恢复前保持启动中，阻止重复启动。</span></div>
+  </section>
+
+  <section class="section card">
+    <h2>排障时序图</h2>
+    <div class="flow" aria-label="启动失败时序">
+      <div class="node"><h3>用户点启动</h3><p>Master 调用 <code>run_bot.sh</code>，写入本次 <code>boot_id</code>。</p></div>
+      <div class="node"><h3>Worker 读取代理</h3><p>日志记录 <code>https_proxy=http://127.0.0.1:6152</code>。</p></div>
+      <div class="node warn"><h3>启动前 get_me</h3><p>旧代码把 Telegram 初始握手作为硬门禁。</p></div>
+      <div class="node danger"><h3>30 秒超时退出</h3><p>旧代码关闭 session 并 <code>SystemExit(1)</code>，pid 死亡。</p></div>
+      <div class="node ok"><h3>修复后保活</h3><p>进入 polling 与后台重试；恢复后补同步菜单和主键盘。</p></div>
+    </div>
+  </section>
+
+  <section class="section split">
+    <div class="card">
+      <h2>Before：为什么会反复失败</h2>
+      <ul class="list">
+        <li><strong>硬门禁：</strong>启动前 Telegram 握手失败直接退出。</li>
+        <li><strong>状态回落：</strong>Master 看到 pid 死亡，把项目写回 <code>stopped</code>。</li>
+        <li><strong>交互误导：</strong>列表重新出现“启动”，用户继续点击，进入同一失败循环。</li>
+        <li><strong>半启动残留：</strong>模型 tmux 可能还在，但 Telegram worker 已死。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>After：新的状态机</h2>
+      <ul class="list">
+        <li><strong>fail-soft：</strong>初始握手失败只 warning；长轮询启动前网络错误继续重试，不退出 worker。</li>
+        <li><strong>后台重试：</strong>周期性重试 <code>ensure_telegram_connectivity()</code>。</li>
+        <li><strong>补偿同步：</strong>恢复后再同步 Bot 命令、聊天菜单、自动主键盘。</li>
+        <li><strong>防重复启动：</strong>pid + tmux 存活时 Master 保持 <code>starting</code>。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section card">
+    <h2>证据链</h2>
+    <table class="evidence">
+      <thead><tr><th>证据</th><th>路径与锚点</th><th>结论</th></tr></thead>
+      <tbody>
+        <tr><td>连续失败</td><td><code>/Users/david/.config/vibego/logs/codex/vibego/run_bot.log:3406-3418</code></td><td>两个 boot_id 均在 30 秒 Telegram 握手处失败。</td></tr>
+        <tr><td>pid 已死</td><td><code>/Users/david/.config/vibego/logs/codex/vibego/bot.pid</code> + <code>ps -p 95660</code></td><td>worker 进程真实退出，不是 Master 误判。</td></tr>
+        <tr><td>tmux 残留</td><td><code>tmux ls</code>：<code>vibe-vibego</code></td><td>模型会话残留，Telegram worker 断开。</td></tr>
+        <tr><td>代码硬门禁</td><td><code>bot.py</code>：<code>ensure_telegram_connectivity</code>、<code>main</code></td><td>修改前握手失败会导致 <code>SystemExit(1)</code>。</td></tr>
+        <tr><td>修复入口</td><td><code>bot.py</code>：<code>_retry_worker_telegram_startup_until_ready</code>、<code>_start_worker_polling_with_retry</code>；<code>master.py</code>：<code>run_worker</code></td><td>保活、后台重试、长轮询启动重试、Master 保持启动中。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section compare">
+    <div class="card">
+      <h2>改动影响</h2>
+      <div class="rail">
+        <div class="step"><b>worker 生命周期</b><span>网络抖动时不再立刻退出；本地 DB/并行会话/Codex trust 初始化仍保持硬失败边界。</span></div>
+        <div class="step"><b>Master 项目列表</b><span>pid + tmux 存活但握手未完成时显示启动中/停止，避免重复启动。</span></div>
+        <div class="step"><b>Telegram UI 同步</b><span>初始失败时延后，后台连通后补做命令、菜单、主键盘。</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>验证矩阵</h2>
+      <div class="rail">
+        <div class="step"><b>RED</b><span>新增用例先失败：main 退出、菜单/命令网络异常抛出、run_worker 抛握手超时，以及 aiogram start_polling 启动前 bot.me 网络异常会直接抛出。</span></div>
+        <div class="step"><b>GREEN</b><span>相关回归 88 passed；全量回归 1136 passed，6 个既有 warning。</span></div>
+        <div class="step"><b>待最终收口</b><span>运行相关回归、语法检查、doctor 与全量测试后再宣称完成。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section card footer">
+    <h2>回滚</h2>
+    <p>若需回滚，恢复 <code>bot.py::main()</code> 初始 Telegram 握手失败后退出，移除 <code>_start_worker_polling_with_retry()</code> 的长轮询网络重试，并恢复 <code>master.py::run_worker()</code> 对健康检查超时直接抛错。回滚后会重新暴露“反复启动、反复失败”。</p>
+  </section>
+</main>
+</body>
+</html>

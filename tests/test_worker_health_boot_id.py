@@ -193,9 +193,9 @@ async def test_run_worker_keeps_starting_when_health_timeout_but_pid_alive(
     monkeypatch.setattr(manager, "_health_check_worker", AsyncMock(return_value="握手超时"))
     monkeypatch.setattr(manager, "_pid_alive", lambda pid: pid == 12345)
 
-    with pytest.raises(RuntimeError, match="握手超时"):
-        await manager.run_worker(cfg)
+    chosen = await manager.run_worker(cfg)
 
+    assert chosen == "codex"
     state = manager.state_store.data[cfg.project_slug]
     assert state.status == "starting"
     assert state.model == "codex"

@@ -7,7 +7,7 @@ import subprocess
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import InlineKeyboardMarkup, MenuButtonCommands, ReplyKeyboardMarkup, KeyboardButton
 
 import bot
@@ -30,6 +30,24 @@ def test_worker_menu_button_handles_bad_request(caplog):
     with caplog.at_level("WARNING"):
         asyncio.run(bot._ensure_worker_menu_button(mock_bot))
     assert mock_bot.set_chat_menu_button.await_count == 1
+
+
+
+
+def test_worker_menu_button_handles_network_error(caplog):
+    mock_bot = AsyncMock()
+    mock_bot.set_chat_menu_button.side_effect = TelegramNetworkError(method=None, message="proxy timeout")
+    with caplog.at_level("WARNING"):
+        asyncio.run(bot._ensure_worker_menu_button(mock_bot))
+    assert mock_bot.set_chat_menu_button.await_count == 1
+
+
+def test_worker_commands_stop_after_startup_network_error(caplog):
+    mock_bot = AsyncMock()
+    mock_bot.set_my_commands.side_effect = TelegramNetworkError(method=None, message="proxy timeout")
+    with caplog.at_level("WARNING"):
+        asyncio.run(bot._ensure_bot_commands(mock_bot))
+    assert mock_bot.set_my_commands.await_count == 1
 
 
 def test_worker_keyboard_structure(monkeypatch):
@@ -830,6 +848,7 @@ def test_worker_broadcast_triggers_start_to_targets(tmp_path, monkeypatch):
 
     fake_task_view = AsyncMock(return_value=("任务列表", None))
     monkeypatch.setattr(bot, "_build_task_list_view", fake_task_view)
+    monkeypatch.setattr(bot, "ENV_ISSUES", [])
 
     mock_bot = AsyncMock()
     asyncio.run(bot._broadcast_worker_keyboard(mock_bot))

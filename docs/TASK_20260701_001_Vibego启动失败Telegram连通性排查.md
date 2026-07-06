@@ -72,3 +72,18 @@ ps -p 87299 -o pid,ppid,stat,etime,command
 
 - TODO：无法回放 2026-06-30 23:13:07 当刻代理端口是否监听、上游代理是否可用。
 - TODO：未做源码硬化；若要把“偶发代理瞬断”从启动失败变成启动期重试，需要另开实现任务并执行 TDD。
+
+## 8. 2026-07-06 复发与硬化修复
+
+2026-07-06 用户再次反馈“反复启动，反复失败”。本次现场与 2026-07-01 的直接故障点一致，但影响扩大为连续两次启动均在 30 秒 Telegram 初始握手处失败并退出：
+
+- `/Users/david/.config/vibego/logs/codex/vibego/run_bot.log:3406-3410`：boot_id=`413bc17ef5184247bd50734f0d8fe680`，09:02:50 使用 `https_proxy=http://127.0.0.1:6152`，09:03:20 握手失败。
+- `/Users/david/.config/vibego/logs/codex/vibego/run_bot.log:3414-3418`：boot_id=`aa49d3e9a86b4de5ac53cfe99880b335`，09:03:37 再次启动，09:04:07 再次握手失败。
+- `/Users/david/.config/vibego/logs/codex/vibego/bot.pid` 指向 `95660`，但 `ps -p 95660` 无进程；`tmux ls` 仍有 `vibe-vibego`；`master_state.json` 中 `vibego.status=stopped`。
+
+本轮已把第 5 节第 4 条“后续代码硬化”落地为源码修复：
+
+1. `bot.py` 初始 Telegram 握手失败不再 `SystemExit(1)`；改为保持 worker 存活、进入 `dp.start_polling()`，并启动后台重试。
+2. `bot.py` 启动期命令/菜单/自动 `/start` 同步遇网络错误 fail-soft；初始握手失败时先跳过，后台恢复后补做。
+3. `master.py` 在 worker pid 与 tmux 主会话仍存活但 Telegram 握手暂未完成时，保持 `starting`，不再向用户报硬失败并回到可重复启动状态。
+4. 详细实现与 TDD 记录见 `docs/TASK_20260706_002_Vibego启动反复失败保活修复.md`。

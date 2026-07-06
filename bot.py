@@ -357,6 +357,10 @@ PROMPT_DELIVERY_CONFIRM_ENABLED = _env_bool("PROMPT_DELIVERY_CONFIRM_ENABLED", T
 PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS = max(_env_float("PROMPT_DELIVERY_CONFIRM_TIMEOUT_SECONDS", 1.2), 0.0)
 PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS = max(_env_float("PROMPT_DELIVERY_CONFIRM_POLL_INTERVAL_SECONDS", 0.2), 0.0)
 PROMPT_DELIVERY_CONFIRM_RETRY_ENABLED = _env_bool("PROMPT_DELIVERY_CONFIRM_RETRY_ENABLED", True)
+WORKER_TELEGRAM_CONNECTIVITY_RETRY_INTERVAL_SECONDS = max(
+    _env_float("WORKER_TELEGRAM_CONNECTIVITY_RETRY_INTERVAL_SECONDS", 10.0),
+    0.1,
+)
 # Telegram 消息补偿轮询：每条入站消息触发一次，按 1/3/10/30/90 分钟检测是否有遗漏输出。
 MESSAGE_RECOVERY_POLL_DELAYS_SECONDS: tuple[float, ...] = (60.0, 180.0, 600.0, 1800.0, 5400.0)
 SEND_RETRY_ATTEMPTS = int(os.environ.get("SEND_RETRY_ATTEMPTS", "3"))
@@ -519,6 +523,16 @@ REQUEST_INPUT_MAX_QUESTIONS = max(_env_int("REQUEST_INPUT_MAX_QUESTIONS", 20), 1
 REQUEST_INPUT_MAX_OPTIONS = max(_env_int("REQUEST_INPUT_MAX_OPTIONS", 10), 1)
 REQUEST_INPUT_SUBMIT_AUTO_RETRY_MAX = max(_env_int("REQUEST_INPUT_SUBMIT_AUTO_RETRY_MAX", 1), 0)
 ENABLE_REQUEST_USER_INPUT_UI = _env_bool("ENABLE_REQUEST_USER_INPUT_UI", True)
+REQUEST_INPUT_NATIVE_MENU_PROBE_LINES = max(_env_int("REQUEST_INPUT_NATIVE_MENU_PROBE_LINES", 120), 20)
+REQUEST_INPUT_NATIVE_KEY_GAP_SECONDS = max(_env_float("REQUEST_INPUT_NATIVE_KEY_GAP_SECONDS", 0.08), 0.0)
+REQUEST_INPUT_NATIVE_OUTPUT_TIMEOUT_SECONDS = max(
+    _env_float("REQUEST_INPUT_NATIVE_OUTPUT_TIMEOUT_SECONDS", 8.0),
+    0.1,
+)
+REQUEST_INPUT_NATIVE_OUTPUT_POLL_INTERVAL_SECONDS = max(
+    _env_float("REQUEST_INPUT_NATIVE_OUTPUT_POLL_INTERVAL_SECONDS", 0.2),
+    0.01,
+)
 # Plan 结束确认：透传为 Telegram 按钮（最小改造）
 PLAN_CONFIRM_CALLBACK_PREFIX = "pcf:"
 PLAN_CONFIRM_ACTION_YES = "yes"
@@ -3457,6 +3471,44 @@ def _session_contains_user_prompt_since(
             if _delivery_text_matches_prompt(text, raw_prompt, dispatch_text):
                 return True
 
+    return False
+
+
+def _session_contains_function_call_output_since(
+    session_path: Path,
+    *,
+    start_offset: int,
+    call_id: str,
+) -> bool:
+    """从指定字节偏移后检查 session JSONL 是否出现对应工具调用结果。"""
+
+    normalized_call_id = (call_id or "").strip()
+    if not normalized_call_id:
+        return False
+    try:
+        with open(session_path, "rb") as fh:
+            fh.seek(max(int(start_offset or 0), 0))
+            raw = fh.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return False
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        if payload.get("type") != "function_call_output":
+            continue
+        if str(payload.get("call_id") or "").strip() == normalized_call_id:
+            return True
     return False
 
 
@@ -16897,6 +16949,206 @@ def _native_plan_confirm_target_cwd(dispatch_context: Optional[ParallelDispatchC
     return (CODEX_WORKDIR or str(PRIMARY_WORKDIR or ROOT_DIR_PATH)).strip()
 
 
+def _should_drive_native_request_input(session: RequestInputSession) -> bool:
+    """判断 request_user_input 是否应走 Codex TUI 原生菜单，而不是普通 prompt 回填。"""
+
+    return _is_codex_model() and (session.tool_name or "").strip() == "request_user_input"
+
+
+def _native_request_input_tmux_session(session: RequestInputSession) -> str:
+    """返回 request_user_input 原生菜单对应的 tmux 会话名。"""
+
+    dispatch_context = session.parallel_dispatch_context
+    if isinstance(dispatch_context, ParallelDispatchContext):
+        return (dispatch_context.tmux_session or "").strip()
+    return (TMUX_SESSION or "").strip()
+
+
+def _request_input_selected_option_indexes_in_order(session: RequestInputSession) -> Optional[List[int]]:
+    """按题目顺序提取已选择的原生选项序号；自定义/未答场景返回 None。"""
+
+    selected_indexes: List[int] = []
+    for question in session.questions:
+        selected_index = session.selected_option_indexes.get(question.question_id)
+        if selected_index is None:
+            return None
+        if selected_index == REQUEST_INPUT_CUSTOM_OPTION_INDEX:
+            return None
+        if not isinstance(selected_index, int):
+            return None
+        if selected_index < 0 or selected_index >= len(question.options):
+            return None
+        selected_indexes.append(selected_index)
+    return selected_indexes
+
+
+def _build_native_request_input_option_keys(selected_indexes: Sequence[int]) -> Tuple[str, ...]:
+    """将选项序号转换为 Codex TUI 原生菜单按键序列。"""
+
+    keys: List[str] = []
+    for selected_index in selected_indexes:
+        keys.extend("Down" for _ in range(max(int(selected_index), 0)))
+        keys.append("C-m")
+    return tuple(keys)
+
+
+def _is_codex_request_input_menu(raw_output: str, session: RequestInputSession) -> bool:
+    """判断 tmux 最近输出是否仍停在 Codex 原生 request_user_input 选项菜单。
+
+    fail-closed 原则：只有看到当前 request_user_input 的题干或候选选项，才允许发送
+    Down/Enter，避免旧 Telegram 按钮在普通输入框里误触发命令。
+    """
+
+    text = strip_ansi(normalize_newlines(raw_output or "")).lower()
+    if not text.strip():
+        return False
+    if re.search(r"questions?\s+\d+\s*/\s*\d+\s+answered", text):
+        return False
+
+    matched_question = False
+    matched_options = 0
+    total_options = 0
+    for question in session.questions:
+        question_text = (question.question or "").strip().lower()
+        header_text = (question.header or "").strip().lower()
+        if question_text and question_text in text:
+            matched_question = True
+        elif header_text and header_text in text:
+            matched_question = True
+        for option in question.options:
+            total_options += 1
+            option_label = (option.label or "").strip().lower()
+            if option_label and option_label in text:
+                matched_options += 1
+
+    required_options = min(2, max(total_options, 1))
+    if matched_question and matched_options >= required_options:
+        return True
+    # 有些终端宽度下题干可能被截断；至少两个候选项同时出现时也视为菜单匹配。
+    return matched_options >= max(2, required_options)
+
+
+async def _send_native_request_input_key_sequence(tmux_session: str, keys: Sequence[str]) -> None:
+    """向 Codex TUI 发送 request_user_input 选项按键序列。"""
+
+    for index, key in enumerate(keys):
+        await asyncio.to_thread(tmux_send_key, tmux_session, key)
+        if REQUEST_INPUT_NATIVE_KEY_GAP_SECONDS > 0 and index < len(keys) - 1:
+            await asyncio.sleep(REQUEST_INPUT_NATIVE_KEY_GAP_SECONDS)
+
+
+async def _wait_for_native_request_input_output(
+    session_path: Path,
+    *,
+    call_id: str,
+    start_offset: int,
+) -> bool:
+    """等待 Codex session JSONL 出现对应 request_user_input 的 function_call_output。"""
+
+    timeout = max(float(REQUEST_INPUT_NATIVE_OUTPUT_TIMEOUT_SECONDS), 0.1)
+    interval = max(float(REQUEST_INPUT_NATIVE_OUTPUT_POLL_INTERVAL_SECONDS), 0.01)
+    deadline = time.monotonic() + timeout
+    while True:
+        if _session_contains_function_call_output_since(
+            session_path,
+            start_offset=start_offset,
+            call_id=call_id,
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
+
+
+async def _drive_native_request_input_selection(
+    session: RequestInputSession,
+) -> tuple[bool, Optional[Path], Optional[str]]:
+    """驱动 Codex TUI 原生 request_user_input 菜单，并确认工具结果写入 JSONL。"""
+
+    selected_indexes = _request_input_selected_option_indexes_in_order(session)
+    if selected_indexes is None:
+        return False, None, "Codex 原生 request_user_input 暂不支持从 Telegram 提交未答题或自定义决策，请在终端菜单中手动选择。"
+
+    tmux_session = _native_request_input_tmux_session(session)
+    if not tmux_session:
+        return False, None, "缺少 tmux 会话名，无法驱动终端 request_user_input 选项菜单。"
+
+    session_key = (session.session_key or "").strip()
+    if not session_key:
+        return False, None, "缺少 Codex session 文件，无法确认 request_user_input 是否已被模型接收。"
+    session_path = resolve_path(session_key)
+    if not session_path.exists():
+        return False, None, "Codex session 文件不存在，无法确认 request_user_input 是否已被模型接收。"
+
+    try:
+        raw_output = await asyncio.to_thread(
+            _capture_tmux_recent_lines,
+            REQUEST_INPUT_NATIVE_MENU_PROBE_LINES,
+            tmux_session=tmux_session,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+        return False, None, f"读取终端 request_user_input 菜单失败：{exc}"
+
+    if not _is_codex_request_input_menu(raw_output, session):
+        return False, None, "终端不在 request_user_input 选项菜单，已中止以避免误操作。"
+
+    keys = _build_native_request_input_option_keys(selected_indexes)
+    if not keys:
+        return False, None, "缺少可发送的 request_user_input 选项按键。"
+
+    start_offset = _session_file_size(session_path)
+    try:
+        await _send_native_request_input_key_sequence(tmux_session, keys)
+    except subprocess.CalledProcessError as exc:
+        return False, None, f"发送终端 request_user_input 选项按键失败：{exc}"
+
+    output_confirmed = await _wait_for_native_request_input_output(
+        session_path,
+        call_id=session.call_id,
+        start_offset=start_offset,
+    )
+    if not output_confirmed:
+        return False, None, "已发送终端选项按键，但未在 Codex session 中确认对应 function_call_output，请查看终端状态。"
+    return True, session_path, None
+
+
+async def _restart_request_input_watcher_after_native_submit(
+    session: RequestInputSession,
+    session_path: Path,
+) -> None:
+    """原生 request_user_input 被终端接收后，立即恢复 watcher，避免等待长轮询。"""
+
+    parallel_task_id = _normalize_task_id(session.parallel_task_id)
+    dispatch_context = session.parallel_dispatch_context
+    if isinstance(dispatch_context, ParallelDispatchContext) or parallel_task_id:
+        task_id = parallel_task_id or _normalize_task_id(getattr(dispatch_context, "task_id", None))
+        if task_id:
+            await _start_parallel_task_watcher(
+                task_id,
+                session.chat_id,
+                session_path,
+                start_in_long_poll=False,
+            )
+        return
+
+    prev_watcher = CHAT_WATCHERS.get(session.chat_id)
+    if prev_watcher is not None and not prev_watcher.done():
+        prev_watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await prev_watcher
+    CHAT_SESSION_MAP[session.chat_id] = str(session_path)
+    CHAT_WATCHERS[session.chat_id] = asyncio.create_task(
+        _watch_and_notify(
+            session.chat_id,
+            session_path,
+            max_wait=WATCH_MAX_WAIT,
+            interval=WATCH_INTERVAL,
+            start_in_long_poll=False,
+        )
+    )
+    await asyncio.sleep(0)
+
+
 def _same_session_file(candidate: Path, session_key: str) -> bool:
     """比较候选文件是否就是旧 session，兼容 session_key 不是文件路径的历史数据。"""
 
@@ -21406,30 +21658,45 @@ async def _submit_request_input_session(
 ) -> bool:
     """将当前 request_user_input 会话答案推送到模型。"""
 
-    output_payload = _build_request_input_output_payload(session)
-    prompt = _build_request_input_submission_prompt(
-        session.call_id,
-        output_payload,
-        tool_name=session.tool_name,
-        question_context=_build_request_input_question_context(session),
-    )
     _remember_chat_active_user(session.chat_id, actor_user_id)
-    dispatch_kwargs: dict[str, Any] = {
-        "reply_to": reply_to,
-        "ack_immediately": False,
-        "send_mode": _resolve_business_prompt_send_mode(),
-    }
-    dispatch_context = session.parallel_dispatch_context
-    parallel_task_id = _normalize_task_id(session.parallel_task_id)
-    if not isinstance(dispatch_context, ParallelDispatchContext) and parallel_task_id:
-        _resolved_task_id, dispatch_context = await _resolve_parallel_dispatch_context(parallel_task_id, None)
-    if isinstance(dispatch_context, ParallelDispatchContext):
-        dispatch_kwargs["dispatch_context"] = dispatch_context
-    success, session_path = await _dispatch_prompt_to_model(
-        session.chat_id,
-        prompt,
-        **dispatch_kwargs,
-    )
+
+    if _should_drive_native_request_input(session):
+        success, session_path, error_message = await _drive_native_request_input_selection(session)
+        if not success:
+            if error_message:
+                await _reply_to_chat(
+                    session.chat_id,
+                    error_message,
+                    reply_to=reply_to,
+                    parse_mode=None,
+                )
+            return False
+        if session_path is not None:
+            await _restart_request_input_watcher_after_native_submit(session, session_path)
+    else:
+        output_payload = _build_request_input_output_payload(session)
+        prompt = _build_request_input_submission_prompt(
+            session.call_id,
+            output_payload,
+            tool_name=session.tool_name,
+            question_context=_build_request_input_question_context(session),
+        )
+        dispatch_kwargs: dict[str, Any] = {
+            "reply_to": reply_to,
+            "ack_immediately": False,
+            "send_mode": _resolve_business_prompt_send_mode(),
+        }
+        dispatch_context = session.parallel_dispatch_context
+        parallel_task_id = _normalize_task_id(session.parallel_task_id)
+        if not isinstance(dispatch_context, ParallelDispatchContext) and parallel_task_id:
+            _resolved_task_id, dispatch_context = await _resolve_parallel_dispatch_context(parallel_task_id, None)
+        if isinstance(dispatch_context, ParallelDispatchContext):
+            dispatch_kwargs["dispatch_context"] = dispatch_context
+        success, session_path = await _dispatch_prompt_to_model(
+            session.chat_id,
+            prompt,
+            **dispatch_kwargs,
+        )
     if not success:
         return False
 
@@ -26880,6 +27147,13 @@ async def _ensure_bot_commands(bot: Bot) -> None:
                 exc,
                 extra={**_session_extra(), "scope": label},
             )
+        except (TelegramNetworkError, TelegramRetryAfter, ClientError, asyncio.TimeoutError, TimeoutError) as exc:
+            worker_log.warning(
+                "设置 Bot 命令网络异常，跳过启动期命令同步：%s",
+                exc,
+                extra={**_session_extra(), "scope": label},
+            )
+            return
         else:
             worker_log.info(
                 "Bot 命令已同步",
@@ -26899,60 +27173,120 @@ async def _ensure_worker_menu_button(bot: Bot) -> None:
             exc,
             extra=_session_extra(),
         )
+    except (TelegramNetworkError, TelegramRetryAfter, ClientError, asyncio.TimeoutError, TimeoutError) as exc:
+        worker_log.warning(
+            "设置聊天菜单网络异常，跳过启动期菜单同步：%s",
+            exc,
+            extra=_session_extra(),
+        )
     else:
         worker_log.info(
             "聊天菜单已同步",
             extra={**_session_extra(), "text": WORKER_MENU_BUTTON_TEXT},
         )
 
+
+async def _sync_worker_startup_telegram_state(bot: Bot) -> None:
+    """同步启动期 Telegram 命令、菜单与主键盘；网络异常只降级，不退出 worker。"""
+
+    await _ensure_bot_commands(bot)
+    await _ensure_worker_menu_button(bot)
+    await _broadcast_worker_keyboard(bot)
+
+
+async def _retry_worker_telegram_startup_until_ready(bot: Bot) -> None:
+    """初始握手失败后后台重试，恢复后补做启动期 Telegram 同步。"""
+
+    while True:
+        await asyncio.sleep(WORKER_TELEGRAM_CONNECTIVITY_RETRY_INTERVAL_SECONDS)
+        try:
+            await ensure_telegram_connectivity(bot)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            worker_log.warning(
+                "Telegram 连通性后台重试仍失败：%s",
+                exc,
+                extra=_session_extra(),
+            )
+            continue
+        await _sync_worker_startup_telegram_state(bot)
+        return
+
+
+async def _start_worker_polling_with_retry(bot: Bot) -> None:
+    """启动 aiogram 长轮询；启动前 bot.me() 网络失败时保持进程存活并重试。"""
+
+    while True:
+        try:
+            await dp.start_polling(bot)
+            return
+        except asyncio.CancelledError:
+            raise
+        except (TelegramNetworkError, TelegramRetryAfter, ClientError, asyncio.TimeoutError, TimeoutError) as exc:
+            worker_log.warning(
+                "Telegram 长轮询启动/运行网络异常，将保持 worker 存活并重试：%s",
+                exc,
+                extra=_session_extra(),
+            )
+            await asyncio.sleep(WORKER_TELEGRAM_CONNECTIVITY_RETRY_INTERVAL_SECONDS)
+
 async def main():
     global _bot, CHAT_LONG_POLL_LOCK
     # 初始化长轮询锁
     CHAT_LONG_POLL_LOCK = asyncio.Lock()
     _bot = build_bot()
+    connectivity_retry_task: Optional[asyncio.Task[None]] = None
+    telegram_ready = True
     try:
-        await ensure_telegram_connectivity(_bot)
-    except Exception as exc:
-        worker_log.error("Telegram 连通性检查失败：%s", exc, extra=_session_extra())
-        if _bot:
-            await _bot.session.close()
-        raise SystemExit(1)
-    try:
-        await TASK_SERVICE.initialize()
-    except Exception as exc:
-        worker_log.error("任务数据库初始化失败：%s", exc, extra=_session_extra())
-        if _bot:
-            await _bot.session.close()
-        raise SystemExit(1)
-    try:
-        await COMMAND_SERVICE.initialize()
-    except Exception as exc:
-        worker_log.error("命令数据库初始化失败：%s", exc, extra=_session_extra())
-        if _bot:
-            await _bot.session.close()
-        raise SystemExit(1)
-    try:
-        await PARALLEL_SESSION_STORE.initialize()
-    except Exception as exc:
-        worker_log.error("并行会话数据库初始化失败：%s", exc, extra=_session_extra())
-        if _bot:
-            await _bot.session.close()
-        raise SystemExit(1)
-    try:
-        await _reconcile_codex_trusted_paths()
-    except Exception as exc:  # noqa: BLE001
-        worker_log.warning("Codex trusted 路径启动对账失败：%s", exc, extra=_session_extra())
-    try:
-        await _ensure_primary_workdir_codex_trust()
-    except Exception as exc:  # noqa: BLE001
-        worker_log.warning("主项目目录 Codex trusted 检查失败：%s", exc, extra=_session_extra())
-    await _ensure_bot_commands(_bot)
-    await _ensure_worker_menu_button(_bot)
-    await _broadcast_worker_keyboard(_bot)
-
-    try:
-        await dp.start_polling(_bot)
+        try:
+            await ensure_telegram_connectivity(_bot)
+        except Exception as exc:
+            telegram_ready = False
+            worker_log.warning(
+                "Telegram 初始连通性检查失败，将保持 worker 存活并交给长轮询/后台重试：%s",
+                exc,
+                extra=_session_extra(),
+            )
+            connectivity_retry_task = asyncio.create_task(
+                _retry_worker_telegram_startup_until_ready(_bot)
+            )
+        try:
+            await TASK_SERVICE.initialize()
+        except Exception as exc:
+            worker_log.error("任务数据库初始化失败：%s", exc, extra=_session_extra())
+            raise SystemExit(1)
+        try:
+            await COMMAND_SERVICE.initialize()
+        except Exception as exc:
+            worker_log.error("命令数据库初始化失败：%s", exc, extra=_session_extra())
+            raise SystemExit(1)
+        try:
+            await PARALLEL_SESSION_STORE.initialize()
+        except Exception as exc:
+            worker_log.error("并行会话数据库初始化失败：%s", exc, extra=_session_extra())
+            raise SystemExit(1)
+        try:
+            await _reconcile_codex_trusted_paths()
+        except Exception as exc:  # noqa: BLE001
+            worker_log.warning("Codex trusted 路径启动对账失败：%s", exc, extra=_session_extra())
+        try:
+            await _ensure_primary_workdir_codex_trust()
+        except Exception as exc:  # noqa: BLE001
+            worker_log.warning("主项目目录 Codex trusted 检查失败：%s", exc, extra=_session_extra())
+        if telegram_ready:
+            await _sync_worker_startup_telegram_state(_bot)
+        else:
+            worker_log.warning(
+                "跳过启动期 Bot 命令/菜单/主键盘同步，等待 Telegram 后台重试恢复。",
+                extra=_session_extra(),
+            )
+        await _start_worker_polling_with_retry(_bot)
     finally:
+        if connectivity_retry_task is not None:
+            connectivity_retry_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await connectivity_retry_task
         if _bot:
             await _bot.session.close()
 

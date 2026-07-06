@@ -2646,6 +2646,13 @@ class MasterManager:
                     status=next_status,
                     boot_id=boot_id if next_status == "starting" else "",
                 )
+                if next_status == "starting":
+                    log.warning(
+                        "worker Telegram 握手暂未完成，但进程与 tmux 均存活，保持启动中等待后台重试: %s",
+                        health_issue,
+                        extra={"project": cfg.project_slug, "model": target_model},
+                    )
+                    return target_model
             else:
                 self.state_store.update(cfg.project_slug, status="stopped", boot_id="")
             log.error(

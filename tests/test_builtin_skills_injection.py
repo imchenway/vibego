@@ -1185,7 +1185,7 @@ def test_vibe_diagram_system_architecture_has_architecture_archetype_and_evidenc
     assert "## 大众系统架构 archetype 模板" in system_text
     assert "外部入口 rail" in system_text
     assert "用户/渠道入口必须画成左侧竖向 rail" in system_text
-    assert "核心应用层必须是主视觉中心" in system_text
+    assert "核心应用/服务层必须是主视觉中心" in system_text
     assert "能力支撑层必须用图标 + 短标签" in system_text
     assert "数据层必须区分知识库、会话数据、用户数据、运营数据" in system_text
     assert "基础设施层必须横向铺成底座" in system_text
@@ -1214,6 +1214,149 @@ def test_vibe_diagram_system_architecture_locks_polished_presentation_micro_rule
     assert "如果读者会问“这个箭头指向哪里”，必须改名或重连" in system_text
     assert "浏览器标注反馈默认只修改用户选中区域及直接相邻关系" in system_text
     assert "横向滚动条、节点内滚动条、文字溢出、图标/文案未居中、箭头穿字、孤立箭头标签均为失败" in system_text
+
+
+def test_vibe_diagram_system_architecture_v6_router_contract_is_documented() -> None:
+    """系统架构 reference 必须固化 v6 路由器，而不是继续只描述某个固定业务 archetype。"""
+
+    core_text = _read_vibe_diagram_core()
+    system_text = _read_vibe_diagram_reference("system-architecture.md")
+
+    assert "系统架构图命中后必须进入 `references/system-architecture.md` 的 v6 路由器" in core_text
+    assert "## 系统架构图 v6 路由器" in system_text
+    assert "C4 主线" in system_text
+    for selected_view in ("context", "container", "component", "deployment"):
+        assert selected_view in system_text
+    for specialty in (
+        "logical",
+        "data-architecture",
+        "data-flow",
+        "api-integration",
+        "event-driven",
+        "network",
+        "security",
+        "identity",
+        "resilience",
+        "observability",
+        "ci-cd",
+    ):
+        assert specialty in system_text
+    for handoff in ("business-architecture", "domain-model", "er", "state-machine", "sequence"):
+        assert handoff in system_text
+    assert "selected_view=" in system_text
+    assert "data-system-arch-view" in system_text
+    assert "data-routing-confidence" in system_text
+    assert "低于 0.45" in system_text
+    assert "槽位可变" in system_text
+    assert "不要把所有模板混入一张图" in system_text
+    assert "不要把客服 / Agent / RAG / LLM / SDK / Gateway 等词当作默认业务内容" in system_text
+
+
+def test_vibe_diagram_system_architecture_lint_requires_v6_diagramspec_attrs(
+    tmp_path: Path,
+) -> None:
+    """v6 落地后，普通系统架构图必须带路由后的机读 DiagramSpec 属性。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    no_spec_html = tmp_path / "no_v6_spec.html"
+    no_spec_html.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation">
+          <svg viewBox="0 0 1500 860" aria-label="系统架构图">
+            <foreignObject x="0" y="0" width="260" height="90">
+              <div xmlns="http://www.w3.org/1999/xhtml" class="node-content">入口 接入 用户 渠道</div>
+            </foreignObject>
+            <foreignObject x="320" y="0" width="260" height="90">
+              <div xmlns="http://www.w3.org/1999/xhtml" class="node-content">应用 服务 能力支撑 数据 基础设施 管理 运维</div>
+            </foreignObject>
+            <path data-flow="主请求流"></path><path data-flow="数据读写流"></path>
+          </svg>
+          <section>入口 接入 用户 渠道 应用 服务 能力 支撑 数据 数据库 基础设施 云 存储 网络 安全 监控 管理 运维 权限 审计 评估 主请求流</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(no_spec_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "系统架构图必须声明 data-system-arch-view" in result.stdout
+    assert "系统架构图必须声明 data-routing-confidence" in result.stdout
+
+
+def test_vibe_diagram_system_architecture_lint_rejects_mixed_all_template_router_canvas(
+    tmp_path: Path,
+) -> None:
+    """系统架构产物不能把 C4、专项扩展和跨图型转交全部混进同一张最终架构图。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    mixed_html = tmp_path / "mixed_all_templates.html"
+    mixed_html.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation"
+              data-system-arch-view="container"
+              data-routing-confidence="0.86">
+          <svg viewBox="0 0 1500 860" aria-label="系统架构图">
+            <foreignObject x="0" y="0" width="320" height="100">
+              <div xmlns="http://www.w3.org/1999/xhtml" class="node-content">Context Container Component Deployment Logical Data Architecture Data Flow API Integration Event-driven Network Security Identity Resilience Observability CI/CD Business Architecture Domain Model ER State Machine Sequence</div>
+            </foreignObject>
+            <path data-flow="主请求流"></path><path data-flow="数据读写流"></path>
+          </svg>
+          <section>入口 接入 用户 渠道 应用 服务 能力 支撑 数据 数据库 基础设施 云 存储 网络 安全 监控 管理 运维 权限 审计 评估 主请求流</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(mixed_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "不要把 C4 主线、专项扩展和跨图型转交全部混入同一张最终架构图" in result.stdout
+
+
+def test_vibe_diagram_system_architecture_lint_rejects_unattributed_fixed_business_defaults(
+    tmp_path: Path,
+) -> None:
+    """模板槽位化后，客服/Agent/RAG/LLM 等词不能作为无来源默认内容出现在普通架构图。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    fixed_html = tmp_path / "fixed_business_defaults.html"
+    fixed_html.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation"
+              data-system-arch-view="container"
+              data-routing-confidence="0.91">
+          <svg viewBox="0 0 1500 860" aria-label="系统架构图">
+            <foreignObject x="0" y="0" width="280" height="100">
+              <div xmlns="http://www.w3.org/1999/xhtml" class="node-content">客服智能体 Agent RAG LLM SDK Gateway</div>
+            </foreignObject>
+            <path data-flow="主请求流"></path><path data-flow="数据读写流"></path>
+          </svg>
+          <section>入口 接入 用户 渠道 应用 服务 能力 支撑 数据 数据库 基础设施 云 存储 网络 安全 监控 管理 运维 权限 审计 评估 主请求流</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(fixed_html)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "系统架构图疑似使用固定业务默认内容" in result.stdout
 
 
 def test_vibe_diagram_system_architecture_presentation_overrides_007_runtime_pipeline() -> None:
@@ -1270,16 +1413,18 @@ def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_p
         """<!doctype html><html><body>
         <main data-diagram-type="system-architecture"
               data-diagram-grammar="system-architecture-presentation"
+              data-system-arch-view="container"
+              data-routing-confidence="0.88"
               data-arch-archetype="entry-rail-application-capability-data-infra-ops">
-          <svg aria-label="客服智能体系统架构图">
+          <svg viewBox="0 0 1500 860" aria-label="系统架构图">
             <foreignObject x="0" y="0" width="220" height="80">
-              <div class="node-content">🤖 客服智能体 AI Agent</div>
+              <div class="node-content">应用服务核心</div>
             </foreignObject>
-            <text>用户接入 rail → 智能体应用层 → 能力支撑层 → 数据层 → 基础设施层 → 管理/运维侧栏</text>
+            <text>用户接入 rail → 应用/服务核心 → 能力支撑层 → 数据层 → 基础设施层 → 管理/运维侧栏</text>
             <path data-flow="主请求流"></path>
             <path data-flow="数据读写流"></path>
           </svg>
-          <section>网页/H5 APP 微信 入口 接入 会话入口 客服智能体 AI Agent RAG LLM 工具中心 API 插件 数据层 知识库 会话数据 用户数据 运营数据 基础设施 云计算 存储 网络安全 监控告警 管理 运维</section>
+          <section>Web APP 入口 接入 用户 渠道 应用 服务 会话 能力 支撑 工具 工作流 检索 数据层 知识库 会话数据 用户数据 运营数据 数据库 基础设施 云计算 存储 网络 安全 监控告警 管理 运维 权限 审计 评估 主请求流</section>
         </main></body></html>""",
         encoding="utf-8",
     )

@@ -128,6 +128,12 @@ def _extract_question_context_from_prompt(prompt: str) -> dict:
     return json.loads(context_line.removeprefix("question_context="))
 
 
+def _disable_native_request_input_driver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让历史 prompt 回填契约测试继续聚焦非原生菜单降级路径。"""
+
+    monkeypatch.setattr(bot, "_should_drive_native_request_input", lambda _session: False)
+
+
 @pytest.fixture(autouse=True)
 def _reset_runtime(monkeypatch):
     monkeypatch.setattr(bot, "ACTIVE_MODEL", "codex")
@@ -224,6 +230,7 @@ def test_request_input_callback_rejects_non_owner():
 
 
 def test_request_input_submit_dispatches_structured_payload(monkeypatch, tmp_path: Path):
+    _disable_native_request_input_driver(monkeypatch)
     questions = [
         bot.RequestInputQuestion(
             question_id="scope",
@@ -398,6 +405,7 @@ def test_ask_user_submit_dispatches_schema_payload(monkeypatch, tmp_path: Path):
 def test_request_input_submit_dispatches_parallel_context(monkeypatch, tmp_path: Path):
     """并行会话里的 request_input 提交，应继续发回对应并行 CLI。"""
 
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -518,6 +526,7 @@ def test_request_input_submit_with_unanswered_requires_telegram_confirmation(mon
 
 
 def test_request_input_submit_confirm_proceed_dispatches_unanswered_context(monkeypatch, tmp_path: Path):
+    _disable_native_request_input_driver(monkeypatch)
     question_scope = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -680,6 +689,7 @@ def test_request_input_keyboard_includes_submit_button_for_unanswered_confirmati
 
 
 def test_request_input_option_auto_submits_when_all_answered(monkeypatch, tmp_path: Path):
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         header="定位范围",
@@ -866,6 +876,7 @@ def test_request_input_old_callback_still_works_after_newer_session_created():
 
 
 def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
+    _disable_native_request_input_driver(monkeypatch)
     custom_text = "按现有逻辑先仅做归因"
     question = bot.RequestInputQuestion(
         question_id="scope",
@@ -941,6 +952,7 @@ def test_request_input_custom_text_auto_submits(monkeypatch, tmp_path: Path):
 def test_request_input_custom_text_auto_submits_to_parallel_context(monkeypatch, tmp_path: Path):
     """并行会话里的自定义决策文本提交，应继续发回对应并行 CLI。"""
 
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -1059,6 +1071,7 @@ def test_dispatch_prompt_to_model_does_not_drop_existing_request_input_session_f
 
 
 def test_request_input_custom_media_message_auto_submits_with_attachment_prompt(monkeypatch, tmp_path: Path):
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -1112,6 +1125,7 @@ def test_request_input_custom_media_message_auto_submits_with_attachment_prompt(
 
 
 def test_request_input_custom_media_only_auto_submits_with_attachment_prompt(monkeypatch, tmp_path: Path):
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -1158,6 +1172,7 @@ def test_request_input_custom_media_only_auto_submits_with_attachment_prompt(mon
 
 
 def test_request_input_custom_text_submit_failure_restores_main_keyboard(monkeypatch):
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -1223,6 +1238,7 @@ def test_request_input_submission_summary_keeps_full_custom_text():
 
 
 def test_request_input_submit_falls_back_to_long_text_attachment_without_truncation(monkeypatch, tmp_path: Path):
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -1385,6 +1401,7 @@ def test_request_input_repeated_click_same_question_is_locked(monkeypatch):
 
 
 def test_request_input_auto_submit_failure_sends_retry_button(monkeypatch):
+    _disable_native_request_input_driver(monkeypatch)
     question = bot.RequestInputQuestion(
         question_id="scope",
         question="请选择范围",
@@ -1426,3 +1443,202 @@ def test_request_input_auto_submit_failure_sends_retry_button(monkeypatch):
     retry_button = retry_markup.inline_keyboard[0][0]
     assert retry_button.callback_data == f"{bot.REQUEST_INPUT_CALLBACK_PREFIX.rstrip(':')}:{session.token}:{bot.REQUEST_INPUT_ACTION_RETRY_SUBMIT}"
     assert isinstance(message.calls[-1][2], ReplyKeyboardMarkup), "失败兜底后应恢复主菜单"
+
+
+def test_request_input_option_auto_submits_codex_native_without_prompt_dispatch(monkeypatch, tmp_path: Path):
+    """Codex 原生 request_user_input 必须驱动终端选项，不能再把工具结果当普通 prompt 发进 tmux。"""
+
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        header="按钮语义",
+        question="这个“重新查询”按钮要做到哪一种强度？",
+        options=[
+            bot.RequestInputOption(label="用户强制同步 (Recommended)", description="后端立即查 Athena task result"),
+            bot.RequestInputOption(label="仅前端刷新", description="只刷新本地订单"),
+        ],
+    )
+    session = bot.RequestInputSession(
+        token="token_native_auto",
+        chat_id=308,
+        user_id=308,
+        call_id="call_native_auto",
+        session_key=str(tmp_path / "native-auto.jsonl"),
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+    )
+    bot.REQUEST_INPUT_SESSIONS[session.token] = session
+    bot.CHAT_ACTIVE_REQUEST_INPUT_TOKENS[308] = session.token
+
+    driven: list[tuple[str, dict[str, int]]] = []
+    ack_calls: list[str] = []
+
+    async def fail_dispatch(*_args, **_kwargs):
+        raise AssertionError("Codex 原生 request_user_input 待选项时不应派发普通 prompt")
+
+    async def fake_drive(current_session):
+        driven.append((current_session.token, dict(current_session.selected_option_indexes)))
+        return True, tmp_path / "native-auto.jsonl", None
+
+    async def fake_ack(chat_id: int, session_path: Path, *, reply_to):
+        assert chat_id == 308
+        ack_calls.append(str(session_path))
+
+    monkeypatch.setattr(bot, "_dispatch_prompt_to_model", fail_dispatch)
+    monkeypatch.setattr(bot, "_drive_native_request_input_selection", fake_drive, raising=False)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_ack)
+
+    callback = DummyCallback(
+        bot._build_request_input_callback_data(session.token, bot.REQUEST_INPUT_ACTION_OPTION, 0, 0),
+        message=DummyMessage(chat_id=308, user_id=308),
+        user_id=308,
+    )
+
+    asyncio.run(bot.on_request_user_input_callback(callback))
+
+    assert driven == [(session.token, {"scope": 0})]
+    assert ack_calls == [str(tmp_path / "native-auto.jsonl")]
+    assert callback.answers[-1] == ("已自动推送到模型", False)
+    assert session.token not in bot.REQUEST_INPUT_SESSIONS
+
+
+def test_native_request_input_selection_refuses_when_terminal_not_request_menu(monkeypatch, tmp_path: Path):
+    """终端不在 request_user_input 原生菜单时，必须 fail-closed，不能盲发 Enter。"""
+
+    session_file = tmp_path / "not-menu.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="请选择范围",
+        options=[bot.RequestInputOption(label="A"), bot.RequestInputOption(label="B")],
+    )
+    session = bot.RequestInputSession(
+        token="token_not_menu",
+        chat_id=408,
+        user_id=408,
+        call_id="call_not_menu",
+        session_key=str(session_file),
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": 0},
+    )
+
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-fawnstudio")
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", lambda *_args, **_kwargs: "› Write tests for @filename")
+
+    def fail_send_key(*_args, **_kwargs):
+        raise AssertionError("终端菜单未匹配时不应发送按键")
+
+    monkeypatch.setattr(bot, "tmux_send_key", fail_send_key)
+
+    success, session_path, error = asyncio.run(bot._drive_native_request_input_selection(session))
+
+    assert success is False
+    assert session_path is None
+    assert error and "终端不在 request_user_input 选项菜单" in error
+
+
+def test_native_request_input_menu_detection_rejects_answered_transcript():
+    """已回答后的历史 transcript 里即使出现题干和答案，也不能被误判成待选择菜单。"""
+
+    question = bot.RequestInputQuestion(
+        question_id="scope",
+        question="这个“重新查询”按钮要做到哪一种强度？",
+        options=[
+            bot.RequestInputOption(label="用户强制同步 (Recommended)"),
+            bot.RequestInputOption(label="仅前端刷新"),
+        ],
+    )
+    session = bot.RequestInputSession(
+        token="token_answered_menu",
+        chat_id=409,
+        user_id=409,
+        call_id="call_answered_menu",
+        session_key="answered.jsonl",
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"scope": 0},
+    )
+
+    raw_output = "\n".join(
+        [
+            "• Questions 1/1 answered",
+            "  • 这个“重新查询”按钮要做到哪一种强度？",
+            "    answer: 用户强制同步 (Recommended)",
+        ]
+    )
+
+    assert bot._is_codex_request_input_menu(raw_output, session) is False
+
+
+def test_native_request_input_selection_sends_option_keys_and_waits_output(monkeypatch, tmp_path: Path):
+    """Telegram 选择第 N 个选项时，应向 Codex TUI 发送 Down*(N)+Enter 并等到对应 call_id 的 function_call_output。"""
+
+    session_file = tmp_path / "native-menu.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    question = bot.RequestInputQuestion(
+        question_id="manual_refresh_scope",
+        question="这个“重新查询”按钮要做到哪一种强度？",
+        options=[
+            bot.RequestInputOption(label="用户强制同步 (Recommended)"),
+            bot.RequestInputOption(label="仅前端刷新"),
+            bot.RequestInputOption(label="仅后台操作"),
+        ],
+    )
+    session = bot.RequestInputSession(
+        token="token_native_keys",
+        chat_id=508,
+        user_id=508,
+        call_id="call_native_keys",
+        session_key=str(session_file),
+        questions=[question],
+        current_index=0,
+        created_at=time.monotonic(),
+        expires_at=time.monotonic() + 600,
+        selected_option_indexes={"manual_refresh_scope": 1},
+    )
+
+    raw_menu = "\n".join(
+        [
+            "这个“重新查询”按钮要做到哪一种强度？",
+            "用户强制同步 (Recommended)",
+            "仅前端刷新",
+            "仅后台操作",
+        ]
+    )
+    sent_keys: list[str] = []
+
+    def fake_send_key(_tmux_session: str, key: str) -> None:
+        sent_keys.append(key)
+        if key == "C-m":
+            output_event = {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call_native_keys",
+                    "output": json.dumps(
+                        {"answers": {"manual_refresh_scope": {"answers": ["仅前端刷新"]}}},
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+            with session_file.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(output_event, ensure_ascii=False) + "\n")
+
+    monkeypatch.setattr(bot, "TMUX_SESSION", "vibe-fawnstudio")
+    monkeypatch.setattr(bot, "_capture_tmux_recent_lines", lambda *_args, **_kwargs: raw_menu)
+    monkeypatch.setattr(bot, "tmux_send_key", fake_send_key)
+    monkeypatch.setattr(bot, "REQUEST_INPUT_NATIVE_OUTPUT_TIMEOUT_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(bot, "REQUEST_INPUT_NATIVE_OUTPUT_POLL_INTERVAL_SECONDS", 0.01, raising=False)
+
+    success, session_path, error = asyncio.run(bot._drive_native_request_input_selection(session))
+
+    assert success is True
+    assert session_path == session_file
+    assert error is None
+    assert sent_keys == ["Down", "C-m"]

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>故障排查：request_user_input 不再假装已推送</title>
+<style>
+:root{
+  --ink: #102033;
+  --muted: #5a6c80;
+  --paper: #fbfdff;
+  --panel: rgba(255,255,255,.9);
+  --line: #8db3d8;
+  --blue: #1f6fb2;
+  --blue-soft: #e8f3ff;
+  --green: #17785a;
+  --green-soft: #e9f8f2;
+  --amber: #986506;
+  --amber-soft: #fff6de;
+  --red: #a63a3a;
+  --red-soft: #fff0f0;
+  --violet: #6254ad;
+  --violet-soft: #f1efff;
+  --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+  --radius: 20px;
+}
+*{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;color:var(--ink);font:15px/1.58 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-wrap:anywhere;background:radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);background-size:auto,auto,28px 28px,28px 28px,auto;}
+main{width:min(1180px,calc(100% - 32px));margin:0 auto;padding:28px 0 72px}.task{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:5px 12px;color:var(--blue);font-weight:800;font-size:12px}h1{font-size:clamp(24px,2.8vw,32px);line-height:1.18;letter-spacing:-.025em;margin:14px 0 10px}.lead{max-width:900px;color:var(--muted);font-size:16px}.toc{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0}.toc a{padding:8px 11px;border-radius:999px;text-decoration:none;color:var(--blue);background:var(--blue-soft);font-weight:700}.panel{background:var(--panel);border:1px solid rgba(141,179,216,.55);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin:18px 0}.panel h2{margin:0 0 12px;font-size:21px}.panel h3{margin:20px 0 10px;font-size:17px}.tag{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-weight:800;font-size:12px}.red{background:var(--red-soft);color:var(--red)}.green{background:var(--green-soft);color:var(--green)}.amber{background:var(--amber-soft);color:var(--amber)}.blue{background:var(--blue-soft);color:var(--blue)}.violet{background:var(--violet-soft);color:var(--violet)}.flow{display:grid;gap:14px;align-items:stretch}.flow.cols6{grid-template-columns:repeat(6,1fr)}.flow.cols5{grid-template-columns:repeat(5,1fr)}.node{position:relative;background:#fff;border:1px solid rgba(141,179,216,.75);border-radius:16px;padding:13px;min-height:112px;box-shadow:0 10px 26px rgba(20,57,92,.06)}.node strong{display:block;margin-bottom:6px}.node small{color:var(--muted);display:block}.node.root{border-color:rgba(166,58,58,.55);background:linear-gradient(180deg,#fff,#fff8f8)}.node.fix{border-color:rgba(23,120,90,.55);background:linear-gradient(180deg,#fff,#f7fffb)}.arrow:after{content:"→";position:absolute;right:-18px;top:46%;color:var(--blue);font-size:22px;font-weight:900;z-index:2}.ladder{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.evidence{background:#fff;border-left:5px solid var(--blue);border-radius:14px;padding:12px;border-top:1px solid rgba(141,179,216,.45);border-right:1px solid rgba(141,179,216,.45);border-bottom:1px solid rgba(141,179,216,.45)}.cause{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.swim{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center}.lane{font-weight:900;color:var(--blue);background:var(--blue-soft);padding:12px;border-radius:12px;text-align:center}.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.step{background:#fff;border:1px solid rgba(141,179,216,.65);border-radius:14px;padding:12px;min-height:86px}.compare{display:grid;grid-template-columns:1fr 70px 1fr;gap:14px;align-items:stretch}.mid{display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--green);font-weight:900}.state{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.state .node{min-height:96px}.matrix{width:100%;border-collapse:separate;border-spacing:0 8px}.matrix th{font-size:12px;text-align:left;color:var(--muted)}.matrix td,.matrix th{padding:10px}.matrix tr td{background:#fff;border-top:1px solid rgba(141,179,216,.45);border-bottom:1px solid rgba(141,179,216,.45)}.matrix tr td:first-child{border-left:1px solid rgba(141,179,216,.45);border-radius:12px 0 0 12px;font-weight:800}.matrix tr td:last-child{border-right:1px solid rgba(141,179,216,.45);border-radius:0 12px 12px 0}.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0f1f31;color:#e8f3ff;border-radius:14px;padding:12px;white-space:pre-wrap;font-size:12px}details{background:#fff;border:1px solid rgba(141,179,216,.45);border-radius:14px;padding:10px 12px}summary{cursor:pointer;font-weight:800;color:var(--blue)}:focus-visible{outline:3px solid rgba(31,111,178,.35);outline-offset:2px}@media(max-width:900px){.flow.cols6,.flow.cols5,.ladder,.cause,.steps,.state,.compare{grid-template-columns:1fr}.arrow:after{content:"↓";right:auto;left:50%;top:auto;bottom:-24px}.compare{gap:8px}.mid{font-size:22px}.swim{grid-template-columns:1fr}.toc{display:block}.toc a{display:inline-flex;margin:4px 4px 4px 0}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<main>
+  <div class="task">TASK_20260706_001</div>
+  <h1>故障排查：request_user_input 不再假装已推送</h1>
+  <p class="lead">用户看到 Telegram 已回“✅ 已推送到模型”，但 Codex 终端仍停在选项菜单。本图把现场证据、旧链路错位、根因、修法、验证和回滚放在同一个单文件里。</p>
+  <nav class="toc" aria-label="图内导航">
+    <a href="#seq">排障时序图</a><a href="#cause">因果链图</a><a href="#bpmn">BPMN-light 排查流程</a><a href="#compare">before/after 流程化对照</a><a href="#state">状态/数据断点图</a><a href="#verify">验证与回滚</a>
+  </nav>
+
+  <section id="seq" class="panel">
+    <h2>排障时序图：08:39 的“已推送”没有闭合原生工具生命周期</h2>
+    <div class="flow cols6">
+      <div class="node arrow"><span class="tag red">现象</span><strong>Telegram 回显成功</strong><small>E1：08:39 显示“已推送到模型”，用户指出终端仍待选择。</small></div>
+      <div class="node arrow"><span class="tag blue">原生工具</span><strong>JSONL 08:38 发起 request_user_input</strong><small>E2：line 235 写入 call_qUBv... function_call。</small></div>
+      <div class="node arrow"><span class="tag amber">旧链路</span><strong>答案被当普通 prompt 派发</strong><small>E5：旧设计文档记录 _submit_request_input_session 调 _dispatch_prompt_to_model。</small></div>
+      <div class="node root arrow"><span class="tag red">根因 R1</span><strong>TUI 在菜单态，不是输入框</strong><small>普通 prompt 不能产生 function_call_output；“已推送”只是 tmux 发送成功。</small></div>
+      <div class="node arrow"><span class="tag violet">延迟证据</span><strong>09:27 才出现 function_call_output</strong><small>E2：line 236，比 08:39 晚约 49 分钟。</small></div>
+      <div class="node fix"><span class="tag green">修法 F1</span><strong>Telegram 选项直驱 TUI 菜单</strong><small>Down*index + Enter，并等待同 call_id 的 function_call_output 后才回显成功。</small></div>
+    </div>
+  </section>
+
+  <section id="cause" class="panel">
+    <h2>因果链图：成功回显与真实接收点错位</h2>
+    <div class="cause">
+      <div class="node"><span class="tag amber">触发</span><strong>模型调用 request_user_input</strong><small>Codex 需要原生工具结果，而不是下一条普通用户消息。</small></div>
+      <div class="node root"><span class="tag red">错误层级</span><strong>Telegram 答案 → prompt 文本</strong><small>旧链路把结构化答案包装成“工具结果（来自 Telegram）”文本。</small></div>
+      <div class="node fix"><span class="tag green">正确层级</span><strong>Telegram 答案 → 终端菜单选择</strong><small>只有 TUI 菜单确认后，Codex 才会写 function_call_output。</small></div>
+    </div>
+    <h3>证据阶梯</h3>
+    <div class="ladder">
+      <div class="evidence"><strong>E1 用户截图</strong><br>Telegram 已回“已推送”，用户指出终端仍待选。</div>
+      <div class="evidence"><strong>E2 JSONL 时间差</strong><br>08:38 function_call；09:27 function_call_output。</div>
+      <div class="evidence"><strong>E3 run_bot.log</strong><br>08:39 watcher 重绑；09:28 才发送后续模型输出。</div>
+      <div class="evidence"><strong>E4 tmux</strong><br>最终出现 Questions 1/1 answered 后才继续。</div>
+      <div class="evidence"><strong>E5 旧设计</strong><br>旧链路证明 prompt 回填是历史约定。</div>
+    </div>
+  </section>
+
+  <section id="bpmn" class="panel">
+    <h2>BPMN-light 排查流程：先证据，后代码，最后修复</h2>
+    <div class="swim"><div class="lane">现场</div><div class="steps"><div class="step">截图：Telegram 成功回显</div><div class="step">JSONL：function_call/output 时间差</div><div class="step">run_bot：watcher 08:39 重绑</div><div class="step">tmux：Questions answered 后继续</div></div></div>
+    <div class="swim"><div class="lane">裁决</div><div class="steps"><div class="step">排除“模型还在正常思考”</div><div class="step">定位旧 prompt 回填</div><div class="step">确认 TUI 菜单态不能吃普通 prompt</div><div class="step">根因成立 R1</div></div></div>
+    <div class="swim"><div class="lane">修复</div><div class="steps"><div class="step">菜单探测</div><div class="step">选项序号转按键</div><div class="step">等待 function_call_output</div><div class="step">恢复 watcher + 回显成功</div></div></div>
+  </section>
+
+  <section id="compare" class="panel">
+    <h2>before/after 流程化对照：从“发送成功”改成“工具闭环成功”</h2>
+    <div class="compare">
+      <div>
+        <h3><span class="tag red">Before</span> 故障逻辑</h3>
+        <div class="flow"><div class="node arrow"><strong>点击 Telegram 选项</strong><small>记录 selected_option_indexes</small></div><div class="node arrow"><strong>构造工具结果 prompt</strong><small>call_id + question_context + answers JSON</small></div><div class="node root"><strong>tmux 发送成功即回显</strong><small>但 TUI 仍在 request_user_input 菜单态。</small></div></div>
+      </div>
+      <div class="mid" aria-hidden="true">→</div>
+      <div>
+        <h3><span class="tag green">After</span> 修复逻辑</h3>
+        <div class="flow"><div class="node arrow"><strong>点击 Telegram 选项</strong><small>Codex 原生 request_user_input 进入 native driver。</small></div><div class="node arrow"><strong>探测菜单 + 发按键</strong><small>Down*index + Enter；不匹配则 fail-closed。</small></div><div class="node fix"><strong>确认 function_call_output 后回显</strong><small>同 call_id 写入 JSONL 后才发送摘要和 ack。</small></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="state" class="panel">
+    <h2>状态/数据断点图：关键断点从 prompt 发送移到 function_call_output</h2>
+    <div class="state">
+      <div class="node arrow"><span class="tag blue">S1</span><strong>RequestInputSession</strong><small>保存 call_id、session_key、questions、selected_option_indexes。</small></div>
+      <div class="node arrow"><span class="tag amber">S2</span><strong>终端菜单探测</strong><small>匹配题干 + 至少两个候选项；排除 Questions 1/1 answered。</small></div>
+      <div class="node arrow"><span class="tag green">S3</span><strong>原生按键提交</strong><small>选项 0 = Enter；选项 1 = Down + Enter。</small></div>
+      <div class="node fix"><span class="tag green">S4</span><strong>JSONL 确认</strong><small>从发送前 offset 后读取同 call_id 的 function_call_output。</small></div>
+    </div>
+    <details style="margin-top:12px"><summary>关键代码锚点</summary><p><code>bot.py</code>：<code>REQUEST_INPUT_NATIVE_* </code> 常量、<code>_is_codex_request_input_menu</code>、<code>_drive_native_request_input_selection</code>、<code>_submit_request_input_session</code>。测试锚点：<code>tests/test_request_user_input_flow.py</code> 的 native driver 四条新增用例。</p></details>
+  </section>
+
+  <section id="verify" class="panel">
+    <h2>验证 / 回滚闭环</h2>
+    <table class="matrix" aria-label="验证矩阵"><thead><tr><th>项目</th><th>状态</th><th>命令或动作</th><th>结果</th></tr></thead><tbody>
+      <tr><td>Baseline</td><td><span class="tag green">已跑</span></td><td><code>PYTHONPATH=. python3.11 -m pytest -q tests/test_request_user_input_flow.py</code></td><td>修改前 27 passed。</td></tr>
+      <tr><td>RED</td><td><span class="tag red">已看到失败</span></td><td><code>-k 'codex_native_without_prompt_dispatch or native_request_input_selection'</code></td><td>3 failed：旧链路仍派发 prompt，native driver 不存在。</td></tr>
+      <tr><td>GREEN</td><td><span class="tag green">已通过</span></td><td><code>PYTHONPATH=. python3.11 -m pytest -q tests/test_request_user_input_flow.py</code></td><td>31 passed，2 个既有 docstring warning。</td></tr>
+      <tr><td>相邻回归</td><td><span class="tag green">已通过</span></td><td><code>MODEL_WORKDIR=/Users/david/hypha/tools/vibego PYTHONPATH=. python3.11 -m pytest -q tests/test_plan_confirm_bridge.py tests/test_tmux_send_line.py::test_dispatch_prompt_does_not_retry_codex_when_jsonl_not_confirmed</code></td><td>21 passed；未设置 MODEL_WORKDIR 的一次失败已记录为环境门禁。</td></tr>
+      <tr><td>编译与诊断</td><td><span class="tag green">已通过</span></td><td><code>python3.11 -m py_compile bot.py</code>；<code>PYTHONPATH=. python3.11 -m vibego_cli doctor</code></td><td>py_compile exit 0；doctor exit 0。</td></tr>
+      <tr><td>全量双轮</td><td><span class="tag green">已通过</span></td><td><code>MODEL_WORKDIR=/Users/david/hypha/tools/vibego PYTHONPATH=. python3.11 -m pytest -q</code></td><td>第 1 轮 1132 passed, 6 warnings；第 2 轮 1132 passed, 6 warnings。</td></tr>
+      <tr><td>回滚</td><td><span class="tag violet">可回滚</span></td><td>恢复旧 _dispatch_prompt_to_model prompt 回填</td><td>会重新暴露本次假成功问题，仅应作为紧急回退。</td></tr>
+    </tbody></table>
+    <div class="code">核心判定：Telegram 不再以“tmux 发送成功”作为 request_user_input 已接收证据；只以同 call_id 的 function_call_output 写入 JSONL 作为成功证据。最终验证已执行：聚焦、相邻回归、py_compile、doctor、全量 pytest 双轮。</div>
+  </section>
+</main>
+</body>
+</html>
