@@ -13,6 +13,28 @@
   - 推荐路径图
 - 校准期要求：当前图型命中后，HTML 内必须按候选 A/B/C/D…纵向展开首选候选与全部备选候选；每个候选都必须是真图。信息不足时也必须生成该备选候选，用“待确认节点”标明缺口。
 
+### HTML 模板资产
+
+本图型必须优先复制 HTML 模板骨架，再替换槽位；禁止从零自由绘制整体布局。模板目录：`templates/decision-communication/`。模板只固定视觉语法、关系主轴、节点居中和响应式结构，不固定业务内容。
+
+使用流程：
+
+1. 先按用户真实问题选择当前图型内的主模板。
+2. 从 `templates/decision-communication/` 复制最匹配的 HTML 文件。
+3. 只替换 `data-slot` 槽位内容、标题、摘要和必要节点文本。
+4. 保留 `data-diagram-type="decision-communication"`、`data-template-family="decision-communication"`、`data-template-id="..."`、`data-template-layout="..."`、主画布结构、节点居中 CSS 和响应式 CSS。
+5. 如果模板槽位不够，先合并/隐藏/复制同类槽位；仍不够时才新建局部子结构，不能破坏主骨架。
+6. 同一图型内的模板不能共享同一宏观骨架或同一 DOM 骨架；`data-template-layout` 必须体现该模板的版式语义，主画布结构要能在去掉文案和槽位名后仍可区分，避免退化成同一种 grid/card 预览。
+
+模板清单：
+
+| 模板文件 | data-template-layout | 用途 |
+| --- | --- | --- |
+| `decision-tree.html` | `decision-tree` | 决策树 |
+| `option-matrix-path.html` | `option-matrix-path` | 方案矩阵 + 主路径绑定 |
+| `tradeoff-quadrant.html` | `tradeoff-quadrant` | 取舍象限 |
+| `recommended-path.html` | `recommended-path` | 推荐路径图 |
+
 ## 技术设计与需求决策图规则
 
 技术设计图默认回答“如何落地实现、有哪些契约、如何验证与回滚”；需求 / 决策沟通图默认回答“为什么做、怎么选、怎样验收”。

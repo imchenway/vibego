@@ -144,6 +144,108 @@
     .sources li { break-inside: avoid; margin: 0 0 8px; line-height: 1.55; color: var(--muted); }
     .sources a { font-weight: 800; }
     .note { margin-top: 12px; padding: 12px 14px; border-radius: 16px; background: rgba(232,243,255,.68); border: 1px solid rgba(31,111,178,.16); color: var(--muted); font-size: 13px; line-height: 1.65; }
+    .template-gallery {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .template-card {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+      border: 1px solid rgba(141,179,216,.36);
+      border-radius: 18px;
+      background: rgba(255,255,255,.88);
+      padding: 12px;
+      box-shadow: 0 10px 24px rgba(20,57,92,.052);
+    }
+    .template-card header { display: grid; gap: 4px; }
+    .template-card b { font-size: 13px; line-height: 1.35; }
+    .template-card code {
+      color: var(--blue);
+      font-weight: 800;
+      font-size: 11px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .template-card small { color: var(--muted); line-height: 1.45; font-size: 11px; }
+    .mini-arch {
+      min-height: 156px;
+      border: 1px solid rgba(141,179,216,.34);
+      border-radius: 16px;
+      padding: 10px;
+      background:
+        linear-gradient(rgba(38,102,154,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(38,102,154,.04) 1px, transparent 1px),
+        rgba(248,252,255,.94);
+      background-size: 18px 18px, 18px 18px, auto;
+      overflow: hidden;
+    }
+    .mini-arch .node, .mini-arch .zone, .mini-arch .lane, .mini-arch .bus, .mini-arch .boundary {
+      border: 1px solid rgba(141,179,216,.62);
+      border-radius: 10px;
+      background: rgba(255,255,255,.94);
+      min-height: 20px;
+      box-shadow: 0 5px 12px rgba(20,57,92,.045);
+    }
+    .mini-arch .core { border-color: rgba(31,111,178,.52); background: var(--blue-soft); }
+    .mini-arch .data { border-color: rgba(23,120,90,.45); background: var(--green-soft); }
+    .mini-arch .ops { border-color: rgba(152,101,6,.42); background: var(--amber-soft); }
+    .mini-arch .risk { border-color: rgba(166,58,58,.42); background: var(--red-soft); }
+    .mini-arch .support { border-color: rgba(98,84,173,.45); background: var(--violet-soft); }
+    .mini-arch .arrow {
+      min-height: 2px;
+      background: #497faf;
+      align-self: center;
+      position: relative;
+    }
+    .mini-arch .arrow::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -4px;
+      border-left: 8px solid #497faf;
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+    }
+    .mini-arch.router-pipeline { display: grid; grid-template-columns: 1.1fr 18px 1.1fr 18px 1.1fr 18px 1.1fr; gap: 6px; }
+    .mini-arch.router-pipeline .group { display: grid; gap: 6px; }
+    .mini-arch.boundary-hub { display: grid; grid-template-columns: .82fr 1.38fr .82fr; gap: 8px; align-items: stretch; }
+    .mini-arch.boundary-hub .stack { display: grid; gap: 7px; }
+    .mini-arch.boundary-hub .boundary { display: grid; gap: 8px; padding: 9px; border-color: rgba(31,111,178,.58); background: rgba(232,243,255,.55); }
+    .mini-arch.entry-core-foundation { display: grid; grid-template-columns: .76fr 2fr .7fr; grid-template-rows: 1fr auto; gap: 8px; }
+    .mini-arch.entry-core-foundation .rail { display: grid; gap: 6px; }
+    .mini-arch.entry-core-foundation .main { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; padding: 8px; }
+    .mini-arch.entry-core-foundation .foundation { grid-column: 1 / -1; min-height: 24px; }
+    .mini-arch.whitebox-cluster { display: grid; grid-template-columns: .72fr 1.9fr .72fr; gap: 8px; }
+    .mini-arch.whitebox-cluster .boundary { display: grid; grid-template-columns: repeat(2,1fr); gap: 7px; padding: 9px; border-color: rgba(31,111,178,.58); background: rgba(232,243,255,.56); }
+    .mini-arch.environment-zones { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+    .mini-arch.environment-zones .zone { display: grid; gap: 7px; padding: 8px; background: rgba(255,255,255,.72); }
+    .mini-arch.north-south-layers { display: grid; grid-template-rows: repeat(5,1fr); gap: 7px; }
+    .mini-arch.north-south-layers .lane { border-radius: 999px; }
+    .mini-arch.data-domain-map { display: grid; grid-template-columns: 1.5fr .8fr; gap: 8px; }
+    .mini-arch.data-domain-map .domains { display: grid; grid-template-columns: repeat(2,1fr); gap: 7px; }
+    .mini-arch.data-domain-map .rail { display: grid; gap: 7px; }
+    .mini-arch.dfd-trust-boundary { display: grid; grid-template-columns: .75fr 1.5fr .75fr; gap: 8px; }
+    .mini-arch.dfd-trust-boundary .trust { display: grid; gap: 7px; padding: 8px; border: 1px dashed rgba(166,58,58,.55); border-radius: 14px; background: rgba(255,240,240,.38); }
+    .mini-arch.contract-mesh { display: grid; grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr); gap: 7px; }
+    .mini-arch.contract-mesh .hub { grid-column: 2; grid-row: 2; }
+    .mini-arch.event-bus { display: grid; grid-template-columns: 1fr 1.55fr 1fr; grid-template-rows: 1fr auto 1fr; gap: 7px; }
+    .mini-arch.event-bus .bus { grid-column: 1 / -1; grid-row: 2; min-height: 16px; background: #dfeaff; border-color: rgba(31,111,178,.45); }
+    .mini-arch.network-zones { display: grid; grid-template-columns: .72fr .9fr 1.2fr .9fr .72fr; gap: 6px; align-items: stretch; }
+    .mini-arch.network-zones .zone { display: grid; gap: 6px; padding: 7px; }
+    .mini-arch.security-threat-controls { display: grid; grid-template-columns: .9fr 1.3fr .9fr; gap: 8px; }
+    .mini-arch.security-threat-controls .controls { display: grid; gap: 7px; }
+    .mini-arch.security-threat-controls .asset { display: grid; gap: 7px; padding: 9px; border-color: rgba(166,58,58,.5); background: rgba(255,240,240,.42); }
+    .mini-arch.identity-access-path { display: grid; grid-template-columns: .8fr 18px .9fr 18px .9fr 18px 1fr; gap: 6px; }
+    .mini-arch.failure-domain-recovery { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr auto; gap: 8px; }
+    .mini-arch.failure-domain-recovery .zone { display: grid; gap: 7px; padding: 8px; }
+    .mini-arch.failure-domain-recovery .recovery { grid-column: 1 / -1; min-height: 26px; border-style: dashed; }
+    .mini-arch.telemetry-pipeline { display: grid; grid-template-columns: .8fr 18px .9fr 18px .9fr 18px .9fr; gap: 6px; }
+    .mini-arch.telemetry-pipeline .stack { display: grid; gap: 6px; }
+    .mini-arch.delivery-rail { display: grid; grid-template-columns: repeat(6,1fr); gap: 6px; align-items: center; }
+    .mini-arch.delivery-rail .gate { min-height: 44px; border-style: dashed; }
     @media (max-width: 900px) {
       main { width: min(100vw - 20px, 760px); padding-top: 12px; }
       .desktop-map { display: none; }
@@ -152,7 +254,7 @@
       .mobile-step b { font-size: 15px; }
       .mobile-step span { color: var(--muted); font-size: 13px; line-height: 1.6; }
       .route-row { grid-template-columns: 1fr; }
-      .guide-grid, .rules { grid-template-columns: 1fr; }
+      .guide-grid, .rules, .template-gallery { grid-template-columns: 1fr; }
       .sources { columns: 1; }
     }
     @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
@@ -260,6 +362,129 @@
     </div>
   </section>
 
+  <section class="section" aria-labelledby="layout-gallery">
+    <h2 id="layout-gallery">16 个模板差异化骨架预览</h2>
+    <p>这一层只审核“宏观骨架是否不同”，不锁死业务内容。真实生成时仍只替换 `data-slot`，但必须保留对应 `data-template-layout`，避免所有模板退化成同一种卡片墙。</p>
+    <div class="template-gallery">
+      <article class="template-card">
+        <header><b>路由说明 / 校准</b><code>router-v6.html · router-pipeline</code><small>输入意图 → 主视图 → companion / handoff → 质量门禁。</small></header>
+        <div class="mini-arch router-pipeline" aria-label="router-pipeline 预览">
+          <div class="group"><i class="node core"></i><i class="node"></i></div><i class="arrow"></i>
+          <div class="group"><i class="node core"></i><i class="node"></i></div><i class="arrow"></i>
+          <div class="group"><i class="node support"></i><i class="node ops"></i></div><i class="arrow"></i>
+          <div class="group"><i class="node risk"></i><i class="node"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>系统上下文</b><code>system-context.html · boundary-hub</code><small>中心系统边界，两侧外部角色和外部系统。</small></header>
+        <div class="mini-arch boundary-hub" aria-label="boundary-hub 预览">
+          <div class="stack"><i class="node"></i><i class="node"></i><i class="node support"></i></div>
+          <div class="boundary"><i class="node core"></i><i class="node core"></i><i class="node ops"></i></div>
+          <div class="stack"><i class="node"></i><i class="node data"></i><i class="node support"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>工作负载总览</b><code>workload-overview.html · entry-core-foundation</code><small>入口、核心可部署单元、运维侧栏与底座。</small></header>
+        <div class="mini-arch entry-core-foundation" aria-label="entry-core-foundation 预览">
+          <div class="rail"><i class="node"></i><i class="node"></i><i class="node"></i></div>
+          <div class="main boundary"><i class="node core"></i><i class="node core"></i><i class="node support"></i><i class="node data"></i><i class="node ops"></i><i class="node"></i></div>
+          <div class="rail"><i class="node ops"></i><i class="node risk"></i></div>
+          <i class="node foundation data"></i>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>组件白盒</b><code>component-breakdown.html · whitebox-cluster</code><small>只展开目标容器内部，不混入全局部署。</small></header>
+        <div class="mini-arch whitebox-cluster" aria-label="whitebox-cluster 预览">
+          <div class="stack"><i class="node"></i><i class="node"></i></div>
+          <div class="boundary"><i class="node core"></i><i class="node core"></i><i class="node support"></i><i class="node data"></i><i class="node ops"></i><i class="node risk"></i></div>
+          <div class="stack"><i class="node data"></i><i class="node ops"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>部署拓扑</b><code>deployment-topology.html · environment-zones</code><small>按环境/节点/托管关系分区，而不是应用分层。</small></header>
+        <div class="mini-arch environment-zones" aria-label="environment-zones 预览">
+          <div class="zone"><i class="node"></i><i class="node core"></i><i class="node data"></i></div>
+          <div class="zone"><i class="node ops"></i><i class="node core"></i><i class="node support"></i></div>
+          <div class="zone"><i class="node risk"></i><i class="node core"></i><i class="node data"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>逻辑分层</b><code>logical-layering.html · north-south-layers</code><small>上下层次关系清晰，但层名和层数不写死。</small></header>
+        <div class="mini-arch north-south-layers" aria-label="north-south-layers 预览">
+          <i class="lane node"></i><i class="lane node core"></i><i class="lane node support"></i><i class="lane node data"></i><i class="lane node ops"></i>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>数据架构</b><code>data-architecture.html · data-domain-map</code><small>数据域/存储/治理侧栏，不画成普通依赖图。</small></header>
+        <div class="mini-arch data-domain-map" aria-label="data-domain-map 预览">
+          <div class="domains"><i class="node data"></i><i class="node data"></i><i class="node data"></i><i class="node support"></i></div>
+          <div class="rail"><i class="node ops"></i><i class="node risk"></i><i class="node"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>数据流 / DFD</b><code>data-flow.html · dfd-trust-boundary</code><small>外部实体、处理过程、存储和信任边界。</small></header>
+        <div class="mini-arch dfd-trust-boundary" aria-label="dfd-trust-boundary 预览">
+          <div class="stack"><i class="node"></i><i class="node"></i></div>
+          <div class="trust"><i class="node core"></i><i class="node core"></i><i class="node data"></i><i class="node risk"></i></div>
+          <div class="stack"><i class="node"></i><i class="node"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>API 集成</b><code>api-integration.html · contract-mesh</code><small>契约中心与多个集成面，突出协议边界。</small></header>
+        <div class="mini-arch contract-mesh" aria-label="contract-mesh 预览">
+          <i class="node"></i><i class="node support"></i><i class="node"></i><i class="node ops"></i><i class="node core hub"></i><i class="node data"></i><i class="node"></i><i class="node risk"></i><i class="node"></i>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>事件驱动</b><code>event-driven.html · event-bus</code><small>发布者、事件通道、消费者和一致性边界。</small></header>
+        <div class="mini-arch event-bus" aria-label="event-bus 预览">
+          <i class="node core"></i><i class="node support"></i><i class="node data"></i><i class="bus"></i><i class="node ops"></i><i class="node"></i><i class="node risk"></i>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>网络拓扑</b><code>network-topology.html · network-zones</code><small>网络区、网关、路径和安全控制点。</small></header>
+        <div class="mini-arch network-zones" aria-label="network-zones 预览">
+          <div class="zone"><i class="node"></i></div><div class="zone"><i class="node ops"></i><i class="node"></i></div><div class="zone"><i class="node core"></i><i class="node data"></i></div><div class="zone"><i class="node risk"></i><i class="node"></i></div><div class="zone"><i class="node"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>安全视图</b><code>security-view.html · security-threat-controls</code><small>资产中心、威胁面和控制证据。</small></header>
+        <div class="mini-arch security-threat-controls" aria-label="security-threat-controls 预览">
+          <div class="controls"><i class="node risk"></i><i class="node ops"></i><i class="node"></i></div>
+          <div class="asset"><i class="node core"></i><i class="node data"></i><i class="node risk"></i></div>
+          <div class="controls"><i class="node support"></i><i class="node risk"></i><i class="node ops"></i></div>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>身份与访问</b><code>identity-access.html · identity-access-path</code><small>主体 → 身份提供方 → 策略 → 资源。</small></header>
+        <div class="mini-arch identity-access-path" aria-label="identity-access-path 预览">
+          <i class="node"></i><i class="arrow"></i><i class="node core"></i><i class="arrow"></i><i class="node risk"></i><i class="arrow"></i><i class="node data"></i>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>韧性 / 容灾</b><code>resilience-view.html · failure-domain-recovery</code><small>故障域、降级路径、切换和恢复目标。</small></header>
+        <div class="mini-arch failure-domain-recovery" aria-label="failure-domain-recovery 预览">
+          <div class="zone"><i class="node core"></i><i class="node data"></i><i class="node risk"></i></div>
+          <div class="zone"><i class="node support"></i><i class="node data"></i><i class="node ops"></i></div>
+          <i class="node recovery ops"></i>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>可观测性</b><code>observability-view.html · telemetry-pipeline</code><small>采集点 → 管道 → 存储 → 查询/告警。</small></header>
+        <div class="mini-arch telemetry-pipeline" aria-label="telemetry-pipeline 预览">
+          <div class="stack"><i class="node"></i><i class="node"></i></div><i class="arrow"></i><i class="node core"></i><i class="arrow"></i><i class="node data"></i><i class="arrow"></i><i class="node ops"></i>
+        </div>
+      </article>
+      <article class="template-card">
+        <header><b>交付流水线</b><code>delivery-pipeline.html · delivery-rail</code><small>构建、制品、门禁、发布、回滚的连续轨道。</small></header>
+        <div class="mini-arch delivery-rail" aria-label="delivery-rail 预览">
+          <i class="node core"></i><i class="node"></i><i class="node gate risk"></i><i class="node support"></i><i class="node ops"></i><i class="node data"></i>
+        </div>
+      </article>
+    </div>
+    <div class="note"><b>本轮修正：</b>之前的问题不是“模板数量不够”，而是“模板缺少差异化宏观骨架契约”。现在每个模板都有独立 `data-template-layout`，测试会阻止 16 个模板再次变成同一套预览。</div>
+  </section>
+
   <section class="section" aria-labelledby="handoff-rules">
     <h2 id="handoff-rules">跨图型转交：不要把非系统架构问题强塞进系统架构图</h2>
     <div class="guide-grid">
@@ -286,11 +511,31 @@
   <section class="section" aria-labelledby="implementation-contract">
     <h2 id="implementation-contract">落到 vibe-diagram 的实现状态</h2>
     <div class="guide-grid">
-      <div class="guide-card"><b>1. 模板注册表已固化</b><small>`system-architecture` 已落到 v6 路由器：C4 主线为基础，专项模板作为 companion registry，跨图型问题转交对应 reference。</small></div>
-      <div class="guide-card"><b>2. DiagramSpec 已进入门禁</b><small>系统架构产物必须声明 data-system-arch-view 与 data-routing-confidence；生成前先判断 selected_view、companion_views 与 handoff_target。</small></div>
-      <div class="guide-card"><b>3. 生产 lint 已覆盖退化</b><small>lint 已检查 SVG、混图型、固定业务默认内容、横向滚动、候选 tab、窄画布、编号实现分层和卡片墙退化。</small></div>
+      <div class="guide-card"><b>1. 系统架构模板资产已固化</b><small>`templates/system-architecture/` 已内置 16 个 HTML 模板；生成时优先复制骨架，只替换 data-slot 槽位内容，不从零自由绘制布局。</small></div>
+      <div class="guide-card"><b>2. 其它图型模板资产已补齐</b><small>新增 10 个图型目录、42 个 HTML 模板；业务架构、流程、时序、状态模型、故障、迭代、页面、技术设计、决策、验收都拥有模板触发锚点。</small></div>
+      <div class="guide-card"><b>3. 生产 lint 已覆盖模板身份</b><small>系统架构保留强 lint；其它图型新增通用 family/id/layout 校验，防止产物绕开已知模板资产自由重画。</small></div>
     </div>
-    <div class="note"><b>已修改：</b>vibego_cli/data/skills/vibe-diagram/SKILL.md、references/system-architecture.md、scripts/vibe_diagram_lint.py、plugins/vibe-diagram 镜像与 tests/test_builtin_skills_injection.py。聚焦验证：78 passed。</div>
+    <div class="note"><b>已修改：</b>vibego_cli/data/skills/vibe-diagram/SKILL.md、references/*.md、scripts/vibe_diagram_lint.py、templates/*/*.html、plugins/vibe-diagram 镜像与 tests/test_builtin_skills_injection.py。聚焦验证：86 passed。</div>
+  </section>
+
+  <section class="section" aria-labelledby="all-template-assets">
+    <h2 id="all-template-assets">全图型 HTML 模板资产矩阵</h2>
+    <p>现在不再只有系统架构图有模板目录。所有主要图型都具备“reference 触发 → 复制 HTML 模板 → 替换 data-slot → lint 校验模板身份”的链路。</p>
+    <div class="guide-grid">
+      <div class="guide-card"><b>业务架构 / 领域地图</b><small>`templates/business-architecture/`：能力领域地图、参与方边界、规则约束热区、价值链地图。</small></div>
+      <div class="guide-card"><b>业务流程图</b><small>`templates/business-flow/`：BPMN-light、泳道流程、阶段轨道、异常分支流程。</small></div>
+      <div class="guide-card"><b>代码时序图</b><small>`templates/code-sequence/`：参与者时间线、异步回调、事务边界、重试/异常返回。</small></div>
+      <div class="guide-card"><b>状态 / 数据模型图</b><small>`templates/state-data-model/`：状态机、ER-lite、生命周期轨道、数据流、状态-事件矩阵。</small></div>
+      <div class="guide-card"><b>故障排查图</b><small>`templates/fault-debugging/`：排障时序、因果链、排查流程、before/after、状态/数据断点。</small></div>
+      <div class="guide-card"><b>功能迭代 / 开发设计图</b><small>`templates/feature-iteration/`：当前/目标流程、技术时序、差异热区、发布回滚轨道。</small></div>
+      <div class="guide-card"><b>页面设计稿</b><small>`templates/page-mockup/`：页面线框、多候选 artboard、响应式状态板、主路径页面流。</small></div>
+      <div class="guide-card"><b>技术设计图</b><small>`templates/technical-design/`：模块契约数据拓扑、API 契约泳道、数据一致性边界、发布切换轨道。</small></div>
+      <div class="guide-card"><b>需求 / 决策沟通图</b><small>`templates/decision-communication/`：决策树、方案矩阵、取舍象限、推荐路径。</small></div>
+      <div class="guide-card"><b>交付验收图</b><small>`templates/delivery-acceptance/`：验收账本、证据泳道、风险动作板、交付时间线。</small></div>
+      <div class="guide-card"><b>系统架构图</b><small>`templates/system-architecture/`：16 个 v6 路由与专项视图模板，保留强 presentation lint。</small></div>
+      <div class="guide-card"><b>通用契约</b><small>每个模板都保留 data-diagram-type、data-template-family、data-template-id、data-template-layout 与 data-slot。</small></div>
+    </div>
+    <div class="note"><b>本轮修正：</b>上一轮 42 个非系统模板虽然文件名和 layout 不同，但主画布 DOM 仍大量复用同一种 slot/arrow 流程。现在新增 DOM 骨架签名测试，去掉文案和槽位名后，同一图型内模板结构也必须不同；42 个非系统模板已重写为树、泳道、时序、矩阵、看板、artboard、账本、时间线等不同图形语法。</div>
   </section>
 
   <section class="section" aria-labelledby="sources">

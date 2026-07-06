@@ -22,7 +22,7 @@ def _relative_files(root: Path) -> dict[str, str]:
     return {
         str(path.relative_to(root)): path.read_text(encoding="utf-8")
         for path in sorted(root.rglob("*"))
-        if path.is_file()
+        if path.is_file() and "__pycache__" not in path.parts
     }
 
 

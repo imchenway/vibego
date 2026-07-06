@@ -79,6 +79,7 @@ AUTO_CENTERED_NODE_MARKERS = (
 
 
 SYSTEM_ARCH_ALLOWED_VIEWS = {
+    "router",
     "context",
     "container",
     "component",
@@ -95,6 +96,91 @@ SYSTEM_ARCH_ALLOWED_VIEWS = {
     "observability",
     "ci-cd",
 }
+
+SYSTEM_ARCH_TEMPLATE_IDS = {
+    "router-v6",
+    "system-context",
+    "workload-overview",
+    "component-breakdown",
+    "deployment-topology",
+    "logical-layering",
+    "data-architecture",
+    "data-flow",
+    "api-integration",
+    "event-driven",
+    "network-topology",
+    "security-view",
+    "identity-access",
+    "resilience-view",
+    "observability-view",
+    "delivery-pipeline",
+}
+
+TEMPLATE_LAYOUTS_BY_TYPE: dict[str, dict[str, str]] = {
+    "business-architecture": {
+        "capability-domain-map": "capability-domain-map",
+        "participant-boundary": "participant-boundary",
+        "rule-constraint-heatmap": "rule-constraint-heatmap",
+        "value-chain-map": "value-chain-map",
+    },
+    "business-flow": {
+        "bpmn-light-flow": "bpmn-light-flow",
+        "swimlane-flow": "swimlane-flow",
+        "stage-track": "stage-track",
+        "exception-branch-flow": "exception-branch-flow",
+    },
+    "code-sequence": {
+        "participant-timeline": "participant-timeline",
+        "async-callback-sequence": "async-callback-sequence",
+        "transaction-boundary-sequence": "transaction-boundary-sequence",
+        "retry-exception-sequence": "retry-exception-sequence",
+    },
+    "state-data-model": {
+        "state-machine": "state-machine",
+        "er-lite": "er-lite",
+        "lifecycle-track": "lifecycle-track",
+        "data-flow-model": "data-flow-model",
+        "state-event-matrix": "state-event-matrix",
+    },
+    "fault-debugging": {
+        "debugging-sequence": "debugging-sequence",
+        "causal-chain": "causal-chain",
+        "bpmn-debug-flow": "bpmn-debug-flow",
+        "before-after-flow": "before-after-flow",
+        "state-data-breakpoint": "state-data-breakpoint",
+    },
+    "feature-iteration": {
+        "current-target-flow": "current-target-flow",
+        "current-target-sequence": "current-target-sequence",
+        "diff-heatmap": "diff-heatmap",
+        "release-rollback-track": "release-rollback-track",
+    },
+    "page-mockup": {
+        "artboard-wireframe": "artboard-wireframe",
+        "artboard-filmstrip": "artboard-filmstrip",
+        "responsive-state-board": "responsive-state-board",
+        "primary-path-page-flow": "primary-path-page-flow",
+    },
+    "technical-design": {
+        "module-contract-data-topology": "module-contract-data-topology",
+        "api-contract-swimlane": "api-contract-swimlane",
+        "data-consistency-boundary": "data-consistency-boundary",
+        "release-switch-track": "release-switch-track",
+    },
+    "decision-communication": {
+        "decision-tree": "decision-tree",
+        "option-matrix-path": "option-matrix-path",
+        "tradeoff-quadrant": "tradeoff-quadrant",
+        "recommended-path": "recommended-path",
+    },
+    "delivery-acceptance": {
+        "acceptance-ledger": "acceptance-ledger",
+        "evidence-swimlane": "evidence-swimlane",
+        "risk-action-board": "risk-action-board",
+        "delivery-timeline": "delivery-timeline",
+    },
+}
+
 SYSTEM_ARCH_C4_TERMS = ("Context", "Container", "Component", "Deployment")
 SYSTEM_ARCH_SPECIALTY_TERMS = (
     "Logical",
@@ -176,6 +262,15 @@ def lint_system_architecture(html: str, *, allow_candidates: bool = False) -> li
             if confidence < 0 or confidence > 1:
                 errors.append("系统架构图 data-routing-confidence 必须是 0 到 1 的数字。")
 
+    template_family = _first_attr(parser, "data-template-family")
+    if template_family != "system-architecture":
+        errors.append('系统架构图必须声明 data-template-family="system-architecture"，证明来自系统架构 HTML 模板资产。')
+    template_id = _first_attr(parser, "data-template-id")
+    if not template_id:
+        errors.append("系统架构图必须声明 data-template-id，记录所复制的 HTML 模板资产。")
+    elif template_id not in SYSTEM_ARCH_TEMPLATE_IDS:
+        errors.append("系统架构图 data-template-id 必须来自 templates/system-architecture/ 的已知模板文件。")
+
     html_lower = html.lower()
     if HORIZONTAL_CANVAS_SCROLL_RE.search(html) or OVERSIZED_MIN_WIDTH_RE.search(html):
         errors.append("系统架构图主画布不得依赖横向滚动或超大 min-width；应压缩空白并在正常页面宽度内可读。")
@@ -232,6 +327,39 @@ def lint_system_architecture(html: str, *, allow_candidates: bool = False) -> li
     return errors
 
 
+def lint_template_identity(html: str, diagram_type: str) -> list[str]:
+    """Validate generic HTML template identity for non-system diagram types."""
+
+    parser = HtmlSignals()
+    parser.feed(html)
+    errors: list[str] = []
+    known_templates = TEMPLATE_LAYOUTS_BY_TYPE.get(diagram_type)
+    if known_templates is None:
+        return errors
+
+    declared_type = _first_attr(parser, "data-diagram-type")
+    if declared_type != diagram_type:
+        errors.append(f'{diagram_type} 图必须声明 data-diagram-type="{diagram_type}"。')
+
+    template_family = _first_attr(parser, "data-template-family")
+    if template_family != diagram_type:
+        errors.append(f'{diagram_type} 图必须声明 data-template-family="{diagram_type}"。')
+
+    template_id = _first_attr(parser, "data-template-id")
+    if not template_id:
+        errors.append(f"{diagram_type} 图必须声明 data-template-id。")
+    elif template_id not in known_templates:
+        errors.append(f"{diagram_type} data-template-id 必须来自 templates/{diagram_type}/ 的已知模板文件。")
+
+    template_layout = _first_attr(parser, "data-template-layout")
+    if not template_layout:
+        errors.append(f"{diagram_type} 图必须声明 data-template-layout。")
+    elif template_id in known_templates and template_layout != known_templates[template_id]:
+        errors.append(f"{diagram_type} data-template-layout 必须匹配所选 HTML 模板资产。")
+
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lint a vibe-diagram single-file HTML artifact.")
     parser.add_argument("html_file", type=Path, help="待检查的单文件 HTML")
@@ -245,7 +373,12 @@ def main(argv: list[str] | None = None) -> int:
 
     html = args.html_file.read_text(encoding="utf-8")
     if args.diagram_type != "system-architecture":
-        print(f"OK: 未启用 {args.diagram_type} 专用 lint，仅完成文件读取。")
+        errors = lint_template_identity(html, args.diagram_type)
+        if errors:
+            for error in errors:
+                print(f"ERROR: {error}")
+            return 1
+        print(f"OK: {args.diagram_type} template lint passed.")
         return 0
 
     errors = lint_system_architecture(html, allow_candidates=args.allow_candidates)

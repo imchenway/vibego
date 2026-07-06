@@ -17,6 +17,40 @@
 
 系统架构图不再直接套一个固定业务 archetype。命中 `system-architecture` 后必须先做 v6 路由：**C4 主线定抽象层级 → 专项扩展补充关注面 → 必要时跨图型转交**。路由只决定骨架，不决定业务内容；所有层名、节点名、模块数、图标和文案都来自用户材料或仓库证据，证据不足写“待确认”。
 
+### HTML 模板资产
+
+系统架构图必须优先复制 HTML 模板骨架，再替换槽位；禁止从零自由绘制整体布局。模板目录：`templates/system-architecture/`。模板命名面向使用意图，不使用 `c4-` 前缀；C4 只作为内部参考方法，不进入文件名前缀。
+
+使用流程：
+
+1. 先用 v6 路由器选择 `selected_view`。
+2. 从 `templates/system-architecture/` 复制最匹配的 HTML 文件。
+3. 只替换 `data-slot` 槽位内容、`data-routing-confidence`、标题和必要节点文本。
+4. 保留 `data-template-family="system-architecture"`、`data-template-id="..."`、`data-template-layout="..."`、`data-system-arch-view="..."`、主画布结构、箭头层、节点居中 CSS 和响应式 CSS。
+5. 如果模板槽位不够，先合并/隐藏/复制同类槽位；仍不够时才新建局部子结构，不能破坏主骨架。
+6. 16 个模板不能共享同一宏观骨架：`data-template-layout` 必须体现该模板的版式语义，只允许替换槽位内容，不允许把所有模板退化成同一种 grid/card 预览。
+
+模板清单：
+
+| 模板文件 | selected_view | 用途 |
+| --- | --- | --- |
+| `router-v6.html` | `router` | 解释路由与 companion / handoff 关系的内部校准视图 |
+| `system-context.html` | `context` | 系统边界、外部角色、外部系统 |
+| `workload-overview.html` | `container` | 默认工作负载/可部署单元总览 |
+| `component-breakdown.html` | `component` | 单容器内部组件白盒 |
+| `deployment-topology.html` | `deployment` | 环境、节点、部署单元和托管关系 |
+| `logical-layering.html` | `logical` | 逻辑分层与职责边界 |
+| `data-architecture.html` | `data-architecture` | 数据域、存储、血缘和治理 |
+| `data-flow.html` | `data-flow` | DFD、数据流和信任边界 |
+| `api-integration.html` | `api-integration` | API / webhook / 协议契约集成 |
+| `event-driven.html` | `event-driven` | 事件源、通道、消费者和一致性边界 |
+| `network-topology.html` | `network` | 网络边界、路由、出入口和安全控制 |
+| `security-view.html` | `security` | 资产、信任边界、威胁和控制 |
+| `identity-access.html` | `identity` | 主体、认证、授权和资源访问 |
+| `resilience-view.html` | `resilience` | 故障域、降级、切换和恢复目标 |
+| `observability-view.html` | `observability` | 日志、指标、追踪、告警和响应闭环 |
+| `delivery-pipeline.html` | `ci-cd` | 构建、制品、发布、回滚和门禁 |
+
 ### C4 主线
 
 | selected_view | 何时选择 | 画布骨架 |

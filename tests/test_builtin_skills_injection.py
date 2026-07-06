@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -12,7 +13,26 @@ VIBE_DIAGRAM_DIR = ROOT / "vibego_cli" / "data" / "skills" / "vibe-diagram"
 VIBE_DIAGRAM_SKILL = VIBE_DIAGRAM_DIR / "SKILL.md"
 VIBE_DIAGRAM_REFERENCES = VIBE_DIAGRAM_DIR / "references"
 VIBE_DIAGRAM_SCRIPTS = VIBE_DIAGRAM_DIR / "scripts"
+VIBE_DIAGRAM_TEMPLATES = VIBE_DIAGRAM_DIR / "templates"
 
+
+
+def _template_structure_signature(html: str) -> str:
+    """忽略文案和槽位命名，只比较模板主画布的 DOM 骨架。"""
+
+    match = re.search(
+        r'<section class="template-layout [^"]+"[^>]*>(.*?)</section>',
+        html,
+        flags=re.S,
+    )
+    assert match, "template layout section missing"
+    body = match.group(1)
+    body = re.sub(r'data-slot="[^"]+"', 'data-slot="_"', body)
+    body = re.sub(r'<b>.*?</b>', '<b>_</b>', body, flags=re.S)
+    body = re.sub(r'<span>.*?</span>', '<span>_</span>', body, flags=re.S)
+    body = re.sub(r'\{\{[^}]+\}\}', '{{_}}', body)
+    body = re.sub(r'\s+', ' ', body).strip()
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 def _read_vibe_diagram_core() -> str:
     """读取 vibe-diagram 常驻薄内核。"""
@@ -91,6 +111,72 @@ CANDIDATE_ATLAS_EXPECTATIONS = {
         "验收账本 / 需求到证据签收表",
         ["证据泳道图", "风险动作板", "交付时间线"],
     ),
+}
+
+
+NON_SYSTEM_TEMPLATE_EXPECTATIONS = {
+    "business-architecture": {
+        "capability-domain-map.html": "capability-domain-map",
+        "participant-boundary.html": "participant-boundary",
+        "rule-constraint-heatmap.html": "rule-constraint-heatmap",
+        "value-chain-map.html": "value-chain-map",
+    },
+    "business-flow": {
+        "bpmn-light-flow.html": "bpmn-light-flow",
+        "swimlane-flow.html": "swimlane-flow",
+        "stage-track.html": "stage-track",
+        "exception-branch-flow.html": "exception-branch-flow",
+    },
+    "code-sequence": {
+        "participant-timeline.html": "participant-timeline",
+        "async-callback-sequence.html": "async-callback-sequence",
+        "transaction-boundary-sequence.html": "transaction-boundary-sequence",
+        "retry-exception-sequence.html": "retry-exception-sequence",
+    },
+    "state-data-model": {
+        "state-machine.html": "state-machine",
+        "er-lite.html": "er-lite",
+        "lifecycle-track.html": "lifecycle-track",
+        "data-flow-model.html": "data-flow-model",
+        "state-event-matrix.html": "state-event-matrix",
+    },
+    "fault-debugging": {
+        "debugging-sequence.html": "debugging-sequence",
+        "causal-chain.html": "causal-chain",
+        "bpmn-debug-flow.html": "bpmn-debug-flow",
+        "before-after-flow.html": "before-after-flow",
+        "state-data-breakpoint.html": "state-data-breakpoint",
+    },
+    "feature-iteration": {
+        "current-target-flow.html": "current-target-flow",
+        "current-target-sequence.html": "current-target-sequence",
+        "diff-heatmap.html": "diff-heatmap",
+        "release-rollback-track.html": "release-rollback-track",
+    },
+    "page-mockup": {
+        "artboard-wireframe.html": "artboard-wireframe",
+        "artboard-filmstrip.html": "artboard-filmstrip",
+        "responsive-state-board.html": "responsive-state-board",
+        "primary-path-page-flow.html": "primary-path-page-flow",
+    },
+    "technical-design": {
+        "module-contract-data-topology.html": "module-contract-data-topology",
+        "api-contract-swimlane.html": "api-contract-swimlane",
+        "data-consistency-boundary.html": "data-consistency-boundary",
+        "release-switch-track.html": "release-switch-track",
+    },
+    "decision-communication": {
+        "decision-tree.html": "decision-tree",
+        "option-matrix-path.html": "option-matrix-path",
+        "tradeoff-quadrant.html": "tradeoff-quadrant",
+        "recommended-path.html": "recommended-path",
+    },
+    "delivery-acceptance": {
+        "acceptance-ledger.html": "acceptance-ledger",
+        "evidence-swimlane.html": "evidence-swimlane",
+        "risk-action-board.html": "risk-action-board",
+        "delivery-timeline.html": "delivery-timeline",
+    },
 }
 
 REFERENCE_BUSINESS_ARCHITECTURE_COLOR_LINES = [
@@ -1252,6 +1338,263 @@ def test_vibe_diagram_system_architecture_v6_router_contract_is_documented() -> 
     assert "不要把客服 / Agent / RAG / LLM / SDK / Gateway 等词当作默认业务内容" in system_text
 
 
+def test_vibe_diagram_system_architecture_html_templates_are_real_assets() -> None:
+    """系统架构模板必须是可复制的 HTML 资产，而不只是 reference 里的文字规则。"""
+
+    template_dir = VIBE_DIAGRAM_DIR / "templates" / "system-architecture"
+    expected = {
+        "router-v6.html",
+        "system-context.html",
+        "workload-overview.html",
+        "component-breakdown.html",
+        "deployment-topology.html",
+        "logical-layering.html",
+        "data-architecture.html",
+        "data-flow.html",
+        "api-integration.html",
+        "event-driven.html",
+        "network-topology.html",
+        "security-view.html",
+        "identity-access.html",
+        "resilience-view.html",
+        "observability-view.html",
+        "delivery-pipeline.html",
+    }
+
+    assert template_dir.is_dir()
+    assert {path.name for path in template_dir.glob("*.html")} == expected
+    assert not any(path.name.startswith("c4-") for path in template_dir.glob("*.html"))
+    for path in sorted(template_dir.glob("*.html")):
+        html = path.read_text(encoding="utf-8")
+        assert html.lower().startswith("<!doctype html>")
+        assert 'data-template-family="system-architecture"' in html
+        assert 'data-template-id="' in html
+        assert 'data-system-arch-view="' in html
+        assert 'data-slot="' in html
+        assert 'data-template-methodology="c4-inspired"' not in html
+        for fixed_word in ("客服", "RAG", "LLM", "七鱼", "微信客服"):
+            assert fixed_word not in html
+
+
+def test_vibe_diagram_system_architecture_reference_requires_copying_html_templates() -> None:
+    """reference 应要求复制 HTML 模板骨架并替换 data-slot，而不是每次自由重画。"""
+
+    system_text = _read_vibe_diagram_reference("system-architecture.md")
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert "templates/system-architecture/" in system_text
+    assert "必须优先复制 HTML 模板骨架" in system_text
+    assert "只替换 `data-slot`" in system_text
+    assert "禁止从零自由绘制整体布局" in system_text
+    assert "data-template-layout" in system_text
+    assert "不能共享同一宏观骨架" in system_text
+    assert "router-v6.html" in system_text
+    assert "workload-overview.html" in system_text
+    assert "deployment-topology.html" in system_text
+    assert "data/skills/*/templates/*/*.html" in pyproject_text
+
+
+def test_vibe_diagram_system_architecture_html_templates_have_distinct_macro_skeletons() -> None:
+    """16 个 HTML 模板不能只是同一个 grid 换标签；每个模板要有可检查的差异化宏观骨架。"""
+
+    template_dir = VIBE_DIAGRAM_DIR / "templates" / "system-architecture"
+    expected_layouts = {
+        "router-v6.html": "router-pipeline",
+        "system-context.html": "boundary-hub",
+        "workload-overview.html": "entry-core-foundation",
+        "component-breakdown.html": "whitebox-cluster",
+        "deployment-topology.html": "environment-zones",
+        "logical-layering.html": "north-south-layers",
+        "data-architecture.html": "data-domain-map",
+        "data-flow.html": "dfd-trust-boundary",
+        "api-integration.html": "contract-mesh",
+        "event-driven.html": "event-bus",
+        "network-topology.html": "network-zones",
+        "security-view.html": "security-threat-controls",
+        "identity-access.html": "identity-access-path",
+        "resilience-view.html": "failure-domain-recovery",
+        "observability-view.html": "telemetry-pipeline",
+        "delivery-pipeline.html": "delivery-rail",
+    }
+
+    seen_layouts: set[str] = set()
+    for filename, layout in expected_layouts.items():
+        html = (template_dir / filename).read_text(encoding="utf-8")
+        assert f'data-template-layout="{layout}"' in html
+        assert f'class="template-layout {layout}"' in html
+        assert layout in html
+        seen_layouts.add(layout)
+
+    assert len(seen_layouts) == len(expected_layouts)
+
+
+
+def test_vibe_diagram_non_system_html_templates_are_real_assets() -> None:
+    """除系统架构外的图型也应有可复制的 HTML 模板资产。"""
+
+    for diagram_type, expected_files in NON_SYSTEM_TEMPLATE_EXPECTATIONS.items():
+        template_dir = VIBE_DIAGRAM_TEMPLATES / diagram_type
+        assert template_dir.is_dir(), diagram_type
+        assert {path.name for path in template_dir.glob("*.html")} == set(expected_files), diagram_type
+        for filename, layout in expected_files.items():
+            html = (template_dir / filename).read_text(encoding="utf-8")
+            template_id = filename.removesuffix(".html")
+            assert html.lower().startswith("<!doctype html>"), filename
+            assert f'data-diagram-type="{diagram_type}"' in html
+            assert f'data-template-family="{diagram_type}"' in html
+            assert f'data-template-id="{template_id}"' in html
+            assert f'data-template-layout="{layout}"' in html
+            assert f'class="template-layout {layout}"' in html
+            assert 'data-slot="' in html
+
+
+
+def test_vibe_diagram_non_system_html_templates_have_distinct_dom_skeletons() -> None:
+    """同一图型内的多个模板不能只是同一个 DOM 骨架换文案。"""
+
+    for diagram_type, expected_files in NON_SYSTEM_TEMPLATE_EXPECTATIONS.items():
+        signatures: dict[str, str] = {}
+        for filename in expected_files:
+            html = (VIBE_DIAGRAM_TEMPLATES / diagram_type / filename).read_text(encoding="utf-8")
+            signatures[filename] = _template_structure_signature(html)
+
+        duplicate_groups: dict[str, list[str]] = {}
+        for filename, signature in signatures.items():
+            duplicate_groups.setdefault(signature, []).append(filename)
+        duplicates = [sorted(files) for files in duplicate_groups.values() if len(files) > 1]
+
+        assert not duplicates, f"{diagram_type} 模板 DOM 骨架重复：{duplicates}"
+
+
+def test_vibe_diagram_non_system_references_require_copying_html_templates() -> None:
+    """每个非系统架构 reference 应要求复制对应 HTML 模板骨架。"""
+
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    for diagram_type, expected_files in NON_SYSTEM_TEMPLATE_EXPECTATIONS.items():
+        reference_text = _read_vibe_diagram_reference(f"{diagram_type}.md")
+        assert f"templates/{diagram_type}/" in reference_text
+        assert "必须优先复制 HTML 模板骨架" in reference_text
+        assert "只替换 `data-slot`" in reference_text
+        assert "禁止从零自由绘制整体布局" in reference_text
+        assert "data-template-layout" in reference_text
+        assert "同一 DOM 骨架" in reference_text
+        for filename in expected_files:
+            assert filename in reference_text
+    assert "data/skills/*/templates/*/*.html" in pyproject_text
+
+
+def test_vibe_diagram_lint_requires_known_template_id_for_all_templated_types(tmp_path: Path) -> None:
+    """非系统架构图也应通过 lint 检查模板 family/id/layout 是否来自已知资产。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    bad = tmp_path / "bad_business_flow.html"
+    bad.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="business-flow"
+              data-template-family="business-flow"
+              data-template-id="unknown-flow"
+              data-template-layout="unknown-flow">
+          <section data-slot="title">业务流程：示例</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    bad_result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "business-flow", str(bad)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert bad_result.returncode == 1
+    assert "data-template-id 必须来自 templates/business-flow/" in bad_result.stdout
+
+    good = tmp_path / "good_business_flow.html"
+    good.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="business-flow"
+              data-template-family="business-flow"
+              data-template-id="bpmn-light-flow"
+              data-template-layout="bpmn-light-flow">
+          <section data-slot="title">业务流程：示例</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    good_result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "business-flow", str(good)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert good_result.returncode == 0
+    assert "OK: business-flow template lint passed." in good_result.stdout
+
+def test_vibe_diagram_system_architecture_lint_requires_known_html_template_id(
+    tmp_path: Path,
+) -> None:
+    """产物级 lint 应检查系统架构图是否来自已知 HTML 模板资产。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    missing_template = tmp_path / "missing_template.html"
+    missing_template.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation"
+              data-system-arch-view="container"
+              data-routing-confidence="0.88">
+          <svg viewBox="0 0 1500 860" aria-label="系统架构图">
+            <foreignObject x="0" y="0" width="280" height="90">
+              <div xmlns="http://www.w3.org/1999/xhtml" class="node-content">入口 接入 用户 渠道</div>
+            </foreignObject>
+            <path data-flow="主请求流"></path><path data-flow="数据读写流"></path>
+          </svg>
+          <section>入口 接入 用户 渠道 应用 服务 能力 支撑 数据 数据库 基础设施 云 存储 网络 安全 监控 管理 运维 权限 审计 评估 主请求流</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    bad = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(missing_template)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert bad.returncode == 1
+    assert "系统架构图必须声明 data-template-id" in bad.stdout
+
+    good_template = tmp_path / "known_template.html"
+    good_template.write_text(
+        """<!doctype html><html><body>
+        <main data-diagram-type="system-architecture"
+              data-diagram-grammar="system-architecture-presentation"
+              data-system-arch-view="container"
+              data-routing-confidence="0.88"
+              data-template-family="system-architecture"
+              data-template-id="workload-overview">
+          <svg viewBox="0 0 1500 860" aria-label="系统架构图">
+            <foreignObject x="0" y="0" width="280" height="90">
+              <div xmlns="http://www.w3.org/1999/xhtml" class="node-content">入口 接入 用户 渠道</div>
+            </foreignObject>
+            <path data-flow="主请求流"></path><path data-flow="数据读写流"></path>
+          </svg>
+          <section>Web APP 入口 接入 用户 渠道 应用 服务 会话 能力 支撑 工具 工作流 检索 数据层 知识库 会话数据 用户数据 运营数据 数据库 基础设施 云计算 存储 网络 安全 监控告警 管理 运维 权限 审计 评估 主请求流</section>
+        </main></body></html>""",
+        encoding="utf-8",
+    )
+
+    good = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(good_template)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert good.returncode == 0
+    assert "OK" in good.stdout
+
 def test_vibe_diagram_system_architecture_lint_requires_v6_diagramspec_attrs(
     tmp_path: Path,
 ) -> None:
@@ -1415,6 +1758,8 @@ def test_vibe_diagram_system_architecture_lint_rejects_card_report_and_accepts_p
               data-diagram-grammar="system-architecture-presentation"
               data-system-arch-view="container"
               data-routing-confidence="0.88"
+              data-template-family="system-architecture"
+              data-template-id="workload-overview"
               data-arch-archetype="entry-rail-application-capability-data-infra-ops">
           <svg viewBox="0 0 1500 860" aria-label="系统架构图">
             <foreignObject x="0" y="0" width="220" height="80">
