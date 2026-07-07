@@ -66,6 +66,14 @@ HORIZONTAL_CANVAS_SCROLL_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 OVERSIZED_MIN_WIDTH_RE = re.compile(r"[{;]\s*min-width\s*:\s*(?:1[3-9]\d{2}|[2-9]\d{3})px", re.IGNORECASE)
+TITLE_DESCRIPTION_NODE_RE = re.compile(
+    r"<(?P<tag>[a-z0-9:-]+)\b[^>]*\bclass=[\"'](?P<class>[^\"']+)[\"'][^>]*>\s*<b\b[^>]*>.*?</b>\s*<span\b",
+    re.IGNORECASE | re.DOTALL,
+)
+CSS_CLASS_RULE_RE = re.compile(
+    r"\.(?P<class>[A-Za-z0-9_-]+)(?:\b|[.#:{\s>+~,])[^{}]*\{(?P<body>[^{}]*)\}",
+    re.IGNORECASE | re.DOTALL,
+)
 AUTO_CENTERED_NODE_MARKERS = (
     "<foreignobject",
     "data-node-layout=\"auto-centered\"",
@@ -230,11 +238,43 @@ def _count_terms(text: str, terms: Iterable[str]) -> int:
     return sum(1 for term in terms if term in text)
 
 
+def lint_title_description_stacking(html: str) -> list[str]:
+    """Check that node title/body pairs are not laid out as horizontal flex rows."""
+
+    title_description_classes: set[str] = set()
+    for match in TITLE_DESCRIPTION_NODE_RE.finditer(html):
+        title_description_classes.update(
+            class_name for class_name in match.group("class").split() if class_name.strip()
+        )
+    if not title_description_classes:
+        return []
+
+    css_rules: dict[str, list[str]] = {}
+    for match in CSS_CLASS_RULE_RE.finditer(html):
+        css_rules.setdefault(match.group("class"), []).append(match.group("body"))
+
+    horizontal_flex_classes = sorted(
+        class_name
+        for class_name in title_description_classes
+        for rule_body in css_rules.get(class_name, [])
+        if re.search(r"(?:^|;)\s*display\s*:\s*flex\s*(?:;|$)", rule_body, re.IGNORECASE)
+        and not re.search(r"(?:^|;)\s*flex-direction\s*:\s*column\s*(?:;|$)", rule_body, re.IGNORECASE)
+    )
+    if not horizontal_flex_classes:
+        return []
+
+    return [
+        "节点标题和描述必须上下排布；"
+        f"{', '.join(f'.{class_name}' for class_name in horizontal_flex_classes)} "
+        "使用 display:flex 时必须同时声明 flex-direction:column。"
+    ]
+
+
 def lint_system_architecture(html: str, *, allow_candidates: bool = False) -> list[str]:
     parser = HtmlSignals()
     parser.feed(html)
     text = parser.text
-    errors: list[str] = []
+    errors: list[str] = lint_title_description_stacking(html)
 
     if not allow_candidates and "tablist" in parser.roles:
         errors.append("普通系统架构图不得生成候选 tab；只有显式校准模式可使用 role=tablist。")
@@ -332,7 +372,7 @@ def lint_template_identity(html: str, diagram_type: str) -> list[str]:
 
     parser = HtmlSignals()
     parser.feed(html)
-    errors: list[str] = []
+    errors: list[str] = lint_title_description_stacking(html)
     known_templates = TEMPLATE_LAYOUTS_BY_TYPE.get(diagram_type)
     if known_templates is None:
         return errors

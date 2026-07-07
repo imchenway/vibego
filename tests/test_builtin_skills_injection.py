@@ -1376,6 +1376,29 @@ def test_vibe_diagram_system_architecture_html_templates_are_real_assets() -> No
             assert fixed_word not in html
 
 
+def test_vibe_diagram_all_html_templates_stack_slot_titles_above_descriptions() -> None:
+    """所有 HTML 模板的节点标题应独占首行，描述放在下方，避免互相挤压换行。"""
+
+    for path in sorted(VIBE_DIAGRAM_TEMPLATES.rglob("*.html")):
+        html = path.read_text(encoding="utf-8")
+        compact = re.sub(r"\s+", "", html)
+
+        assert ".slot{display:grid;grid-template-rows:autoauto;align-content:center;justify-items:center;gap:4px;" in compact, path
+        assert ".slotb{display:block;max-width:100%;font-size:13px;line-height:1.2" in compact, path
+        assert ".slotspan{display:block;max-width:100%;margin-top:0;color:var(--muted);font-size:12px;line-height:1.45" in compact, path
+
+
+def test_vibe_diagram_rules_require_title_description_vertical_stack() -> None:
+    """模板以外的自由绘制节点也应遵守标题/描述上下排布规则。"""
+
+    skill_text = _read_vibe_diagram_core()
+
+    assert "节点标题必须单独一行，描述放在标题下方" in skill_text
+    assert "display:flex" in skill_text
+    assert "flex-direction:column" in skill_text
+    assert "标题和描述横向挤压" in skill_text
+
+
 def test_vibe_diagram_system_architecture_reference_requires_copying_html_templates() -> None:
     """reference 应要求复制 HTML 模板骨架并替换 data-slot，而不是每次自由重画。"""
 
@@ -1594,6 +1617,71 @@ def test_vibe_diagram_system_architecture_lint_requires_known_html_template_id(
 
     assert good.returncode == 0
     assert "OK" in good.stdout
+
+
+def test_vibe_diagram_lint_rejects_horizontal_flex_title_description_nodes(
+    tmp_path: Path,
+) -> None:
+    """产物级 lint 应拦截标题和描述横向 flex 排布的节点，避免标题被描述挤换行。"""
+
+    lint_script = VIBE_DIAGRAM_SCRIPTS / "vibe_diagram_lint.py"
+    base_main_attrs = """
+        data-diagram-type="system-architecture"
+        data-diagram-grammar="system-architecture-presentation"
+        data-system-arch-view="container"
+        data-routing-confidence="0.86"
+        data-template-family="system-architecture"
+        data-template-id="workload-overview"
+        data-content-source="repo-evidence"
+    """
+    svg_body = """
+      <svg viewBox="0 0 1600 900">
+        <foreignObject x="40" y="40" width="300" height="160">
+          <div xmlns="http://www.w3.org/1999/xhtml" class="arch-box">
+            <b>入口渠道</b><span>应用服务接入，能力支撑，数据读写，基础设施与管理运维</span>
+          </div>
+        </foreignObject>
+        <text>主请求流</text>
+      </svg>
+    """
+    bad = tmp_path / "horizontal_flex_nodes.html"
+    bad.write_text(
+        f"""<!doctype html><html><head><style>
+        .arch-box{{display:flex;align-items:center;justify-content:center;text-align:center}}
+        .arch-box b{{display:block}}.arch-box span{{display:block}}
+        </style></head><body><main {base_main_attrs}>{svg_body}</main></body></html>""",
+        encoding="utf-8",
+    )
+
+    bad_result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(bad)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert bad_result.returncode == 1
+    assert "标题和描述必须上下排布" in bad_result.stdout
+
+    good = tmp_path / "vertical_flex_nodes.html"
+    good.write_text(
+        f"""<!doctype html><html><head><style>
+        .arch-box{{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:4px}}
+        .arch-box b{{display:block;max-width:100%}}.arch-box span{{display:block;max-width:100%}}
+        </style></head><body><main {base_main_attrs}>{svg_body}</main></body></html>""",
+        encoding="utf-8",
+    )
+
+    good_result = subprocess.run(
+        [sys.executable, str(lint_script), "--type", "system-architecture", str(good)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert good_result.returncode == 0, good_result.stdout
+    assert "OK: system-architecture presentation lint passed." in good_result.stdout
+
 
 def test_vibe_diagram_system_architecture_lint_requires_v6_diagramspec_attrs(
     tmp_path: Path,

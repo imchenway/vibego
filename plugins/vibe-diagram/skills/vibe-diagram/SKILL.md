@@ -127,8 +127,9 @@ aside。
 3. 箭头标签不压正文；连线层低于节点层；禁止箭头穿过节点正文、标题、图例、交互按钮或弹窗。
 4. 节点正文必须用 HTML/CSS 可换行容器；max-width、min-height、height:auto、line-height、overflow-wrap:anywhere 和 padding
    保证可读。
-5. 不得用固定高度裁切文字，不得用 `white-space: nowrap` 承载正文，禁止 line-clamp、max-height 或 overflow:hidden 裁字。
-6. 任一节点重叠、线穿字、文字溢出，必须重排；桌面宽度和 390px 宽度都要检查。
+5. 节点标题必须单独一行，描述放在标题下方；用 `display:flex` 需有 `flex-direction:column`，防标题和描述横向挤压。
+6. 不得用固定高度裁切文字，不得用 `white-space: nowrap` 承载正文，禁止 line-clamp、max-height 或 overflow:hidden 裁字。
+7. 任一节点重叠、线穿字、文字溢出，必须重排；桌面宽度和 390px 宽度都要检查。
 
 ## 节点信息承载与证据详情
 
