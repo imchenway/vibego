@@ -51,24 +51,19 @@
 - 代码实现或修复：必须只有通过 Readiness Gate 且用户确认后，使用 superpowers:test-driven-development。
 - 收尾声明前：必须使用 superpowers:verification-before-completion。
 - 命中下方 `Vibe / HTML trigger matrix` 时，必须使用 vibe-diagram；未命中且属于纯概念、翻译改写、一句话答案、简单命令、安装升级说明、轻量决策或用户明确不要图时，默认简洁文本。
-- 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility；产品设计/视觉探索类再按下方 Product
-  Design 边界处理。
+- 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility；产品设计/视觉探索类才按需路由到
+  Product Design。
 - 产品体验、UX 研究、用户流程审计、视觉方向探索、原型/重设计/URL 克隆、截图/Figma/ImageGen 到可交互原型、原型视觉 QA：若当前环境已提供
-  OpenAI Product Design，则必须使用；使用时必须先确认 brief，缺少视觉目标时先生成 3 个方向并等待用户选择，不得从文字 brief
-  直接实现；落地代码仍遵守 superpowers:test-driven-development、frontend-skill、impeccable、accessibility 与本仓库验证门禁。
+  OpenAI Product Design，则按需使用并遵守其 brief/visual-target 门禁；缺失时回退，不自动安装。
 - 高级视觉、记忆点、沉浸式体验：必须使用 premium-frontend-ui。
 - 滚动叙事、页面转场、视差、连续动效：必须使用 gsap-framer-scroll-animation，并提供 reduced-motion 降级。
 
 ## Vibe / HTML trigger matrix
 
-- 必须触发 vibe-diagram：明确要求画图/图形化/HTML
-  图；复杂技术/业务逻辑、关系结构、调用链、状态流转、数据口径、前后差异、根因链路或证据链；系统/业务/流程/时序/状态/故障/页面设计/技术设计/需求决策/交付验收等视觉沟通。
-- 默认触发 vibe-diagram：行为/故障为什么；具体功能、按钮、接口、配置、权限、构建、任务、数据或运行现场出现“为什么没反应 /
-  为什么失败 / 为什么没生效 / 为什么走错 / 为什么变慢 / 为什么不一致”；解释具体对象、代码、文件更新、diff、模块、页面、接口、配置、数据、功能入口或运行结果。
-- 命中后优先生成/更新项目内单文件 HTML；分析、设计、排障、方案、决策、验收、代码逻辑、证据链、风险、回滚和测试矩阵写入 HTML 或
-  docs。
-- 生成 HTML 后聊天只给链接/路径和下一步；链接文字必须使用 HTML 内部 `<h1>` 主标题，不要写成固定的“打开
-  HTML”；平台或入口侧要求由发送侧提示词前缀或运行时适配层注入。
+- 触发：显式画图/HTML；复杂关系、链路、状态、数据、前后差异、根因或证据；行为/故障为什么；具体对象、文件/diff、接口/配置、运行结果解释；架构、流程、时序、页面、技术设计、决策或交付验收等视觉沟通。
+- 不触发：纯概念、翻译、一句话答案、简单命令、安装升级、轻量决策或用户明确不要图。
+- 命中后优先生成/更新项目内单文件 HTML；分析、证据、风险、回滚和测试矩阵写入 HTML 或 docs；聊天只给链接/路径和下一步，链接文字使用
+  HTML 内部 `<h1>`。
 
 ## Work contract
 
@@ -87,5 +82,5 @@
 
 - AGENTS 只判断何时触发；具体制图规则以 vibe-diagram 为准。不要因为用户没显式说“画图”，就把具体运行现象、故障成因、代码逻辑链路或证据链追问退回聊天长文。
 - 前端任务必须明确唯一核心目标、用户主路径、首层展示和收纳内容；视觉、交互、响应式、可访问性细节以
-  frontend-skill、impeccable、accessibility、Product Design为准。
+  frontend-skill、impeccable、accessibility 为准。
 - 前端页面禁止卡片堆叠、不能功能平铺、不能重复废话标题；宁可多一层交互递进，也不要把所有功能塞进同一屏。
