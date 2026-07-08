@@ -19,12 +19,22 @@
 
 ## Readiness Gate
 
-- 进入 develop 前必须通过 Readiness Gate；不得只说“我有 95% 信心”。95% 代表：没有高风险未知项，且目标、现状证据、方案、影响范围、验收标准、验证方式和回滚方式都已明确。
+- 进入设计、计划或 develop 前必须通过 Readiness Gate；不得只说“我有 95% 信心”。95%
+  代表：没有高风险未知项，且目标、现状证据、方案、影响范围、验收标准、验证方式和回滚方式都已明确。
 - 新需求必须先澄清用户/场景、业务目标、主流程、业务规则、权限角色、边界异常、多端差异和可测试 AC。
 - 现有功能迭代必须先说明入口与现状、当前实现链路、新增/修改/删除点、兼容影响和风险。
 - Bug/异常必须先复述现象与影响，提出至少两个候选根因，验证后才能把根因写成事实；未验证根因只能标注为假设。
 - 所有假设必须列出；高风险假设必须继续追问，低风险假设可给默认方案并请用户确认。
 - 通过门禁后，只能请求用户确认是否进入 develop；未确认不得写代码。
+
+## Interaction Gate
+
+- 自评未达到 95% 或 Readiness Gate 未满足时，必须标记 `READINESS: BLOCKED`；只允许只读取证、列出已确认事实、列出阻塞未知，并向用户提出问题。
+- Readiness 未满足前，不得输出完整设计、实现计划、任务拆解或最终方案；不得用“先给一个方案/默认按推荐”绕过。
+- 每轮最多问 1 个最高影响问题；多个选项可以放在同一个问题内，但不得一次性提出 2-3 个独立问题。
+- 多个未知项并存时，按风险排序，只问会改变方案、范围、验收、权限、数据或回滚的最高风险问题；用户回答后更新 Readiness
+  清单，若仍未达标，继续只问下一个最高影响问题。
+- 提问前必须先完成可只读取证：读 AGENTS/docs/相关代码/测试/日志；不得询问可从仓库查到的问题。
 
 ## Docs memory
 
@@ -40,13 +50,25 @@
 - Bug、异常、测试失败：必须使用 superpowers:systematic-debugging。
 - 代码实现或修复：必须只有通过 Readiness Gate 且用户确认后，使用 superpowers:test-driven-development。
 - 收尾声明前：必须使用 superpowers:verification-before-completion。
-- 明确要求画图/HTML，或需要表达复杂关系、调用链、状态流转、故障证据链、前后差异、页面设计、技术设计、交付验收时，必须使用
-  vibe-diagram；简单概念、翻译改写、一句话答案、简单命令默认文本。
-- 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility + Product Design。
-- 产品体验、UX 研究、视觉探索、原型/重设计/URL 克隆、截图/Figma/ImageGen 到可交互原型、原型视觉 QA：若环境已提供 OpenAI
-  Product Design，则必须使用；
+- 命中下方 `Vibe / HTML trigger matrix` 时，必须使用 vibe-diagram；未命中且属于纯概念、翻译改写、一句话答案、简单命令、安装升级说明、轻量决策或用户明确不要图时，默认简洁文本。
+- 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility；产品设计/视觉探索类再按下方 Product
+  Design 边界处理。
+- 产品体验、UX 研究、用户流程审计、视觉方向探索、原型/重设计/URL 克隆、截图/Figma/ImageGen 到可交互原型、原型视觉 QA：若当前环境已提供
+  OpenAI Product Design，则必须使用；使用时必须先确认 brief，缺少视觉目标时先生成 3 个方向并等待用户选择，不得从文字 brief
+  直接实现；落地代码仍遵守 superpowers:test-driven-development、frontend-skill、impeccable、accessibility 与本仓库验证门禁。
 - 高级视觉、记忆点、沉浸式体验：必须使用 premium-frontend-ui。
 - 滚动叙事、页面转场、视差、连续动效：必须使用 gsap-framer-scroll-animation，并提供 reduced-motion 降级。
+
+## Vibe / HTML trigger matrix
+
+- 必须触发 vibe-diagram：明确要求画图/图形化/HTML
+  图；复杂技术/业务逻辑、关系结构、调用链、状态流转、数据口径、前后差异、根因链路或证据链；系统/业务/流程/时序/状态/故障/页面设计/技术设计/需求决策/交付验收等视觉沟通。
+- 默认触发 vibe-diagram：行为/故障为什么；具体功能、按钮、接口、配置、权限、构建、任务、数据或运行现场出现“为什么没反应 /
+  为什么失败 / 为什么没生效 / 为什么走错 / 为什么变慢 / 为什么不一致”；解释具体对象、代码、文件更新、diff、模块、页面、接口、配置、数据、功能入口或运行结果。
+- 命中后优先生成/更新项目内单文件 HTML；分析、设计、排障、方案、决策、验收、代码逻辑、证据链、风险、回滚和测试矩阵写入 HTML 或
+  docs。
+- 生成 HTML 后聊天只给链接/路径和下一步；链接文字必须使用 HTML 内部 `<h1>` 主标题，不要写成固定的“打开
+  HTML”；平台或入口侧要求由发送侧提示词前缀或运行时适配层注入。
 
 ## Work contract
 
@@ -58,12 +80,12 @@
 
 ## HTML / visual delivery contract
 
-- 生成 HTML 时，分析、设计、排障、方案、决策、验收、代码逻辑说明、证据链、风险、回滚、测试矩阵写入 HTML；docs 做长期沉淀；聊天只给链接/路径和下一步。
-- Codex 默认给可点击 `file://` 链接和绝对路径兜底；链接文字必须使用 HTML 内部 `<h1>` 主标题，不要写成固定的“打开 HTML”。
+- HTML 触发、内容承载和聊天信封以 `Vibe / HTML trigger matrix` 为准；Codex 默认给可点击 `file://` 链接和绝对路径兜底。
 - 如果当前环境无法写入 HTML，才允许在聊天里输出完整 HTML 代码块，并说明无法写文件。
 
 ## Visual and frontend contract
 
+- AGENTS 只判断何时触发；具体制图规则以 vibe-diagram 为准。不要因为用户没显式说“画图”，就把具体运行现象、故障成因、代码逻辑链路或证据链追问退回聊天长文。
 - 前端任务必须明确唯一核心目标、用户主路径、首层展示和收纳内容；视觉、交互、响应式、可访问性细节以
-  frontend-skill、impeccable、accessibility 、Product Design为准。
+  frontend-skill、impeccable、accessibility、Product Design为准。
 - 前端页面禁止卡片堆叠、不能功能平铺、不能重复废话标题；宁可多一层交互递进，也不要把所有功能塞进同一屏。
