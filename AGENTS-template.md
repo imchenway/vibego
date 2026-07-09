@@ -49,6 +49,8 @@
 - 复杂实现计划、架构调整、重要重构：必须使用 superpowers:writing-plans。
 - Bug、异常、测试失败：必须使用 superpowers:systematic-debugging。
 - 代码实现或修复：必须只有通过 Readiness Gate 且用户确认后，使用 superpowers:test-driven-development。
+- 每次开发任务完成后、进入下一任务或收尾声明前：必须使用 superpowers:requesting-code-review；review
+  请求必须纳入本次需求/计划、变更范围、验证证据，并要求 reviewer 读取且遵守当前项目 AGENTS.md 及相关上级规约。
 - 收尾声明前：必须使用 superpowers:verification-before-completion。
 - 命中下方 `Vibe / HTML trigger matrix` 时，必须使用 vibe-diagram；未命中且属于纯概念、翻译改写、一句话答案、简单命令、安装升级说明、轻量决策或用户明确不要图时，默认简洁文本。
 - 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility；产品设计/视觉探索类才按需路由到
