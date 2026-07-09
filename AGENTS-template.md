@@ -55,6 +55,8 @@
 - 开发、review 和 verification 前必须先定位真实 Git 工作区；若当前目录不是 Git 仓，或父级目录下存在多个子 Git
   仓/子模块，必须逐个受影响子仓收集 cwd、branch、status、diff/暂存 diff 和验证命令，禁止只用父目录的 git status、单一 SHA
   区间或聚合仓 clean 状态下结论。
+- 使用 subagent（含 Subagent-Driven、reviewer、fixer）时，默认不得显式指定 `model` 或 `reasoning_effort`
+  ，必须继承主会话当前模型与推理强度；只有用户明确要求切换，或任务失败后需升级并获用户确认时，才允许覆盖。不得为省成本/速度降级到低级模型，也不得读取配置文件替代当前会话设置。
 - 收尾声明前：必须使用 superpowers:verification-before-completion。
 - 命中下方 `Vibe / HTML trigger matrix` 时，必须使用 vibe-diagram；未命中且属于纯概念、翻译改写、一句话答案、简单命令、安装升级说明、轻量决策或用户明确不要图时，默认简洁文本。
 - 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility；产品设计/视觉探索类才按需路由到
