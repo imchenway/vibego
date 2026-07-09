@@ -50,7 +50,11 @@
 - Bug、异常、测试失败：必须使用 superpowers:systematic-debugging。
 - 代码实现或修复：必须只有通过 Readiness Gate 且用户确认后，使用 superpowers:test-driven-development。
 - 每次开发任务完成后、进入下一任务或收尾声明前：必须使用 superpowers:requesting-code-review；review
-  请求必须纳入本次需求/计划、变更范围、验证证据，并要求 reviewer 读取且遵守当前项目 AGENTS.md 及相关上级规约。
+  请求必须纳入本次需求/计划、变更范围、验证证据，并要求 reviewer 读取且遵守当前项目 AGENTS.md、各受影响子仓 AGENTS.md
+  及相关上级规约。
+- 开发、review 和 verification 前必须先定位真实 Git 工作区；若当前目录不是 Git 仓，或父级目录下存在多个子 Git
+  仓/子模块，必须逐个受影响子仓收集 cwd、branch、status、diff/暂存 diff 和验证命令，禁止只用父目录的 git status、单一 SHA
+  区间或聚合仓 clean 状态下结论。
 - 收尾声明前：必须使用 superpowers:verification-before-completion。
 - 命中下方 `Vibe / HTML trigger matrix` 时，必须使用 vibe-diagram；未命中且属于纯概念、翻译改写、一句话答案、简单命令、安装升级说明、轻量决策或用户明确不要图时，默认简洁文本。
 - 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility；产品设计/视觉探索类才按需路由到
