@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>故障排查：回复未回传 Telegram 是 watcher 绑定到旧会话</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { color-scheme: light; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+      overflow-x: clip;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 22px 0 48px;
+    }
+
+    .task-code {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      margin-bottom: 10px;
+      padding: 4px 10px;
+      border: 1px solid rgba(31,111,178,.26);
+      border-radius: 999px;
+      color: var(--blue);
+      background: rgba(255,255,255,.76);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
+
+    h1 {
+      max-width: 920px;
+      margin: 0 0 10px;
+      font-size: clamp(24px, 2.8vw, 32px);
+      line-height: 1.18;
+      letter-spacing: -.025em;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: clamp(18px, 2vw, 23px);
+      line-height: 1.3;
+    }
+
+    h3 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    p { margin: 0; }
+
+    code {
+      padding: .1em .35em;
+      border-radius: 6px;
+      color: #164e78;
+      background: rgba(232,243,255,.9);
+      overflow-wrap: anywhere;
+    }
+
+    .summary {
+      max-width: 980px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .verdict-band {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      margin: 18px 0;
+      padding: 14px 16px;
+      border: 1px solid rgba(166,58,58,.28);
+      border-radius: 16px;
+      background: linear-gradient(90deg, rgba(255,240,240,.95), rgba(255,255,255,.9));
+      box-shadow: var(--shadow);
+    }
+
+    .verdict-band strong { color: var(--red); }
+    .verdict-band span { color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .status.confirmed { color: #fff; background: var(--red); }
+    .status.pending { color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(152,101,6,.26); }
+    .status.ok { color: var(--green); background: var(--green-soft); border: 1px solid rgba(23,120,90,.22); }
+    .status.excluded { color: var(--green); background: var(--green-soft); }
+
+    .template-layout {
+      position: relative;
+      margin-top: 18px;
+      padding: 18px;
+      border: 1px solid rgba(141,179,216,.48);
+      border-radius: 24px;
+      background: rgba(255,255,255,.82);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .template-layout::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(38,102,154,.043) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(38,102,154,.043) 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+
+    .template-layout > * { position: relative; z-index: 1; }
+
+    .actor-grid,
+    .event-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .actor-grid {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      padding-bottom: 13px;
+      background: linear-gradient(180deg, rgba(255,255,255,.98) 72%, rgba(255,255,255,0));
+    }
+
+    .actor {
+      min-height: 74px;
+      padding: 12px;
+      border: 1px solid rgba(141,179,216,.55);
+      border-radius: 16px;
+      text-align: center;
+      background: rgba(255,255,255,.97);
+    }
+
+    .actor b { display: block; font-size: 13px; line-height: 1.3; }
+    .actor span { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .actor.telegram { border-color: rgba(98,84,173,.35); background: linear-gradient(180deg, #fff, var(--violet-soft)); }
+    .actor.worker { border-color: rgba(31,111,178,.38); background: linear-gradient(180deg, #fff, var(--blue-soft)); }
+    .actor.pointer { border-color: rgba(152,101,6,.34); background: linear-gradient(180deg, #fff, var(--amber-soft)); }
+    .actor.output { border-color: rgba(23,120,90,.34); background: linear-gradient(180deg, #fff, var(--green-soft)); }
+
+    .sequence {
+      position: relative;
+      display: grid;
+      gap: 10px;
+      padding: 4px 0 8px;
+    }
+
+    .sequence::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), rgba(141,179,216,.25) calc(25% - 1px) 25%);
+      pointer-events: none;
+    }
+
+    .event-row { min-height: 82px; align-items: center; }
+
+    .event {
+      position: relative;
+      min-height: 64px;
+      padding: 10px 13px 10px 42px;
+      border: 1px solid rgba(31,111,178,.34);
+      border-radius: 14px;
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 8px 18px rgba(20,57,92,.06);
+      overflow-wrap: anywhere;
+    }
+
+    .event::before {
+      content: attr(data-step);
+      position: absolute;
+      left: 10px;
+      top: 11px;
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--blue);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .event::after {
+      content: "";
+      position: absolute;
+      right: -11px;
+      top: calc(50% - 6px);
+      border-left: 10px solid var(--blue);
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+    }
+
+    .event strong { display: block; font-size: 13px; line-height: 1.4; }
+    .event span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .event small { display: block; margin-top: 5px; color: var(--blue); font-size: 11px; line-height: 1.35; font-weight: 750; }
+    .event.good { border-color: rgba(23,120,90,.42); background: var(--green-soft); }
+    .event.good::before { background: var(--green); }
+    .event.good::after { border-left-color: var(--green); }
+    .event.warn { border-color: rgba(152,101,6,.42); background: var(--amber-soft); }
+    .event.warn::before { background: var(--amber); }
+    .event.warn::after { border-left-color: var(--amber); }
+    .event.bad { border-color: rgba(166,58,58,.48); background: var(--red-soft); }
+    .event.bad::before { background: var(--red); }
+    .event.bad::after { border-left-color: var(--red); }
+    .event.stop::after { content: "×"; right: -18px; top: calc(50% - 15px); border: 0; color: var(--red); font-size: 28px; line-height: 1; font-weight: 900; }
+
+    .c1-2 { grid-column: 1 / 3; }
+    .c2-4 { grid-column: 2 / 5; }
+    .c2-3 { grid-column: 2 / 4; }
+    .c3-4 { grid-column: 3 / 5; }
+
+    .root-cause {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 14px;
+      align-items: start;
+      margin-top: 14px;
+      padding: 16px;
+      border: 2px solid rgba(166,58,58,.48);
+      border-radius: 18px;
+      background: rgba(255,240,240,.97);
+    }
+
+    .root-mark {
+      display: grid;
+      place-items: center;
+      min-width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--red);
+      font-weight: 900;
+    }
+
+    .root-cause p { margin-top: 6px; color: #6e3030; font-size: 13px; line-height: 1.65; }
+
+    .evidence-steps {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .evidence-step {
+      position: relative;
+      min-height: 92px;
+      padding: 11px;
+      border: 1px solid rgba(141,179,216,.42);
+      border-radius: 14px;
+      background: rgba(255,255,255,.96);
+    }
+
+    .evidence-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -14px;
+      top: 34px;
+      z-index: 2;
+      color: var(--blue);
+      font-weight: 900;
+    }
+
+    .evidence-step b { display: block; color: var(--blue); font-size: 12px; }
+    .evidence-step span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.48; }
+
+    .section {
+      margin-top: 24px;
+      padding: 18px;
+      border: 1px solid rgba(141,179,216,.42);
+      border-radius: 20px;
+      background: rgba(255,255,255,.84);
+      box-shadow: var(--shadow);
+    }
+
+    .hypothesis-table,
+    .source-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .hypothesis-table th,
+    .hypothesis-table td,
+    .source-table th,
+    .source-table td {
+      padding: 10px 11px;
+      border-right: 1px solid rgba(141,179,216,.25);
+      border-bottom: 1px solid rgba(141,179,216,.25);
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    .hypothesis-table th,
+    .source-table th { color: #29455f; background: var(--blue-soft); }
+    .hypothesis-table tr > *:first-child,
+    .source-table tr > *:first-child { border-left: 1px solid rgba(141,179,216,.25); }
+    .hypothesis-table thead tr:first-child > *,
+    .source-table thead tr:first-child > * { border-top: 1px solid rgba(141,179,216,.25); }
+    .hypothesis-table thead tr:first-child > *:first-child,
+    .source-table thead tr:first-child > *:first-child { border-top-left-radius: 12px; }
+    .hypothesis-table thead tr:first-child > *:last-child,
+    .source-table thead tr:first-child > *:last-child { border-top-right-radius: 12px; }
+
+    .action-track {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .action-node {
+      min-height: 114px;
+      padding: 13px;
+      border: 1px solid rgba(31,111,178,.35);
+      border-radius: 16px;
+      background: var(--blue-soft);
+    }
+
+    .action-node strong { display: block; font-size: 13px; line-height: 1.35; }
+    .action-node span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .action-node.pending { border-color: rgba(152,101,6,.35); background: var(--amber-soft); }
+    .action-node.done { border-color: rgba(23,120,90,.3); background: var(--green-soft); }
+    .action-arrow { color: var(--blue); font-size: 24px; font-weight: 900; }
+
+    .notice {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-left: 4px solid var(--amber);
+      border-radius: 10px;
+      color: #704c0b;
+      background: var(--amber-soft);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    details {
+      margin-top: 10px;
+      border: 1px solid rgba(141,179,216,.36);
+      border-radius: 14px;
+      background: rgba(255,255,255,.88);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 11px 13px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    details > div { padding: 0 13px 13px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+
+    summary:focus-visible,
+    a:focus-visible {
+      outline: 3px solid rgba(31,111,178,.35);
+      outline-offset: 3px;
+    }
+
+    .footer-note { margin-top: 18px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+
+    @media (max-width: 780px) {
+      main { width: min(100vw - 20px, 760px); padding-top: 14px; }
+      .verdict-band { grid-template-columns: 1fr; }
+      .actor-grid { position: static; grid-template-columns: 1fr 1fr; }
+      .sequence::before { display: none; }
+      .event-row { display: block; min-height: 0; }
+      .event { margin: 0 0 30px; }
+      .event::after {
+        right: auto;
+        left: calc(50% - 6px);
+        top: auto;
+        bottom: -24px;
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        border-top: 10px solid var(--blue);
+        border-bottom: 0;
+      }
+      .event.good::after { border-left-color: transparent; border-top-color: var(--green); }
+      .event.warn::after { border-left-color: transparent; border-top-color: var(--amber); }
+      .event.bad::after { border-left-color: transparent; border-top-color: var(--red); }
+      .event.stop::after { left: calc(50% - 8px); bottom: -27px; top: auto; right: auto; border: 0; }
+      .evidence-steps { grid-template-columns: 1fr; }
+      .evidence-step:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -17px; }
+      .root-cause { grid-template-columns: 1fr; }
+      .root-mark { width: 52px; }
+      .action-track { grid-template-columns: 1fr; }
+      .action-arrow { text-align: center; transform: rotate(90deg); }
+      .hypothesis-table,
+      .source-table { font-size: 11px; }
+      .hypothesis-table th,
+      .hypothesis-table td,
+      .source-table th,
+      .source-table td { padding: 8px; }
+    }
+
+    @media (max-width: 440px) {
+      .template-layout,
+      .section { padding: 13px; }
+      .actor-grid { grid-template-columns: 1fr; }
+      .root-cause { padding: 13px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main data-diagram-type="fault-debugging"
+        data-template-family="fault-debugging"
+        data-template-id="debugging-sequence"
+        data-template-layout="debugging-sequence">
+    <div class="task-code">TASK_20260711_001</div>
+    <h1 data-slot="title">故障排查：Telegram 回复错绑旧会话已完成源码修复与回归</h1>
+    <p class="summary" data-slot="summary">2026-07-11 运行现场确认断点发生在“新 JSONL → worker watcher”。本轮已用 TDD 修复发送期 pointer 竞态、无 marker fallback、watcher / 补偿轮询漂移和并行 marker 共用；源码与自动化已验证，当前已安装 worker 尚未升级重启，移动端实况验收仍待部署后执行。</p>
+
+    <div class="verdict-band" role="status" aria-label="故障结论">
+      <span class="status confirmed">根因 R1</span>
+      <div><strong>会话监听错位，不是 Telegram 网络失败。</strong><br><span>修法已切断错误链路：发送后按 CWD + worker marker + 本轮 prompt 重裁决，恢复轮询也能从旧 map 自愈到新 pointer。</span></div>
+      <span class="status ok">源码已验证</span>
+    </div>
+
+    <section class="template-layout debugging-sequence" aria-labelledby="sequence-title">
+      <h2 id="sequence-title">现场故障时序（修复前）</h2>
+      <div class="actor-grid" aria-label="参与者">
+        <div class="actor telegram"><b>Telegram / 用户</b><span>业务消息与“模型思考中”确认</span></div>
+        <div class="actor worker"><b>vibego worker</b><span><code>CHAT_SESSION_MAP</code>、dispatch、watcher</span></div>
+        <div class="actor pointer"><b>session_binder / pointer</b><span><code>current_session.txt</code> 与 worker marker</span></div>
+        <div class="actor output"><b>Codex JSONL / Telegram API</b><span>final_answer 事实源与出站发送</span></div>
+      </div>
+
+      <div class="sequence" aria-label="按时间排序的故障链路">
+        <div class="event-row">
+          <div class="event good c1-2" data-step="1">
+            <strong>12:16:38 Telegram 已连通</strong>
+            <span>worker 完成连接；后续对同一 chat 的 ack 也能成功发送。</span>
+            <small>E1 · run_bot.log:3570-3579</small>
+          </div>
+        </div>
+
+        <div class="event-row">
+          <div class="event bad c2-3" data-step="2">
+            <strong>12:17:26 strict fallback 选中旧会话</strong>
+            <span>新 pointer 还不可用，worker 只按同 CWD / mtime 扫描，绑定 7 月 9 日 Codex Desktop JSONL；该会话没有 worker marker。</span>
+            <small>E2 · bot.py:4093-4101、17904-17959</small>
+          </div>
+        </div>
+
+        <div class="event-row">
+          <div class="event good c2-4" data-step="3">
+            <strong>12:23:26.646 用户消息进入新的 Codex TUI JSONL</strong>
+            <span>tmux → Codex 输入链路已成功；目标 session 是 7 月 11 日的新 JSONL。</span>
+            <small>E3 · new JSONL:9-10</small>
+          </div>
+        </div>
+
+        <div class="event-row">
+          <div class="event warn c3-4" data-step="4">
+            <strong>12:23:26.931 binder 才更新正确 pointer</strong>
+            <span><code>current_session.txt</code> 已指向含 worker marker 的新 JSONL，但 dispatch 前段已经读过 pointer 并保留旧缓存路径。</span>
+            <small>E4 · session_binder.log:56</small>
+          </div>
+        </div>
+
+        <div class="event-row">
+          <div class="event bad c2-4" data-step="5">
+            <strong>12:23:27 watcher 仍绑定 7 月 9 日旧 JSONL</strong>
+            <span>dispatch 没有在 tmux 发送后重新读取 pointer；旧 path 被写回 <code>CHAT_SESSION_MAP</code> 并传给 watcher。12:23:28 ack 发送成功。</span>
+            <small>E5 · bot.py:4187-4195、4233-4243</small>
+          </div>
+        </div>
+
+        <div class="event-row">
+          <div class="event good c3-4" data-step="6">
+            <strong>12:24:02 模型在新 JSONL 生成合法 final</strong>
+            <span>同时存在 <code>response_item message / assistant / final_answer</code>，12:24:05 随后 <code>task_complete</code>。</span>
+            <small>E6 · new JSONL:24-27</small>
+          </div>
+        </div>
+
+        <div class="event-row">
+          <div class="event bad stop c2-4" data-step="7">
+            <strong>watcher 与补偿轮询继续读取旧文件</strong>
+            <span>12:24:25、12:27:25 只轮询旧 JSONL；没有“检测到待发送 / 准备发送模型输出”，因此 Telegram <code>sendMessage</code> 根本未被调用。</span>
+            <small>E7 · run_bot.log:3624-3625</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="root-cause">
+        <div class="root-mark">R1</div>
+        <div>
+          <h3>已确认根因：dispatch 与 session_binder 的首次绑定竞态</h3>
+          <p>因为 E2 建立了错误的旧缓存映射，E4 又证明正确 pointer 在 dispatch 期间才出现，而 E5 / E7 证明 watcher 从未切到新路径，所以本轮 final 虽然已经生成，却停在 JSONL 与 worker 之间。修复后 dispatch 会在发送后再次裁决 pointer；补偿轮询即使看到旧文件仍存在，也会校验当前 pointer 并替换旧 watcher。</p>
+        </div>
+      </div>
+
+      <div class="evidence-steps boundary" aria-label="证据阶梯">
+        <div class="evidence-step"><b>E1 通道正常</b><span>Telegram 连接与 ack 成功。</span></div>
+        <div class="evidence-step"><b>E2 错绑发生</b><span>fallback 绑定无 marker 的旧 Desktop 会话。</span></div>
+        <div class="evidence-step"><b>E3–E4 新会话出现</b><span>输入进入新 JSONL，pointer 随后更新。</span></div>
+        <div class="evidence-step"><b>E5 静态旧 watcher</b><span>chat 映射和 watcher 仍指向 old。</span></div>
+        <div class="evidence-step"><b>E6–E7 final 被绕过</b><span>final 已生成，但 sendMessage 前无事件。</span></div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="hypothesis-title">
+      <h2 id="hypothesis-title">候选根因裁决</h2>
+      <table class="hypothesis-table">
+        <thead><tr><th>候选</th><th>裁决</th><th>证据</th></tr></thead>
+        <tbody>
+          <tr><td>H1 · Telegram 网络导致正文发送失败</td><td><span class="status excluded">排除</span></td><td>连接正常、同一 chat 的 ack 成功；final 之后没有任何正文发送尝试。</td></tr>
+          <tr><td>H2 · 模型没有生成正式 final / phase 被过滤</td><td><span class="status excluded">排除</span></td><td>新 JSONL 同时有合法 <code>response_item role=assistant phase=final_answer</code> 与 <code>task_complete</code>。</td></tr>
+          <tr><td>H3 · reader 读到半行并推进 offset</td><td><span class="status pending">独立缺口</span></td><td>当前实现确有缺测试风险，但本现场 watcher 根本没有打开新 JSONL，断点更早。</td></tr>
+          <tr><td>H4 · watcher 静态绑定旧 JSONL</td><td><span class="status confirmed">成立</span></td><td>E2 + E4 + E5 + E7 形成完整、按时间一致的运行证据链。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" aria-labelledby="action-title">
+      <h2 id="action-title">修复与验证闭环（源码已完成）</h2>
+      <div class="action-track" aria-label="修复与验证流程">
+        <div class="action-node done"><strong>F1 · RED 复现竞态</strong><span>4 个核心用例先得到 4 failed：发送后切 pointer、无 marker fallback、recovery 旧 map、parallel marker 共用均被稳定复现。</span></div>
+        <div class="action-arrow" aria-hidden="true">→</div>
+        <div class="action-node done"><strong>F2 · 发送后重绑</strong><span>在 offset、chat map 与 watcher 前重读 pointer；只接受同 CWD、当前 marker、发送后本轮 prompt 均成立的新 session，从本轮 user 行开始读取。</span></div>
+        <div class="action-arrow" aria-hidden="true">→</div>
+        <div class="action-node done"><strong>F3 · watcher / recovery 自愈</strong><span>漂移时先用最近一次 tmux dispatch prompt + 时间证明新 JSONL 同源，成立后取消旧 watcher 并从本轮 user 行建立 offset；无法证明保持旧绑定，异常也补建 watcher，长 JSONL 扫描转入工作线程。</span></div>
+        <div class="action-arrow" aria-hidden="true">→</div>
+        <div class="action-node done"><strong>V1 · 自动化验收</strong><span>相关 306 passed；全量 1149 passed。验证 current final 只出现一次、historical final 不回放，并回归 Resume、并行、goal、Codex/Copilot 投递语义。</span></div>
+      </div>
+      <div class="notice"><strong>部署边界：</strong>本轮只修改仓库源码、测试和文档，没有升级 pipx 运行副本，也没有重启 worker。发布并重启后，需从 Telegram 发一条会触发新 Codex session 的普通消息做移动端实况验收；历史已漏 final 不会凭源码改动自动补发。回滚只需恢复本轮文件，不涉及 DB、依赖、配置或远端历史。</div>
+    </section>
+
+    <section class="section" aria-labelledby="sources-title" data-slot="evidence-and-notes">
+      <h2 id="sources-title">证据与代码锚点</h2>
+      <table class="source-table">
+        <thead><tr><th>范围</th><th>路径与锚点</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>运行日志</td><td><code>~/.config/vibego/logs/codex/vibego/run_bot.log:3570-3625</code></td><td>连接、错误 fallback、旧 watcher 绑定、ack 与错误补偿轮询。</td></tr>
+          <tr><td>binder</td><td><code>~/.config/vibego/logs/codex/vibego/session_binder.log:56</code></td><td>正确新 pointer 在 12:23:26 才写入。</td></tr>
+          <tr><td>当前 JSONL</td><td><code>~/.codex/sessions/2026/07/11/rollout-2026-07-11T12-22-44-019f4f69-d635-7682-95a8-1a3f95706197.jsonl:9-10,24-27</code></td><td>用户输入、合法 final_answer 与 task_complete。</td></tr>
+          <tr><td>发送期修复</td><td><code>bot.py::_find_user_prompt_event_offset</code>、<code>_dispatch_prompt_to_model</code></td><td>发送后按 CWD / marker / 本轮 prompt 重绑；常规同 session 使用 pre-send EOF，不全扫 JSONL。</td></tr>
+          <tr><td>恢复自愈</td><td><code>bot.py::_rebind_chat_session_from_pointer</code>、<code>_probe_new_model_message_once</code></td><td>替换旧 map / watcher；时间基线与长文件扫描在线程中计算，投递异常仍恢复 watcher。</td></tr>
+          <tr><td>并行隔离</td><td><code>bot.py::_parallel_session_binder_token_file</code>、<code>_session_marker_file_for_pointer</code></td><td>主会话保留自定义 marker 路径；每个 parallel task 使用自身 runtime marker。</td></tr>
+          <tr><td>回归测试</td><td><code>tests/test_task_description.py</code>、<code>tests/test_message_recovery_poll.py</code>（含无本轮 prompt 时拒绝漂移）、<code>tests/test_parallel_flow.py</code></td><td>覆盖竞态、历史 final、毫秒时间戳、异常 watcher、事件循环 offload、fallback 与并行 marker。</td></tr>
+        </tbody>
+      </table>
+
+      <details>
+        <summary>为什么 memory citation 不是本次原因？</summary>
+        <div>上一条回复包含正常业务正文，且当前 JSONL 的正式 <code>response_item final_answer</code> 完整存在。citation-only 清理为空会被跳过是既有边界，但不符合本次“正文 + citation”的事件形态；更直接的是 worker 没有读取目标 JSONL。</div>
+      </details>
+      <details>
+        <summary>当前验证状态</summary>
+        <div>核心 TDD 首轮为 <code>4 failed</code>，实现后为 <code>4 passed</code>；review 发现的 watcher 异常、测试 marker 泄漏、同 session 全扫、毫秒精度、recovery 全扫与缺少本轮 prompt 证明均先补失败测试再修复。聚焦回归为 <code>306 passed</code>，全量为 <code>1149 passed, 6 warnings</code>；warnings 来自既有 <code>tests/test_unescape_markdown.py</code> 返回非 None。源码验证通过，但 pipx 运行副本与 Telegram 移动端实况尚未部署验证。</div>
+      </details>
+      <details>
+        <summary>剩余未覆盖点</summary>
+        <div>H3“JSONL 半行解析时 offset 是否推进”不是本现场根因，本轮未改 reader；发布后仍需真实 Telegram → 新 Codex session → final 附件/文本回传验收。若实况失败，先保留新 <code>run_bot.log</code>、<code>session_binder.log</code>、pointer 与 JSONL 再裁决，不能仅凭单测宣称运行态成功。</div>
+      </details>
+    </section>
+
+    <p class="footer-note">主任务记忆：<code>docs/TASK_20260228_001_Telegram补偿轮询与落后一条修复.md</code>。本图同时承载 2026-07-11 运行证据、根因、源码修法、自动化验收、部署边界与回滚。</p>
+  </main>
+</body>
+</html>

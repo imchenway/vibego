@@ -20,7 +20,7 @@ try:
 except ImportError:  # pragma: no cover - 仅 Python3.10 及更早版本会触发
     UTC = timezone.utc  # Python<3.11 没有 datetime.UTC，用 timezone.utc 兜底
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal, Mapping
+from typing import Any, Dict, Optional, Sequence, Tuple, List, Callable, Awaitable, Literal, Mapping, Iterable
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, quote, unquote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -3441,6 +3441,71 @@ def _delivery_text_matches_prompt(candidate: str, raw_prompt: str, dispatch_text
     return False
 
 
+def _session_event_epoch(event: Mapping[str, Any]) -> Optional[float]:
+    """解析 session JSONL 事件时间；无法证明时间时返回 None。"""
+
+    raw = event.get("timestamp")
+    if not isinstance(raw, str) or not raw.strip():
+        payload = event.get("payload")
+        raw = payload.get("timestamp") if isinstance(payload, Mapping) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def _iter_session_jsonl_event_offsets(session_path: Path) -> Iterable[tuple[int, Mapping[str, Any]]]:
+    """按字节行首偏移遍历完整 JSONL 事件，坏行与半行均跳过。"""
+
+    try:
+        with session_path.open("rb") as fh:
+            while True:
+                line_offset = fh.tell()
+                raw_line = fh.readline()
+                if not raw_line:
+                    return
+                if not raw_line.endswith(b"\n"):
+                    return
+                try:
+                    event = json.loads(raw_line.decode("utf-8", errors="ignore"))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, Mapping):
+                    yield line_offset, event
+    except OSError:
+        return
+
+
+def _find_user_prompt_event_offset(
+    session_path: Path,
+    *,
+    raw_prompt: str,
+    dispatch_text: str,
+    not_before_epoch: float,
+) -> Optional[int]:
+    """定位本轮用户输入所在 JSONL 行首，避免重绑后回放历史 final。"""
+
+    matched_offset: Optional[int] = None
+    # Codex JSONL 当前只保留毫秒精度，而 Python 基线含微秒；回退 1ms
+    # 仅补偿时间戳截断，仍结合 marker / CWD / prompt 内容避免历史同文误绑定。
+    threshold = max(float(not_before_epoch) - 0.001, 0.0)
+    for line_offset, event in _iter_session_jsonl_event_offsets(session_path):
+        event_epoch = _session_event_epoch(event)
+        if event_epoch is None or event_epoch < threshold:
+            continue
+        if any(
+            _delivery_text_matches_prompt(text, raw_prompt, dispatch_text)
+            for text in _extract_user_prompt_texts_from_event(event)
+        ):
+            matched_offset = line_offset
+    return matched_offset
+
+
 def _session_contains_user_prompt_since(
     session_path: Path,
     *,
@@ -3878,11 +3943,9 @@ async def _dispatch_prompt_to_model(
         pointer_path = resolve_path(pointer_override)
     elif CODEX_SESSION_FILE_PATH:
         pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
-    required_session_marker = (
-        _read_required_session_marker(pointer_path)
-        if _is_codex_model() and not allow_session_discovery_fallback
-        else ""
-    )
+    # marker 与“是否允许全局发现”是两条独立安全边界：fresh Codex worker
+    # 只要存在 marker，cache / pointer / fallback 都必须保持同源。
+    required_session_marker = _read_required_session_marker(pointer_path) if _is_codex_model() else ""
 
     def _session_matches_required_marker(candidate: Path) -> bool:
         return _codex_session_contains_required_marker(candidate, required_session_marker)
@@ -3963,7 +4026,11 @@ async def _dispatch_prompt_to_model(
             latest = (
                 _find_latest_gemini_session(pointer_path, target_cwd)
                 if _is_gemini_model()
-                else _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+                else _find_latest_rollout_for_cwd(
+                    pointer_path,
+                    target_cwd,
+                    session_validator=_session_matches_required_marker if required_session_marker else None,
+                )
             )
             if latest is not None:
                 SESSION_OFFSETS[str(latest)] = _initial_session_offset(latest)
@@ -4041,11 +4108,13 @@ async def _dispatch_prompt_to_model(
     dispatch_text = _prepend_enforced_agents_notice(prompt)
     target_session = dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION
     delivery_confirm_path = session_path
+    dispatch_session_start_offset = _session_file_size(delivery_confirm_path) if delivery_confirm_path is not None else 0
     delivery_confirm_start_offset = (
-        _session_file_size(delivery_confirm_path)
+        dispatch_session_start_offset
         if confirm_delivery and delivery_confirm_path is not None and _supports_prompt_delivery_confirmation()
         else 0
     )
+    dispatch_started_at_epoch = time.time()
 
     try:
         if resolved_send_mode == PUSH_SEND_MODE_QUEUED:
@@ -4063,6 +4132,10 @@ async def _dispatch_prompt_to_model(
             reply_to=reply_to,
         )
         return False, None
+
+    if not is_parallel_dispatch and _is_codex_model():
+        # recovery 只能凭本轮真实 dispatch prompt 证明 pointer 同源；仅记录 tmux 发送成功的输入。
+        CHAT_RECENT_MODEL_DISPATCH_PROOFS[chat_id] = (prompt, dispatch_started_at_epoch)
 
     if needs_session_wait:
         session_path = await _await_session_path(
@@ -4092,7 +4165,11 @@ async def _dispatch_prompt_to_model(
         ):
             # strict 模式兜底：当 pointer 长时间未写入（binder 异常/已退出）时，
             # 直接扫描会话目录定位最新 session，避免用户侧出现“未检测到会话日志”的误报。
-            session_path = _fallback_locate_latest_session(pointer_path, target_cwd)
+            session_path = _fallback_locate_latest_session(
+                pointer_path,
+                target_cwd,
+                session_validator=_session_matches_required_marker if required_session_marker else None,
+            )
             if session_path is not None:
                 worker_log.info(
                     "[session-map] chat=%s strict fallback locate latest session %s",
@@ -4142,6 +4219,7 @@ async def _dispatch_prompt_to_model(
 
     assert session_path is not None
     session_key = str(session_path)
+    confirmed_prompt_offset: Optional[int] = None
     if confirm_delivery and _supports_prompt_delivery_confirmation():
         if delivery_confirm_path is not None and delivery_confirm_path == session_path:
             confirm_start_offset = delivery_confirm_start_offset
@@ -4159,16 +4237,69 @@ async def _dispatch_prompt_to_model(
             reply_to=reply_to,
         ):
             return False, None
-        if session_key not in SESSION_OFFSETS:
-            SESSION_OFFSETS[session_key] = confirm_start_offset
-            worker_log.info(
-                "[session-map] init offset for confirmed dispatch %s -> %s",
-                session_key,
-                SESSION_OFFSETS[session_key],
-                extra=_session_extra(key=session_key),
+
+    if _is_codex_model() and delivery_confirm_path != session_path:
+        # 仅发送后才出现的新 session 需要定位本轮 prompt；常规同会话直接使用
+        # pre-send EOF，避免每条 Telegram 消息都在事件循环中全量扫描长 JSONL。
+        confirmed_prompt_offset = await asyncio.to_thread(
+            _find_user_prompt_event_offset,
+            session_path,
+            raw_prompt=prompt,
+            dispatch_text=dispatch_text,
+            not_before_epoch=dispatch_started_at_epoch,
+        )
+
+    # binder 可能在 tmux 已消费输入后才把 pointer 从旧 session 切到新 session。
+    # 只有能由 CWD / marker / 本轮 user prompt 同时证明的新会话才允许重绑。
+    if not is_parallel_dispatch and _is_codex_model() and pointer_path is not None:
+        post_send_pointer = _read_pointer_path(pointer_path)
+        if (
+            post_send_pointer is not None
+            and post_send_pointer != session_path
+            and (not required_session_marker or _session_matches_required_marker(post_send_pointer))
+        ):
+            post_send_cwd = _read_session_meta_cwd(post_send_pointer)
+            cwd_matches = not target_cwd or (
+                post_send_cwd is not None
+                and _paths_equal(resolve_path(post_send_cwd), resolve_path(target_cwd))
             )
+            post_send_prompt_offset = None
+            if cwd_matches:
+                post_send_prompt_offset = await asyncio.to_thread(
+                    _find_user_prompt_event_offset,
+                    post_send_pointer,
+                    raw_prompt=prompt,
+                    dispatch_text=dispatch_text,
+                    not_before_epoch=dispatch_started_at_epoch,
+                )
+            if post_send_prompt_offset is not None:
+                previous_key = session_key
+                _reset_delivered_hashes(chat_id, previous_key)
+                _reset_delivered_offsets(chat_id, previous_key)
+                SESSION_OFFSETS.pop(previous_key, None)
+                session_path = post_send_pointer
+                session_key = str(session_path)
+                confirmed_prompt_offset = post_send_prompt_offset
+                SESSION_OFFSETS[session_key] = max(
+                    SESSION_OFFSETS.get(session_key, 0),
+                    post_send_prompt_offset,
+                )
+                pointer_switched = True
+                _drop_plan_confirm_sessions_for_session(chat_id, session_key)
+                worker_log.info(
+                    "[session-map] chat=%s post-send pointer switched -> %s",
+                    chat_id,
+                    session_path,
+                    extra=_session_extra(path=session_path),
+                )
+
     if session_key not in SESSION_OFFSETS:
-        initial_offset = _initial_session_offset(session_path)
+        if confirmed_prompt_offset is not None:
+            initial_offset = confirmed_prompt_offset
+        elif _is_codex_model() and delivery_confirm_path == session_path:
+            initial_offset = dispatch_session_start_offset
+        else:
+            initial_offset = _initial_session_offset(session_path)
         SESSION_OFFSETS[session_key] = initial_offset
         worker_log.info(
             "[session-map] init offset for %s -> %s",
@@ -4244,7 +4375,12 @@ async def _dispatch_prompt_to_model(
     return True, session_path
 
 
-def _fallback_locate_latest_session(pointer_path: Path, target_cwd: Optional[str]) -> Optional[Path]:
+def _fallback_locate_latest_session(
+    pointer_path: Path,
+    target_cwd: Optional[str],
+    *,
+    session_validator: Optional[Callable[[Path], bool]] = None,
+) -> Optional[Path]:
     """在 session pointer 未写入时，兜底扫描会话目录定位最新 session 文件。
 
     主要用于修复以下场景：
@@ -4253,11 +4389,19 @@ def _fallback_locate_latest_session(pointer_path: Path, target_cwd: Optional[str
     """
 
     if _is_gemini_model():
-        return _find_latest_gemini_session(pointer_path, target_cwd)
-    if _is_claudecode_model():
+        candidate = _find_latest_gemini_session(pointer_path, target_cwd)
+    elif _is_claudecode_model():
         # ClaudeCode 会话可能缺少 cwd 元数据，按更新时间回退选择最新（并排除 agent-*）。
-        return _find_latest_claudecode_rollout(pointer_path)
-    return _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+        candidate = _find_latest_claudecode_rollout(pointer_path)
+    else:
+        return _find_latest_rollout_for_cwd(
+            pointer_path,
+            target_cwd,
+            session_validator=session_validator,
+        )
+    if candidate is not None and session_validator is not None and not session_validator(candidate):
+        return None
+    return candidate
 
 
 def _convert_overlong_task_prompt_to_attachment(
@@ -12596,6 +12740,8 @@ CHAT_DELIVERED_OFFSETS: Dict[int, Dict[str, set[int]]] = {}
 # 同一 chat/session 的模型输出投递必须串行，避免快速轮询、watcher、补偿轮询并发读到同一 offset 后双发。
 CHAT_DELIVERY_LOCKS: Dict[Tuple[int, str], asyncio.Lock] = {}
 CHAT_MESSAGE_RECOVERY_POLL_TASKS: Dict[int, asyncio.Task] = {}
+# chat -> (最近一次 tmux 发送成功的原始 prompt, 发送 wall-clock epoch)，供 recovery 同源证明。
+CHAT_RECENT_MODEL_DISPATCH_PROOFS: Dict[int, Tuple[str, float]] = {}
 CHAT_REPLY_COUNT: Dict[int, Dict[str, int]] = {}
 CHAT_COMPACT_STATE: Dict[int, Dict[str, Dict[str, Any]]] = {}
 # 记录每个 chat 最近一次向模型发起请求的用户（用于按钮权限校验）。
@@ -13196,6 +13342,12 @@ def _parallel_pointer_file(task_id: str) -> Path:
     return _parallel_runtime_meta_dir(task_id) / "current_session.txt"
 
 
+def _parallel_session_binder_token_file(task_id: str) -> Path:
+    """返回并行 CLI 私有 marker 文件，避免覆盖主会话或其他并行会话。"""
+
+    return _parallel_runtime_meta_dir(task_id) / "session_binder_token.txt"
+
+
 def _parallel_active_session_file(task_id: str) -> Path:
     return _parallel_runtime_meta_dir(task_id) / "active_session_id.txt"
 
@@ -13268,6 +13420,7 @@ async def _start_parallel_tmux_session(task: TaskRecord, workspace_root: Path) -
             "TMUX_SESSION": tmux_session,
             "MODEL_WORKDIR": str(workspace_root),
             "SESSION_POINTER_FILE": str(pointer_file),
+            "SESSION_BINDER_TOKEN_FILE": str(_parallel_session_binder_token_file(task.id)),
             "SESSION_ACTIVE_ID_FILE": str(_parallel_active_session_file(task.id)),
             "SESSION_BINDER_LOG": str(_parallel_session_binder_log(task.id)),
             "SESSION_BINDER_PID_FILE": str(_parallel_session_binder_pid(task.id)),
@@ -15691,6 +15844,70 @@ async def _deliver_pending_messages_locked(
     return False
 
 
+async def _rebind_chat_session_from_pointer(
+    chat_id: int,
+    *,
+    pointer_path: Path,
+    target_cwd: Optional[str],
+    required_marker: str,
+    expected_target: Optional[Path] = None,
+) -> tuple[Optional[Path], bool]:
+    """按 pointer 重新裁决主 chat 绑定；切换时先停止旧 watcher。"""
+
+    pointer_target = _read_pointer_path(pointer_path)
+    if pointer_target is None:
+        return None, False
+    if expected_target is not None and not _paths_equal(pointer_target, expected_target):
+        return None, False
+    if required_marker and not _codex_session_contains_required_marker(pointer_target, required_marker):
+        worker_log.warning(
+            "[session-map] chat=%s reject drifted pointer without worker marker: %s",
+            chat_id,
+            pointer_target,
+            extra=_session_extra(path=pointer_target),
+        )
+        return None, False
+    if target_cwd:
+        pointer_cwd = _read_session_meta_cwd(pointer_target)
+        if pointer_cwd is None or not _paths_equal(resolve_path(pointer_cwd), resolve_path(target_cwd)):
+            worker_log.warning(
+                "[session-map] chat=%s reject drifted pointer with mismatched cwd: %s",
+                chat_id,
+                pointer_target,
+                extra=_session_extra(path=pointer_target),
+            )
+            return None, False
+
+    previous_key = CHAT_SESSION_MAP.get(chat_id)
+    target_key = str(pointer_target)
+    if previous_key == target_key:
+        return pointer_target, False
+
+    previous_watcher = CHAT_WATCHERS.pop(chat_id, None)
+    if previous_watcher is not None and not previous_watcher.done():
+        previous_watcher.cancel()
+        if hasattr(previous_watcher, "__await__"):
+            with suppress(asyncio.CancelledError):
+                await previous_watcher
+
+    if previous_key:
+        _reset_delivered_hashes(chat_id, previous_key)
+        _reset_delivered_offsets(chat_id, previous_key)
+        SESSION_OFFSETS.pop(previous_key, None)
+        SESSION_PENDING_TASK_BINDINGS.pop(previous_key, None)
+        _clear_last_message(chat_id, previous_key)
+        _reset_compact_tracking(chat_id, previous_key)
+    CHAT_SESSION_MAP[chat_id] = target_key
+    CHAT_FAILURE_NOTICES.pop(chat_id, None)
+    worker_log.info(
+        "[session-map] chat=%s pointer drift rebind -> %s",
+        chat_id,
+        pointer_target,
+        extra=_session_extra(path=pointer_target),
+    )
+    return pointer_target, True
+
+
 async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
     """确保指定聊天已绑定模型会话并启动监听。"""
 
@@ -15698,11 +15915,31 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
     if CODEX_SESSION_FILE_PATH:
         pointer_path = resolve_path(CODEX_SESSION_FILE_PATH)
 
+    target_cwd_raw = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
+    target_cwd = target_cwd_raw or None
+    required_session_marker = _read_required_session_marker(pointer_path) if _is_codex_model() else ""
+
     session_path: Optional[Path] = None
     previous_key = CHAT_SESSION_MAP.get(chat_id)
-    if previous_key:
+    pointer_rebound_from_existing = False
+    if pointer_path is not None and _is_codex_model():
+        rebound_path, pointer_switched = await _rebind_chat_session_from_pointer(
+            chat_id,
+            pointer_path=pointer_path,
+            target_cwd=target_cwd,
+            required_marker=required_session_marker,
+        )
+        if rebound_path is not None:
+            session_path = rebound_path
+            pointer_rebound_from_existing = pointer_switched and previous_key is not None
+
+    if session_path is None and previous_key:
         candidate = resolve_path(previous_key)
-        if candidate.exists():
+        marker_matches = (
+            not required_session_marker
+            or _codex_session_contains_required_marker(candidate, required_session_marker)
+        )
+        if candidate.exists() and marker_matches:
             session_path = candidate
         else:
             worker_log.warning(
@@ -15711,11 +15948,14 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
                 extra={"session": previous_key},
             )
 
-    target_cwd_raw = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
-    target_cwd = target_cwd_raw or None
-
     if session_path is None and pointer_path is not None:
         session_path = _read_pointer_path(pointer_path)
+        if (
+            session_path is not None
+            and required_session_marker
+            and not _codex_session_contains_required_marker(session_path, required_session_marker)
+        ):
+            session_path = None
         if session_path is not None:
             worker_log.info(
                 "[session-map] chat=%s pointer -> %s",
@@ -15727,7 +15967,15 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
         latest = (
             _find_latest_gemini_session(pointer_path, target_cwd)
             if _is_gemini_model()
-            else _find_latest_rollout_for_cwd(pointer_path, target_cwd)
+            else _find_latest_rollout_for_cwd(
+                pointer_path,
+                target_cwd,
+                session_validator=(
+                    (lambda candidate: _codex_session_contains_required_marker(candidate, required_session_marker))
+                    if required_session_marker
+                    else None
+                ),
+            )
         )
         if latest is not None:
             session_path = latest
@@ -15758,6 +16006,11 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
             poll=SESSION_BIND_POLL_INTERVAL,
             strict=SESSION_BIND_STRICT,
             max_wait=SESSION_BIND_TIMEOUT_SECONDS,
+            session_validator=(
+                (lambda candidate: _codex_session_contains_required_marker(candidate, required_session_marker))
+                if required_session_marker
+                else None
+            ),
         )
         if session_path is not None:
             _update_pointer(pointer_path, session_path)
@@ -15769,7 +16022,15 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
             )
     if session_path is None and pointer_path is not None and SESSION_BIND_STRICT:
         # strict 模式兜底：当 pointer 长时间未写入时，尝试直接扫描会话目录定位最新 session。
-        session_path = _fallback_locate_latest_session(pointer_path, target_cwd)
+        session_path = _fallback_locate_latest_session(
+            pointer_path,
+            target_cwd,
+            session_validator=(
+                (lambda candidate: _codex_session_contains_required_marker(candidate, required_session_marker))
+                if required_session_marker
+                else None
+            ),
+        )
         if session_path is not None:
             _update_pointer(pointer_path, session_path)
             worker_log.info(
@@ -15804,7 +16065,16 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
         return None
 
     session_key = str(session_path)
-    if session_key not in SESSION_OFFSETS:
+    if pointer_rebound_from_existing:
+        initial_offset = _session_file_size(session_path)
+        SESSION_OFFSETS[session_key] = max(SESSION_OFFSETS.get(session_key, 0), initial_offset)
+        worker_log.info(
+            "[session-map] advance drifted session offset for %s -> %s",
+            session_key,
+            SESSION_OFFSETS[session_key],
+            extra=_session_extra(key=session_key),
+        )
+    elif session_key not in SESSION_OFFSETS:
         initial_offset = _initial_session_offset(session_path)
         SESSION_OFFSETS[session_key] = initial_offset
         worker_log.info(
@@ -15815,8 +16085,12 @@ async def _ensure_session_watcher(chat_id: int) -> Optional[Path]:
         )
 
     if previous_key != session_key:
-        _clear_last_message(chat_id)
-        _reset_compact_tracking(chat_id)
+        if previous_key:
+            _clear_last_message(chat_id, previous_key)
+            _reset_compact_tracking(chat_id, previous_key)
+        else:
+            _clear_last_message(chat_id)
+            _reset_compact_tracking(chat_id)
         CHAT_FAILURE_NOTICES.pop(chat_id, None)
 
     CHAT_SESSION_MAP[chat_id] = session_key
@@ -16043,8 +16317,101 @@ async def _probe_new_model_message_once(
     trigger_message_id: int,
     round_index: int,
     source: str,
+    triggered_at_epoch: Optional[float] = None,
 ) -> bool:
     """执行一次补偿检测：若本轮成功向 Telegram 发送了新的模型消息则返回 True。"""
+
+    before_states: dict[str, tuple[Optional[str], int]] = {}
+    mapped_key = CHAT_SESSION_MAP.get(chat_id)
+    if mapped_key:
+        before_states[mapped_key] = (
+            _get_last_message(chat_id, mapped_key),
+            len(_get_delivered_offsets(chat_id, mapped_key)),
+        )
+
+    pointer_path = resolve_path(CODEX_SESSION_FILE_PATH) if CODEX_SESSION_FILE_PATH else None
+    pointer_target = _read_pointer_path(pointer_path) if pointer_path is not None else None
+    if pointer_target is not None:
+        pointer_key = str(pointer_target)
+        before_states.setdefault(
+            pointer_key,
+            (
+                _get_last_message(chat_id, pointer_key),
+                len(_get_delivered_offsets(chat_id, pointer_key)),
+            ),
+        )
+
+    pointer_switched = False
+    pointer_differs = (
+        pointer_target is not None
+        and (mapped_key is None or not _paths_equal(resolve_path(mapped_key), pointer_target))
+    )
+    if pointer_path is not None and pointer_differs and _is_codex_model():
+        target_cwd_raw = (os.environ.get("MODEL_WORKDIR") or CODEX_WORKDIR or "").strip()
+        required_marker = _read_required_session_marker(pointer_path)
+        proof = CHAT_RECENT_MODEL_DISPATCH_PROOFS.get(chat_id)
+        proof_prompt: Optional[str] = None
+        proof_epoch: Optional[float] = None
+        if proof is not None:
+            candidate_prompt, candidate_epoch = proof
+            if (
+                isinstance(candidate_prompt, str)
+                and candidate_prompt.strip()
+                and isinstance(candidate_epoch, (int, float))
+                and (
+                    triggered_at_epoch is None
+                    or float(candidate_epoch) >= float(triggered_at_epoch) - 0.001
+                )
+            ):
+                proof_prompt = candidate_prompt
+                proof_epoch = float(candidate_epoch)
+
+        marker_matches = (
+            pointer_target is not None
+            and (
+                not required_marker
+                or _codex_session_contains_required_marker(pointer_target, required_marker)
+            )
+        )
+        cwd_matches = True
+        if pointer_target is not None and target_cwd_raw:
+            pointer_cwd = _read_session_meta_cwd(pointer_target)
+            cwd_matches = pointer_cwd is not None and _paths_equal(
+                resolve_path(pointer_cwd),
+                resolve_path(target_cwd_raw),
+            )
+
+        prompt_offset: Optional[int] = None
+        if pointer_target is not None and marker_matches and cwd_matches and proof_prompt and proof_epoch is not None:
+            prompt_offset = await asyncio.to_thread(
+                _find_user_prompt_event_offset,
+                pointer_target,
+                raw_prompt=proof_prompt,
+                dispatch_text=_prepend_enforced_agents_notice(proof_prompt),
+                not_before_epoch=proof_epoch,
+            )
+
+        if prompt_offset is None:
+            worker_log.info(
+                "[session-map] chat=%s recovery reject drifted pointer without current dispatch proof: %s",
+                chat_id,
+                pointer_target,
+                extra=_session_extra(path=pointer_target),
+            )
+        else:
+            rebound_path, pointer_switched = await _rebind_chat_session_from_pointer(
+                chat_id,
+                pointer_path=pointer_path,
+                target_cwd=target_cwd_raw or None,
+                required_marker=required_marker,
+                expected_target=pointer_target,
+            )
+            if rebound_path is not None and pointer_switched:
+                rebound_key = str(rebound_path)
+                SESSION_OFFSETS[rebound_key] = max(
+                    SESSION_OFFSETS.get(rebound_key, 0),
+                    prompt_offset,
+                )
 
     session_key = CHAT_SESSION_MAP.get(chat_id)
     if not session_key:
@@ -16073,8 +16440,32 @@ async def _probe_new_model_message_once(
         )
         return False
 
-    before_last = _get_last_message(chat_id, session_key)
-    before_offsets = len(_get_delivered_offsets(chat_id, session_key))
+    before_last, before_offsets = before_states.get(
+        session_key,
+        (
+            _get_last_message(chat_id, session_key),
+            len(_get_delivered_offsets(chat_id, session_key)),
+        ),
+    )
+
+    async def _ensure_rebound_watcher(hit: bool) -> None:
+        if not pointer_switched or CHAT_SESSION_MAP.get(chat_id) != session_key:
+            return
+        watcher = CHAT_WATCHERS.get(chat_id)
+        if watcher is not None and not watcher.done():
+            return
+        if watcher is not None:
+            CHAT_WATCHERS.pop(chat_id, None)
+        await _interrupt_long_poll(chat_id)
+        CHAT_WATCHERS[chat_id] = asyncio.create_task(
+            _watch_and_notify(
+                chat_id,
+                session_path,
+                max_wait=WATCH_MAX_WAIT,
+                interval=WATCH_INTERVAL,
+                start_in_long_poll=hit or (session_key in (CHAT_LAST_MESSAGE.get(chat_id) or {})),
+            )
+        )
 
     try:
         await _deliver_pending_messages(chat_id, session_path, add_completion_header=False)
@@ -16090,14 +16481,16 @@ async def _probe_new_model_message_once(
                 **_session_extra(path=session_path),
             },
         )
+        await _ensure_rebound_watcher(False)
         return False
 
     after_last = _get_last_message(chat_id, session_key)
     after_offsets = len(_get_delivered_offsets(chat_id, session_key))
     hit = bool(after_last is not None and after_last != before_last)
-    if not hit and before_last is None and after_last:
-        # 兜底：首次消息命中时，文本可能与 before 一致为空值，这里结合偏移变化补判一次。
+    if not hit:
         hit = after_offsets > before_offsets
+
+    await _ensure_rebound_watcher(hit)
 
     worker_log.info(
         "补偿轮询完成一次检测",
@@ -16119,6 +16512,7 @@ async def _run_message_recovery_poll(
     *,
     trigger_message_id: int,
     source: str,
+    triggered_at_epoch: Optional[float] = None,
 ) -> None:
     """执行 Telegram 入站消息触发的补偿轮询（1/3/10/30/90 分钟）。"""
 
@@ -16139,6 +16533,7 @@ async def _run_message_recovery_poll(
                 trigger_message_id=trigger_message_id,
                 round_index=round_index,
                 source=source,
+                triggered_at_epoch=triggered_at_epoch,
             )
             if hit:
                 worker_log.info(
@@ -16190,6 +16585,7 @@ async def _schedule_message_recovery_poll(message: Message, *, source: str) -> N
         return
     chat_id = int(chat.id)
     trigger_message_id = int(getattr(message, "message_id", 0) or 0)
+    triggered_at_epoch = time.time()
 
     await _cancel_message_recovery_poll(chat_id)
     task = asyncio.create_task(
@@ -16197,6 +16593,7 @@ async def _schedule_message_recovery_poll(message: Message, *, source: str) -> N
             chat_id,
             trigger_message_id=trigger_message_id,
             source=source,
+            triggered_at_epoch=triggered_at_epoch,
         )
     )
     CHAT_MESSAGE_RECOVERY_POLL_TASKS[chat_id] = task
@@ -16783,11 +17180,17 @@ def _read_session_meta_cwd(path: Path) -> Optional[str]:
 def _session_marker_file_for_pointer(pointer: Optional[Path]) -> Optional[Path]:
     """定位当前 pointer 对应的 worker 同源 marker 文件。"""
 
-    if SESSION_BINDER_TOKEN_FILE:
-        return resolve_path(SESSION_BINDER_TOKEN_FILE)
-    if pointer is not None:
-        return pointer.parent / "session_binder_token.txt"
-    return None
+    configured = resolve_path(SESSION_BINDER_TOKEN_FILE) if SESSION_BINDER_TOKEN_FILE else None
+    if pointer is None:
+        return configured
+    main_pointer = resolve_path(CODEX_SESSION_FILE_PATH) if CODEX_SESSION_FILE_PATH else None
+    if configured is not None:
+        if main_pointer is not None and _paths_equal(pointer, main_pointer):
+            return configured
+        if main_pointer is None and _paths_equal(configured.parent, pointer.parent):
+            return configured
+    # 并行会话必须按自身 pointer 目录隔离 marker，不能复用主 worker 的 token 文件。
+    return pointer.parent / "session_binder_token.txt"
 
 
 def _read_required_session_marker(pointer: Optional[Path]) -> str:
@@ -17901,7 +18304,12 @@ def _find_latest_claudecode_rollout(pointer: Path) -> Optional[Path]:
     return latest_path
 
 
-def _find_latest_rollout_for_cwd(pointer: Path, target_cwd: Optional[str]) -> Optional[Path]:
+def _find_latest_rollout_for_cwd(
+    pointer: Path,
+    target_cwd: Optional[str],
+    *,
+    session_validator: Optional[Callable[[Path], bool]] = None,
+) -> Optional[Path]:
     """依据目标 CWD 在候选目录中寻找最新会话文件。"""
 
     roots: List[Path] = []
@@ -17953,6 +18361,8 @@ def _find_latest_rollout_for_cwd(pointer: Path, target_cwd: Optional[str]) -> Op
                 cwd = _read_session_meta_cwd(rollout)
                 if cwd != target_cwd:
                     continue
+            if session_validator is not None and not session_validator(rollout):
+                continue
             latest_mtime = mtime
             latest_path = rollout
 

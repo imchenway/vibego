@@ -30,7 +30,6 @@ from tasks.models import TaskHistoryRecord, TaskNoteRecord, TaskRecord
 from tasks.service import TaskService
 
 
-
 class DummyMessage:
     def __init__(self):
         self.calls = []
@@ -3495,6 +3494,8 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
     monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setenv("MODEL_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BINDER_TOKEN_FILE", "")
 
     bot.CHAT_SESSION_MAP.clear()
     bot.SESSION_OFFSETS.clear()
@@ -3555,6 +3556,66 @@ def test_ensure_session_watcher_rebinds_pointer(monkeypatch, tmp_path: Path):
     bot.CHAT_WATCHERS.clear()
     bot.CHAT_DELIVERED_HASHES.clear()
     bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
+def test_session_marker_file_keeps_custom_main_path_but_isolates_parallel_pointer(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """主会话保留显式 marker 路径，并行 pointer 仍使用任务私有 marker。"""
+
+    main_pointer = tmp_path / "main-runtime" / "current_session.txt"
+    custom_marker = tmp_path / "custom-runtime" / "worker-token.txt"
+    parallel_pointer = tmp_path / "parallel" / "TASK_0001" / "current_session.txt"
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(main_pointer))
+    monkeypatch.setattr(bot, "SESSION_BINDER_TOKEN_FILE", str(custom_marker))
+
+    assert bot._session_marker_file_for_pointer(main_pointer) == custom_marker
+    assert bot._session_marker_file_for_pointer(parallel_pointer) == (
+        parallel_pointer.parent / "session_binder_token.txt"
+    )
+
+
+def test_ensure_session_watcher_drift_starts_at_eof_without_trigger_time(monkeypatch, tmp_path: Path):
+    """无触发时间的 watcher 漂移自愈必须从 EOF 开始，不能回放新会话历史。"""
+
+    pointer = tmp_path / "current_session.txt"
+    old_session = tmp_path / "old.jsonl"
+    new_session = tmp_path / "new.jsonl"
+    old_session.write_text("", encoding="utf-8")
+    new_session.write_text(json.dumps({"type": "historical"}) + "\n", encoding="utf-8")
+    pointer.write_text(str(new_session), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setenv("MODEL_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_BINDER_TOKEN_FILE", "")
+    chat_id = 124
+    bot.CHAT_SESSION_MAP[chat_id] = str(old_session)
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+
+    async def fake_deliver(_chat_id: int, session_path: Path) -> bool:
+        assert session_path == new_session
+        assert bot.SESSION_OFFSETS[str(new_session)] == new_session.stat().st_size
+        return False
+
+    async def fake_watch(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(bot, "_deliver_pending_messages", fake_deliver)
+    monkeypatch.setattr(bot, "_watch_and_notify", fake_watch)
+
+    result = asyncio.run(bot._ensure_session_watcher(chat_id))
+
+    assert result == new_session
+    assert bot.CHAT_SESSION_MAP[chat_id] == str(new_session)
+    assert bot.SESSION_OFFSETS[str(new_session)] == new_session.stat().st_size
+    watcher = bot.CHAT_WATCHERS.pop(chat_id)
+    watcher.cancel()
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
 
 
 def test_dispatch_prompt_rebinds_when_pointer_updates(monkeypatch, tmp_path: Path):
@@ -3634,6 +3695,169 @@ def test_dispatch_prompt_rebinds_when_pointer_updates(monkeypatch, tmp_path: Pat
             coro.close()  # type: ignore[attr-defined]
         except Exception:
             pass
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
+def test_dispatch_prompt_rebinds_when_pointer_switches_during_tmux_send(monkeypatch, tmp_path: Path):
+    """pointer 在 tmux 发送后才更新时，watcher 必须绑定新会话。"""
+
+    pointer = tmp_path / "pointer.txt"
+    marker_file = tmp_path / "session_binder_token.txt"
+    marker = "vibego-session-bind-token:test-race"
+    marker_file.write_text(marker, encoding="utf-8")
+    old_session = tmp_path / "old.jsonl"
+    new_session = tmp_path / "new.jsonl"
+
+    def session_meta(session_id: str) -> dict:
+        return {
+            "timestamp": "2026-07-11T00:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": session_id,
+                "cwd": str(tmp_path),
+                "source": "cli",
+                "base_instructions": {"text": f"worker instructions\n{marker}"},
+            },
+        }
+
+    old_session.write_text(json.dumps(session_meta("old")) + "\n", encoding="utf-8")
+    historical_final = {
+        "timestamp": "2026-07-11T00:00:01Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "historical final"}],
+        },
+    }
+    new_session.write_text(
+        json.dumps(session_meta("new")) + "\n" + json.dumps(historical_final) + "\n",
+        encoding="utf-8",
+    )
+    pointer.write_text(str(old_session), encoding="utf-8")
+
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("MODEL_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(bot, "SESSION_BINDER_TOKEN_FILE", str(marker_file))
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_LAST_MESSAGE.clear()
+    bot.CHAT_COMPACT_STATE.clear()
+    bot.CHAT_REPLY_COUNT.clear()
+    bot.CHAT_FAILURE_NOTICES.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    chat_id = 556
+    bot.CHAT_SESSION_MAP[chat_id] = str(old_session)
+    # 新 pointer 可能残留旧 offset；重绑必须至少推进到本轮 user prompt。
+    bot.SESSION_OFFSETS[str(new_session)] = 0
+    current_user_offset = {"value": -1}
+
+    def fake_tmux_send_line(_session: str, _prompt: str) -> None:
+        current_user = {
+            "timestamp": datetime.now(bot.UTC).isoformat(),
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": bot._prepend_enforced_agents_notice("pwd")}],
+            },
+        }
+        current_final = {
+            "timestamp": datetime.now(bot.UTC).isoformat(),
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "current final"}],
+            },
+        }
+        current_user_offset["value"] = new_session.stat().st_size
+        with new_session.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(current_user) + "\n")
+            fh.write(json.dumps(current_final) + "\n")
+        pointer.write_text(str(new_session), encoding="utf-8")
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return None
+
+    acked_paths: list[Path] = []
+
+    async def fake_send_ack(_chat_id: int, path: Path, *, reply_to) -> None:
+        acked_paths.append(path)
+
+    watched_paths: list[Path] = []
+
+    def fake_watch(_chat_id: int, path: Path, **_kwargs):
+        watched_paths.append(path)
+
+        async def _noop() -> None:
+            return None
+
+        return _noop()
+
+    created_coroutines: list = []
+
+    class DummyTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+    def fake_create_task(coro):
+        created_coroutines.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(bot, "tmux_send_line", fake_tmux_send_line)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+    monkeypatch.setattr(bot, "_watch_and_notify", fake_watch)
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    async def scenario() -> tuple[bool, Optional[Path]]:
+        return await bot._dispatch_prompt_to_model(
+            chat_id,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+        )
+
+    ok, session_path = asyncio.run(scenario())
+
+    assert ok is True
+    assert session_path == new_session
+    assert bot.CHAT_SESSION_MAP[chat_id] == str(new_session)
+    assert bot.SESSION_OFFSETS[str(new_session)] == current_user_offset["value"]
+    next_offset, deliverables = bot._read_session_events_jsonl(
+        new_session,
+        bot.SESSION_OFFSETS[str(new_session)],
+    )
+    assert [item.text for item in deliverables] == ["current final"]
+    _, repeated = bot._read_session_events_jsonl(new_session, next_offset)
+    assert repeated == []
+    assert acked_paths == [new_session]
+    assert watched_paths == [new_session]
+
+    for coro in created_coroutines:
+        coro.close()
 
     bot.CHAT_SESSION_MAP.clear()
     bot.SESSION_OFFSETS.clear()
@@ -3913,16 +4137,213 @@ def test_dispatch_prompt_strict_fallback_locates_latest_session_when_pointer_emp
     bot.CHAT_DELIVERED_OFFSETS.clear()
 
 
-def test_dispatch_prompt_strict_fallback_errors_with_details_when_no_session_found(monkeypatch, tmp_path: Path):
-    """strict 绑定模式下，当 pointer 为空且扫描也找不到 session 时，应返回带细节的错误提示。"""
+def test_dispatch_prompt_same_session_does_not_full_scan_jsonl(monkeypatch, tmp_path: Path):
+    """常规同会话投递已有发送前 EOF 基线，不应同步全量扫描 JSONL。"""
+
+    pointer = tmp_path / "current_session.txt"
+    session_file = tmp_path / "rollout.jsonl"
+    session_file.write_text("", encoding="utf-8")
+    pointer.write_text(str(session_file), encoding="utf-8")
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "CODEX_WORKDIR", "")
+    monkeypatch.setenv("MODEL_WORKDIR", "")
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    monkeypatch.setattr(bot, "tmux_send_line", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bot,
+        "_find_user_prompt_event_offset",
+        lambda *_args, **_kwargs: pytest.fail("同会话常规投递不应扫描完整 JSONL"),
+    )
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return None
+
+    async def fake_watch(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+    monkeypatch.setattr(bot, "_watch_and_notify", fake_watch)
+
+    ok, path = asyncio.run(
+        bot._dispatch_prompt_to_model(
+            557,
+            "pwd",
+            reply_to=None,
+            ack_immediately=False,
+        )
+    )
+
+    assert ok is True
+    assert path == session_file
+    watcher = bot.CHAT_WATCHERS.pop(557)
+    watcher.cancel()
+
+
+def test_session_prompt_offset_accepts_codex_millisecond_timestamp_truncation(tmp_path: Path):
+    """Codex 毫秒时间戳不得因发送基线含微秒而被误判为发送前事件。"""
+
+    session_file = tmp_path / "rollout.jsonl"
+    dispatch_text = bot._prepend_enforced_agents_notice("pwd")
+    user_event = {
+        "timestamp": "2026-07-11T00:00:00.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": dispatch_text}],
+        },
+    }
+    session_file.write_text(json.dumps(user_event) + "\n", encoding="utf-8")
+    dispatch_epoch = datetime(2026, 7, 11, tzinfo=bot.UTC).timestamp() + 0.0009
+
+    assert bot._find_user_prompt_event_offset(
+        session_file,
+        raw_prompt="pwd",
+        dispatch_text=dispatch_text,
+        not_before_epoch=dispatch_epoch,
+    ) == 0
+
+
+def test_dispatch_prompt_strict_fallback_rejects_newer_session_without_worker_marker(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """fresh worker 的 strict fallback 只能选择含当前 marker 的 Codex 会话。"""
+
+    pointer = tmp_path / "current_session.txt"
+    pointer.write_text("", encoding="utf-8")
+    marker_file = tmp_path / "session_binder_token.txt"
+    marker = "vibego-session-bind-token:test-worker"
+    marker_file.write_text(marker, encoding="utf-8")
+    target_cwd = str(tmp_path / "workdir")
+    monkeypatch.setenv("MODEL_WORKDIR", target_cwd)
+
+    def write_session(path: Path, *, instructions: str) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-07-11T00:00:00Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": path.stem,
+                        "cwd": target_cwd,
+                        "source": "cli",
+                        "base_instructions": {"text": instructions},
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    worker_session = tmp_path / "rollout-worker.jsonl"
+    desktop_session = tmp_path / "rollout-desktop.jsonl"
+    write_session(worker_session, instructions=f"worker instructions\n{marker}")
+    write_session(desktop_session, instructions="desktop instructions")
+    os.utime(worker_session, (10, 10))
+    os.utime(desktop_session, (20, 20))
+
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
+    monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "SESSION_BINDER_TOKEN_FILE", str(marker_file))
+    monkeypatch.setattr(bot, "MODEL_SESSION_ROOT", str(tmp_path))
+    monkeypatch.setattr(bot, "CODEX_SESSIONS_ROOT", "")
+    monkeypatch.setattr(bot, "MODEL_SESSION_GLOB", "rollout-*.jsonl")
+    monkeypatch.setattr(bot, "SESSION_BIND_STRICT", True)
+    monkeypatch.setattr(bot, "SESSION_POLL_TIMEOUT", 0)
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+    monkeypatch.setattr(bot, "tmux_send_line", lambda *_args, **_kwargs: None)
+
+    async def fake_await_session_path(*_args, **_kwargs) -> Optional[Path]:
+        return None
+
+    async def fake_interrupt(_chat_id: int) -> None:
+        return None
+
+    async def fake_send_ack(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(bot, "_await_session_path", fake_await_session_path)
+    monkeypatch.setattr(bot, "_interrupt_long_poll", fake_interrupt)
+    monkeypatch.setattr(bot, "_send_session_ack", fake_send_ack)
+
+    created_coroutines: list = []
+
+    class DummyTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            return None
+
+    def fake_create_task(coro):
+        created_coroutines.append(coro)
+        return DummyTask()
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    ok, session_path = asyncio.run(
+        bot._dispatch_prompt_to_model(902, "pwd", reply_to=None, ack_immediately=False)
+    )
+
+    assert ok is True
+    assert session_path == worker_session
+    assert bot.CHAT_SESSION_MAP[902] == str(worker_session)
+    assert pointer.read_text(encoding="utf-8").strip() == str(worker_session)
+
+    for coro in created_coroutines:
+        coro.close()
+
+    bot.CHAT_SESSION_MAP.clear()
+    bot.SESSION_OFFSETS.clear()
+    bot.CHAT_WATCHERS.clear()
+    bot.CHAT_DELIVERED_HASHES.clear()
+    bot.CHAT_DELIVERED_OFFSETS.clear()
+
+
+def test_dispatch_prompt_strict_fallback_fails_closed_when_all_sessions_lack_worker_marker(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """strict fallback 只有无 marker 候选时，必须报错且不建立 chat/watcher 绑定。"""
 
     pointer = tmp_path / "current_session.txt"
     pointer.write_text("", encoding="utf-8")
 
     target_cwd = str(tmp_path / "workdir")
     monkeypatch.setenv("MODEL_WORKDIR", target_cwd)
+    marker_file = tmp_path / "session_binder_token.txt"
+    marker_file.write_text("vibego-session-bind-token:required", encoding="utf-8")
+    desktop_session = tmp_path / "rollout-desktop.jsonl"
+    desktop_session.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-07-11T00:00:00Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": "desktop",
+                    "cwd": target_cwd,
+                    "source": "cli",
+                    "base_instructions": {"text": "desktop instructions without worker marker"},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
+    monkeypatch.setattr(bot, "MODEL_CANONICAL_NAME", "codex")
     monkeypatch.setattr(bot, "CODEX_SESSION_FILE_PATH", str(pointer))
+    monkeypatch.setattr(bot, "SESSION_BINDER_TOKEN_FILE", str(marker_file))
     monkeypatch.setattr(bot, "MODEL_SESSION_ROOT", str(tmp_path))
     monkeypatch.setattr(bot, "CODEX_SESSIONS_ROOT", "")
     monkeypatch.setattr(bot, "MODEL_SESSION_GLOB", "rollout-*.jsonl")
@@ -3974,6 +4395,8 @@ def test_dispatch_prompt_strict_fallback_errors_with_details_when_no_session_fou
     assert str(pointer) in replies[-1]
     assert "cwd=" in replies[-1]
     assert target_cwd in replies[-1]
+    assert 901 not in bot.CHAT_SESSION_MAP
+    assert 901 not in bot.CHAT_WATCHERS
 
     bot.CHAT_SESSION_MAP.clear()
     bot.SESSION_OFFSETS.clear()

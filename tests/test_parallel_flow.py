@@ -1540,6 +1540,7 @@ def test_start_parallel_tmux_session_requires_ready_file(monkeypatch, tmp_path: 
 
     monkeypatch.setattr(bot, "CONFIG_ROOT_PATH", tmp_path)
     monkeypatch.setattr(bot, "PROJECT_SLUG", "demo")
+    monkeypatch.setenv("SESSION_BINDER_TOKEN_FILE", str(tmp_path / "main-session-binder-token.txt"))
 
     captured_env: dict[str, str] = {}
 
@@ -1562,6 +1563,9 @@ def test_start_parallel_tmux_session_requires_ready_file(monkeypatch, tmp_path: 
     asyncio.run(scenario())
 
     assert captured_env["SESSION_READY_FILE"].endswith("tmux_ready")
+    assert captured_env["SESSION_BINDER_TOKEN_FILE"] == str(
+        tmp_path / "runtime" / "parallel" / "demo" / "TASK_9005" / "_runtime" / "session_binder_token.txt"
+    )
 
 
 def test_start_parallel_tmux_session_returns_after_ready_file_written(monkeypatch, tmp_path: Path):
