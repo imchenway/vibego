@@ -1,6 +1,6 @@
 {
   "name": "vibe-diagram",
-  "version": "1.5.215",
+  "version": "1.5.216",
   "description": "Generate self-contained HTML diagrams for architecture, workflows, debugging, technical design, decisions, and delivery acceptance.",
   "author": {
     "name": "Hypha"
