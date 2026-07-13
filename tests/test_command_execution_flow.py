@@ -127,6 +127,23 @@ def _build_auto_preview_command() -> CommandDefinition:
     )
 
 
+def _build_remote_debug_command() -> CommandDefinition:
+    """构造最小可执行的自动真机调试命令对象。"""
+
+    return CommandDefinition(
+        id=18,
+        project_slug="__global__",
+        scope="global",
+        name=bot.WX_REMOTE_DEBUG_COMMAND_NAME,
+        title="启动微信自动真机调试",
+        command='echo "remote-debug"',
+        description="",
+        timeout=600,
+        enabled=True,
+        aliases=(),
+    )
+
+
 def _build_project_preview_command(project_root: Path, *, retry_marker: bool = False) -> CommandDefinition:
     """构造带小程序目录的预览命令对象。"""
 
@@ -367,6 +384,78 @@ async def test_execute_wx_auto_preview_compile_failure_is_reported_as_failure(mo
 
 
 @pytest.mark.asyncio
+async def test_execute_wx_remote_debug_success_shows_verified_device_evidence(monkeypatch):
+    """真机调试成功态应展示连接与运行时探测证据，而不是只看退出码。"""
+
+    events: list[tuple] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        return (
+            0,
+            'VIBEGO_WX_REMOTE_DEBUG_RESULT:{"status":"success","project":"/tmp/mini",'
+            '"platform":"ios","system":"iOS 18.5","connectionEvidence":"Tool.onRemoteDebugConnected"}',
+            "",
+            2.31,
+        )
+
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
+
+    await bot._execute_command_definition(
+        command=_build_remote_debug_command(),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=None,
+    )
+
+    summary_text = events[-1][1]
+    assert "状态：✅ 成功" in summary_text
+    assert "真机已连接且运行时探测通过" in summary_text
+    assert "项目：`/tmp/mini`" in summary_text
+    assert r"连接证据：`Tool\.onRemoteDebugConnected`" in summary_text
+    assert "平台：`ios`" in summary_text
+    assert "系统：`iOS 18\\.5`" in summary_text
+    assert "标准输出摘要" not in summary_text
+    assert service.calls[-1]["kwargs"]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_execute_wx_remote_debug_exit_zero_without_evidence_fails_closed(monkeypatch):
+    """执行器退出 0 但缺少结构化连接证据时，Telegram 不得误报成功。"""
+
+    events: list[tuple] = []
+    reply_message = _DummyReplyMessage()
+    service = _StubCommandService()
+
+    async def fake_run_shell_command(command: str, timeout: int):
+        return (0, "[完成] 已触发真机调试", "", 0.31)
+
+    monkeypatch.setattr(bot, "_run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(bot, "_answer_with_markdown", _build_command_answer_spy(events))
+
+    await bot._execute_command_definition(
+        command=_build_remote_debug_command(),
+        reply_message=reply_message,
+        trigger="按钮",
+        actor_user=None,
+        service=service,
+        history_detail_prefix=bot.COMMAND_HISTORY_DETAIL_GLOBAL_PREFIX,
+        fsm_state=None,
+    )
+
+    summary_text = events[-1][1]
+    assert "状态：⚠️ 失败" in summary_text
+    assert "缺少已验证的真机连接与运行时探测证据" in summary_text
+    assert "状态：✅ 成功" not in summary_text
+    assert service.calls[-1]["kwargs"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_execute_command_result_falls_back_to_new_message_when_edit_fails(monkeypatch):
     """执行中消息无法编辑时，应降级发送新的结果消息，避免用户看不到结果。"""
 
@@ -511,3 +600,26 @@ def test_select_wx_devtools_auto_retry_port_requires_unique_missing_port_candida
 
     monkeypatch.setattr(bot, "_suggest_wx_devtools_ports", lambda: ([12605, 64701], True, None))
     assert bot._select_wx_devtools_auto_retry_port(command, 2, stderr) == (None, None)
+
+
+def test_select_wx_remote_debug_auto_retry_port_uses_existing_recovery_rules(tmp_path: Path):
+    """自动真机调试应复用 IDE 当前端口的单次高置信恢复规则。"""
+
+    project = tmp_path / "mini"
+    command = CommandDefinition(
+        id=19,
+        project_slug="hyphamall",
+        scope="global",
+        name=bot.WX_REMOTE_DEBUG_COMMAND_NAME,
+        title="启动微信自动真机调试",
+        command=f'PROJECT_PATH="{project}" echo remote-debug',
+        description="",
+        timeout=600,
+        enabled=True,
+        aliases=(),
+    )
+    stderr = "IDE server has started on http://127.0.0.1:34724 and must be restarted on port 64701 first"
+    assert bot._select_wx_devtools_auto_retry_port(command, 255, stderr) == (
+        34724,
+        "端口不匹配，已自动改用 IDE 当前端口",
+    )

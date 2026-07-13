@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>功能迭代：命令管理新增微信自动真机调试</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+
+    * { box-sizing: border-box; }
+    html { color-scheme: light; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+      overflow-x: clip;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 22px 0 48px;
+    }
+
+    .task-code {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      margin-bottom: 10px;
+      border: 1px solid rgba(31,111,178,.34);
+      border-radius: 999px;
+      color: var(--blue);
+      background: rgba(232,243,255,.86);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(24px, 2.8vw, 32px);
+      line-height: 1.18;
+      letter-spacing: -.025em;
+    }
+
+    .summary {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+      overflow-wrap: anywhere;
+    }
+
+    .gate-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      align-items: center;
+      margin: 0 0 28px;
+      padding: 11px 14px;
+      border: 1px solid rgba(23,120,90,.34);
+      border-top: 3px solid var(--green);
+      background: rgba(233,248,242,.82);
+      box-shadow: var(--shadow);
+    }
+
+    .gate-strip strong { color: var(--green); }
+    .gate-strip span { font-size: 13px; line-height: 1.5; }
+
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 34px 0 14px;
+    }
+
+    .section-title h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.3;
+    }
+
+    .section-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .decision-rail {
+      display: grid;
+      grid-template-columns: 1.2fr .85fr .85fr;
+      gap: 14px;
+      align-items: stretch;
+      margin-bottom: 28px;
+    }
+
+    .choice {
+      position: relative;
+      min-height: 142px;
+      padding: 16px;
+      border: 1px solid rgba(141,179,216,.48);
+      background: rgba(255,255,255,.9);
+      box-shadow: var(--shadow);
+      overflow-wrap: anywhere;
+    }
+
+    .choice.recommended {
+      border: 2px solid rgba(23,120,90,.62);
+      background: linear-gradient(180deg, #fff, var(--green-soft));
+    }
+
+    .choice .label {
+      display: inline-block;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .choice.recommended .label { color: var(--green); }
+    .choice h3 { margin: 0 0 8px; font-size: 16px; line-height: 1.35; }
+    .choice p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+
+    .current-target-flow {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 92px minmax(0, 1fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .flow-lane {
+      position: relative;
+      padding: 18px;
+      border: 1px solid rgba(141,179,216,.46);
+      background: rgba(255,255,255,.78);
+      box-shadow: var(--shadow);
+    }
+
+    .flow-lane.current { border-top: 5px solid var(--amber); }
+    .flow-lane.target { border-top: 5px solid var(--blue); }
+
+    .lane-heading {
+      margin: 0 0 18px;
+      text-align: center;
+    }
+
+    .lane-heading b { display: block; font-size: 16px; line-height: 1.35; }
+    .lane-heading span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    .node {
+      position: relative;
+      z-index: 2;
+      width: min(100%, 430px);
+      height: auto;
+      min-height: 82px;
+      margin: 0 auto;
+      padding: 13px 15px;
+      border: 1px solid rgba(141,179,216,.62);
+      border-radius: 16px;
+      background: rgba(255,255,255,.98);
+      overflow-wrap: anywhere;
+    }
+
+    .node.start,
+    .node.end {
+      min-height: 64px;
+      border-radius: 999px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      text-align: center;
+    }
+
+    .node.decision {
+      border: 2px solid rgba(98,84,173,.42);
+      background: linear-gradient(180deg, #fff, var(--violet-soft));
+    }
+
+    .node.risk {
+      border-color: rgba(166,58,58,.45);
+      background: linear-gradient(180deg, #fff, var(--red-soft));
+    }
+
+    .node.success {
+      border-color: rgba(23,120,90,.48);
+      background: linear-gradient(180deg, #fff, var(--green-soft));
+    }
+
+    .node.install {
+      border-color: rgba(152,101,6,.45);
+      background: linear-gradient(180deg, #fff, var(--amber-soft));
+    }
+
+    .node b { display: block; margin-bottom: 5px; font-size: 14px; line-height: 1.35; }
+    .node span { display: block; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .node .evidence { margin-top: 7px; color: var(--blue); font-weight: 800; }
+
+    .connector {
+      position: relative;
+      z-index: 1;
+      width: 2px;
+      height: 36px;
+      margin: 0 auto;
+      background: var(--blue);
+    }
+
+    .connector::after {
+      content: "";
+      position: absolute;
+      left: -5px;
+      bottom: -1px;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-top: 9px solid var(--blue);
+    }
+
+    .connector span {
+      position: absolute;
+      left: 12px;
+      top: 8px;
+      width: 96px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .branch {
+      width: min(100%, 430px);
+      margin: 8px auto 0;
+      padding: 10px 12px;
+      border: 1px dashed rgba(166,58,58,.55);
+      background: rgba(255,240,240,.72);
+      color: var(--red);
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .diff-axis {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 100%;
+      color: var(--blue);
+      text-align: center;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .08em;
+    }
+
+    .diff-axis::before,
+    .diff-axis::after {
+      content: "";
+      width: 2px;
+      flex: 1;
+      min-height: 44px;
+      background: linear-gradient(var(--line), var(--blue));
+    }
+
+    .change-track,
+    .release-track {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      align-items: stretch;
+      gap: 0;
+      padding: 16px;
+      border: 1px solid rgba(141,179,216,.46);
+      background: rgba(255,255,255,.78);
+      box-shadow: var(--shadow);
+    }
+
+    .track-step {
+      position: relative;
+      min-height: 148px;
+      padding: 14px 18px 14px 14px;
+      border-top: 4px solid var(--blue);
+      background: rgba(255,255,255,.97);
+      overflow-wrap: anywhere;
+    }
+
+    .track-step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      z-index: 3;
+      right: -7px;
+      top: 50%;
+      width: 13px;
+      height: 13px;
+      border-top: 2px solid var(--blue);
+      border-right: 2px solid var(--blue);
+      transform: translateY(-50%) rotate(45deg);
+      background: #fff;
+    }
+
+    .track-step.modify { border-top-color: var(--violet); }
+    .track-step.add { border-top-color: var(--green); }
+    .track-step.risky { border-top-color: var(--red); }
+    .track-step.keep { border-top-color: var(--amber); }
+    .track-step b { display: block; margin-bottom: 7px; font-size: 13px; line-height: 1.35; }
+    .track-step span { display: block; color: var(--muted); font-size: 12px; line-height: 1.58; }
+
+    .matrix-wrap {
+      border: 1px solid rgba(141,179,216,.46);
+      background: rgba(255,255,255,.84);
+      box-shadow: var(--shadow);
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid rgba(141,179,216,.32);
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    th { color: var(--blue); background: rgba(232,243,255,.66); }
+    tr:last-child td { border-bottom: 0; }
+    .pass { color: var(--green); font-weight: 800; }
+    .risk-text { color: var(--red); font-weight: 800; }
+    .pending { color: var(--amber); font-weight: 800; }
+
+    .evidence-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    details {
+      border: 1px solid rgba(141,179,216,.42);
+      background: rgba(255,255,255,.88);
+    }
+
+    summary {
+      min-height: 44px;
+      padding: 12px 14px;
+      cursor: pointer;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.5;
+    }
+
+    details div {
+      padding: 0 14px 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.72;
+      overflow-wrap: anywhere;
+    }
+
+    a { color: var(--blue); text-underline-offset: 3px; }
+    a:hover { color: var(--violet); }
+    a:focus-visible,
+    summary:focus-visible {
+      outline: 3px solid rgba(31,111,178,.34);
+      outline-offset: 3px;
+    }
+
+    .footer-decision {
+      margin-top: 28px;
+      padding: 15px 16px;
+      border: 1px solid rgba(152,101,6,.38);
+      border-top: 3px solid var(--amber);
+      background: rgba(255,246,222,.88);
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    @media (max-width: 860px) {
+      .decision-rail { grid-template-columns: 1fr; }
+      .current-target-flow { grid-template-columns: 1fr; }
+      .diff-axis { min-height: 70px; }
+      .diff-axis::before,
+      .diff-axis::after { width: 42%; height: 2px; min-height: 2px; background: var(--line); }
+      .change-track,
+      .release-track { grid-template-columns: 1fr; gap: 16px; }
+      .track-step { min-height: 0; }
+      .track-step:not(:last-child)::after {
+        right: 50%;
+        top: auto;
+        bottom: -12px;
+        transform: translateX(50%) rotate(135deg);
+      }
+    }
+
+    @media (max-width: 460px) {
+      main { width: min(100vw - 20px, 440px); padding-top: 14px; }
+      h1 { font-size: clamp(20px, 6vw, 24px); }
+      .summary { font-size: 13px; }
+      .section-title { align-items: flex-start; flex-direction: column; gap: 3px; margin-top: 28px; }
+      .flow-lane { padding: 14px 10px; }
+      .node { padding: 12px; }
+      .connector span { left: 10px; width: 76px; }
+      th, td { padding: 10px 9px; }
+      .matrix-wrap { overflow-x: visible; }
+      .matrix-wrap table,
+      .matrix-wrap tbody,
+      .matrix-wrap tr,
+      .matrix-wrap td { display: block; width: 100%; }
+      .matrix-wrap thead { display: none; }
+      .matrix-wrap tr { padding: 8px 10px; border-bottom: 1px solid rgba(141,179,216,.32); }
+      .matrix-wrap tr:last-child { border-bottom: 0; }
+      .matrix-wrap td {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 10px;
+        padding: 7px 0;
+        border-bottom: 0;
+      }
+      .matrix-wrap td::before {
+        content: attr(data-label);
+        color: var(--blue);
+        font-weight: 800;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main data-diagram-type="feature-iteration"
+        data-template-family="feature-iteration"
+        data-template-id="current-target-flow"
+        data-template-layout="current-target-flow">
+    <div class="task-code">TASK_20260713_001</div>
+    <h1 data-slot="title">功能迭代：命令管理新增微信自动真机调试</h1>
+    <p class="summary" data-slot="summary">官方 Automator + remote(true) 链路已实现，聚焦、全量、静态、复审与最新分发构建已通过；真实手机验收尚未 opt-in 执行。</p>
+
+    <div class="gate-strip" aria-label="阶段与就绪状态">
+      <span><strong>VERIFICATION：自动化已通过</strong></span>
+      <span>自动化验证：聚焦 77 passed；全量 1169 passed</span>
+      <span>主入口：Telegram Worker / 📟 命令管理</span>
+      <span>未覆盖：真机 opt-in 验收；不承诺强制 2.0</span>
+    </div>
+
+    <section aria-labelledby="decision-title">
+      <div class="section-title">
+        <h2 id="decision-title">方案裁决</h2>
+        <span>移动端免扫码优先，拒绝不存在的 CLI/HTTP 接口</span>
+      </div>
+      <div class="decision-rail">
+        <article class="choice recommended">
+          <span class="label">采用 · 官方路径</span>
+          <h3>Automator + remote(true)</h3>
+          <p>同账号微信保持前台即可自动调起；真机连接事件后再做运行时探测，能够支撑 fail-closed 成功口径。</p>
+        </article>
+        <article class="choice">
+          <span class="label">不采用 · 同屏障碍</span>
+          <h3>Automator + 二维码</h3>
+          <p>接口同样官方，但 Telegram 与微信都在手机上时无法方便扫描同屏二维码，不符合移动端主场景。</p>
+        </article>
+        <article class="choice">
+          <span class="label">不采用 · 高脆弱性</span>
+          <h3>macOS GUI 自动点击</h3>
+          <p>会侵入桌面，无法稳定证明连接成功，也无法抵抗开发者工具 UI 升级；不用于强制 2.0。</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="flow-title">
+      <div class="section-title">
+        <h2 id="flow-title">变更前流程 vs 已实现流程</h2>
+        <span>右侧为当前工作树实现；失败分支贴在对应决策节点</span>
+      </div>
+      <div class="current-target-flow" aria-label="变更前命令流程与已实现自动真机调试流程对照">
+        <div class="flow-lane current">
+          <div class="lane-heading">
+            <b>变更前功能主路径</b>
+            <span>已有微信命令入口，但没有真机调试执行器</span>
+          </div>
+
+          <div class="node start">
+            <b>开始：Telegram 命令管理</b>
+            <span>用户点击默认通用微信命令</span>
+          </div>
+          <div class="connector" aria-hidden="true"><span>读取默认命令</span></div>
+
+          <div class="node">
+            <b>现有三条命令</b>
+            <span>wx-dev-preview / wx-auto-preview / wx-dev-upload</span>
+            <span class="evidence">E1：源码已确认</span>
+          </div>
+          <div class="connector" aria-hidden="true"><span>目录与端口</span></div>
+
+          <div class="node">
+            <b>复用微信命令编排</b>
+            <span>候选目录、IDE 服务端口、一次自动重试、人工兜底</span>
+            <span class="evidence">E2：现有链路可复用</span>
+          </div>
+          <div class="connector" aria-hidden="true"><span>执行 CLI</span></div>
+
+          <div class="node decision">
+            <b>能否建立真机调试连接？</b>
+            <span>preview / auto-preview / upload 都不是 remote debug</span>
+          </div>
+          <div class="branch"><strong>否：</strong>当前最多完成预览、手机自动预览或上传，无法等待真机调试连接事件。</div>
+          <div class="connector" aria-hidden="true"><span>能力缺口</span></div>
+
+          <div class="node end risk">
+            <b>结束：缺少真机调试触发</b>
+            <span>不能把 auto-preview 的 exit 0 包装成真机调试成功</span>
+          </div>
+        </div>
+
+        <div class="diff-axis" aria-label="差异映射轴">差异映射</div>
+
+        <div class="flow-lane target">
+          <div class="lane-heading">
+            <b>已实现功能主路径</b>
+            <span>官方 SDK + 结构化连接证据 + 失败不误报</span>
+          </div>
+
+          <div class="node start">
+            <b>开始：点击 wx-remote-debug</b>
+            <span>标题：启动微信自动真机调试</span>
+          </div>
+          <div class="connector" aria-hidden="true"><span>单候选自动</span></div>
+
+          <div class="node">
+            <b>确认小程序目录与 IDE 端口</b>
+            <span>复用现有候选选择、唯一端口自动重试一次与人工端口兜底</span>
+            <span class="evidence">E1：bot 路由与自动选择已接入</span>
+          </div>
+          <div class="connector" aria-hidden="true"><span>运行期门禁</span></div>
+
+          <div class="node decision install">
+            <b>锁定依赖是否已就绪？</b>
+            <span>显式要求 Node.js ≥16；项目锁早于安装，死 PID 安装锁可回收，并校验 package-lock 哈希</span>
+          </div>
+          <div class="branch"><strong>否：</strong>首次复制专用清单并执行 npm ci；node/npm、网络或完整性失败立即返回非零。</div>
+          <div class="connector" aria-hidden="true"><span>官方 Automator</span></div>
+
+          <div class="node">
+            <b>cli auto → automator.connect()</b>
+            <span>显式分离 automation WS 端口与 IDE HTTP 端口；动态 WS 明确冲突时释放旧锁、换端口且仅重试一次</span>
+            <span class="evidence">E2：trigger.cjs 已实现两类端口分离</span>
+          </div>
+          <div class="connector" aria-hidden="true"><span>等待连接</span></div>
+
+          <div class="node decision">
+            <b>连接与运行时探测都成立？</b>
+            <span>remote(true) 最长 120 秒；连接后 systemInfo() 最长重试 10 秒，并要求 platform / system 可识别</span>
+          </div>
+          <div class="branch"><strong>否：</strong>超时或异常均 fail-closed；disconnect 并终止本轮 cli auto 子进程，不调用 close；超时提示 IDE 可能仍在准备态，可手动关闭。</div>
+          <div class="connector" aria-hidden="true"><span>连接事件成立</span></div>
+
+          <div class="node end success">
+            <b>结束：真机已连接且探测通过</b>
+            <span>Telegram 专用成功态外显项目/平台；结构化证据同时写入命令历史</span>
+            <span class="evidence">E3：只有结构化证据合法才显示成功</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="change-title">
+      <div class="section-title">
+        <h2 id="change-title">差异映射</h2>
+        <span>新增、修改、不变、风险、回滚沿发布轴绑定</span>
+      </div>
+      <div class="change-track" aria-label="代码与运行期差异轨道">
+        <div class="track-step add">
+          <b>新增 · 命令入口</b>
+          <span>defaults.py 增加 wx-remote-debug；bot.py 增加识别、目录/端口文案与自动流程白名单。</span>
+        </div>
+        <div class="track-step modify">
+          <b>修改 · 执行链路</b>
+          <span>gen_preview.sh 增加 remote-debug action，复用当前项目与 IDE 端口解析。</span>
+        </div>
+        <div class="track-step add">
+          <b>新增 · 官方执行器</b>
+          <span>随包发布 trigger.cjs、专用 package.json 与 package-lock.json；首用在版本化临时目录 npm ci，成功后原子切换。</span>
+        </div>
+        <div class="track-step keep">
+          <b>不变 · 兼容边界</b>
+          <span>不改权限模型和 DB schema；preview、auto-preview、upload 的既有语义必须保持。</span>
+        </div>
+        <div class="track-step risky">
+          <b>风险 / 回滚</b>
+          <span>npm audit 仍有 10 项传递依赖风险（6 moderate / 1 high / 3 critical），风险未清零；回滚删除命令、资产、打包条目、runtime 目录及已 seed 数据行。</span>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="release-title">
+      <div class="section-title">
+        <h2 id="release-title">验证与发布闭环</h2>
+        <span>真机验证保持 opt-in，不擅自拉起 GUI 或手机</span>
+      </div>
+      <div class="release-track" aria-label="测试验证与回滚轨道">
+        <div class="track-step risky">
+          <b>1 · 验证资产已建立</b>
+          <span>覆盖命令入口、SDK 调用、超时失败、探测失败、disconnect、依赖缓存与打包资产。</span>
+        </div>
+        <div class="track-step add">
+          <b>2 · 聚焦自动化已通过</b>
+          <span>4 个微信命令测试文件共 77 passed，用时 18.49s；假 CLI / 假 Automator 覆盖成功与失败边界。</span>
+        </div>
+        <div class="track-step modify">
+          <b>3 · 全量回归已通过</b>
+          <span>全量 pytest：1169 passed、6 条既有 warning，用时 56.12s；preview / auto-preview / upload 与 Telegram 成败展示已回归。</span>
+        </div>
+        <div class="track-step keep">
+          <b>4 · 分发与静态门禁已通过</b>
+          <span>git diff --check、bash -n、node --check、py_compile 均成功；基于最新源码 build，wheel/sdist 实查均包含 trigger.cjs、package.json 和 package-lock.json。</span>
+        </div>
+        <div class="track-step risky">
+          <b>5 · 真机验收未执行</b>
+          <span>本轮没有启动微信开发者工具、没有调起手机；只能在用户明确 opt-in 后验收真实连接及 disconnect 后会话持续性。</span>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="ac-title">
+      <div class="section-title">
+        <h2 id="ac-title">验收与风险矩阵</h2>
+        <span>所有成功判断都绑定可观察证据</span>
+      </div>
+      <div class="matrix-wrap">
+        <table>
+          <thead>
+            <tr><th>轨道</th><th>验收口径</th><th>自动化证据</th><th>风险 / 回滚</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td data-label="轨道">入口与路由</td>
+              <td data-label="验收口径">命令管理可见；单候选自动、多候选可选</td>
+              <td data-label="自动化证据" class="pass">已通过：默认命令、识别与单候选自动执行</td>
+              <td data-label="风险 / 回滚">删除 default 与已 seed 记录</td>
+            </tr>
+            <tr>
+              <td data-label="轨道">官方链路</td>
+              <td data-label="验收口径">只使用 cli auto + automator.connect + remote(true)</td>
+              <td data-label="自动化证据" class="pass">已通过：断言 auto 参数、wsEndpoint、remote(true)、systemInfo()</td>
+              <td data-label="风险 / 回滚">不得回退到私有协议或 GUI 点击</td>
+            </tr>
+            <tr>
+              <td data-label="轨道">成功判定</td>
+              <td data-label="验收口径" class="pass">连接事件 + 运行时探测成立才成功</td>
+              <td data-label="自动化证据" class="pass">已通过：成功证据、探测空结果、超时及 exit 0 无证据降级</td>
+              <td data-label="风险 / 回滚" class="risk-text">禁止把“已触发”写成“已连接”</td>
+            </tr>
+            <tr>
+              <td data-label="轨道">依赖与分发</td>
+              <td data-label="验收口径">锁定 0.12.1；首次原子 npm ci；wheel/sdist 入包</td>
+              <td data-label="自动化证据" class="pass">已通过：Node&lt;16 拒绝、哈希复用、锁回收、配置/runtime root、wheel/sdist 入包</td>
+              <td data-label="风险 / 回滚" class="risk-text">audit 仍有 10 项传递依赖风险；删除 runtime/wx-remote-debug 与打包条目</td>
+            </tr>
+            <tr>
+              <td data-label="轨道">兼容与真机</td>
+              <td data-label="验收口径">旧三命令不退化；真机验证必须用户 opt-in；确认 disconnect 后调试仍持续</td>
+              <td data-label="自动化证据" class="pending">旧命令聚焦与全量 pytest 已通过；仅真机 opt-in 验收未执行</td>
+              <td data-label="风险 / 回滚">不承诺 2.0，不擅自启动 GUI</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="evidence-title">
+      <div class="section-title">
+        <h2 id="evidence-title">证据详情</h2>
+        <span>主结论已在图内外显；这里仅展开路径与官方资料</span>
+      </div>
+      <div class="evidence-list" data-slot="evidence-and-notes">
+        <details>
+          <summary>E1 · wx-remote-debug 已接入默认命令与 Worker 微信编排</summary>
+          <div>仓库锚点：command_center/defaults.py:57-62；bot.py:6141, 7095-7113。单候选自动执行、多候选选择、IDE 端口恢复沿用既有编排链路。</div>
+        </details>
+        <details>
+          <summary>E2 · shell 入口与 Node 执行器已实现官方自动化链路</summary>
+          <div>仓库锚点：scripts/gen_preview.sh（WX_PREVIEW_ACTION=remote-debug）；vibego_cli/data/wx-remote-debug/trigger.cjs（assertSupportedNodeVersion、resolveConfigDir、resolveRuntimeRoot、tryAcquireDirectoryLock、isAutomationPortConflict、stopWechatCli、miniProgram.remote(true)）。实现 Node ≥16 门禁、同源配置/runtime root、锁回收、动态端口一次重试、连接探测和子进程清理。</div>
+        </details>
+        <details>
+          <summary>E3 · Worker 对结构化成功证据进行二次 fail-closed 校验</summary>
+          <div>仓库锚点：bot.py:7200-7227, 7845-7851, 7893-7898。即使执行器 exit 0，若缺少 Tool.onRemoteDebugConnected 或 platform/system，Telegram 仍降级为失败；成功时才显示已连接及平台/系统。</div>
+        </details>
+        <details>
+          <summary>E4 · 聚焦自动化已经记录成功证据</summary>
+          <div>验证命令：PYTHONPATH=. pytest -q tests/test_wx_remote_debug_flow.py tests/test_wx_preview_detection.py tests/test_wx_preview_port_flow.py tests/test_command_execution_flow.py。结果：77 passed in 18.49s；全量 PYTHONPATH=. pytest -q：1169 passed、6 warnings in 56.12s。</div>
+        </details>
+        <details>
+          <summary>E5 · 静态检查与分发构建已通过</summary>
+          <div>git diff --check、bash -n scripts/gen_preview.sh、node --check trigger.cjs、python3.11 -m py_compile bot.py command_center/defaults.py 成功；基于最新源码执行 python3.11 -m build，两份归档实查均含 wx-remote-debug 的 trigger.cjs、package.json 和 package-lock.json。实现复审无 Critical/Important。</div>
+        </details>
+        <details>
+          <summary>E6 · 真实手机验收与能力边界仍未闭环</summary>
+          <div>本轮未获得 opt-in，因此没有启动开发者工具或调起手机；disconnect 后真机调试是否持续、同账号手机前台自动调起及 Telegram 成功时点需真机核验。npm audit 退出码 1，仍有 6 moderate / 1 high / 3 critical 共 10 项传递依赖 advisory；风险未清零。仍不承诺强制真机调试 2.0。</div>
+        </details>
+      </div>
+    </section>
+
+    <div class="footer-decision">
+      <strong>当前结论：</strong>功能实现、聚焦/全量自动化、静态检查、实现复审与最新分发构建已记录成功证据，但不等于真实手机验收通过，且 npm 传递依赖风险未清零。下一步仅在用户明确 opt-in 后从 Telegram 执行真机验收；若 disconnect 会终止调试，则回到 PLAN，不自动追加后台 session。回滚时移除默认命令、bot/shell 路由、Node 资产与打包条目，并清理 runtime 目录及已 seed 记录。
+    </div>
+  </main>
+</body>
+</html>

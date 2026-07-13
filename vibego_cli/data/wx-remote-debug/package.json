@@ -1,0 +1,13 @@
+{
+  "name": "vibego-wx-remote-debug-runtime",
+  "version": "0.12.1",
+  "private": true,
+  "description": "Vibego 微信小程序自动真机调试运行时依赖",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "miniprogram-automator": "0.12.1"
+  }
+}

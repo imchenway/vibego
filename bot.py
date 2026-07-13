@@ -6138,6 +6138,7 @@ COMMAND_STDERR_MAX_CHARS = _env_int("COMMAND_STDERR_MAX_CHARS", 1200)
 COMMAND_OUTPUT_PREVIEW_LINES = _env_int("COMMAND_OUTPUT_PREVIEW_LINES", 5)
 WX_PREVIEW_COMMAND_NAME = "wx-dev-preview"
 WX_AUTO_PREVIEW_COMMAND_NAME = "wx-auto-preview"
+WX_REMOTE_DEBUG_COMMAND_NAME = "wx-remote-debug"
 WX_UPLOAD_COMMAND_NAME = "wx-dev-upload"
 WX_DEVTOOLS_AUTO_PORT_RETRY_ENV = "WX_DEVTOOLS_AUTO_PORT_RETRY"
 WX_PREVIEW_CHOICE_PREFIX = "wxpreview:choose:"
@@ -7005,6 +7006,16 @@ def _build_wx_preview_prompt(
             "",
             "候选目录：",
         ]
+    elif command_name == WX_REMOTE_DEBUG_COMMAND_NAME:
+        lines = [
+            "*请选择要启动自动真机调试的小程序目录*",
+            f"扫描范围：当前目录及一层子目录（基准：`{_escape_markdown_text(str(base))}`）",
+            f"端口配置文件：`{_escape_markdown_text(str(ports_file))}`（未配置将无法执行）",
+            "将调用微信开发者工具官方自动化接口连接同账号手机；请保持手机微信前台。",
+            "只有收到真机连接事件且运行时探测通过才会显示成功。",
+            "",
+            "候选目录：",
+        ]
     elif command_name == WX_AUTO_PREVIEW_COMMAND_NAME:
         lines = [
             "*请选择要手机自动预览的小程序目录*",
@@ -7034,6 +7045,8 @@ def _build_wx_preview_prompt(
         )
     if command_name == WX_UPLOAD_COMMAND_NAME:
         lines.append("_请选择其一后执行上传（二维码请在微信后台查看）。_")
+    elif command_name == WX_REMOTE_DEBUG_COMMAND_NAME:
+        lines.append("_请选择其一后启动自动真机调试。_")
     elif command_name == WX_AUTO_PREVIEW_COMMAND_NAME:
         lines.append("_请选择其一后触发手机自动预览。_")
     else:
@@ -7082,13 +7095,22 @@ def _wrap_wx_preview_command(command: CommandDefinition, project_root: Path) -> 
 def _is_wx_devtools_command(command_name: Optional[str]) -> bool:
     """判断是否为微信开发者工具相关命令。"""
 
-    return command_name in {WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME, WX_UPLOAD_COMMAND_NAME}
+    return command_name in {
+        WX_PREVIEW_COMMAND_NAME,
+        WX_AUTO_PREVIEW_COMMAND_NAME,
+        WX_REMOTE_DEBUG_COMMAND_NAME,
+        WX_UPLOAD_COMMAND_NAME,
+    }
 
 
 def _is_wx_preview_auto_flow_command(command_name: Optional[str]) -> bool:
     """判断是否为允许自动选择/自动端口重试的预览类命令。"""
 
-    return command_name in {WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME}
+    return command_name in {
+        WX_PREVIEW_COMMAND_NAME,
+        WX_AUTO_PREVIEW_COMMAND_NAME,
+        WX_REMOTE_DEBUG_COMMAND_NAME,
+    }
 
 
 def _collect_wx_command_env_overrides(command_text: str) -> Dict[str, str]:
@@ -7170,10 +7192,39 @@ _WX_PREVIEW_PROJECT_ROOT_PATTERNS = (
     # 从 wx-dev-preview 的输出中提取实际小程序目录
     re.compile(r"\[信息\]\s*生成预览，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
     re.compile(r"\[信息\]\s*手机自动预览，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
+    re.compile(r"\[信息\]\s*自动真机调试，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
     re.compile(r"\[信息\]\s*执行上传，项目：(?P<path>[^，\n]+)", flags=re.MULTILINE),
     re.compile(r"小程序目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
     re.compile(r"项目目录：(?P<path>[^\n]+)", flags=re.MULTILINE),
 )
+_WX_REMOTE_DEBUG_RESULT_PREFIX = "VIBEGO_WX_REMOTE_DEBUG_RESULT:"
+
+
+def _parse_wx_remote_debug_result(stdout_text: str) -> Optional[Dict[str, str]]:
+    """解析并校验自动真机调试执行器的结构化成功证据。"""
+
+    for line in (stdout_text or "").splitlines():
+        if not line.startswith(_WX_REMOTE_DEBUG_RESULT_PREFIX):
+            continue
+        raw_payload = line[len(_WX_REMOTE_DEBUG_RESULT_PREFIX) :].strip()
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            return None
+        connection_evidence = str(payload.get("connectionEvidence") or "").strip()
+        platform = str(payload.get("platform") or "").strip()
+        system = str(payload.get("system") or "").strip()
+        if connection_evidence != "Tool.onRemoteDebugConnected" or not (platform or system):
+            return None
+        return {
+            "project": str(payload.get("project") or "").strip(),
+            "platform": platform,
+            "system": system,
+            "connectionEvidence": connection_evidence,
+        }
+    return None
 
 
 def _parse_wx_preview_port_mismatch(stderr_text: str) -> tuple[Optional[int], Optional[int]]:
@@ -7616,7 +7667,12 @@ async def _maybe_handle_wx_preview(
         candidate = candidates[0]
         command_override = _wrap_wx_preview_command(command, candidate.project_root)
         command_override = _apply_command_env_overrides(command_override, env_overrides)
-        action_text = "手机自动预览" if command.name == WX_AUTO_PREVIEW_COMMAND_NAME else "生成预览"
+        if command.name == WX_REMOTE_DEBUG_COMMAND_NAME:
+            action_text = "自动真机调试"
+        elif command.name == WX_AUTO_PREVIEW_COMMAND_NAME:
+            action_text = "手机自动预览"
+        else:
+            action_text = "生成预览"
         await _answer_with_markdown(
             reply_message,
             "\n".join(
@@ -7723,6 +7779,7 @@ async def _execute_command_definition(
     exit_code: Optional[int] = None
     duration = 0.0
     status = "success"
+    wx_remote_debug_result: Optional[Dict[str, str]] = None
     try:
         exit_code, stdout_text, stderr_text, duration = await _run_shell_command(command.command, command.timeout)
         status = "success" if exit_code == 0 else "failed"
@@ -7785,6 +7842,13 @@ async def _execute_command_definition(
             exc,
             extra={**_session_extra(), "command": command.name},
         )
+    if command.name == WX_REMOTE_DEBUG_COMMAND_NAME and status == "success":
+        wx_remote_debug_result = _parse_wx_remote_debug_result(stdout_text)
+        if wx_remote_debug_result is None:
+            status = "failed"
+            exit_code = exit_code or 70
+            evidence_error = "自动真机调试缺少已验证的真机连接与运行时探测证据，已按失败处理。"
+            stderr_text = f"{stderr_text.rstrip()}\n{evidence_error}".lstrip()
     finished_at = shanghai_now_iso()
     history_record = await service.record_history(
         command.id,
@@ -7826,6 +7890,18 @@ async def _execute_command_definition(
         f"耗时：{duration:.2f}s / 超时：{command.timeout}s",
         f"状态：{status_label}",
     ]
+    if wx_remote_debug_result is not None:
+        lines.append("真机已连接且运行时探测通过。")
+        if wx_remote_debug_result["project"]:
+            lines.append(f"项目：`{_escape_markdown_text(wx_remote_debug_result['project'])}`")
+        lines.append(
+            "连接证据："
+            f"`{_escape_markdown_text(wx_remote_debug_result['connectionEvidence'])}`"
+        )
+        if wx_remote_debug_result["platform"]:
+            lines.append(f"平台：`{_escape_markdown_text(wx_remote_debug_result['platform'])}`")
+        if wx_remote_debug_result["system"]:
+            lines.append(f"系统：`{_escape_markdown_text(wx_remote_debug_result['system'])}`")
     if show_diagnostics and exit_code is not None:
         lines.append(f"退出码：{exit_code}")
     if show_diagnostics and stdout_text:
@@ -22967,6 +23043,8 @@ async def on_wx_preview_choice(callback: CallbackQuery, state: FSMContext) -> No
     await state.clear()
     if command_override.name == WX_UPLOAD_COMMAND_NAME:
         await callback.answer("开始执行上传…")
+    elif command_override.name == WX_REMOTE_DEBUG_COMMAND_NAME:
+        await callback.answer("开始自动真机调试…")
     elif command_override.name == WX_AUTO_PREVIEW_COMMAND_NAME:
         await callback.answer("开始自动预览…")
     else:
@@ -23100,9 +23178,13 @@ async def _apply_wx_preview_port_and_retry(
                     "开始重试上传…"
                     if command_retry.name == WX_UPLOAD_COMMAND_NAME
                     else (
-                        "开始重试自动预览…"
-                        if command_retry.name == WX_AUTO_PREVIEW_COMMAND_NAME
-                        else "开始重试生成预览…"
+                        "开始重试自动真机调试…"
+                        if command_retry.name == WX_REMOTE_DEBUG_COMMAND_NAME
+                        else (
+                            "开始重试自动预览…"
+                            if command_retry.name == WX_AUTO_PREVIEW_COMMAND_NAME
+                            else "开始重试生成预览…"
+                        )
                     )
                 ),
             ]

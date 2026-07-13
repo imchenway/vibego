@@ -17,6 +17,9 @@ from command_center.defaults import DEFAULT_GLOBAL_COMMANDS
 from command_center import CommandDefinition
 
 
+WX_REMOTE_DEBUG_COMMAND_NAME = "wx-remote-debug"
+
+
 def _write_app_json(dir_path: Path) -> None:
     """在目标目录写入最小化 app.json。"""
 
@@ -164,6 +167,24 @@ def test_wx_auto_preview_is_default_global_command() -> None:
     assert "gen_preview.sh" in command_text
 
 
+def test_wx_remote_debug_is_default_global_command() -> None:
+    """自动真机调试应作为免扫码的默认通用命令接入命令管理。"""
+
+    assert getattr(bot_module, "WX_REMOTE_DEBUG_COMMAND_NAME", None) == WX_REMOTE_DEBUG_COMMAND_NAME
+    assert _is_wx_devtools_command(WX_REMOTE_DEBUG_COMMAND_NAME) is True
+    cmd = next(
+        (item for item in DEFAULT_GLOBAL_COMMANDS if item["name"] == WX_REMOTE_DEBUG_COMMAND_NAME),
+        None,
+    )
+    assert cmd is not None
+    assert cmd["title"] == "启动微信自动真机调试"
+    command_text = str(cmd["command"])
+    assert 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}"' in command_text
+    assert "WX_PREVIEW_ACTION=remote-debug" in command_text
+    assert "gen_preview.sh" in command_text
+    assert "二维码" not in str(cmd["description"])
+
+
 class _DummyWxPreviewState:
     """记录微信目录选择 FSM 调用，便于断言是否进入人工选择。"""
 
@@ -200,9 +221,12 @@ def _build_wx_command(name: str) -> CommandDefinition:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("command_name", [WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME])
+@pytest.mark.parametrize(
+    "command_name",
+    [WX_PREVIEW_COMMAND_NAME, WX_AUTO_PREVIEW_COMMAND_NAME, WX_REMOTE_DEBUG_COMMAND_NAME],
+)
 async def test_wx_preview_single_candidate_executes_without_choice(monkeypatch, tmp_path: Path, command_name: str) -> None:
-    """preview/auto-preview 只有一个小程序候选时，应自动选择并直接执行。"""
+    """预览类命令只有一个小程序候选时，应自动选择并直接执行。"""
 
     mini = tmp_path / "frontend-mini"
     _write_app_json(mini)

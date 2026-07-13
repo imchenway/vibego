@@ -42,7 +42,7 @@ py-modules = ["bot", "master", "logging_setup", "project_repository", "parallel_
 include = ["vibego_cli", "vibego_cli.*", "tasks", "scripts", "scripts.*", "command_center"]
 
 [tool.setuptools.package-data]
-"vibego_cli" = ["data/*.txt", "data/skills/*/SKILL.md", "data/skills/*/references/*.md", "data/skills/*/templates/*/*.html", "data/skills/*/agents/*.yaml", "data/skills/*/scripts/*.py"]
+"vibego_cli" = ["data/*.txt", "data/skills/*/SKILL.md", "data/skills/*/references/*.md", "data/skills/*/templates/*/*.html", "data/skills/*/agents/*.yaml", "data/skills/*/scripts/*.py", "data/wx-remote-debug/*.cjs", "data/wx-remote-debug/*.json"]
 "scripts" = ["*.sh", "models/*.sh"]
 
 [tool.setuptools.data-files]

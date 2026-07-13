@@ -250,10 +250,12 @@ Telegram 命令菜单可通过 `/plan_mode` 切换 Copilot 的 `interactive / pl
   `~/.config/vibego/state/master_state.json`。
 - 其他自定义字段暂不读取。
 
-### 微信开发命令端口配置（wx-dev-preview / wx-auto-preview / wx-dev-upload）
+### 微信开发命令端口配置（wx-dev-preview / wx-auto-preview / wx-remote-debug / wx-dev-upload）
 
-- `wx-dev-preview`、`wx-auto-preview` 与 `wx-dev-upload` 都会调用微信开发者工具 CLI 的 `--port`，该端口为 IDE HTTP 服务端口；若端口未配置则命令会直接报错。
+- `wx-dev-preview`、`wx-auto-preview`、`wx-remote-debug` 与 `wx-dev-upload` 都会调用微信开发者工具 CLI 的 `--port`，该端口为 IDE HTTP 服务端口；若端口未配置则命令会直接报错。
 - `wx-auto-preview` 调用微信开发者工具 `auto-preview`，用于触发已登录手机自动预览；不生成二维码、不回传图片。
+- `wx-remote-debug` 调用官方 `miniprogram-automator` 链路：`cli auto` → `automator.connect()` → `miniProgram.remote(true)`；同账号手机微信需保持前台，不生成二维码。只有收到真机连接事件且 `systemInfo()` 返回平台或系统信息时才显示成功。
+- `wx-remote-debug` 要求 Node.js `>=16` 与 npm；首次执行会把锁定的 `miniprogram-automator@0.12.1` 安装到 Vibego runtime root 下的 `wx-remote-debug/0.12.1/`（默认 `~/.config/vibego/runtime/`，可由 `VIBEGO_RUNTIME_ROOT` 覆盖），后续复用缓存。Node/npm、网络或完整性失败会直接返回失败。它只终止本次启动的 `cli auto` 子进程，不会主动关闭微信开发者工具，也不承诺强制使用“真机调试 2.0”。
 - 配置文件：`~/.config/vibego/config/wx_devtools_ports.json`（若设置了 `VIBEGO_CONFIG_DIR`/`MASTER_CONFIG_ROOT`，则路径随之变化）
 - 配置模板：`config/wx_devtools_ports.json.example`
 - 端口获取：微信开发者工具 → 设置 → 安全设置 → 服务端口（官方文档：https://developers.weixin.qq.com/miniprogram/dev/devtools/cli.html）

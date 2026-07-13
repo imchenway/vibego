@@ -2,12 +2,13 @@
 # 通用微信小程序预览脚本：
 # - 默认 preview：输出 JPEG 到本地文件，并通过 TG_PHOTO_FILE 标记便于机器人回传；
 # - WX_PREVIEW_ACTION=auto-preview：触发微信开发者工具手机自动预览，不生成二维码。
+# - WX_PREVIEW_ACTION=remote-debug：通过官方自动化接口启动免扫码真机调试。
 set -eo pipefail
 
 CLI_BIN="${CLI_BIN:-/Applications/wechatwebdevtools.app/Contents/MacOS/cli}"  # 可通过环境变量覆盖 CLI 路径
 PROJECT_PATH="${PROJECT_PATH:-}"                                              # 允许外部显式指定，未指定时后续自动探测
 VERSION="${VERSION:-$(date +%Y%m%d%H%M%S)}"
-WX_PREVIEW_ACTION="${WX_PREVIEW_ACTION:-preview}"                             # preview / auto-preview
+WX_PREVIEW_ACTION="${WX_PREVIEW_ACTION:-preview}"                             # preview / auto-preview / remote-debug
 PORT="${PORT:-}"                                                             # 可临时用环境变量覆盖；未设置则读取项目端口配置
 WX_DEVTOOLS_PORTS_FILE="${WX_DEVTOOLS_PORTS_FILE:-}"                          # 可显式指定端口映射文件路径（默认读取 vibego 配置目录）
 PROJECT_SEARCH_DEPTH="${PROJECT_SEARCH_DEPTH:-6}"                             # 自动探测目录的最大深度（默认提升为 6，覆盖深层项目）
@@ -367,13 +368,36 @@ if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
 fi
 
 case "$WX_PREVIEW_ACTION" in
-  preview|auto-preview)
+  preview|auto-preview|remote-debug)
     ;;
   *)
-    echo "[错误] 不支持的微信预览动作：WX_PREVIEW_ACTION=$WX_PREVIEW_ACTION（仅支持 preview / auto-preview）" >&2
+    echo "[错误] 不支持的微信预览动作：WX_PREVIEW_ACTION=${WX_PREVIEW_ACTION}（仅支持 preview / auto-preview / remote-debug）" >&2
     exit 2
     ;;
 esac
+
+if [[ "$WX_PREVIEW_ACTION" == "remote-debug" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+  WX_REMOTE_DEBUG_TRIGGER_PATH="${WX_REMOTE_DEBUG_TRIGGER_PATH:-$ROOT_DIR/vibego_cli/data/wx-remote-debug/trigger.cjs}"
+  NODE_BIN="${NODE_BIN:-$(command -v node 2>/dev/null || true)}"
+
+  if [[ -z "$NODE_BIN" || ! -x "$NODE_BIN" ]]; then
+    echo "[错误] 自动真机调试需要 Node.js，但未找到可执行的 node；可通过 NODE_BIN 显式指定。" >&2
+    exit 3
+  fi
+  if [[ ! -f "$WX_REMOTE_DEBUG_TRIGGER_PATH" ]]; then
+    echo "[错误] 自动真机调试执行器不存在：$WX_REMOTE_DEBUG_TRIGGER_PATH" >&2
+    exit 3
+  fi
+
+  echo "[信息] 自动真机调试，项目：${RESOLVED_PROJECT_PATH}，IDE 服务端口：${PORT}"
+  "$NODE_BIN" "$WX_REMOTE_DEBUG_TRIGGER_PATH" \
+    --project "$RESOLVED_PROJECT_PATH" \
+    --ide-port "$PORT" \
+    --cli "$CLI_BIN"
+  exit $?
+fi
 
 if [[ "$WX_PREVIEW_ACTION" == "auto-preview" ]]; then
   AUTO_PREVIEW_INFO_OUTPUT="${AUTO_PREVIEW_INFO_OUTPUT:-${TMPDIR:-/tmp}/wx-auto-preview-${VERSION}-info.json}"

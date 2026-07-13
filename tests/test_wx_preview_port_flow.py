@@ -599,6 +599,117 @@ def test_gen_preview_auto_preview_fails_when_preview_does_not_generate_qr(tmp_pa
     assert "手机自动预览已触发" not in stdout
 
 
+@pytest.mark.skipif(os.name != "posix", reason="wx-remote-debug 脚本依赖 bash/Posix 环境")
+def test_gen_preview_remote_debug_calls_node_executor_without_qr(tmp_path: Path) -> None:
+    """真机调试 action 应复用项目/IDE 端口解析并调用 Node 执行器。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_preview.sh"
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "fake-wx-cli"
+    fake_cli.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    fake_cli.chmod(0o755)
+    args_file = tmp_path / "node-args.txt"
+    fake_node = bin_dir / "fake-node"
+    fake_node.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+            printf '%s\n' "$@" > "$FAKE_NODE_ARGS_FILE"
+            printf '%s\n' 'VIBEGO_WX_REMOTE_DEBUG_RESULT:{"status":"success","project":"fake","platform":"ios","system":"iOS 18","connectionEvidence":"Tool.onRemoteDebugConnected"}'
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_node.chmod(0o755)
+
+    ports_file = tmp_path / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps({"paths": {str(project_root.resolve()): 45927}, "projects": {}}),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "CLI_BIN": str(fake_cli),
+            "NODE_BIN": str(fake_node),
+            "FAKE_NODE_ARGS_FILE": str(args_file),
+            "PROJECT_PATH": str(project_root),
+            "PROJECT_BASE": str(project_root),
+            "WX_DEVTOOLS_PORTS_FILE": str(ports_file),
+            "WX_PREVIEW_ACTION": "remote-debug",
+        }
+    )
+    env.pop("PORT", None)
+
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    assert proc.returncode == 0, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    args = args_file.read_text(encoding="utf-8").splitlines()
+    assert args[0].endswith("vibego_cli/data/wx-remote-debug/trigger.cjs")
+    assert args[args.index("--project") + 1] == str(project_root)
+    assert args[args.index("--ide-port") + 1] == "45927"
+    assert args[args.index("--cli") + 1] == str(fake_cli)
+    assert "VIBEGO_WX_REMOTE_DEBUG_RESULT:" in stdout
+    assert "TG_PHOTO_FILE" not in stdout
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-remote-debug 脚本依赖 bash/Posix 环境")
+def test_gen_preview_remote_debug_missing_node_fails_closed(tmp_path: Path) -> None:
+    """自动真机调试找不到 Node.js 时必须在触发手机前失败。"""
+
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_preview.sh"
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+    fake_cli = tmp_path / "fake-cli"
+    fake_cli.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    fake_cli.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "CLI_BIN": str(fake_cli),
+            "NODE_BIN": str(tmp_path / "missing-node"),
+            "PROJECT_PATH": str(project_root),
+            "PROJECT_BASE": str(project_root),
+            "WX_PREVIEW_ACTION": "remote-debug",
+            "PORT": "45927",
+        }
+    )
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    assert proc.returncode != 0
+    assert "需要 Node.js" in stderr
+    assert "VIBEGO_WX_REMOTE_DEBUG_RESULT:" not in (proc.stdout or b"").decode("utf-8", errors="replace")
+
+
 @pytest.mark.skipif(os.name != "posix", reason="wx-dev-upload 脚本依赖 bash/Posix 环境")
 def test_gen_upload_prefers_python3_over_python_and_honors_version(tmp_path: Path) -> None:
     """确保上传脚本在 python 不可用时仍能用 python3 解析端口，并携带指定版本号。"""

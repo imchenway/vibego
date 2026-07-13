@@ -54,6 +54,14 @@ DEFAULT_GLOBAL_COMMANDS: Tuple[Dict[str, object], ...] = (
         "timeout": 600,
     },
     {
+        "name": "wx-remote-debug",
+        "title": "启动微信自动真机调试",
+        "command": 'WX_PREVIEW_ACTION=remote-debug PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}" bash "$ROOT_DIR/scripts/gen_preview.sh"',
+        "description": "通过微信开发者工具官方自动化接口连接同账号手机并启动真机调试；手机微信需保持前台。只有收到真机连接事件且运行时探测通过才返回成功；首次使用需要 npm 联网安装锁定依赖。",
+        "aliases": (),
+        "timeout": 600,
+    },
+    {
         "name": "wx-dev-upload",
         "title": "上传微信代码到体验版",
         "command": 'PROJECT_BASE="${PROJECT_BASE:-$MODEL_WORKDIR}" bash "$ROOT_DIR/scripts/gen_upload.sh"',
