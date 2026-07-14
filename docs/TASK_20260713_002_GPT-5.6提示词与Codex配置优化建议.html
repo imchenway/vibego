@@ -1,0 +1,1079 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：先修有效上下文，再调 GPT-5.6 参数</title>
+    <style>
+        :root {
+            --ink: #102033;
+            --muted: #5a6c80;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .9);
+            --line: #8db3d8;
+            --blue: #1f6fb2;
+            --blue-soft: #e8f3ff;
+            --green: #17785a;
+            --green-soft: #e9f8f2;
+            --amber: #986506;
+            --amber-soft: #fff6de;
+            --red: #a63a3a;
+            --red-soft: #fff0f0;
+            --violet: #6254ad;
+            --violet-soft: #f1efff;
+            --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+            --radius: 20px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+            background: radial-gradient(circle at 18% 3%, rgba(214, 233, 255, .78), transparent 30rem),
+            radial-gradient(circle at 78% 6%, rgba(228, 246, 239, .8), transparent 28rem),
+            linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+            overflow-x: clip;
+        }
+
+        a {
+            color: var(--blue);
+            text-underline-offset: 3px;
+        }
+
+        a:hover {
+            color: #144f81;
+        }
+
+        main {
+            width: min(1280px, calc(100vw - 32px));
+            margin: 0 auto;
+            padding: 24px 0 64px;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            padding: 6px 10px;
+            border: 1px solid rgba(31, 111, 178, .25);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .78);
+            color: var(--blue);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .04em;
+        }
+
+        h1 {
+            max-width: 950px;
+            margin: 0 0 12px;
+            font-size: clamp(28px, 4.2vw, 52px);
+            line-height: 1.08;
+            letter-spacing: -.04em;
+        }
+
+        h2 {
+            margin: 0 0 14px;
+            font-size: clamp(21px, 2.5vw, 30px);
+            letter-spacing: -.025em;
+        }
+
+        h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        p {
+            margin: 0;
+        }
+
+        .summary {
+            max-width: 980px;
+            margin: 0 0 16px;
+            color: var(--muted);
+            font-size: 16px;
+            line-height: 1.75;
+        }
+
+        .status-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 0 0 18px;
+        }
+
+        .status-strip span, .tag {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid rgba(141, 179, 216, .45);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .76);
+            padding: 5px 9px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 750;
+        }
+
+        .tag.p0 {
+            color: var(--red);
+            border-color: rgba(166, 58, 58, .32);
+            background: var(--red-soft);
+        }
+
+        .tag.p1 {
+            color: var(--amber);
+            border-color: rgba(152, 101, 6, .28);
+            background: var(--amber-soft);
+        }
+
+        .tag.good {
+            color: var(--green);
+            border-color: rgba(23, 120, 90, .28);
+            background: var(--green-soft);
+        }
+
+        .template-layout {
+            border: 1px solid rgba(141, 179, 216, .48);
+            border-radius: 24px;
+            background: rgba(255, 255, 255, .78);
+            box-shadow: var(--shadow);
+            padding: 22px;
+            min-height: 360px;
+        }
+
+        .decision-tree {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0;
+            align-items: center;
+        }
+
+        .root, .recommend {
+            width: min(720px, 100%);
+            justify-self: center;
+        }
+
+        .slot {
+            display: grid;
+            align-content: center;
+            justify-items: center;
+            gap: 5px;
+            min-height: 74px;
+            padding: 14px 16px;
+            overflow-wrap: anywhere;
+            border: 1px solid rgba(141, 179, 216, .58);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, .95);
+            text-align: center;
+        }
+
+        .slot b {
+            display: block;
+            font-size: 14px;
+            line-height: 1.25;
+        }
+
+        .slot span {
+            display: block;
+            color: var(--muted);
+            font-size: 12.5px;
+            line-height: 1.55;
+        }
+
+        .slot code {
+            font-size: 11.5px;
+        }
+
+        .core {
+            border-color: rgba(31, 111, 178, .56);
+            background: linear-gradient(180deg, #fff, var(--blue-soft));
+        }
+
+        .support {
+            border-color: rgba(98, 84, 173, .45);
+            background: linear-gradient(180deg, #fff, var(--violet-soft));
+        }
+
+        .data {
+            border-color: rgba(23, 120, 90, .45);
+            background: linear-gradient(180deg, #fff, var(--green-soft));
+        }
+
+        .risk {
+            border-color: rgba(166, 58, 58, .42);
+            background: linear-gradient(180deg, #fff, var(--red-soft));
+        }
+
+        .ops {
+            border-color: rgba(152, 101, 6, .42);
+            background: linear-gradient(180deg, #fff, var(--amber-soft));
+        }
+
+        .v-edge {
+            position: relative;
+            width: 2px;
+            height: 34px;
+            margin: 0 auto;
+            background: var(--blue);
+        }
+
+        .v-edge::after {
+            position: absolute;
+            right: -5px;
+            bottom: -1px;
+            width: 0;
+            height: 0;
+            content: "";
+            border-right: 6px solid transparent;
+            border-left: 6px solid transparent;
+            border-top: 10px solid var(--blue);
+        }
+
+        .branches {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            padding: 0;
+        }
+
+        .branch-card {
+            display: grid;
+            grid-template-rows: auto 28px auto;
+            align-content: start;
+            padding: 12px;
+            border: 1px solid rgba(141, 179, 216, .38);
+            border-radius: 19px;
+            background: rgba(255, 255, 255, .56);
+        }
+
+        .branch-card .v-edge {
+            height: 28px;
+        }
+
+        .branch-card .v-edge::after {
+            border-top-width: 8px;
+        }
+
+        .recommend .slot {
+            min-height: 92px;
+        }
+
+        .path-inline {
+            display: flex !important;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 5px;
+        }
+
+        .path-inline em {
+            color: var(--green);
+            font-style: normal;
+            font-weight: 800;
+        }
+
+        .section {
+            margin-top: 34px;
+            scroll-margin-top: 20px;
+        }
+
+        .section-lead {
+            max-width: 920px;
+            margin: -4px 0 16px;
+            color: var(--muted);
+            line-height: 1.65;
+        }
+
+        .panel {
+            min-width: 0;
+            border: 1px solid rgba(141, 179, 216, .42);
+            border-radius: var(--radius);
+            background: rgba(255, 255, 255, .78);
+            box-shadow: 0 10px 30px rgba(20, 57, 92, .055);
+            padding: 18px;
+        }
+
+        .flow {
+            display: grid;
+            grid-template-columns: 1fr 52px 1.1fr 52px 1fr 52px 1.1fr;
+            align-items: stretch;
+            gap: 8px;
+        }
+
+        .flow-node {
+            min-height: 124px;
+            display: grid;
+            align-content: center;
+            gap: 7px;
+            border: 1px solid rgba(141, 179, 216, .5);
+            border-radius: 16px;
+            background: #fff;
+            padding: 14px;
+        }
+
+        .flow-node strong {
+            font-size: 14px;
+        }
+
+        .flow-node span {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .flow-node.danger {
+            border-color: rgba(166, 58, 58, .35);
+            background: var(--red-soft);
+        }
+
+        .arrow {
+            position: relative;
+            align-self: center;
+            height: 2px;
+            background: var(--blue);
+        }
+
+        .arrow::after {
+            position: absolute;
+            top: -5px;
+            right: -1px;
+            content: "";
+            border-top: 6px solid transparent;
+            border-bottom: 6px solid transparent;
+            border-left: 10px solid var(--blue);
+        }
+
+        .metric {
+            display: block;
+            color: var(--ink) !important;
+            font-size: clamp(24px, 3vw, 36px) !important;
+            font-weight: 850;
+            letter-spacing: -.035em;
+        }
+
+        .ledger-wrap {
+            overflow-x: auto;
+            border-radius: 16px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: rgba(255, 255, 255, .76);
+            font-size: 13px;
+        }
+
+        th, td {
+            padding: 13px 12px;
+            border-bottom: 1px solid rgba(141, 179, 216, .28);
+            text-align: left;
+            vertical-align: top;
+            line-height: 1.55;
+        }
+
+        th {
+            color: var(--muted);
+            background: rgba(232, 243, 255, .55);
+            font-size: 11.5px;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        td:first-child {
+            width: 72px;
+            white-space: nowrap;
+        }
+
+        td:nth-child(2) {
+            width: 18%;
+            font-weight: 750;
+        }
+
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .two-col > * {
+            min-width: 0;
+        }
+
+        .stack {
+            display: grid;
+            gap: 12px;
+        }
+
+        .layer {
+            position: relative;
+            min-height: 82px;
+            padding: 14px 16px 14px 22px;
+            border: 1px solid rgba(141, 179, 216, .42);
+            border-radius: 16px;
+            background: #fff;
+        }
+
+        .layer::before {
+            position: absolute;
+            top: 13px;
+            bottom: 13px;
+            left: 9px;
+            width: 4px;
+            border-radius: 99px;
+            background: var(--blue);
+            content: "";
+        }
+
+        .layer:nth-child(2)::before {
+            background: var(--violet);
+        }
+
+        .layer:nth-child(3)::before {
+            background: var(--green);
+        }
+
+        .layer strong {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .layer p {
+            color: var(--muted);
+            font-size: 12.5px;
+            line-height: 1.55;
+        }
+
+        pre {
+            margin: 0;
+            padding: 16px;
+            overflow-x: auto;
+            border: 1px solid rgba(16, 32, 51, .12);
+            border-radius: 16px;
+            background: #102033;
+            color: #eaf4ff;
+            font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            tab-size: 2;
+        }
+
+        pre code {
+            padding: 0;
+            background: transparent;
+            color: inherit;
+            overflow-wrap: normal;
+            word-break: normal;
+        }
+
+        .note {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-left: 4px solid var(--amber);
+            border-radius: 0 10px 10px 0;
+            background: var(--amber-soft);
+            color: #65470e;
+            font-size: 12.5px;
+            line-height: 1.55;
+        }
+
+        .eval-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .eval-item {
+            min-height: 136px;
+            padding: 13px;
+            border: 1px solid rgba(141, 179, 216, .38);
+            border-radius: 15px;
+            background: rgba(255, 255, 255, .88);
+        }
+
+        .eval-item strong {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .eval-item p {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            padding: 0;
+            margin: 0;
+            list-style: none;
+            counter-reset: path;
+        }
+
+        .steps li {
+            position: relative;
+            min-height: 148px;
+            padding: 48px 14px 14px;
+            border: 1px solid rgba(141, 179, 216, .42);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, .82);
+            counter-increment: path;
+        }
+
+        .steps li::before {
+            position: absolute;
+            top: 12px;
+            left: 14px;
+            display: grid;
+            width: 27px;
+            height: 27px;
+            place-items: center;
+            border-radius: 50%;
+            background: var(--blue);
+            color: #fff;
+            content: counter(path);
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        .steps strong {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .steps p {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .evidence-list {
+            display: grid;
+            gap: 10px;
+            padding: 0;
+            margin: 0;
+            list-style: none;
+        }
+
+        .evidence-list li {
+            padding: 12px 14px;
+            border: 1px solid rgba(141, 179, 216, .34);
+            border-radius: 13px;
+            background: rgba(255, 255, 255, .72);
+            font-size: 12.5px;
+            line-height: 1.65;
+        }
+
+        code {
+            padding: .08em .32em;
+            border-radius: 5px;
+            background: rgba(31, 111, 178, .08);
+            color: #174d78;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .footer-note {
+            margin-top: 28px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(141, 179, 216, .35);
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.65;
+        }
+
+        @media (max-width: 960px) {
+            .flow {
+                grid-template-columns: 1fr;
+            }
+
+            .arrow {
+                width: 2px;
+                height: 28px;
+                justify-self: center;
+            }
+
+            .arrow::after {
+                top: auto;
+                right: -5px;
+                bottom: -1px;
+                border-top: 10px solid var(--blue);
+                border-right: 6px solid transparent;
+                border-bottom: 0;
+                border-left: 6px solid transparent;
+            }
+
+            .eval-grid, .steps {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 780px) {
+            main {
+                width: min(100vw - 20px, 760px);
+                padding-top: 14px;
+            }
+
+            h1 {
+                font-size: clamp(28px, 9.2vw, 42px);
+            }
+
+            .summary {
+                font-size: 14px;
+            }
+
+            .template-layout {
+                padding: 13px;
+            }
+
+            .branches, .two-col, .eval-grid, .steps {
+                grid-template-columns: 1fr;
+            }
+
+            .branch-card {
+                grid-template-rows: auto 28px auto;
+            }
+
+            .section {
+                margin-top: 28px;
+            }
+
+            th, td {
+                min-width: 150px;
+            }
+
+            th:first-child, td:first-child {
+                min-width: 64px;
+            }
+
+            .flow-node {
+                min-height: 105px;
+            }
+
+            .path-inline {
+                display: grid !important;
+            }
+
+            pre {
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+            }
+
+            pre code {
+                white-space: inherit;
+                overflow-wrap: anywhere;
+                word-break: break-word;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+<main data-diagram-type="decision-communication"
+      data-template-family="decision-communication"
+      data-template-id="decision-tree"
+      data-template-layout="decision-tree">
+    <div class="eyebrow">TASK_20260713_002 · 只读审计 · 2026-07-13</div>
+    <h1 data-slot="title">需求决策：先修有效上下文，再调 GPT-5.6 参数</h1>
+    <p class="summary" data-slot="summary">
+        当前 <strong>gpt-5.6-sol</strong> 选型可保留；主要损耗不是模型能力，而是项目规约被截断、内核重复/冲突、危险权限叠加，以及
+        configured 与 effective 运行值不一致。推荐先做上下文完整性与安全收口，再用行为评测决定 verbosity、reasoning、service
+        tier 和 skill 表面。
+    </p>
+    <div class="status-strip" aria-label="审计状态">
+        <span>未修改源码或配置</span>
+        <span>已读取运行时 JSONL</span>
+        <span>已对照 OpenAI 官方最新模型指南</span>
+        <span>主任务记忆：TASK_20260708_001</span>
+    </div>
+
+    <section class="template-layout decision-tree" aria-label="GPT-5.6 提示词与配置优化决策树">
+        <div class="root">
+            <div class="slot core" data-slot="problem">
+                <b>先换模型，还是先修提示词与运行边界？</b>
+                <span>模型已是 <code>gpt-5.6-sol</code>；官方建议先保持 effort，再逐项精简提示词并用代表性任务评测。</span>
+            </div>
+        </div>
+        <div class="v-edge" aria-hidden="true"></div>
+        <div class="branches" data-slot="branches">
+            <article class="branch-card">
+                <div class="slot risk" data-slot="condition-a">
+                    <b><span class="tag p0">P0</span> 有效上下文不完整</b>
+                    <span><code>AGENTS.md</code> 216,894B；worker cap 131,072B；活跃会话约在第 69 行中间截断，后续质量门禁不可见。</span>
+                </div>
+                <div class="v-edge" aria-hidden="true"></div>
+                <div class="slot data" data-slot="option-a">
+                    <b>压缩根规约，不抬 cap</b>
+                    <span>保留稳定行为约束、命令、索引；把历史 Facts Table 下沉 docs，并增加 byte budget + tail sentinel 行为测试。</span>
+                </div>
+            </article>
+
+            <article class="branch-card">
+                <div class="slot risk" data-slot="condition-b">
+                    <b><span class="tag p0">P0</span> 安全边界被多层绕过</b>
+                    <span><code>approval=never</code>、<code>danger-full-access</code>、根目录 trust 与启动脚本 bypass 叠加；部分 token 文件权限为 0644。</span>
+                </div>
+                <div class="v-edge" aria-hidden="true"></div>
+                <div class="slot data" data-slot="option-b">
+                    <b>拆分交互 / worker profile</b>
+                    <span>默认采用 workspace-write + on-request；无人值守高权限模式显式 opt-in，并收窄 trust、凭据和可用工具范围。</span>
+                </div>
+            </article>
+
+            <article class="branch-card">
+                <div class="slot ops" data-slot="condition-c">
+                    <b><span class="tag p1">P1</span> 参数与能力表面未校准</b>
+                    <span>配置写 medium/max，但活跃 JSONL 是 ultra/default；首轮输入约 38,666 tokens，skill 还存在重复暴露。</span>
+                </div>
+                <div class="v-edge" aria-hidden="true"></div>
+                <div class="slot data" data-slot="option-c">
+                    <b>用行为评测逐项 A/B</b>
+                    <span>显式测试 medium verbosity、较低 plan effort、priority 与标准 tier、按 profile 精简 skill；每次只改一组变量。</span>
+                </div>
+            </article>
+        </div>
+        <div class="v-edge" aria-hidden="true"></div>
+        <div class="recommend">
+            <div class="slot data" data-slot="recommend">
+                <b>推荐路径</b>
+                <span class="path-inline"><em>① AGENTS 可见性</em> → <em>② 权限与凭据</em> → <em>③ configured/effective 可观测</em> → <em>④ 参数与 skill A/B</em></span>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="context">
+        <h2>为什么首要不是调模型参数</h2>
+        <p class="section-lead">活跃 worker 的真实注入链路显示，项目规约在 Facts Table 中间被截断；继续抬高上限会同时增加
+            token 成本，并激活文件后部仍存在的旧协议。</p>
+        <div class="panel flow" role="img" aria-label="从提示词来源到运行时截断的因果链">
+            <div class="flow-node">
+                <strong>全局 Kernel</strong>
+                <span>模板本身与 current / Codex 受管块一致，这是现有链路的正确部分。</span>
+            </div>
+            <div class="arrow" aria-hidden="true"></div>
+            <div class="flow-node">
+                <strong>项目 AGENTS</strong>
+                <span class="metric">216,894B</span>
+                <span>18–99 行的历史 Facts Table 占据主要体积。</span>
+            </div>
+            <div class="arrow" aria-hidden="true"></div>
+            <div class="flow-node danger">
+                <strong>worker cap</strong>
+                <span class="metric">131,072B</span>
+                <span>活跃会话项目正文约在第 69 行中间停止。</span>
+            </div>
+            <div class="arrow" aria-hidden="true"></div>
+            <div class="flow-node danger">
+                <strong>不可见的尾部</strong>
+                <span>Repo Map、测试与质量门禁、DoD、Guardrails 均未进入当前运行时；第 289 行旧 <code>vibe → design → develop</code> 也说明不能直接抬 cap。</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="ledger">
+        <h2>优化建议账本</h2>
+        <p class="section-lead">优先级按“是否影响实际指令生效、是否形成越权风险、是否能用评测安全回滚”排序。</p>
+        <div class="panel ledger-wrap">
+            <table>
+                <thead>
+                <tr>
+                    <th>优先级</th>
+                    <th>问题</th>
+                    <th>仓库 / 运行时证据</th>
+                    <th>建议</th>
+                    <th>验收与回滚</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr>
+                    <td><span class="tag p0">P0-1</span></td>
+                    <td>根 AGENTS 超预算</td>
+                    <td><code>AGENTS.md:18-99</code>；worker cap 见 <code>scripts/models/codex.sh:9</code>；活跃 JSONL 在第
+                        69 行中间截断。
+                    </td>
+                    <td>把历史事实迁至 docs；根文件只保留稳定规则、命令、验证入口和索引。工程预算建议控制在
+                        24–32KiB，且给嵌套规约留空间。
+                    </td>
+                    <td>新会话验证尾部 sentinel 可见、首轮 tokens 下降；保留原文件归档可一键恢复。</td>
+                </tr>
+                <tr>
+                    <td><span class="tag p0">P0-2</span></td>
+                    <td>权限与凭据过宽</td>
+                    <td><code>~/.codex/config.toml:3,7,112,186</code>；<code>codex.sh:10</code> 仍强制 bypass；<code>projects.json</code>
+                        与运行 token 文件为 0644。
+                    </td>
+                    <td>默认交互 profile 改为 workspace-write + on-request；高权限 worker 独立、显式启用。secret 文件创建 /
+                        replace 后强制 0600；移除并轮换内联凭据。
+                    </td>
+                    <td>先以单项目 canary 启动；若 worker 工作流受阻，回退到独立高权限 profile，而不是恢复全局默认。</td>
+                </tr>
+                <tr>
+                    <td><span class="tag p0">P0-3</span></td>
+                    <td>跨模型旧协议并存</td>
+                    <td><code>CLAUDE.md:3,31,100</code> 与 Gemini 管理块外仍含旧多问、阶段口令、Maven 假设；repo <code>AGENTS.md:289</code>
+                        也有旧流程。
+                    </td>
+                    <td>建立“模型无关短核心 + 平台 adapter”；对受管块外旧规则做指纹审计，未被运行链路引用的 <code>prompt_*.md</code>
+                        标记 legacy 或归档。
+                    </td>
+                    <td>对 Codex / Claude / Gemini 各开新会话跑相同门禁用例；命中任何旧指纹即失败。</td>
+                </tr>
+                <tr>
+                    <td><span class="tag p1">P1-1</span></td>
+                    <td>configured ≠ effective</td>
+                    <td>配置为 sol + medium / max；活跃 JSONL 为 sol + ultra /
+                        default，覆盖来源尚未闭环，不能把配置值当运行事实。
+                    </td>
+                    <td><code>/status</code> 同时展示 adapter、configured、启动覆盖、effective JSONL 值、来源和时间戳。</td>
+                    <td>启动后状态页与 JSONL 对齐；若取不到 effective，必须显示“待确认”，不能静默回退配置值。</td>
+                </tr>
+                <tr>
+                    <td><span class="tag p1">P1-2</span></td>
+                    <td>提示词内核重复且策略分散</td>
+                    <td>Phase / Readiness / Interaction / Work contract 多处重复授权规则；同一 Global Kernel 还可能在
+                        base instructions 与 AGENTS 聚合中重复出现。
+                    </td>
+                    <td>收敛成一张授权矩阵：只读答复直接执行；修改需 develop 确认；外部 /
+                        破坏性动作单独确认；高风险未知一次只问一个。
+                    </td>
+                    <td>保留严格证据、fail-closed 和一问一答；用行为用例验证，不写脆弱的固定文案断言。</td>
+                </tr>
+                <tr>
+                    <td><span class="tag p1">P1-3</span></td>
+                    <td>同步与启动不幂等</td>
+                    <td><code>agents_sync.py:301</code> 与 <code>common.sh:268</code> 会累积块外空行；Codex 关键
+                        <code>-c</code> 参数被两处追加。
+                    </td>
+                    <td>shell 统一调用 Python 同步入口；受管块 byte-idempotent；模型参数只在一个入口组装，并记录 source /
+                        target digest。
+                    </td>
+                    <td>连续同步 N 次文件逐字节不变；每个关键 <code>-c</code> 恰好一次。</td>
+                </tr>
+                <tr>
+                    <td><span class="tag p1">P1-4</span></td>
+                    <td>skill / plugin 表面过宽</td>
+                    <td>同名 <code>vibe-diagram</code> 来自两个 native root；unprefixed superpowers 与插件副本重复；外部大上下文中的
+                        Memory 指令也占用固定前缀。
+                    </td>
+                    <td>按 consumer 分发或按 name + content hash 去重；为 Vibego worker 使用最小 profile。Memory
+                        保留项目相关部分，不做全局一刀切。
+                    </td>
+                    <td>比较 task success、工具误选率、首轮 tokens；缺失能力时可单项重新启用。</td>
+                </tr>
+                <tr>
+                    <td><span class="tag">P2</span></td>
+                    <td>配置根优先级分裂</td>
+                    <td><code>vibego_cli/config.py:12</code> 忽略 <code>MASTER_CONFIG_ROOT</code>，而 master / shell /
+                        constitution 优先读取它。
+                    </td>
+                    <td>抽出唯一配置根解析契约，并覆盖“仅设置 MASTER_CONFIG_ROOT”的 Python + shell 跨入口测试。</td>
+                    <td>所有入口输出同一个 canonical root；恢复旧优先级只需回退解析器。</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="prompt-shape">
+        <h2>建议的提示词分层</h2>
+        <p class="section-lead">这不是删除严格门禁，而是让模型每次只看到“当前任务一定需要的规则”。官方 GPT-5.6
+            指南强调：每条指令只陈述一次、只暴露相关工具、每次移除一组后重跑评测。</p>
+        <div class="two-col">
+            <div class="panel stack">
+                <div class="layer">
+                    <strong>层 1 · 模型无关短核心（全局）</strong>
+                    <p>证据、fail-closed、授权边界、完成声明、只读 fast path。工程目标建议 ≤ 8KiB；不放 skill
+                        执行细则和项目历史。</p>
+                </div>
+                <div class="layer">
+                    <strong>层 2 · 仓库 AGENTS</strong>
+                    <p>稳定 Repo Map、真实命令、测试 / DoD、特殊风险、docs 索引。建议 ≤ 12–16KiB，并为嵌套项目留预算。</p>
+                </div>
+                <div class="layer">
+                    <strong>层 3 · docs / skill / task memory（按需）</strong>
+                    <p>Facts 历史、设计细则、HTML token、完整调研和一次性验证证据。被任务命中后再加载。</p>
+                </div>
+            </div>
+            <div class="panel stack">
+                <div class="layer">
+                    <strong>授权矩阵 · 建议替代重复门禁</strong>
+                    <p><b>答复 / review / 状态：</b>只读取证后直接交付；不触发 develop gate。</p>
+                </div>
+                <div class="layer">
+                    <strong>修改 / 构建 / 修复</strong>
+                    <p>高风险未知先一次一问；Readiness 可审计后呈现 PLAN；用户明确确认 develop 才写行为文件。</p>
+                </div>
+                <div class="layer">
+                    <strong>外部 / 破坏性 / 扩范围动作</strong>
+                    <p>即使 develop 已授权，也需单独确认；prompt gate 不能代替 sandbox、approval 和凭据最小化。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="config">
+        <h2>配置目标值：先建立 profile，再做 A/B</h2>
+        <p class="section-lead">以下是目标方向，不是已应用配置。当前 <code>gpt-5.6-sol + medium</code> 可作为控制组；官方建议保持同等
+            effort 起步，再测试低一档。</p>
+        <div class="two-col">
+            <div>
+                <h3>交互式默认 profile（推荐基线）</h3>
+                <pre aria-label="交互式 Codex 配置目标值"><code>model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
+model_verbosity = "medium"       # A/B：避免低默认过度压缩证据
+plan_mode_reasoning_effort = "max" # 先保留；随后与 xhigh 比较
+service_tier = "priority"        # 仅在延迟收益值得额外用量时保留
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"</code></pre>
+                <div class="note">本机有效 runtime 当前记录为 <code>ultra / default + proactive multi-agent</code>。子代理会继承高
+                    effort，因此日常任务应把 medium/high 纳入 A/B；在找出覆盖来源前，不应声称上述文件值已经生效。
+                </div>
+            </div>
+            <div>
+                <h3>无人值守 Vibego worker</h3>
+                <pre aria-label="无人值守 worker 的边界目标"><code># 策略草图，不是可直接粘贴的 Codex TOML
+# 不继承全局默认；使用独立 profile / 启动入口
+# 只有在外部隔离、限定 cwd、限定工具后才启用高权限
+
+trust = ["/Users/david/hypha/tools/vibego"]
+secrets_mode = "env-or-keychain"
+skill_surface = "vibego-minimal"
+dangerous_mode = "explicit-opt-in"
+
+# 禁止：根目录 trust、明文 token、静默 bypass</code></pre>
+                <div class="note">当前启动脚本会再次追加 sandbox bypass；因此只改 <code>~/.codex/config.toml</code>
+                    不足以收口，必须让启动入口也遵守 profile。
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="evals">
+        <h2>参数与提示词评测矩阵</h2>
+        <p class="section-lead">每轮只改一组指令或一个参数；保留相同任务集，比较成功率、必保留证据、输入 / 输出
+            tokens、延迟、误审批和工具误选。</p>
+        <div class="panel eval-grid">
+            <div class="eval-item"><strong>纯问答 fast path</strong>
+                <p>读取代码后直接给结论；不能错误输出 <code>READINESS: BLOCKED</code>，也不能要求 develop 授权。</p></div>
+            <div class="eval-item"><strong>Bug 只读取证</strong>
+                <p>先复述现象，至少两个候选根因；只有日志 / JSONL / 测试验证后才能定根因。</p></div>
+            <div class="eval-item"><strong>未授权修改</strong>
+                <p>完成侦查和一个最高影响问题，但不改源码、测试、配置或脚本。</p></div>
+            <div class="eval-item"><strong>明确 develop</strong>
+                <p>基于已确认 PLAN 用 TDD 实施；review、verification 和原需求逐条验收均存在。</p></div>
+            <div class="eval-item"><strong>外部 / 破坏性动作</strong>
+                <p>commit、push、外部消息、迁移和权限变化必须获得独立授权。</p></div>
+            <div class="eval-item"><strong>HTML trigger</strong>
+                <p>跨模块因果 / 时序走单文件 HTML；短定义、翻译、简单命令保持短文本。</p></div>
+            <div class="eval-item"><strong>能力缺失</strong>
+                <p>skill 不存在时清晰回退；不能自动安装，也不能假定其他模型有 Codex skill。</p></div>
+            <div class="eval-item"><strong>上下文预算</strong>
+                <p>检查 tail sentinel 可见；记录首轮 tokens，从当前约 38,666 建立下降目标。</p></div>
+        </div>
+    </section>
+
+    <section class="section" id="order">
+        <h2>建议实施顺序与回滚</h2>
+        <ol class="steps">
+            <li><strong>先做 AGENTS 瘦身</strong>
+                <p>迁出历史 Facts、裁决旧规则、加 byte budget 和 tail sentinel。回滚：恢复归档文件并重启 worker。</p></li>
+            <li><strong>再做安全 profile</strong>
+                <p>secret 权限、根 trust、内联凭据和脚本 bypass 分开变更。回滚：仅对受控 worker 临时启用显式高权限
+                    profile。</p></li>
+            <li><strong>补 effective 可观测</strong>
+                <p>状态页显示 configured / startup / effective 三层值，先闭环 ultra/default 来源，再决定 effort。</p></li>
+            <li><strong>最后做参数 / skill A/B</strong>
+                <p>依次测试 verbosity、plan effort、service tier、skill 去重；任何质量下降只回退当轮变量。</p></li>
+        </ol>
+    </section>
+
+    <section class="section" id="evidence">
+        <h2>证据与官方依据</h2>
+        <p class="section-lead">仓库事实均给出路径和锚点；敏感值未写入本文。未闭环项明确标为待确认。</p>
+        <div class="two-col">
+            <div class="panel">
+                <h3>本地证据</h3>
+                <ul class="evidence-list">
+                    <li><code>/Users/david/hypha/tools/vibego/AGENTS.md:18-99,289</code> — 巨型 Facts Table 与后部旧流程；文件大小
+                        216,894B。
+                    </li>
+                    <li><code>/Users/david/hypha/tools/vibego/AGENTS-template.md:15-44</code> — Phase / Readiness /
+                        Interaction Gate；<code>:46-99</code> — skill routing 与视觉契约。
+                    </li>
+                    <li><code>/Users/david/hypha/tools/vibego/scripts/models/codex.sh:7-14</code> 与 <code>scripts/start_tmux_codex.sh:221-271</code>
+                        — 128KiB cap、生成 instructions、重复参数与危险 bypass。
+                    </li>
+                    <li><code>/Users/david/hypha/tools/vibego/vibego_cli/agents_sync.py:139,301,516</code> — source
+                        路由、受管块换行、同步目标。
+                    </li>
+                    <li><code>/Users/david/.codex/config.toml:1-9,112-149</code> — 模型、effort、service tier、sandbox /
+                        approval 与 trust；内联凭据仅做脱敏审计。
+                    </li>
+                    <li><code>/Users/david/.codex/sessions/2026/07/12/rollout-2026-07-12T13-30-26-019f54ce-301c-7b51-8cc1-2cbe9fc5ddb8.jsonl:1,6-7,14,901</code>
+                        — 实际 base instructions、AGENTS 截断、首轮 tokens 与 effective turn context。
+                    </li>
+                    <li>
+                        <code>/Users/david/hypha/tools/vibego/docs/TASK_20260708_001_AGENTS新模板触发边界与提问门禁修正.md:1</code>
+                        — 本轮采用的主任务记忆。
+                    </li>
+                </ul>
+            </div>
+            <div class="panel">
+                <h3>OpenAI 官方依据</h3>
+                <ul class="evidence-list">
+                    <li><a href="https://developers.openai.com/api/docs/guides/latest-model">Model guidance ·
+                        GPT-5.6</a> — 先保持同等 effort、再测试低一档；提示词应精简、指令只陈述一次、只暴露相关工具，并逐组重跑评测。
+                    </li>
+                    <li><a href="https://developers.openai.com/codex/agent-configuration/agents-md">Codex AGENTS.md</a>
+                        — 全局与项目规约的发现链，以及项目文档 byte budget。
+                    </li>
+                    <li><a href="https://developers.openai.com/codex/config-file/config-reference">Codex config
+                        reference</a> — model、verbosity、reasoning、project doc budget、profiles 与 skills 配置。
+                    </li>
+                    <li><a href="https://developers.openai.com/codex/build-skills">Build skills</a> — skill catalog
+                        采用渐进式披露，完整 SKILL 仅在激活时读取。
+                    </li>
+                    <li><a href="https://developers.openai.com/codex/agent-approvals-security">Agent approvals &amp;
+                        security</a> — sandbox 和 approval 是独立安全层；无限制模式不应作为普通默认值。
+                    </li>
+                    <li><a href="https://developers.openai.com/api/docs/guides/prompt-engineering">Prompt
+                        engineering</a> — developer instructions、上下文分层与稳定前缀。
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <p class="footer-note">
+        审计边界：本轮只读取证并生成本 HTML，未修改源码、测试、配置、依赖、凭据或 Git 历史。未发现相关上级
+        <code>AGENTS.md</code>、<code>PROJECT-STYLE.md</code>、<code>CODE-GUIDELINES.md</code> 或 <code>DESIGN.md</code>。活跃
+        worker 创建于 2026-07-12，尚未热加载 2026-07-13 的项目 AGENTS 更新；结论分别使用当前静态文件与活跃会话快照，并未混称。待确认项：effective
+        <code>ultra/default</code> 的具体覆盖来源；在闭环前不得把配置文件中的 medium/max 当作当前运行事实。
+    </p>
+</main>
+</body>
+</html>

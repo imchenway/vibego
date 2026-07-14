@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>需求决策：可以独立，但应采用开放 Skill 核心与多客户端适配层</title>
+    <style>
+        :root {
+            --ink: #102033;
+            --muted: #5a6c80;
+            --paper: #fbfdff;
+            --panel: rgba(255, 255, 255, .9);
+            --line: #8db3d8;
+            --blue: #1f6fb2;
+            --blue-soft: #e8f3ff;
+            --green: #17785a;
+            --green-soft: #e9f8f2;
+            --amber: #986506;
+            --amber-soft: #fff6de;
+            --red: #a63a3a;
+            --red-soft: #fff0f0;
+            --violet: #6254ad;
+            --violet-soft: #f1efff;
+            --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+            --radius: 20px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            color-scheme: light;
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+            background: radial-gradient(circle at 18% 3%, rgba(214, 233, 255, .78), transparent 30rem),
+            radial-gradient(circle at 78% 6%, rgba(228, 246, 239, .8), transparent 28rem),
+            linear-gradient(rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(93, 133, 173, .045) 1px, transparent 1px),
+            linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+            background-size: auto, auto, 28px 28px, 28px 28px, auto;
+            overflow-x: clip;
+        }
+
+        a {
+            color: var(--blue);
+            text-underline-offset: 3px;
+        }
+
+        code, pre {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        code {
+            overflow-wrap: anywhere;
+        }
+
+        main {
+            width: min(1240px, calc(100vw - 32px));
+            margin: 0 auto;
+            padding: 24px 0 56px;
+        }
+
+        .task-code {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            margin-bottom: 10px;
+            padding: 4px 10px;
+            border: 1px solid rgba(31, 111, 178, .28);
+            border-radius: 999px;
+            color: var(--blue);
+            background: rgba(232, 243, 255, .72);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .04em;
+        }
+
+        h1 {
+            margin: 0;
+            max-width: 1050px;
+            font-size: clamp(24px, 2.8vw, 32px);
+            line-height: 1.18;
+            letter-spacing: -.025em;
+        }
+
+        .summary {
+            max-width: 980px;
+            margin: 12px 0 20px;
+            color: var(--muted);
+            font-size: 15px;
+            line-height: 1.75;
+        }
+
+        .decision-tree {
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-areas:
+        ". root ."
+        "branches branches branches"
+        "option-a option-b option-c"
+        ". recommend .";
+            gap: 28px 24px;
+            min-height: 590px;
+            padding: 28px;
+            border: 1px solid rgba(141, 179, 216, .54);
+            border-radius: 24px;
+            background: rgba(255, 255, 255, .82);
+            box-shadow: var(--shadow);
+            isolation: isolate;
+        }
+
+        .decision-tree::before {
+            content: "";
+            position: absolute;
+            inset: 18px;
+            z-index: -2;
+            border-radius: 18px;
+            background: linear-gradient(rgba(38, 102, 154, .043) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(38, 102, 154, .043) 1px, transparent 1px);
+            background-size: 22px 22px;
+            pointer-events: none;
+        }
+
+        .root {
+            grid-area: root;
+            position: relative;
+        }
+
+        .branches {
+            grid-area: branches;
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            padding-top: 32px;
+        }
+
+        .option-a {
+            grid-area: option-a;
+        }
+
+        .option-b {
+            grid-area: option-b;
+        }
+
+        .option-c {
+            grid-area: option-c;
+        }
+
+        .recommend {
+            grid-area: recommend;
+            position: relative;
+        }
+
+        .root::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            bottom: -32px;
+            width: 2px;
+            height: 32px;
+            background: var(--blue);
+            transform: translateX(-50%);
+        }
+
+        .branches::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: calc(16.666% + 12px);
+            right: calc(16.666% + 12px);
+            height: 2px;
+            background: var(--blue);
+        }
+
+        .branch {
+            position: relative;
+            display: grid;
+            align-content: start;
+            gap: 18px;
+        }
+
+        .branch::before {
+            content: "";
+            position: absolute;
+            top: -32px;
+            left: 50%;
+            width: 2px;
+            height: 32px;
+            background: var(--blue);
+            transform: translateX(-50%);
+        }
+
+        .branch::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: calc(50% - 5px);
+            width: 2px;
+            height: 24px;
+            background: var(--blue);
+            transform: translateX(-50%);
+        }
+
+        .slot {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 7px;
+            min-height: 94px;
+            padding: 16px 18px;
+            border: 1px solid rgba(141, 179, 216, .58);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, .97);
+            text-align: left;
+            overflow-wrap: anywhere;
+            box-shadow: 0 8px 24px rgba(20, 57, 92, .06);
+        }
+
+        .slot b {
+            display: block;
+            font-size: 14px;
+            line-height: 1.3;
+        }
+
+        .slot span {
+            display: block;
+            color: var(--muted);
+            font-size: 12.5px;
+            line-height: 1.55;
+        }
+
+        .slot small {
+            color: var(--muted);
+            font-size: 11.5px;
+            line-height: 1.45;
+        }
+
+        .slot.core {
+            border-color: rgba(31, 111, 178, .56);
+            background: linear-gradient(180deg, #fff, var(--blue-soft));
+        }
+
+        .slot.support {
+            border-color: rgba(98, 84, 173, .45);
+            background: linear-gradient(180deg, #fff, var(--violet-soft));
+        }
+
+        .slot.data {
+            border-color: rgba(23, 120, 90, .48);
+            background: linear-gradient(180deg, #fff, var(--green-soft));
+        }
+
+        .slot.ops {
+            border-color: rgba(152, 101, 6, .44);
+            background: linear-gradient(180deg, #fff, var(--amber-soft));
+        }
+
+        .slot.risk {
+            border-color: rgba(166, 58, 58, .44);
+            background: linear-gradient(180deg, #fff, var(--red-soft));
+        }
+
+        .outcome {
+            min-height: 78px;
+            border-style: dashed;
+        }
+
+        .recommend .slot {
+            min-height: 106px;
+            border-width: 2px;
+            box-shadow: 0 14px 34px rgba(23, 120, 90, .14);
+        }
+
+        .recommend::before {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: -28px;
+            width: 2px;
+            height: 28px;
+            background: var(--green);
+            transform: translateX(-50%);
+        }
+
+        .recommend::after {
+            content: "";
+            position: absolute;
+            left: calc(50% - 6px);
+            top: -8px;
+            border-top: 10px solid var(--green);
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+        }
+
+        .branch-label {
+            display: inline-flex;
+            align-self: start;
+            width: fit-content;
+            min-height: 24px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .03em;
+        }
+
+        .branch-label.ok {
+            color: var(--green);
+            background: var(--green-soft);
+        }
+
+        .branch-label.warn {
+            color: var(--amber);
+            background: var(--amber-soft);
+        }
+
+        .branch-label.blocked {
+            color: var(--red);
+            background: var(--red-soft);
+        }
+
+        section.supporting {
+            margin-top: 22px;
+            padding: 22px;
+            border: 1px solid rgba(141, 179, 216, .48);
+            border-radius: var(--radius);
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+
+        section.supporting h2 {
+            margin: 0 0 8px;
+            font-size: 19px;
+            line-height: 1.35;
+        }
+
+        section.supporting > p {
+            margin: 0 0 14px;
+            color: var(--muted);
+            font-size: 13.5px;
+            line-height: 1.65;
+        }
+
+        .split-table,
+        .evidence-table,
+        .client-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: 12.5px;
+            line-height: 1.55;
+        }
+
+        th, td {
+            padding: 11px 12px;
+            border-bottom: 1px solid rgba(141, 179, 216, .30);
+            text-align: left;
+            vertical-align: top;
+            overflow-wrap: anywhere;
+        }
+
+        th {
+            color: var(--muted);
+            background: rgba(232, 243, 255, .52);
+            font-size: 11.5px;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 800;
+            white-space: normal;
+        }
+
+        .status::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex: 0 0 auto;
+        }
+
+        .status.pass {
+            color: var(--green);
+        }
+
+        .status.pass::before {
+            background: var(--green);
+        }
+
+        .status.partial {
+            color: var(--amber);
+        }
+
+        .status.partial::before {
+            background: var(--amber);
+        }
+
+        .status.blocked {
+            color: var(--red);
+        }
+
+        .status.blocked::before {
+            background: var(--red);
+        }
+
+        .gate-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0 24px;
+            margin: 8px 0 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .gate-list li {
+            position: relative;
+            min-height: 66px;
+            padding: 11px 10px 11px 30px;
+            border-bottom: 1px solid rgba(141, 179, 216, .30);
+            color: var(--muted);
+            font-size: 12.5px;
+            line-height: 1.55;
+        }
+
+        .gate-list li::before {
+            content: attr(data-step);
+            position: absolute;
+            left: 0;
+            top: 11px;
+            display: grid;
+            place-items: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            color: #fff;
+            background: var(--blue);
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .gate-list b {
+            display: block;
+            margin-bottom: 3px;
+            color: var(--ink);
+        }
+
+        .alert {
+            margin-top: 16px;
+            padding: 14px 16px;
+            border: 1px solid rgba(166, 58, 58, .36);
+            border-left: 4px solid var(--red);
+            border-radius: 14px;
+            color: #6f2c2c;
+            background: rgba(255, 240, 240, .88);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .sources {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px 22px;
+            margin: 10px 0 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .sources li {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(141, 179, 216, .26);
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .evidence-button {
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            margin-top: 9px;
+            padding: 7px 10px;
+            border: 1px solid rgba(31, 111, 178, .34);
+            border-radius: 10px;
+            color: var(--blue);
+            background: rgba(255, 255, 255, .82);
+            font: inherit;
+            font-size: 11.5px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        button:focus-visible, a:focus-visible, summary:focus-visible {
+            outline: 3px solid rgba(31, 111, 178, .32);
+            outline-offset: 3px;
+        }
+
+        dialog {
+            width: min(720px, calc(100vw - 28px));
+            padding: 0;
+            border: 1px solid rgba(141, 179, 216, .56);
+            border-radius: 18px;
+            color: var(--ink);
+            background: var(--paper);
+            box-shadow: 0 28px 80px rgba(16, 32, 51, .24);
+        }
+
+        dialog::backdrop {
+            background: rgba(16, 32, 51, .42);
+        }
+
+        .dialog-head {
+            display: flex;
+            align-items: start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px 20px 12px;
+            border-bottom: 1px solid rgba(141, 179, 216, .30);
+        }
+
+        .dialog-head h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .dialog-close {
+            min-width: 44px;
+            min-height: 44px;
+            border: 0;
+            border-radius: 12px;
+            color: var(--muted);
+            background: var(--blue-soft);
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        .dialog-body {
+            padding: 18px 20px 22px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        @media (max-width: 780px) {
+            main {
+                width: min(100vw - 20px, 760px);
+                padding-top: 16px;
+            }
+
+            .summary {
+                font-size: 14px;
+            }
+
+            .decision-tree {
+                display: grid;
+                grid-template-columns: 1fr;
+                grid-template-areas: "root" "branches" "recommend";
+                gap: 24px;
+                min-height: 0;
+                padding: 16px;
+            }
+
+            .root::after, .branches::before, .branch::before, .branch::after {
+                display: none;
+            }
+
+            .branches {
+                display: grid;
+                grid-template-columns: 1fr;
+                gap: 20px;
+                padding-top: 0;
+            }
+
+            .branch {
+                gap: 12px;
+                padding-left: 22px;
+            }
+
+            .branch::before {
+                display: block;
+                top: -12px;
+                left: 0;
+                width: 2px;
+                height: calc(100% + 24px);
+                transform: none;
+            }
+
+            .branch > .slot::before {
+                content: "";
+                position: absolute;
+                left: -22px;
+                top: 50%;
+                width: 22px;
+                height: 2px;
+                background: var(--blue);
+            }
+
+            .recommend::before {
+                top: -24px;
+                height: 24px;
+            }
+
+            .recommend::after {
+                top: -5px;
+            }
+
+            section.supporting {
+                padding: 16px;
+            }
+
+            .evidence-button {
+                min-height: 44px;
+            }
+
+            .split-table, .evidence-table, .client-table,
+            .split-table tbody, .evidence-table tbody, .client-table tbody,
+            .split-table tr, .evidence-table tr, .client-table tr {
+                display: block;
+                width: 100%;
+            }
+
+            .split-table thead, .evidence-table thead, .client-table thead {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                padding: 0;
+                margin: -1px;
+                overflow: hidden;
+                clip: rect(0 0 0 0);
+                clip-path: inset(50%);
+                border: 0;
+            }
+
+            .split-table tr, .evidence-table tr, .client-table tr {
+                padding: 8px 0;
+                border-bottom: 1px solid rgba(141, 179, 216, .34);
+            }
+
+            .split-table tr:last-child, .evidence-table tr:last-child, .client-table tr:last-child {
+                border-bottom: 0;
+            }
+
+            .split-table td, .evidence-table td, .client-table td {
+                display: block;
+                width: 100%;
+                padding: 7px 4px;
+                border: 0;
+            }
+
+            .split-table td::before, .evidence-table td::before, .client-table td::before {
+                display: block;
+                margin-bottom: 3px;
+                color: var(--muted);
+                font-size: 11px;
+                font-weight: 800;
+                letter-spacing: .03em;
+            }
+
+            .split-table td:nth-child(1)::before {
+                content: "层";
+            }
+
+            .split-table td:nth-child(2)::before {
+                content: "保留 / 建立";
+            }
+
+            .split-table td:nth-child(3)::before {
+                content: "禁止混入";
+            }
+
+            .split-table td:nth-child(4)::before {
+                content: "验收信号";
+            }
+
+            .client-table td:nth-child(1)::before {
+                content: "客户端";
+            }
+
+            .client-table td:nth-child(2)::before {
+                content: "共享 Skill";
+            }
+
+            .client-table td:nth-child(3)::before {
+                content: "平台包装";
+            }
+
+            .client-table td:nth-child(4)::before {
+                content: "当前状态";
+            }
+
+            .evidence-table td:nth-child(1)::before {
+                content: "检查";
+            }
+
+            .evidence-table td:nth-child(2)::before {
+                content: "结果";
+            }
+
+            .evidence-table td:nth-child(3)::before {
+                content: "说明";
+            }
+
+            .gate-list, .sources {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                scroll-behavior: auto !important;
+                transition-duration: .001ms !important;
+                animation-duration: .001ms !important;
+            }
+        }
+    </style>
+</head>
+<body>
+<main data-diagram-type="decision-communication"
+      data-template-family="decision-communication"
+      data-template-id="decision-tree"
+      data-template-layout="decision-tree">
+    <div class="task-code">TASK_20260714_001</div>
+    <h1 data-slot="title">需求决策：可以独立，但应采用开放 Skill 核心与多客户端适配层</h1>
+    <p class="summary" data-slot="summary">
+        截至 2026-07-14，现有 <code>vibe-diagram</code> 已具备完整内容资产和合法 Codex plugin 结构；它不是从零开始。
+        但当前发布、版本、许可证、交付语义和验证仍与 Vibego / Codex / Telegram 耦合，因此准确口径是：<strong>具备抽取基础，尚未达到跨客户端成熟发布状态</strong>。
+    </p>
+
+    <section class="decision-tree" aria-label="vibe-diagram 是否适合独立为跨客户端成熟 skill 的决策树">
+        <div class="root">
+            <div class="slot core" data-slot="problem">
+                <b>目标：一个制图能力，多端可安装、可验证、可升级</b>
+                <span>支持 Codex、Claude Code、Gemini CLI、GitHub Copilot CLI，以及其他 Agent Skills 兼容客户端。</span>
+            </div>
+        </div>
+
+        <div class="branches" data-slot="conditions">
+            <div class="branch">
+                <span class="branch-label ok">内容基础成立</span>
+                <div class="slot support" data-slot="condition-a">
+                    <b>现有核心已经可复用</b>
+                    <span>209 行薄内核、11 个按需 reference、58 个 HTML 模板、1 个纯标准库 linter；模板与插件镜像已有回归保护。</span>
+                    <button class="evidence-button" type="button" data-title="内容资产证据"
+                            data-body="vibego_cli/data/skills/vibe-diagram/SKILL.md:1-209&#10;vibego_cli/data/skills/vibe-diagram/references/: 11 files&#10;vibego_cli/data/skills/vibe-diagram/templates/: 58 HTML files&#10;vibego_cli/data/skills/vibe-diagram/scripts/vibe_diagram_lint.py:1-15,403-430">
+                        查看锚点
+                    </button>
+                </div>
+                <div class="slot data outcome" data-slot="option-a">
+                    <b>判断：不需要重写</b>
+                    <span>应做“抽取 + 标准化 + 多端包装”，保留已验证的图型规则、模板与 lint。</span>
+                </div>
+            </div>
+
+            <div class="branch">
+                <span class="branch-label warn">结构部分成立</span>
+                <div class="slot ops" data-slot="condition-b">
+                    <b>已有 Codex 分发，但不是通用分发</b>
+                    <span><code>.codex-plugin/plugin.json</code> 与 repo marketplace 已通过；Claude 校验当前目录明确失败，Gemini/Copilot 也没有各自 manifest 与调用 smoke。</span>
+                    <button class="evidence-button" type="button" data-title="分发与适配证据"
+                            data-body="plugins/vibe-diagram/.codex-plugin/plugin.json:1-37&#10;.agents/plugins/marketplace.json:1-20&#10;tests/test_vibe_diagram_plugin_distribution.py:29-100&#10;本机 claude plugin validate plugins/vibe-diagram：缺少 .claude-plugin/plugin.json，验证失败">
+                        查看锚点
+                    </button>
+                </div>
+                <div class="slot ops outcome" data-slot="option-b">
+                    <b>判断：共用 skill，不共用 manifest</b>
+                    <span>Agent Skills 核心可跨端；安装目录、插件 manifest、调用语法、权限和预览交付必须由宿主适配。</span>
+                </div>
+            </div>
+
+            <div class="branch">
+                <span class="branch-label blocked">成熟发布未达标</span>
+                <div class="slot risk" data-slot="condition-c">
+                    <b>独立产品门禁仍缺失</b>
+                    <span>版本与 Vibego 锁步；根 Apache-2.0 与 manifest proprietary 冲突；无跨客户端 eval / 安装 / 调用 / 升级矩阵；wheel 还携带被跟踪的 CPython 3.11 缓存。</span>
+                    <button class="evidence-button" type="button" data-title="发布阻塞证据"
+                            data-body="pyproject.toml:5-14,51-80&#10;LICENSE:1-5&#10;plugins/vibe-diagram/.codex-plugin/plugin.json:28&#10;MANIFEST.in:1-7&#10;git ls-files 命中 vibego_cli/data/skills/vibe-diagram/scripts/__pycache__/vibe_diagram_lint.cpython-311.pyc">
+                        查看锚点
+                    </button>
+                </div>
+                <div class="slot risk outcome" data-slot="option-c">
+                    <b>判断：现在不能宣称“成熟跨端”</b>
+                    <span>许可证先 fail-closed；其余能力需用跨端可复现证据逐项升级，不能用“目录能被读到”代替运行验证。</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="recommend">
+            <div class="slot data" data-slot="recommend">
+                <b>推荐路径：唯一 canonical core + 能力型交付契约 + 多客户端包装</b>
+                <span>核心只定义如何选图、生成自包含 HTML、校验质量；Codex / Claude / Gemini / Copilot / Telegram 分别负责安装、调用、权限、附件或本地链接交付。Vibego 改为消费已发布核心，而不是继续作为版本与分发源。</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="supporting" data-slot="evidence-and-notes" aria-labelledby="split-title">
+        <h2 id="split-title">最小成熟化边界</h2>
+        <p>“跨客户端”不应等同于制造一个所有工具都识别的万能
+            manifest；成熟做法是稳定共享标准核心，把宿主差异限制在薄适配层。</p>
+        <table class="split-table">
+            <thead>
+            <tr>
+                <th style="width:18%">层</th>
+                <th style="width:34%">保留 / 建立</th>
+                <th style="width:28%">禁止混入</th>
+                <th style="width:20%">验收信号</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td><strong>开放 Skill 核心</strong></td>
+                <td><code>SKILL.md</code>、references、assets/templates、标准库 lint、通用 artifact contract、eval prompts
+                </td>
+                <td>品牌专属工具名、安装路径、manifest、附件 API、<code>file://</code> 回复格式</td>
+                <td><span class="status pass">Agent Skills 规范验证通过</span></td>
+            </tr>
+            <tr>
+                <td><strong>宿主能力 profile</strong></td>
+                <td>按“能写文件 / 能发附件 / 能打开本地文件 / 只能输出文本”选择交付方式</td>
+                <td>把某个 CLI 的当前 UI 行为写成所有客户端的永久规则</td>
+                <td><span class="status partial">同一输入，各端产物契约一致</span></td>
+            </tr>
+            <tr>
+                <td><strong>平台包装</strong></td>
+                <td>Codex、Claude、Gemini、Copilot 各自 manifest / marketplace / installer metadata</td>
+                <td>人工维护多份会漂移的 skill 正文</td>
+                <td><span class="status partial">各端 validate + install smoke</span></td>
+            </tr>
+            <tr>
+                <td><strong>独立发布</strong></td>
+                <td>独立 semver、LICENSE、README、CHANGELOG、签名/校验和、回滚说明</td>
+                <td>继续把 plugin version 强制等于 Vibego version</td>
+                <td><span class="status blocked">许可证待用户裁决</span></td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="supporting" aria-labelledby="client-title">
+        <h2 id="client-title">客户端兼容口径：共享核心，分别包装</h2>
+        <p>下表基于各厂商截至 2026-07-14 的官方文档；“支持”只表示协议与安装入口存在，不代表当前 Vibego
+            仓库已做完端到端验证。</p>
+        <table class="client-table">
+            <thead>
+            <tr>
+                <th style="width:17%">客户端</th>
+                <th style="width:25%">共享 Skill 入口</th>
+                <th style="width:27%">平台包装</th>
+                <th style="width:31%">当前仓库状态</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td><strong>Codex</strong></td>
+                <td><code>SKILL.md</code> + resources；官方建立在开放 Agent Skills 标准上</td>
+                <td><code>.codex-plugin/plugin.json</code> + marketplace</td>
+                <td><span class="status pass">结构与回归已验证</span>；尚无真实 marketplace install / invoke smoke</td>
+            </tr>
+            <tr>
+                <td><strong>Claude Code</strong></td>
+                <td><code>~/.claude/skills</code>、<code>.claude/skills</code>、plugin <code>skills/</code></td>
+                <td><code>.claude-plugin/plugin.json</code> + Claude marketplace</td>
+                <td><span class="status blocked">当前 Codex bundle 校验失败</span>；缺 Claude manifest</td>
+            </tr>
+            <tr>
+                <td><strong>Gemini CLI</strong></td>
+                <td><code>~/.agents/skills</code> / <code>.agents/skills</code> 为官方互操作别名，也支持 Gemini 专属
+                    skills 目录
+                </td>
+                <td><code>gemini-extension.json</code>；extension 可自动发现 <code>skills/</code></td>
+                <td><span class="status partial">agents-sync 已复制通用目录</span>；未做发现、激活、生成 smoke</td>
+            </tr>
+            <tr>
+                <td><strong>GitHub Copilot CLI</strong></td>
+                <td><code>~/.agents/skills</code> / <code>.agents/skills</code> 等官方目录</td>
+                <td><code>plugin.json</code>；skills / agents / hooks / MCP / LSP 可打包</td>
+                <td><span class="status partial">通用目录具备</span>；未做正式 plugin 与调用 smoke</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="supporting" aria-labelledby="gate-title">
+        <h2 id="gate-title">只有通过这些门禁，才可称为“成熟 skill”</h2>
+        <p>这些是成熟度验收条件，不是已获 develop 许可的实现计划。</p>
+        <ol class="gate-list">
+            <li data-step="1"><b>唯一事实源</b>核心 skill 只维护一份；各插件包由发布流程生成或校验字节一致。</li>
+            <li data-step="2"><b>许可与版本独立</b>裁决 Apache-2.0 与 proprietary 冲突，并建立独立 semver / changelog /
+                rollback。
+            </li>
+            <li data-step="3"><b>规范与静态质量</b><code>skills-ref validate</code>、四端 manifest validator、58 模板资产完整性与
+                HTML lint 全绿。
+            </li>
+            <li data-step="4"><b>跨模型 eval</b>每类图至少有真实 prompt；每端同时跑 with-skill、without-skill /
+                previous-version 基线。
+            </li>
+            <li data-step="5"><b>端到端安装与调用</b>干净环境完成 discover → install → explicit/implicit invoke → 生成文件
+                → 打开/附件交付 → upgrade / rollback。
+            </li>
+            <li data-step="6"><b>视觉与可访问性</b>桌面、390px、无 JS、reduced-motion、键盘焦点、无横向溢出；关键结论不依赖弹窗。
+            </li>
+            <li data-step="7"><b>跨 OS 与依赖边界</b>macOS / Linux / Windows；无第三方依赖路径优先，脚本不可用时有纯文本
+                HTML fallback。
+            </li>
+            <li data-step="8"><b>支持承诺可审计</b>README 维护明确 compatibility matrix：verified / experimental /
+                unsupported，不做模糊“全平台支持”宣传。
+            </li>
+        </ol>
+
+        <div class="alert">
+            <strong>发布阻塞：</strong>当前 <code>LICENSE:1-5</code> 是 Apache-2.0，但 <code>pyproject.toml:14</code> 与
+            <code>plugins/vibe-diagram/.codex-plugin/plugin.json:28</code> 声明 <code>LicenseRef-Proprietary</code>。
+            在用户明确选择开源公共发布或私有/商业发布之前，必须 fail-closed，不能发布独立包。
+        </div>
+    </section>
+
+    <section class="supporting" aria-labelledby="evidence-title">
+        <h2 id="evidence-title">本轮可复现证据</h2>
+        <table class="evidence-table">
+            <thead>
+            <tr>
+                <th style="width:34%">检查</th>
+                <th style="width:18%">结果</th>
+                <th style="width:48%">说明</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td>Codex skill quick validator：builtin + plugin</td>
+                <td><span class="status pass">2 项 valid</span></td>
+                <td>证明当前两个 skill 目录满足 Codex 基础格式；不等于跨客户端运行通过。</td>
+            </tr>
+            <tr>
+                <td>Codex plugin validator</td>
+                <td><span class="status pass">passed</span></td>
+                <td><code>plugins/vibe-diagram</code> 的 Codex manifest 与结构合法。</td>
+            </tr>
+            <tr>
+                <td><code>tests/test_builtin_skills_injection.py</code> + distribution</td>
+                <td><span class="status pass">89 passed</span></td>
+                <td>覆盖薄内核、references、58 模板、lint、插件镜像和分发契约。</td>
+            </tr>
+            <tr>
+                <td>Claude plugin validator</td>
+                <td><span class="status blocked">failed as expected</span></td>
+                <td>当前目录没有 <code>.claude-plugin/plugin.json</code> 或 marketplace；这是平台包装缺失，不是内容核心失败。
+                </td>
+            </tr>
+            <tr>
+                <td>本机 CLI 能力探针</td>
+                <td><span class="status pass">4 端工具存在</span></td>
+                <td>Codex 0.144.1、Claude Code 2.1.198、Gemini CLI 0.32.1、Copilot CLI 1.0.35；帮助信息均显示 skill 或
+                    plugin 扩展入口。
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="supporting" aria-labelledby="sources-title">
+        <h2 id="sources-title">事实来源</h2>
+        <p>仓库事实使用本地文件锚点；跨客户端能力只采用官方一手文档。未完成的端到端验证均明确标为未验证。</p>
+        <ul class="sources">
+            <li>
+                <strong>现有主任务记忆：</strong><code>docs/TASK_20260701_014_vibe_diagram独立Skill发布方案.md:1-74</code>
+            </li>
+            <li><strong>本地分发：</strong><code>README.md:57-96</code>；<code>plugins/vibe-diagram/.codex-plugin/plugin.json:1-37</code>
+            </li>
+            <li><strong>同步链：</strong><code>vibego_cli/agents_sync.py:337-367,430-450,516-567</code></li>
+            <li><strong>平台耦合：</strong><code>vibego_cli/data/skills/vibe-diagram/SKILL.md:24-37,194-207</code></li>
+            <li><a href="https://agentskills.io/specification">Agent Skills Specification</a>：开放目录、frontmatter、resources
+                与验证规范
+            </li>
+            <li><a href="https://learn.chatgpt.com/docs/build-skills">OpenAI：Build skills</a>；<a
+                    href="https://learn.chatgpt.com/docs/build-plugins">OpenAI：Build plugins</a></li>
+            <li><a href="https://code.claude.com/docs/en/slash-commands">Anthropic：Extend Claude with skills</a>；<a
+                    href="https://code.claude.com/docs/en/plugins-reference">Claude plugins reference</a></li>
+            <li><a href="https://geminicli.com/docs/cli/skills/">Google：Gemini CLI Agent Skills</a>；<a
+                    href="https://geminicli.com/docs/extensions/reference/">Gemini extension reference</a></li>
+            <li><a href="https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills">GitHub：Adding
+                agent skills for Copilot CLI</a></li>
+            <li><a href="https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference">GitHub：Copilot
+                CLI plugin reference</a></li>
+        </ul>
+    </section>
+</main>
+
+<dialog id="evidence-dialog" aria-labelledby="evidence-dialog-title">
+    <div class="dialog-head">
+        <h2 id="evidence-dialog-title">证据锚点</h2>
+        <button class="dialog-close" type="button" aria-label="关闭证据详情">×</button>
+    </div>
+    <div class="dialog-body" id="evidence-dialog-body"></div>
+</dialog>
+
+<script>
+    (function () {
+        var dialog = document.getElementById('evidence-dialog');
+        var title = document.getElementById('evidence-dialog-title');
+        var body = document.getElementById('evidence-dialog-body');
+        var closeButton = dialog.querySelector('.dialog-close');
+
+        document.querySelectorAll('.evidence-button').forEach(function (button) {
+            button.addEventListener('click', function () {
+                title.textContent = button.getAttribute('data-title') || '证据锚点';
+                body.textContent = button.getAttribute('data-body') || '';
+                dialog.showModal();
+            });
+        });
+
+        closeButton.addEventListener('click', function () {
+            dialog.close();
+        });
+        dialog.addEventListener('click', function (event) {
+            if (event.target === dialog) dialog.close();
+        });
+    }());
+</script>
+</body>
+</html>

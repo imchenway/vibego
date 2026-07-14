@@ -19,22 +19,28 @@
 
 ## Readiness Gate
 
-- 进入设计、计划或 develop 前必须通过 Readiness Gate；不得只说“我有 95% 信心”。95%
-  代表：没有高风险未知项，且目标、现状证据、方案、影响范围、验收标准、验证方式和回滚方式都已明确。
+- 进入设计或计划前必须先通过设计输入 Readiness；不得用“我有 95% 信心”等自评代替门禁。目标、现状证据、范围、规则、角色/权限、边界异常、可测试
+  AC、风险、设计、验证和回滚约束必须明确，不得存在高风险未知项，且用户必须确认已达成共同理解；此时不要求最终方案已明确。
+- 设计输入 Readiness 通过后，允许进入 `superpowers:brainstorming` / `superpowers:writing-plans` 阶段；这不等于已获得
+  develop 许可。
+- 进入 develop 前必须再次复核选定方案、变更点、兼容影响、风险、验收、验证和回滚；全部明确后仍只能请求用户确认是否进入
+  develop，未获明确确认不得写代码。
 - 新需求必须先澄清用户/场景、业务目标、主流程、业务规则、权限角色、边界异常、多端差异和可测试 AC。
 - 现有功能迭代必须先说明入口与现状、当前实现链路、新增/修改/删除点、兼容影响和风险。
 - Bug/异常必须先复述现象与影响，提出至少两个候选根因，验证后才能把根因写成事实；未验证根因只能标注为假设。
 - 所有假设必须列出；高风险假设必须继续追问，低风险假设可给默认方案并请用户确认。
-- 通过门禁后，只能请求用户确认是否进入 develop；未确认不得写代码。
 
 ## Interaction Gate
 
-- 自评未达到 95% 或 Readiness Gate 未满足时，必须标记 `READINESS: BLOCKED`；只允许只读取证、列出已确认事实、列出阻塞未知，并向用户提出问题。
-- Readiness 未满足前，不得输出完整设计、实现计划、任务拆解或最终方案；不得用“先给一个方案/默认按推荐”绕过。
+- 任一阶段的 Readiness 未满足时，必须标记 `READINESS: BLOCKED`
+  ；先完成只读取证，列出已确认事实和阻塞未知，每轮只问一个会改变方案、范围、验收、权限、数据或回滚的最高影响问题，并附高置信度推荐。
+- `READINESS: BLOCKED` 时不得输出完整设计、实现计划、任务拆解、最终方案或进行任何行为实现；不得用“先给一个方案/默认按推荐”绕过。
 - 每轮最多问 1 个最高影响问题；多个选项可以放在同一个问题内，但不得一次性提出 2-3 个独立问题。
 - 多个未知项并存时，按风险排序，只问会改变方案、范围、验收、权限、数据或回滚的最高风险问题；用户回答后更新 Readiness
   清单，若仍未达标，继续只问下一个最高影响问题。
 - 提问前必须先完成可只读取证：读 AGENTS/docs/相关代码/测试/日志；不得询问可从仓库查到的问题。
+- 唯一写入例外是 `domain-modeling`：可将已确定、稳定且可复用的领域术语即时写入 `CONTEXT.md`
+  ；仅当架构决策同时满足难回退、非直观、存在真实权衡三个条件时，才允许写 ADR。
 
 ## Docs memory
 
@@ -45,9 +51,15 @@
 
 ## Skill routing
 
-- 需求、方案、行为变更、复杂设计：必须使用 superpowers:brainstorming。
+- `Readiness Gate` 覆盖的任务：除 Bug/异常/测试失败的前置取证外，必须先使用 `grilling` + `domain-modeling`，其组合语义等价于
+  `grill-with-docs`；只有用户确认已达成共同理解后才能进入下一阶段。
+- 用户确认共同理解后的需求、方案、行为变更、复杂设计：必须使用 `superpowers:brainstorming` 进行方案比较与设计综合；必须复用
+  grilling 已确认结论，不得重复追问；如发现新高风险未知，必须回退 `READINESS: BLOCKED` 和 grilling。
+- Bug、异常、测试失败：必须先使用 `superpowers:systematic-debugging` 完成可取证事实和候选根因验证，再由 grilling
+  处理仅能由用户决策的未知项。
+- 使用 `domain-modeling` 时，只将稳定、可复用且不含实现细节的领域语义写入 `CONTEXT.md`，只为同时满足难回退、非直观、存在真实权衡三个条件的架构决策写
+  ADR；当次调研、AC、方案、验证与回滚仍写入 `docs/TASK_*.md`。
 - 复杂实现计划、架构调整、重要重构：必须使用 superpowers:writing-plans。
-- Bug、异常、测试失败：必须使用 superpowers:systematic-debugging。
 - 代码实现或修复：必须只有通过 Readiness Gate 且用户确认后，使用 superpowers:test-driven-development。
 - 使用 superpowers:using-git-worktrees 时，默认只能做现有隔离状态与当前工作区可见性检查；不得仅因 feature
   work、implementation plan 或该 skill 自身建议而主动询问、创建、切换 worktree / 隔离工作区。只有用户本轮明确要求或确认
