@@ -259,15 +259,21 @@ _resolve_project_path() {
 
   # 去重并挑选最佳匹配：优先包含 hint，其次路径最短
   if [[ ${#candidates[@]} -gt 0 ]]; then
-    declare -A seen=()
     local best="" best_len=0
     local listed=()
+    local existing="" duplicated=0
     for p in "${candidates[@]}"; do
       [[ -z "$p" || ! -d "$p" ]] && continue
-      if [[ -n "${seen[$p]:-}" ]]; then
+      duplicated=0
+      for existing in "${listed[@]}"; do
+        if [[ "$existing" == "$p" ]]; then
+          duplicated=1
+          break
+        fi
+      done
+      if [[ $duplicated -ne 0 ]]; then
         continue
       fi
-      seen["$p"]=1
       listed+=( "$p" )
       local preferred=0
       if [[ -n "$hint" && "$p" == *"$hint"* ]]; then

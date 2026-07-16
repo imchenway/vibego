@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>故障排查：Telegram 能预览而终端命令失败的原因</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: light; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+      min-height: 100vh;
+      overflow-x: clip;
+    }
+    main { width: min(1160px, calc(100vw - 32px)); margin: 0 auto; padding: 22px 0 40px; }
+    .task-code {
+      display: inline-flex;
+      margin-bottom: 10px;
+      border: 1px solid rgba(31,111,178,.28);
+      border-radius: 999px;
+      background: rgba(255,255,255,.82);
+      padding: 5px 10px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .03em;
+    }
+    h1 { margin: 0; font-size: clamp(24px, 2.8vw, 32px); line-height: 1.18; letter-spacing: -.025em; overflow-wrap: anywhere; }
+    .summary { max-width: 920px; margin: 10px 0 18px; color: var(--muted); font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+    .verdict {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 18px;
+      border: 1px solid rgba(31,111,178,.34);
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, rgba(232,243,255,.94), rgba(255,255,255,.94));
+      box-shadow: var(--shadow);
+      padding: 14px 16px;
+    }
+    .verdict strong { color: var(--blue); font-size: 13px; white-space: nowrap; }
+    .verdict span { min-width: 0; font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+    .canvas {
+      position: relative;
+      border: 1px solid rgba(141,179,216,.48);
+      border-radius: 24px;
+      background: rgba(255,255,255,.78);
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+    .origin {
+      width: min(680px, 100%);
+      margin: 0 auto 18px;
+      border: 1px solid rgba(98,84,173,.38);
+      border-radius: 18px;
+      background: linear-gradient(180deg, #fff, var(--violet-soft));
+      padding: 13px 16px;
+      text-align: center;
+    }
+    .origin b, .node b { display: block; font-size: 13px; line-height: 1.35; }
+    .origin span, .node span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    .split-arrow { width: 2px; height: 28px; margin: -18px auto 0; background: var(--blue); position: relative; }
+    .split-arrow::after { content: ""; position: absolute; left: -5px; bottom: -1px; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 10px solid var(--blue); }
+    .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: start; }
+    .lane {
+      min-width: 0;
+      border: 1px solid rgba(141,179,216,.4);
+      border-radius: 20px;
+      background: rgba(255,255,255,.72);
+      padding: 14px;
+    }
+    .lane h2 { margin: 0 0 12px; text-align: center; font-size: 17px; letter-spacing: -.01em; }
+    .lane.good h2 { color: var(--green); }
+    .lane.bad h2 { color: var(--red); }
+    .flow { display: grid; justify-items: stretch; }
+    .node {
+      min-height: 74px;
+      display: grid;
+      align-content: center;
+      border: 1px solid rgba(141,179,216,.58);
+      border-radius: 16px;
+      background: rgba(255,255,255,.96);
+      padding: 11px 13px;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+    .node.bot { border-color: rgba(98,84,173,.4); background: linear-gradient(180deg, #fff, var(--violet-soft)); }
+    .node.ok { border-color: rgba(23,120,90,.45); background: linear-gradient(180deg, #fff, var(--green-soft)); }
+    .node.warn { border-color: rgba(152,101,6,.42); background: linear-gradient(180deg, #fff, var(--amber-soft)); }
+    .node.root { border: 2px solid rgba(166,58,58,.64); background: linear-gradient(180deg, #fff, var(--red-soft)); }
+    .arrow-down { width: 2px; height: 25px; justify-self: center; background: var(--blue); position: relative; }
+    .arrow-down::after { content: ""; position: absolute; left: -5px; bottom: -1px; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 10px solid var(--blue); }
+    .root-label { display: inline-block; margin-bottom: 4px; color: var(--red); font-size: 11px; font-weight: 900; letter-spacing: .04em; }
+    .merge {
+      margin-top: 18px;
+      border: 2px solid rgba(31,111,178,.42);
+      border-radius: 20px;
+      background: linear-gradient(135deg, var(--blue-soft), rgba(255,255,255,.96));
+      padding: 16px;
+      text-align: center;
+    }
+    .merge b { display: block; color: var(--blue); font-size: 16px; }
+    .merge p { margin: 6px auto 0; max-width: 860px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .evidence {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      align-items: center;
+      border: 1px solid rgba(141,179,216,.42);
+      border-radius: 18px;
+      background: rgba(255,255,255,.78);
+      padding: 14px 16px;
+    }
+    .evidence h2 { margin: 0 0 5px; font-size: 16px; }
+    .evidence p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    button {
+      min-height: 42px;
+      border: 1px solid rgba(31,111,178,.38);
+      border-radius: 12px;
+      background: var(--blue);
+      color: white;
+      padding: 9px 14px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(.96); }
+    button:focus-visible { outline: 3px solid rgba(31,111,178,.28); outline-offset: 3px; }
+    dialog { width: min(760px, calc(100vw - 28px)); border: 0; border-radius: 20px; box-shadow: 0 28px 80px rgba(16,32,51,.24); padding: 0; }
+    dialog::backdrop { background: rgba(16,32,51,.35); }
+    .dialog-body { padding: 20px; background: var(--paper); }
+    .dialog-body h2 { margin: 0 0 12px; font-size: 20px; }
+    .dialog-body ul { margin: 0; padding-left: 20px; color: var(--muted); }
+    .dialog-body li { margin: 8px 0; line-height: 1.55; overflow-wrap: anywhere; }
+    code { color: #314a63; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; overflow-wrap: anywhere; word-break: break-word; }
+    .dialog-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+    .status { color: var(--amber); font-weight: 800; }
+    @media (max-width: 780px) {
+      main { width: min(100vw - 20px, 760px); padding-top: 14px; }
+      .verdict { grid-template-columns: 1fr; gap: 4px; }
+      .verdict strong { white-space: normal; }
+      .lanes { grid-template-columns: 1fr; }
+      .split-arrow { margin-bottom: 14px; }
+      .evidence { grid-template-columns: 1fr; }
+      button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+<main data-diagram-type="fault-debugging"
+      data-template-family="fault-debugging"
+      data-template-id="debugging-sequence"
+      data-template-layout="debugging-sequence">
+  <div class="task-code">TASK_20260716_001</div>
+  <h1>故障排查：Telegram 能预览而终端命令失败的原因</h1>
+  <p class="summary">两边最终调用的是同一个 <code>gen_preview.sh</code>，但进入脚本前的参数不同。Telegram 先由 Python 层解析出项目目录并注入 <code>PROJECT_PATH</code>；终端命令只有 <code>PROJECT_BASE</code>，因此曾走进 macOS Bash 3.2 不兼容的自动探测分支。该兼容缺陷现已在预览与上传脚本中同步修复。</p>
+
+  <section class="verdict" aria-label="核心结论">
+    <strong>核心结论</strong>
+    <span>Telegram “能用”是因为绕开了故障代码；永久修复已把自动探测去重改成 Bash 3.2 支持的普通数组精确遍历。</span>
+  </section>
+
+  <section class="canvas" aria-label="Telegram 与终端执行链路对照">
+    <div class="origin">
+      <b>同一个目标：为 fawnStudio 生成微信预览</b>
+      <span>分歧发生在调用 <code>scripts/gen_preview.sh</code> 之前</span>
+    </div>
+    <div class="split-arrow" aria-hidden="true"></div>
+
+    <div class="lanes">
+      <section class="lane good" aria-label="Telegram 成功链路">
+        <h2>Telegram 链路 · 可继续执行</h2>
+        <div class="flow">
+          <div class="node bot"><b>点击 wx-dev-preview</b><span>进入 <code>bot.py::_maybe_handle_wx_preview</code></span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node bot"><b>Python 层先扫描目录</b><span>找到唯一候选 <code>frontend-mini</code></span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node ok"><b>注入确定路径</b><span><code>PROJECT_PATH=.../frontend-mini</code><br><code>PROJECT_BASE=.../frontend-mini</code></span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node ok"><b>脚本第 223 行提前返回</b><span>检测到有效 <code>PROJECT_PATH</code>，不再自动扫描</span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node ok"><b>到达微信 CLI</b><span>完全绕过 <code>declare -A</code> 故障点</span></div>
+        </div>
+      </section>
+
+      <section class="lane bad" aria-label="终端失败链路">
+        <h2>终端链路 · 修复前故障与当前修法</h2>
+        <div class="flow">
+          <div class="node warn"><b>手工执行脚本</b><span>只传入 <code>PROJECT_BASE</code>，未传 <code>PROJECT_PATH</code></span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node warn"><b>脚本进入自动探测</b><span>扫描到 <code>project.config.json</code> 与 <code>miniprogram/app.json</code></span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node root"><span class="root-label">根因 R1 · 已复现</span><b>Bash 3.2 不支持关联数组</b><span>第 262 行 <code>declare -A seen=()</code> 直接报 <code>invalid option</code></span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node root"><b>路径被当成算术下标</b><span>第 267 行进一步报 <code>operand expected</code></span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node warn"><b>产生误导性末级错误</b><span>脚本最终声称“未找到小程序项目目录”，但目录其实存在</span></div>
+          <div class="arrow-down" aria-hidden="true"></div>
+          <div class="node ok"><span class="root-label" style="color: var(--green)">修法 F1 · 已实施</span><b>普通数组精确遍历去重</b><span>保持候选顺序、<code>PROJECT_HINT</code> 与最短路径规则；预览和上传脚本同步修复</span></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="merge">
+      <b>已修复：Telegram 链路不变，终端自动探测现在也能到达 CLI。</b>
+      <p>Telegram 仍用 Python 的目录扫描结果填好 <code>PROJECT_PATH</code>；终端则由 Bash 自动探测。修复只替换去重数据结构，不改变 fawnStudio 目录选择、端口、CLI 参数或成功判定。</p>
+    </div>
+  </section>
+
+  <section class="evidence" aria-label="证据与当前状态">
+    <div>
+      <h2>证据裁决与状态</h2>
+      <p>E1 当前机器 <code>/bin/bash</code> 为 3.2.57；E2 红灯为 <code>4 failed</code>；E3 修复后首轮绿灯为 <code>4 passed</code>；E4 审查加固后的选择规则矩阵为 <code>10 passed</code>；E5 微信相关聚焦集合为 <code>93 passed</code>；E6 全量回归为 <code>1179 passed</code>。<span class="status">独立 review 无 Critical/Important 问题。</span></p>
+    </div>
+    <button type="button" id="open-evidence">查看代码锚点</button>
+  </section>
+</main>
+
+<dialog id="evidence-dialog" aria-labelledby="evidence-title">
+  <div class="dialog-body">
+    <h2 id="evidence-title">代码与测试锚点</h2>
+    <ul>
+      <li><code>bot.py:7637-7695</code>：Telegram 先扫描候选目录，单候选时自动执行。</li>
+      <li><code>bot.py:7075-7085</code>：包装命令时同时注入 <code>PROJECT_PATH</code> 与 <code>PROJECT_BASE</code>。</li>
+      <li><code>scripts/gen_preview.sh:223-225</code>：显式路径存在时直接返回。</li>
+      <li><code>scripts/gen_preview.sh:260-277</code>：自动探测改为普通数组精确遍历去重。</li>
+      <li><code>scripts/gen_upload.sh:259-276</code>：上传脚本同步采用同一兼容实现。</li>
+      <li><code>tests/test_wx_preview_port_flow.py:131-300</code>：锁定 Bash 3.2，并覆盖显式路径、hint、最短路径、去重和首次候选规则。</li>
+      <li><code>tests/test_wx_preview_detection.py:223-264</code>：既有 Telegram 单候选测试明确断言执行命令含 <code>PROJECT_PATH=</code>。</li>
+    </ul>
+    <div class="dialog-actions"><button type="button" id="close-evidence">关闭</button></div>
+  </div>
+</dialog>
+
+<script>
+  const dialog = document.getElementById('evidence-dialog');
+  document.getElementById('open-evidence').addEventListener('click', () => dialog.showModal());
+  document.getElementById('close-evidence').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && dialog.open) dialog.close();
+  });
+</script>
+</body>
+</html>

@@ -128,6 +128,178 @@ def test_upsert_wx_devtools_ports_file_upgrades_legacy_format(tmp_path: Path) ->
     assert data["paths"][str(project_root.resolve())] == 64701
 
 
+@pytest.mark.parametrize("script_name", ["gen_preview.sh", "gen_upload.sh"])
+def test_wx_scripts_do_not_require_bash4_associative_arrays(script_name: str) -> None:
+    """微信脚本必须兼容 macOS 默认 Bash 3.2，不能依赖 Bash 4 关联数组。"""
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_text = (repo_root / "scripts" / script_name).read_text(encoding="utf-8")
+
+    for declaration in ("declare -A", "local -A", "typeset -A"):
+        assert declaration not in script_text
+
+
+@pytest.mark.skipif(os.name != "posix", reason="微信脚本自动探测依赖 bash/Posix 环境")
+@pytest.mark.parametrize(
+    ("script_name", "expected_command"),
+    [
+        ("gen_preview.sh", "preview"),
+        ("gen_upload.sh", "upload"),
+    ],
+)
+@pytest.mark.parametrize(
+    "selection_rule",
+    [
+        "fawn_shortest_and_deduplicated",
+        "explicit_project_path",
+        "project_hint",
+        "equal_length_first_candidate",
+    ],
+)
+def test_wx_scripts_preserve_project_selection_rules(
+    tmp_path: Path,
+    script_name: str,
+    expected_command: str,
+    selection_rule: str,
+) -> None:
+    """Bash 3.2 兼容改动不得改变显式路径、hint、最短路径和首次顺序。"""
+
+    if sys.platform == "darwin" and Path("/bin/bash").is_file():
+        bash_bin = "/bin/bash"
+        bash_version = subprocess.run(
+            [bash_bin, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "version 3.2" in bash_version
+    else:
+        bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / script_name
+    assert script_path.is_file()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "fake-wx-cli-auto-detect"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -eu
+
+            calls_file="${FAKE_WX_CLI_CALLS_FILE:?}"
+            {
+              printf '%s\n' '---'
+              printf '%s\n' "$@"
+            } >> "$calls_file"
+            exit 37
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    duplicate_candidate: Path | None = None
+
+    if selection_rule == "fawn_shortest_and_deduplicated":
+        project_root = workspace / "frontend-mini"
+        miniprogram_root = project_root / "miniprogram"
+        miniprogram_root.mkdir(parents=True)
+        (miniprogram_root / "app.json").write_text("{}", encoding="utf-8")
+        (project_root / "project.config.json").write_text(
+            json.dumps(
+                {
+                    "miniprogramRoot": "miniprogram",
+                    "appid": "wx_APPID_REDACTED",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        duplicate_candidate = miniprogram_root
+    elif selection_rule == "explicit_project_path":
+        auto_candidate = workspace / "auto-candidate"
+        auto_candidate.mkdir()
+        (auto_candidate / "app.json").write_text("{}", encoding="utf-8")
+        project_root = tmp_path / "explicit-project"
+        project_root.mkdir()
+        (project_root / "app.json").write_text("{}", encoding="utf-8")
+    elif selection_rule == "project_hint":
+        short_candidate = workspace / "a"
+        short_candidate.mkdir()
+        (short_candidate / "app.json").write_text("{}", encoding="utf-8")
+        project_root = workspace / "long-hint-target"
+        project_root.mkdir()
+        (project_root / "app.json").write_text("{}", encoding="utf-8")
+    else:
+        project_root = workspace / "bb"
+        second_candidate = workspace / "aa"
+        project_root.mkdir()
+        second_candidate.mkdir()
+        first_app_json = project_root / "app.json"
+        second_app_json = second_candidate / "app.json"
+        first_app_json.write_text("{}", encoding="utf-8")
+        second_app_json.write_text("{}", encoding="utf-8")
+        fake_rg = bin_dir / "rg"
+        fake_rg.write_text(
+            dedent(
+                """\
+                #!/bin/bash
+                set -eu
+                case "$*" in
+                  *"-g app.json"*) printf '%s\n' "${FAKE_RG_APP_FILES:?}" ;;
+                  *"-g project.config.json"*) ;;
+                  *) exit 2 ;;
+                esac
+                """
+            ),
+            encoding="utf-8",
+        )
+        fake_rg.chmod(0o755)
+
+    calls_file = tmp_path / f"{script_name}.calls"
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["CLI_BIN"] = str(fake_cli)
+    env["PROJECT_BASE"] = str(workspace)
+    env["PORT"] = "45459"
+    env["OUTPUT_QR"] = str(tmp_path / "preview.jpg")
+    env["UPLOAD_RETRY_ON_FAIL"] = "0"
+    env["FAKE_WX_CLI_CALLS_FILE"] = str(calls_file)
+    env.pop("PROJECT_PATH", None)
+    env.pop("PROJECT_HINT", None)
+    if selection_rule == "explicit_project_path":
+        env["PROJECT_PATH"] = str(project_root)
+    elif selection_rule == "project_hint":
+        env["PROJECT_HINT"] = "hint-target"
+    elif selection_rule == "equal_length_first_candidate":
+        env["FAKE_RG_APP_FILES"] = f"{project_root / 'app.json'}\n{second_candidate / 'app.json'}"
+
+    proc = subprocess.run(
+        [bash_bin, str(script_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        cwd=str(workspace),
+    )
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    assert calls_file.is_file(), f"exit={proc.returncode}\nstderr:\n{stderr}"
+    calls_text = calls_file.read_text(encoding="utf-8")
+    assert expected_command in calls_text.splitlines()
+    assert f"--project\n{project_root}" in calls_text
+    assert "declare: -A" not in stderr
+    assert "operand expected" not in stderr
+    if duplicate_candidate is not None:
+        assert stderr.count(str(duplicate_candidate)) == 1
+
+
 @pytest.mark.skipif(os.name != "posix", reason="wx-dev-preview 脚本依赖 bash/Posix 环境")
 def test_gen_preview_prefers_python3_over_python(tmp_path: Path) -> None:
     """确保脚本在 python 不可用时仍能用 python3 解析端口映射，避免误报“端口缺失”。
