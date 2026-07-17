@@ -466,16 +466,6 @@ TEXT_PASTE_PREFIX_FOLLOWUP_MIN_CHARS = max(_env_int("TEXT_PASTE_PREFIX_FOLLOWUP_
 # 低于 near-limit 但明显属于“中长多行粘贴首段”的内容，也先进入长窗口等待；
 # 否则会出现首段原文先入模、后续超长分片再转附件入模的双 prompt。
 TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS = max(_env_int("TEXT_PASTE_LEADING_FRAGMENT_MIN_CHARS", 1200), 0)
-# 发送到 tmux 的提示词前缀（用户确认版本），用于强制模型遵守 vibego 规约文件
-ENFORCED_AGENTS_NOTICE = (
-    "以下是用户需求描述："
-)
-# Telegram worker 注入的来源上下文：让模型在生成 HTML 图时优先走移动端可用的附件卡片，
-# 避免把 Codex App 可点击的 file:// 链接当成 Telegram 主入口。
-TELEGRAM_SOURCE_CONTEXT_NOTICE = (
-    "请求来源：vibego Telegram worker / 移动端。HTML 图交付：Telegram 主交付是项目内 `.html/.htm` "
-    "文件附件卡片，不需要 PNG；不要把 `file://` 作为 Telegram 主入口。"
-)
 # 内部测试标记只允许留在测试/日志夹具中，若被误当成整条用户 prompt 推送则必须 fail-closed。
 INTERNAL_RESERVED_TEST_MARKER_RE = re.compile(r"__VIBEGO_[A-Z0-9_]*TEST[A-Z0-9_]*__")
 # 模型答案消息底部快捷按钮（仅用于模型输出投递的消息）
@@ -3298,34 +3288,6 @@ async def _send_session_ack(
     )
 
 
-def _prepend_enforced_agents_notice(raw_prompt: str) -> str:
-    """在推送到 tmux 前追加强制规约提示语。
-
-    约束：
-    - 仅对非命令类 prompt 生效（以 / 开头的内部命令不注入，避免破坏语义）
-    - 避免重复注入同一条提示语
-    """
-
-    text = (raw_prompt or "").strip("\n")
-    if not text:
-        return raw_prompt
-    # Plan 收口确认（Yes）与恢复提示要求严格透传固定提示词，不允许追加强制前缀。
-    if text in {PLAN_IMPLEMENT_PROMPT, PLAN_IMPLEMENT_EXEC_PROMPT, PLAN_RECOVERY_DEVELOP_PROMPT}:
-        return raw_prompt
-    # 约定：内部命令（如 /compact）不应被提示语破坏
-    if text.lstrip().startswith("/"):
-        return raw_prompt
-    notice = ENFORCED_AGENTS_NOTICE.strip()
-    if not notice:
-        return raw_prompt
-    if text.lstrip().startswith(notice):
-        return raw_prompt
-    # 来源上下文只进入普通业务 prompt；slash/control 命令和 Plan 固定提示已在上方跳过。
-    source_context = TELEGRAM_SOURCE_CONTEXT_NOTICE.strip()
-    prefix = f"{notice}\n{source_context}" if source_context else notice
-    return f"{prefix}\n\n{raw_prompt}"
-
-
 def _is_internal_reserved_test_prompt(raw_prompt: str) -> bool:
     """识别整条 prompt 是否为 vibego 内部保留测试标记。"""
 
@@ -3413,8 +3375,8 @@ def _extract_user_prompt_texts_from_event(event: Mapping[str, Any]) -> list[str]
 def _delivery_text_matches_prompt(candidate: str, raw_prompt: str, dispatch_text: str) -> bool:
     """判断 session 中的用户文本是否对应本次 prompt。
 
-    既匹配原始 prompt，也匹配注入 tmux 的完整 dispatch_text，以兼容普通直聊
-    会追加规约前缀，而 `/goal` 等 slash 命令不追加前缀的差异。
+    同时接受调用方记录的原始 prompt 与实际 tmux 发送文本；Telegram 当前原样
+    发送，两者一致，参数仍保留给投递确认和会话恢复共用同一匹配接口。
     """
 
     haystack = _normalize_delivery_match_text(candidate)
@@ -4105,7 +4067,7 @@ async def _dispatch_prompt_to_model(
         )
         resolved_send_mode = PUSH_SEND_MODE_IMMEDIATE
 
-    dispatch_text = _prepend_enforced_agents_notice(prompt)
+    dispatch_text = prompt
     target_session = dispatch_context.tmux_session if dispatch_context is not None else TMUX_SESSION
     delivery_confirm_path = session_path
     dispatch_session_start_offset = _session_file_size(delivery_confirm_path) if delivery_confirm_path is not None else 0
@@ -16463,7 +16425,7 @@ async def _probe_new_model_message_once(
                 _find_user_prompt_event_offset,
                 pointer_target,
                 raw_prompt=proof_prompt,
-                dispatch_text=_prepend_enforced_agents_notice(proof_prompt),
+                dispatch_text=proof_prompt,
                 not_before_epoch=proof_epoch,
             )
 

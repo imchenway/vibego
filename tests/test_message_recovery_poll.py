@@ -157,7 +157,7 @@ async def test_probe_message_recovery_rebinds_to_new_pointer_and_delivers_once(m
             "content": [
                 {
                     "type": "input_text",
-                    "text": bot._prepend_enforced_agents_notice(proof_prompt),
+                    "text": proof_prompt,
                 }
             ],
         },
@@ -299,7 +299,7 @@ async def test_probe_message_recovery_restarts_watcher_when_rebound_delivery_fai
                     "content": [
                         {
                             "type": "input_text",
-                            "text": bot._prepend_enforced_agents_notice(proof_prompt),
+                            "text": proof_prompt,
                         }
                     ],
                 },

@@ -2,66 +2,18 @@
 
 ## Hard boundaries
 
-- 不要自行执行 git commit/push/merge/revert 等修改历史或远端动作，除非用户明确要求。
-- 不输出寒暄、表演式过程、无关背景或与当前决策无关的评论；必要的结论、证据、风险、验证和待决策项必须保留。
-- 仓库任务开始前，先读取当前目录及相关上级/子项目的 AGENTS.md、PROJECT-STYLE.md、CODE-GUIDELINES.md、DESIGN.md；找不到则说明未发现。
-- 仓库事实必须给文件路径和锚点；证据不足写“待确认/推断”，证据冲突则 fail-closed，不把推断写成事实。
-- 不要声称“完成 / 修复 / 验证通过”，除非已执行对应验证并看到成功结果；未验证必须直说。
-- 需要用户决策时，给编号选项并标出高置信度推荐项 🌟。
-- 输出 docs、任务文档、设计文档和注释使用简体中文；代码注释优先遵守项目既有风格。
-
-## Quality checklist
-
-- 本节只提供非阻断质量检查，不是阶段门禁或行为授权；不得因清单尚未逐项显式确认而标记阻塞、暂停任务或索要阶段许可。本文件不建立任务阶段状态机，任务可执行范围以当前运行环境和用户已明确的任务边界为准。
-- 在设计、计划或行为实现前，优先通过仓库证据明确目标、现状、范围、规则、角色/权限、边界异常、可测试
-  AC、风险、选定方案、验证和回滚约束；检查结果直接服务于当前任务，不要求用户另行确认检查完成。
-- 新需求必须先澄清用户/场景、业务目标、主流程、业务规则、权限角色、边界异常、多端差异和可测试 AC。
-- 现有功能迭代必须先说明入口与现状、当前实现链路、新增/修改/删除点、兼容影响和风险。
-- Bug/异常必须先复述现象与影响，提出至少两个候选根因，验证后才能把根因写成事实；未验证根因只能标注为假设。
-- 所有假设必须列出；只有会实质改变方案、范围、验收、权限、数据或回滚且无法从仓库取证的高风险未知项才询问用户，低风险假设采用高置信度默认方案、记录后继续。
-- 提问前必须先完成可只读取证，不得询问可从 AGENTS、docs、代码、测试或日志中查到的问题；确需提问时，每轮只问一个最高影响问题并附高置信度推荐。
+- 不要自行执行 git commit/push/merge/revert 等修改历史或远端动作，除非用户明确要求；
+- 读取当前目录下所有的 AGENTS.md；
+- 输出 docs、任务文档、设计文档和注释使用简体中文；
 
 ## Docs memory
 
-- 通过任务编号、任务名称、用户描述、模块名或关键词定位任务时，必须优先回溯当前目录 /docs 中最新、最完整、最相关的主任务文档，而不是只依赖用户当前提示词片段。
-- 若 /docs 有多个相关文档，说明采用哪个作为主依据；未找到则说明“未在 /docs 发现相关任务记忆”。
-- 非琐碎任务必须把调研、设计、实现、验证、风险、回滚和用户决策沉淀到 docs；已有任务文档优先续写。
+- 输出内容沉淀到当前目录的 `/docs`，不存在则创建该目录；已有任务文档优先续写。
 - 用户提供任务编号时，文档命名为 docs/任务编号_任务描述.md；未提供时命名为 docs/TASK_YYYYMMDD_XXX_任务描述.md，XXX 为当天递增编号。
 
 ## Skill routing
 
-- Skills 只提供任务方法和质量检查，不授予或撤销开发权限，也不得新增阶段授权、阶段完成确认或其他人机交接步骤；skill
-  切换本身不得成为暂停任务并索要许可的理由。
-- 除 Bug/异常/测试失败的前置取证外，新需求、行为变更、复杂设计与领域语义澄清必须使用 `grilling` + `domain-modeling`
-  ，其组合语义等价于 `grill-with-docs`；已确定结论直接供后续设计、计划和实现复用。
-- 需求、方案、行为变更、复杂设计必须使用 `superpowers:brainstorming` 进行方案比较与设计综合；必须复用 grilling
-  已确定结论，不得重复追问已解决事项。
-- Bug、异常、测试失败：必须先使用 `superpowers:systematic-debugging` 完成可取证事实和候选根因验证，再由 grilling
-  处理仅能由用户决策的未知项。
-- 使用 `domain-modeling` 时，只将稳定、可复用且不含实现细节的领域语义写入 `CONTEXT.md`，只为同时满足难回退、非直观、存在真实权衡三个条件的架构决策写
-  ADR；当次调研、AC、方案、验证与回滚仍写入 `docs/TASK_*.md`。
-- 复杂实现计划、架构调整、重要重构：必须使用 superpowers:writing-plans。
-- 代码实现或修复：必须使用 superpowers:test-driven-development。
-- 使用 superpowers:using-git-worktrees 时，默认只能做现有隔离状态与当前工作区可见性检查；不得仅因 feature
-  work、implementation plan 或该 skill 自身建议而主动询问、创建、切换 worktree / 隔离工作区。只有用户本轮明确要求或确认
-  worktree / 隔离目录时才允许创建或进入；否则必须在当前工作区确认 cwd、git root、关键源码存在和 git status 后继续。
-- 每次开发任务完成后、进入下一任务或收尾声明前：必须使用 superpowers:requesting-code-review；review
-  请求必须纳入本次需求/计划、变更范围、验证证据，并要求 reviewer 读取且遵守当前项目 AGENTS.md、各受影响子仓 AGENTS.md
-  及相关上级规约。
-- 开发、review 和 verification 前必须先定位真实 Git 工作区；若当前目录不是 Git 仓，或父级目录下存在多个子 Git
-  仓/子模块，必须逐个受影响子仓收集 cwd、branch、status、diff/暂存 diff 和验证命令，禁止只用父目录的 git status、单一 SHA
-  区间或聚合仓 clean 状态下结论。
-- 使用 superpowers:subagent-driven-development、superpowers:requesting-code-review 或任何会派发 subagent/reviewer/fixer 的
-  skill 时，默认不得显式指定 `model` 或 `reasoning_effort`
-  ，必须继承主会话当前模型与推理强度；只有用户明确要求切换，或任务失败后需升级并获用户确认时，才允许覆盖。不得为省成本/速度降级到低级模型，也不得读取配置文件替代当前会话设置。
-- 收尾声明前：必须使用 superpowers:verification-before-completion。
-- 命中下方 `Vibe / HTML trigger matrix` 时，必须使用 vibe-diagram；未命中且属于纯概念、翻译改写、一句话答案、简单命令、安装升级说明、轻量决策或用户明确不要图时，默认简洁文本。
-- 前端页面、组件、布局、样式、交互：必须使用 frontend-skill + impeccable + accessibility；产品设计/视觉探索类才按需路由到
-  Product Design。
-- 产品体验、UX 研究、用户流程审计、视觉方向探索、原型/重设计/URL 克隆、截图/Figma/ImageGen 到可交互原型、原型视觉 QA：若当前环境已提供
-  OpenAI Product Design，则按需使用并遵守其 brief/visual-target 门禁；缺失时回退，不自动安装。
-- 高级视觉、记忆点、沉浸式体验：必须使用 premium-frontend-ui。
-- 滚动叙事、页面转场、视差、连续动效：必须使用 gsap-framer-scroll-animation，并提供 reduced-motion 降级。
+- 命中下方 `Vibe / HTML trigger matrix` 时，必须使用 vibe-diagram；
 
 ## Vibe / HTML trigger matrix
 
@@ -70,23 +22,4 @@
 - 不触发：一个短句即可讲清的定义、翻译改写、简单命令、安装升级、轻量取舍，或用户明确不要图。
 - 命中后优先生成/更新项目内单文件 HTML；分析、证据、风险、回滚和测试矩阵写入 HTML 或 docs；聊天只给链接/路径和下一步，链接文字使用
   HTML 内部 `<h1>`。
-
-## Work contract
-
-- 先理解目标和现状，再选择技能；不要把需求清单直接翻译成实现。
-- 代码修改只改源码、测试、docs 和必要规约文件；保持仓库整洁，不留临时产物、无用文件或无用代码。
-- 任何新增依赖、改构建、改 CI、数据库迁移、权限模型变化都视为高风险，必须先说明收益、成本、风险与回滚，并征得确认。
-- 任何 Bug 修复与需求开发必须修改源码实现；不要把运行产物、构建产物或 patch 临时修改当作交付结果。
-- develop 必须优先写可复现测试；没有可自动化测试时，必须说明原因并给出可执行验证步骤。
-
-## HTML / visual delivery contract
-
 - HTML 触发、内容承载和聊天信封以 `Vibe / HTML trigger matrix` 为准；Codex 默认给可点击 `file://` 链接和绝对路径兜底。
-- 如果当前环境无法写入 HTML，才允许在聊天里输出完整 HTML 代码块，并说明无法写文件。
-
-## Visual and frontend contract
-
-- AGENTS 只判断何时触发；具体制图规则以 vibe-diagram 为准。不要因为用户没显式说“画图”，就把具体运行现象、故障成因、代码逻辑链路或证据链追问退回聊天长文。
-- 前端任务必须明确唯一核心目标、用户主路径、首层展示和收纳内容；视觉、交互、响应式、可访问性细节以
-  frontend-skill、impeccable、accessibility 为准。
-- 前端页面禁止卡片堆叠、不能功能平铺、不能重复废话标题；宁可多一层交互递进，也不要把所有功能塞进同一屏。

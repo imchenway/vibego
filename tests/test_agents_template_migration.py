@@ -1,12 +1,6 @@
 """AGENTS 模板文件名迁移测试。"""
 
-import os
 from pathlib import Path
-
-os.environ.setdefault("BOT_TOKEN", "TEST_TOKEN")
-
-import bot
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,24 +11,16 @@ def _read_text(rel_path: str) -> str:
     return (ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def test_enforced_notice_keeps_user_requirement_header() -> None:
-    """强制规约文案应保留用户需求分隔头。"""
+def test_telegram_prompt_prefix_runtime_contract_is_removed() -> None:
+    """worker 运行时代码不得再定义或注入 Telegram 入模前缀。"""
 
-    assert "以下是用户需求描述：" in bot.ENFORCED_AGENTS_NOTICE
-    assert "当前根目录 AGENTS-template.md" not in bot.ENFORCED_AGENTS_NOTICE
+    bot_text = _read_text("bot.py")
 
-
-def test_enforced_notice_adds_user_requirement_header_before_prompt() -> None:
-    """强制规约文案应在用户正文前标明 Telegram 来源与 HTML 附件口径。"""
-
-    injected = bot._prepend_enforced_agents_notice("pwd")
-    lines = injected.splitlines()
-
-    assert lines[-4] == "以下是用户需求描述："
-    assert "请求来源：vibego Telegram worker / 移动端。" in lines[-3]
-    assert "不需要 PNG" in lines[-3]
-    assert lines[-2] == ""
-    assert lines[-1] == "pwd"
+    assert "ENFORCED_AGENTS_NOTICE" not in bot_text
+    assert "TELEGRAM_SOURCE_CONTEXT_NOTICE" not in bot_text
+    assert "_prepend_enforced_agents_notice" not in bot_text
+    assert "以下是用户需求描述：" not in bot_text
+    assert "请求来源：vibego Telegram worker / 移动端。" not in bot_text
 
 
 def test_shell_defaults_use_agents_template() -> None:

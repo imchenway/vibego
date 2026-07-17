@@ -456,7 +456,7 @@ def test_dispatch_prompt_retries_with_queue_for_copilot_when_user_prompt_not_con
 
     assert ok is True
     assert session_path == session_file
-    expected_prompt = bot._prepend_enforced_agents_notice("hello retry")
+    expected_prompt = "hello retry"
     assert send_calls == [(bot.TMUX_SESSION, expected_prompt)]
     assert queue_calls == [(bot.TMUX_SESSION, expected_prompt)]
 
@@ -501,7 +501,7 @@ def test_dispatch_prompt_does_not_retry_codex_when_jsonl_not_confirmed(monkeypat
 
     assert ok is True
     assert session_path == session_file
-    expected_prompt = bot._prepend_enforced_agents_notice("busy prompt")
+    expected_prompt = "busy prompt"
     assert send_calls == [(bot.TMUX_SESSION, expected_prompt)]
     assert queue_calls == []
     assert replies == []
@@ -547,7 +547,7 @@ def test_dispatch_prompt_reports_unconfirmed_after_retry_for_copilot(monkeypatch
 
     assert ok is False
     assert session_path is None
-    expected_prompt = bot._prepend_enforced_agents_notice("missing confirm")
+    expected_prompt = "missing confirm"
     assert send_calls == [(bot.TMUX_SESSION, expected_prompt)]
     assert queue_calls == [(bot.TMUX_SESSION, expected_prompt)]
     assert replies and "模型未确认收到" in replies[-1]

@@ -416,7 +416,7 @@ def test_dispatch_prompt_to_model_continues_when_session_ack_fails(monkeypatch: 
 
     asyncio.run(scenario())
 
-    assert sent_lines == [f"{bot.ENFORCED_AGENTS_NOTICE}\n{bot.TELEGRAM_SOURCE_CONTEXT_NOTICE}\n\npwd"]
+    assert sent_lines == ["pwd"]
     assert 3210 in bot.CHAT_WATCHERS
 
     for coro in created_tasks:
