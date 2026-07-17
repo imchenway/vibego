@@ -54,46 +54,16 @@ vibego start         # 启动 master 服务
 
 然后在 telegram 创建的 bot中点击`/statr`，enjoy it！
 
-### Codex Skill / Plugin 与 vibe-diagram
+### 同步 AGENTS 模板
 
-vibego 会随 `agents-sync` 同步内置 `vibe-diagram` skill；同时仓库也提供 `plugins/vibe-diagram`，可作为 Codex plugin / repo
-marketplace 分发给其他人使用。
-
-**触发边界**
-
-- `vibe-diagram` 只在明确要求画图、图形化、HTML 图，或答案需要说明一个实现对象如何在系统中产生、流转、转换并影响结果时自动使用。
-- 当问题需要呈现跨角色/模块的因果、时序、状态、数据、证据、前后差异或验收关系时，默认生成单文件 HTML 图。
-- “为什么 / 怎么做”按意图区分：概念解释、安装升级、轻量用法说明默认简洁文本；行为成因、故障成因和逻辑链路理解默认生成 HTML 图。
-- 若纯文本回答会退化成路径、函数、字段或证据 bullet 清单，必须改成图；不要把关键词堆成触发条件。
-- 只在一个短句即可讲清的定义、翻译改写、简单命令、轻量取舍或用户明确不要图时默认使用简洁文本。
-- HTML 顶部 tabs / role=tablist 只用于同一图型的多个候选布局；不得把追问、步骤、发布说明或普通章节导航追加成按钮。
-
-**本机同步 / 更新**
+升级后可显式同步 Vibego 管理的 AGENTS 区块：
 
 ```bash
 pipx upgrade vibego
 vibego agents-sync --json
 ```
 
-`agents-sync` 会更新 AGENTS 目标文件，并把内置 skill 同步到本机 native skill 目录（如 `~/.codex/skills/vibe-diagram` 与
-`~/.agents/skills/vibe-diagram`）。长期运行的 Codex / worker 若需要立即读取新 skill，建议重启对应进程。
-
-**通过 repo marketplace 安装 / 升级 plugin**
-
-```bash
-codex plugin marketplace add /path/to/vibego
-codex plugin add vibe-diagram@vibego
-```
-
-上游更新后，已安装用户需要手动刷新/重装：
-
-```bash
-codex plugin marketplace upgrade vibego
-codex plugin add vibe-diagram@vibego
-```
-
-> native skill 是本机能力目录；plugin 是 Codex 可安装/分发单位。Superpowers 这类能力通常以 plugin 分发，plugin 内部再包含多个
-> skills。`vibe-diagram` 同时支持本机 native skill 同步和 repo marketplace plugin 分发。
+当前发行包不携带内置 skill；`agents-sync` 在没有内置 skill 时仍会正常同步模板，并清理由上一版本管理、但当前版本已删除的 native skill 投影。
 
 ## 目录结构
 

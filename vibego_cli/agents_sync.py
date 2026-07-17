@@ -196,21 +196,25 @@ def _first_existing_file(candidates: list[Path], label: str) -> Path:
 
 
 def _first_existing_skills_dir(candidates: list[Path]) -> tuple[Path, list[Path]]:
-    """从候选路径中选择第一个包含 SKILL.md 的 skills 目录。"""
+    """选择首个存在的 skills 目录；没有内置 skill 也是合法状态。"""
 
-    checked: list[str] = []
+    first_existing: Path | None = None
     for candidate in candidates:
-        checked.append(str(candidate))
-        if not candidate.is_dir():
-            continue
-        skill_files = sorted(candidate.glob("*/SKILL.md"))
-        if skill_files:
-            return candidate, skill_files
-    raise AgentsSyncError(f"skills 目录不存在或未发现 SKILL.md，已检查：{'；'.join(checked)}")
+        if candidate.is_dir():
+            skill_files = sorted(candidate.glob("*/SKILL.md"))
+            if skill_files:
+                return candidate, skill_files
+            if first_existing is None:
+                first_existing = candidate
+    if first_existing is not None:
+        return first_existing, []
+    if not candidates:
+        raise AgentsSyncError("未配置 skills 目录候选路径")
+    return candidates[0], []
 
 
 def _validate_source_root(source_root: Path) -> tuple[Path, Path, list[Path]]:
-    """校验源目录必须同时包含模板与至少一个内置 skill。"""
+    """校验源目录必须包含模板，内置 skill 允许为空。"""
 
     template_file = _first_existing_file(_candidate_template_files(source_root), "AGENTS 模板")
     skills_dir, skill_files = _first_existing_skills_dir(_candidate_skills_dirs(source_root))
@@ -239,7 +243,7 @@ def render_builtin_skills(skills_dir: Path) -> str:
 
     skill_files = sorted(Path(skills_dir).expanduser().glob("*/SKILL.md"))
     if not skill_files:
-        raise AgentsSyncError(f"skills 目录未发现 SKILL.md：{skills_dir}")
+        return ""
 
     lines = [
         "# Vibego 内置 Skills",
@@ -283,7 +287,8 @@ def _render_managed_block(
     body = template_file.read_text(encoding="utf-8").rstrip()
     if include_skill_index:
         skills_block = render_builtin_skills(skills_dir)
-        body = body + "\n\n" + skills_block
+        if skills_block:
+            body = body + "\n\n" + skills_block
     return "\n".join(
         [
             VIBEGO_AGENTS_MARKER_START,
@@ -380,8 +385,6 @@ def validate_agents_override_root(override_root: Path) -> tuple[Path, Path]:
         raise AgentsSyncError(f"override AGENTS 模板不存在：{template_file}")
     if not skills_dir.is_dir():
         raise AgentsSyncError(f"override skills 目录不存在：{skills_dir}")
-    if not list(skills_dir.glob("*/SKILL.md")):
-        raise AgentsSyncError(f"override skills 目录未发现 SKILL.md：{skills_dir}")
     return template_file, skills_dir
 
 
@@ -430,21 +433,31 @@ def _replace_tree_atomically(source_dir: Path, target_dir: Path) -> None:
 def publish_native_skills(
     skills_dir: Path,
     targets: Mapping[str, Path],
+    *,
+    removed_skill_names: set[str] | None = None,
 ) -> dict[str, NativeSkillSyncStatus]:
-    """把内置 skills 发布到 Codex/agents native skill 目录。"""
+    """发布当前内置 skills，并清理由上一版 Vibego 管理但已移除的投影。"""
 
     skill_dirs = sorted(path for path in Path(skills_dir).expanduser().iterdir() if (path / "SKILL.md").is_file())
-    if not skill_dirs:
-        raise AgentsSyncError(f"native skills 源目录未发现 SKILL.md：{skills_dir}")
+    removed_skill_names = removed_skill_names or set()
 
     statuses: dict[str, NativeSkillSyncStatus] = {}
     for key, target_root in targets.items():
         target_root = Path(target_root).expanduser()
+        cleaned = False
+        for skill_name in sorted(removed_skill_names):
+            stale_target = target_root / skill_name
+            if stale_target.is_symlink() or stale_target.is_file():
+                stale_target.unlink()
+                cleaned = True
+            elif stale_target.is_dir():
+                shutil.rmtree(stale_target)
+                cleaned = True
         for skill_dir in skill_dirs:
             _replace_tree_atomically(skill_dir, target_root / skill_dir.name)
         statuses[key] = NativeSkillSyncStatus(
             path=target_root,
-            status="updated",
+            status="updated" if skill_dirs else ("cleaned" if cleaned else "unchanged"),
             skill_count=len(skill_dirs),
         )
     return statuses
@@ -475,7 +488,11 @@ def _publish_override_copy(
     try:
         staging_root.mkdir(parents=True, exist_ok=True)
         shutil.copy2(template_file, staging_root / "AGENTS-template.md")
-        shutil.copytree(skills_dir, staging_root / "vibego_cli" / "data" / "skills")
+        staging_skills_dir = staging_root / "vibego_cli" / "data" / "skills"
+        if skills_dir.is_dir():
+            shutil.copytree(skills_dir, staging_skills_dir)
+        else:
+            staging_skills_dir.mkdir(parents=True)
         (staging_root / MANIFEST_NAME).write_text(
             json.dumps(
                 {
@@ -529,6 +546,11 @@ def sync_agents(
     target_map = dict(targets or default_agents_targets(config_root=config_root, env=env))
     native_skill_targets = default_native_skill_targets(env)
     synced_at = _utc_timestamp()
+    previous_skills_dir = config_root / "agents" / "current" / "vibego_cli" / "data" / "skills"
+    previous_skill_names = {
+        path.parent.name for path in previous_skills_dir.glob("*/SKILL.md")
+    }
+    current_skill_names = {path.parent.name for path in skill_files}
 
     override_root, override_template, override_skills_dir = _publish_override_copy(
         config_root=config_root,
@@ -540,7 +562,11 @@ def sync_agents(
         native_skill_targets=native_skill_targets,
         synced_at=synced_at,
     )
-    native_skill_statuses = publish_native_skills(override_skills_dir, native_skill_targets)
+    native_skill_statuses = publish_native_skills(
+        override_skills_dir,
+        native_skill_targets,
+        removed_skill_names=previous_skill_names - current_skill_names,
+    )
 
     block = _render_managed_block(
         template_file=override_template,

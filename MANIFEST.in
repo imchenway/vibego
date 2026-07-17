@@ -3,6 +3,5 @@ include AGENTS-template.md
 include AGENTS-en.md
 include scripts/requirements.txt
 recursive-include scripts *.sh *.py
-recursive-include vibego_cli/data/skills *
 recursive-include vibego_cli/data/wx-remote-debug *.cjs *.json
 recursive-include config *.example

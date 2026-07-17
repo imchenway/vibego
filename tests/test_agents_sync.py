@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,20 +19,27 @@ from vibego_cli.agents_sync import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _make_source_root(tmp_path: Path, *, template_text: str = "# 模板 v1\n") -> Path:
+def _make_source_root(
+    tmp_path: Path,
+    *,
+    template_text: str = "# 模板 v1\n",
+    skill_name: str | None = None,
+) -> Path:
     """构造最小 AGENTS 源目录，模拟仓库或新版安装包。"""
 
     source = tmp_path / "source"
-    skill_dir = source / "vibego_cli" / "data" / "skills" / "vibe-diagram"
-    references_dir = skill_dir / "references"
-    skill_dir.mkdir(parents=True)
-    references_dir.mkdir(parents=True)
+    skills_dir = source / "vibego_cli" / "data" / "skills"
+    skills_dir.mkdir(parents=True)
     (source / "AGENTS-template.md").write_text(template_text, encoding="utf-8")
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: vibe-diagram\ndescription: draw diagrams\n---\n\n# 图形协议\n",
-        encoding="utf-8",
-    )
-    (references_dir / "delivery-acceptance.md").write_text("# delivery reference\n", encoding="utf-8")
+    if skill_name:
+        skill_dir = skills_dir / skill_name
+        references_dir = skill_dir / "references"
+        references_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_name}\ndescription: sample capability\n---\n\n# 示例能力\n",
+            encoding="utf-8",
+        )
+        (references_dir / "example.md").write_text("# example reference\n", encoding="utf-8")
     return source
 
 
@@ -59,28 +67,14 @@ def test_sync_agents_writes_override_and_targets(tmp_path: Path) -> None:
     override_root = config_root / "agents" / "current"
     assert result.override_root == override_root
     assert (override_root / "AGENTS-template.md").read_text(encoding="utf-8") == "# 模板 v1\n"
-    assert (override_root / "vibego_cli" / "data" / "skills" / "vibe-diagram" / "SKILL.md").exists()
-    assert (
-        override_root
-        / "vibego_cli"
-        / "data"
-        / "skills"
-        / "vibe-diagram"
-        / "references"
-        / "delivery-acceptance.md"
-    ).exists()
-    assert (tmp_path / "home" / ".codex" / "skills" / "vibe-diagram" / "SKILL.md").exists()
-    assert (
-        tmp_path
-        / "home"
-        / ".codex"
-        / "skills"
-        / "vibe-diagram"
-        / "references"
-        / "delivery-acceptance.md"
-    ).exists()
-    assert (tmp_path / "home" / ".agents" / "skills" / "vibe-diagram" / "SKILL.md").exists()
+    override_skills_dir = override_root / "vibego_cli" / "data" / "skills"
+    assert override_skills_dir.is_dir()
+    assert list(override_skills_dir.iterdir()) == []
+    assert not (tmp_path / "home" / ".codex" / "skills").exists()
+    assert not (tmp_path / "home" / ".agents" / "skills").exists()
     assert set(result.native_skill_statuses.keys()) == {"codex", "agents"}
+    assert result.skill_count == 0
+    assert {status.status for status in result.native_skill_statuses.values()} == {"unchanged"}
     manifest = json.loads((override_root / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_root"] == str(source)
     assert manifest["template_file"] == str(override_root / "AGENTS-template.md")
@@ -94,16 +88,16 @@ def test_sync_agents_writes_override_and_targets(tmp_path: Path) -> None:
         assert "<!-- vibego-agents:end -->" in text
         assert "# 模板 v1" in text
         assert "# Vibego 内置 Skills" not in text
-        assert "## Skill: vibe-diagram" not in text
-        assert "description: draw diagrams" not in text
+        assert "## Skill: sample-skill" not in text
+        assert "description: sample capability" not in text
         assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" not in text
-        assert "# 图形协议" not in text
+        assert "# 示例能力" not in text
 
 
 def test_sync_agents_can_render_legacy_skill_index_when_enabled(tmp_path: Path) -> None:
     """显式 legacy 开关打开时，仍可写入旧 AGENTS skill 索引。"""
 
-    source = _make_source_root(tmp_path)
+    source = _make_source_root(tmp_path, skill_name="sample-skill")
     config_root = tmp_path / "config"
     targets = _make_targets(tmp_path)
     env = {
@@ -116,10 +110,33 @@ def test_sync_agents_can_render_legacy_skill_index_when_enabled(tmp_path: Path) 
     for target in targets.values():
         text = target.read_text(encoding="utf-8")
         assert "# Vibego 内置 Skills" in text
-        assert "## Skill: vibe-diagram" in text
-        assert "description: draw diagrams" in text
+        assert "## Skill: sample-skill" in text
+        assert "description: sample capability" in text
         assert "命中该 skill 时，先读取上方 vibego-skill-source 指向的 SKILL.md 全文" in text
-        assert "# 图形协议" not in text
+        assert "# 示例能力" not in text
+
+
+def test_sync_agents_removes_native_skill_that_was_removed_from_source(tmp_path: Path) -> None:
+    """源目录删除曾由 Vibego 管理的 skill 后，同步应清理其 native 投影。"""
+
+    source = _make_source_root(tmp_path, skill_name="sample-skill")
+    config_root = tmp_path / "config"
+    targets = _make_targets(tmp_path)
+    env = {"HOME": str(tmp_path / "home")}
+
+    sync_agents(source_root=source, config_root=config_root, targets=targets, env=env)
+    codex_skill = tmp_path / "home" / ".codex" / "skills" / "sample-skill"
+    agents_skill = tmp_path / "home" / ".agents" / "skills" / "sample-skill"
+    assert codex_skill.is_dir()
+    assert agents_skill.is_dir()
+
+    shutil.rmtree(source / "vibego_cli" / "data" / "skills" / "sample-skill")
+    result = sync_agents(source_root=source, config_root=config_root, targets=targets, env=env)
+
+    assert not codex_skill.exists()
+    assert not agents_skill.exists()
+    assert result.skill_count == 0
+    assert {status.status for status in result.native_skill_statuses.values()} == {"cleaned"}
 
 
 def test_sync_agents_preserves_user_content_and_replaces_managed_block(tmp_path: Path) -> None:
@@ -221,21 +238,51 @@ def test_default_global_commands_include_agents_sync_button() -> None:
 
 
 def test_sync_agents_reads_template_from_pipx_venv_root_when_package_root_lacks_data_file(tmp_path: Path) -> None:
-    """pipx 安装形态下，模板在 venv 根目录，skills 在 site-packages，应按脚本旧兜底成功同步。"""
+    """pipx 安装形态下即使不含内置 skill，也应按 venv 根目录模板完成同步。"""
 
     venv_root = tmp_path / "pipx" / "venvs" / "vibego"
     package_root = venv_root / "lib" / "python3.11" / "site-packages"
-    skills_dir = package_root / "vibego_cli" / "data" / "skills" / "vibe-diagram"
-    skills_dir.mkdir(parents=True)
+    package_root.mkdir(parents=True)
     (venv_root / "AGENTS-template.md").write_text("# pipx venv 模板\n", encoding="utf-8")
-    (skills_dir / "SKILL.md").write_text(
-        "---\nname: vibe-diagram\ndescription: draw\n---\n\n# skill\n",
-        encoding="utf-8",
-    )
     targets = {"vibego": tmp_path / "config" / "AGENTS.md"}
 
     result = sync_agents(source_root=package_root, config_root=tmp_path / "config", targets=targets)
 
     assert result.source_root == package_root.resolve()
+    assert result.skill_count == 0
     assert "pipx venv 模板" in targets["vibego"].read_text(encoding="utf-8")
     assert (result.override_root / "AGENTS-template.md").read_text(encoding="utf-8") == "# pipx venv 模板\n"
+
+
+def test_sync_agents_prefers_packaged_skills_over_empty_source_directory(tmp_path: Path) -> None:
+    """源码候选为空时，仍应继续查找 pipx/site-packages 中实际存在的 skill。"""
+
+    venv_root = tmp_path / "pipx" / "venvs" / "vibego"
+    (venv_root / "vibego_cli" / "data" / "skills").mkdir(parents=True)
+    packaged_skill = (
+        venv_root
+        / "lib"
+        / "python3.11"
+        / "site-packages"
+        / "vibego_cli"
+        / "data"
+        / "skills"
+        / "sample-skill"
+    )
+    packaged_skill.mkdir(parents=True)
+    (packaged_skill / "SKILL.md").write_text(
+        "---\nname: sample-skill\ndescription: sample capability\n---\n",
+        encoding="utf-8",
+    )
+    (venv_root / "AGENTS-template.md").write_text("# pipx venv 模板\n", encoding="utf-8")
+    env = {"HOME": str(tmp_path / "home")}
+
+    result = sync_agents(
+        source_root=venv_root,
+        config_root=tmp_path / "config",
+        targets={"vibego": tmp_path / "config" / "AGENTS.md"},
+        env=env,
+    )
+
+    assert result.skill_count == 1
+    assert (tmp_path / "home" / ".codex" / "skills" / "sample-skill" / "SKILL.md").is_file()

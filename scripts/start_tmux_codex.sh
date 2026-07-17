@@ -119,12 +119,6 @@ select_agents_template_file() {
       echo "[$prefix] AGENTS override 损坏: $override_root" >&2
       exit 1
     fi
-    local skill_probe=""
-    skill_probe="$(find "$override_skills_dir" -mindepth 2 -maxdepth 2 -name SKILL.md -print -quit 2>/dev/null || true)"
-    if [[ -z "$skill_probe" ]]; then
-      echo "[$prefix] AGENTS override 损坏: $override_skills_dir 缺少 SKILL.md" >&2
-      exit 1
-    fi
     export VIBEGO_BUILTIN_SKILLS_DIR="$override_skills_dir"
     printf '%s' "$override_template"
     return 0

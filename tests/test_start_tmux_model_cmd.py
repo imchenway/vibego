@@ -209,6 +209,7 @@ def test_start_tmux_prefers_agents_override_when_manifest_exists() -> None:
     assert "manifest.json" in script_text
     assert "VIBEGO_BUILTIN_SKILLS_DIR" in script_text
     assert "AGENTS override 损坏" in script_text
+    assert "缺少 SKILL.md" not in script_text
 
 
 def test_run_bot_prefers_agents_override_when_manifest_exists() -> None:
@@ -220,3 +221,4 @@ def test_run_bot_prefers_agents_override_when_manifest_exists() -> None:
     assert "manifest.json" in run_bot_text
     assert "VIBEGO_BUILTIN_SKILLS_DIR" in run_bot_text
     assert "AGENTS override 损坏" in run_bot_text
+    assert "缺少 SKILL.md" not in run_bot_text
