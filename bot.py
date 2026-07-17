@@ -6103,6 +6103,7 @@ WX_AUTO_PREVIEW_COMMAND_NAME = "wx-auto-preview"
 WX_REMOTE_DEBUG_COMMAND_NAME = "wx-remote-debug"
 WX_UPLOAD_COMMAND_NAME = "wx-dev-upload"
 WX_DEVTOOLS_AUTO_PORT_RETRY_ENV = "WX_DEVTOOLS_AUTO_PORT_RETRY"
+WX_DEVTOOLS_SCRIPT_PORT_RETRY_MARKER = "VIBEGO_WX_PORT_RETRY_USED=1"
 WX_PREVIEW_CHOICE_PREFIX = "wxpreview:choose:"
 WX_PREVIEW_CANCEL = "wxpreview:cancel"
 WX_PREVIEW_PORT_USE_PREFIX = "wxpreview:port_use:"
@@ -7275,6 +7276,8 @@ def _select_wx_devtools_auto_retry_port(
     """按高置信规则选择自动重试端口；无法安全判断时返回 None。"""
 
     if not _is_wx_preview_auto_flow_command(command.name):
+        return None, None
+    if WX_DEVTOOLS_SCRIPT_PORT_RETRY_MARKER in (stderr_text or ""):
         return None, None
     if _wx_devtools_auto_retry_already_used(command):
         return None, None

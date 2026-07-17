@@ -205,6 +205,158 @@ print(str(port))
 PY
 }
 
+WX_PORT_RETRY_MARKER="VIBEGO_WX_PORT_RETRY_USED=1"
+WX_PORT_RETRY_USED=0
+
+# 仅接受微信 CLI 明确给出的“当前端口 + 本次请求端口”不匹配证据。
+_parse_wx_devtools_port_mismatch() {
+  local log_file="$1"
+  local requested_port="$2"
+  [[ -n "${PYTHON_BIN:-}" && -f "$log_file" ]] || return 1
+
+  "$PYTHON_BIN" - "$log_file" "$requested_port" <<'PY' 2>/dev/null
+import re
+import sys
+
+log_path = sys.argv[1]
+requested_raw = sys.argv[2]
+try:
+    requested = int(requested_raw)
+    text = open(log_path, "r", encoding="utf-8", errors="replace").read()
+except (OSError, TypeError, ValueError):
+    raise SystemExit(1)
+
+match = re.search(
+    r"IDE server has started on https?://[^:\s]+:(\d+)\s+and must be restarted on port\s+(\d+)\s+first",
+    text,
+    flags=re.IGNORECASE,
+)
+if not match:
+    raise SystemExit(1)
+
+current = int(match.group(1))
+expected = int(match.group(2))
+if not (1 <= current <= 65535 and 1 <= expected <= 65535):
+    raise SystemExit(1)
+if expected != requested or current == requested:
+    raise SystemExit(1)
+print(current)
+PY
+}
+
+# 更新当前项目的路径映射；项目名缺失时仅在旧端口唯一对应一个项目键时同步更新。
+_upsert_wx_devtools_port_mapping() {
+  local ports_file="$1"
+  local project_slug="$2"
+  local project_root="$3"
+  local previous_port="$4"
+  local current_port="$5"
+  [[ -n "${PYTHON_BIN:-}" ]] || return 1
+
+  "$PYTHON_BIN" - "$ports_file" "$project_slug" "$project_root" "$previous_port" "$current_port" <<'PY'
+import json
+import os
+import stat
+import sys
+import tempfile
+
+ports_file, project_slug, project_root, previous_raw, current_raw = sys.argv[1:]
+previous_port = int(previous_raw)
+current_port = int(current_raw)
+
+with open(ports_file, "r", encoding="utf-8") as handle:
+    raw = json.load(handle)
+if not isinstance(raw, dict):
+    raise ValueError("端口映射根节点必须是对象")
+
+if "projects" in raw or "paths" in raw:
+    projects = raw.get("projects") if isinstance(raw.get("projects"), dict) else {}
+    paths = raw.get("paths") if isinstance(raw.get("paths"), dict) else {}
+else:
+    projects = dict(raw)
+    paths = {}
+    raw = {"projects": projects, "paths": paths}
+raw["projects"] = projects
+raw["paths"] = paths
+
+resolved_root = os.path.realpath(os.path.expanduser(project_root))
+paths[resolved_root] = current_port
+
+if project_slug:
+    projects[project_slug] = current_port
+else:
+    matching_keys = []
+    for key, value in projects.items():
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            continue
+        if normalized == previous_port:
+            matching_keys.append(key)
+    if len(matching_keys) == 1:
+        projects[matching_keys[0]] = current_port
+
+parent = os.path.dirname(os.path.abspath(ports_file))
+mode = stat.S_IMODE(os.stat(ports_file).st_mode)
+fd, temp_path = tempfile.mkstemp(prefix=".wx-devtools-ports-", suffix=".json", dir=parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(raw, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temp_path, mode)
+    os.replace(temp_path, ports_file)
+except Exception:
+    try:
+        os.unlink(temp_path)
+    except OSError:
+        pass
+    raise
+PY
+}
+
+# 执行微信 CLI；端口不匹配时使用 CLI 明确报告的当前端口且最多重试一次。
+# 调用方不要传 --port，本函数统一附加当前 PORT。
+_run_wx_cli_with_port_recovery() {
+  local log_file="$1"
+  shift
+  local requested_port="$PORT"
+  local current_port=""
+  local status=0
+
+  "$CLI_BIN" "$@" --port "$requested_port" >"$log_file" 2>&1
+  status=$?
+  if [[ $status -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "${WX_DEVTOOLS_AUTO_PORT_RETRY:-0}" == "1" || "$WX_PORT_RETRY_USED" == "1" ]]; then
+    return "$status"
+  fi
+
+  current_port="$(_parse_wx_devtools_port_mismatch "$log_file" "$requested_port" 2>/dev/null || true)"
+  if [[ -z "$current_port" ]]; then
+    return "$status"
+  fi
+
+  WX_PORT_RETRY_USED=1
+  echo "$WX_PORT_RETRY_MARKER" >&2
+  echo "[信息] 检测到微信开发者工具 IDE 服务端口漂移：${requested_port} -> ${current_port}，自动重试 1 次。" >&2
+
+  local ports_file="${WX_DEVTOOLS_PORTS_FILE:-$(_default_wx_devtools_ports_file)}"
+  local project_slug="${PROJECT_NAME:-${PROJECT_SLUG:-}}"
+  if ! _upsert_wx_devtools_port_mapping \
+    "$ports_file" "$project_slug" "$RESOLVED_PROJECT_PATH" "$requested_port" "$current_port"; then
+    echo "[警告] 微信开发者工具端口映射写入失败：$ports_file；仅本次使用端口 ${current_port} 重试。" >&2
+  else
+    echo "[信息] 已更新微信开发者工具端口映射：$ports_file" >&2
+  fi
+
+  PORT="$current_port"
+  "$CLI_BIN" "$@" --port "$PORT" >"$log_file" 2>&1
+  return $?
+}
+
 # 根据当前/模型工作目录自动探测小程序根目录（含 app.json 或 project.config.json）
 _resolve_project_path() {
   local base="$PROJECT_BASE"
@@ -430,14 +582,13 @@ if [[ "$WX_PREVIEW_ACTION" == "auto-preview" ]]; then
   rm -f "$AUTO_PREVIEW_CHECK_QR"
   set +e
   pushd "$RESOLVED_PROJECT_PATH" >/dev/null
-  "$CLI_BIN" preview \
+  _run_wx_cli_with_port_recovery "$PREVIEW_CHECK_LOG" preview \
     --project "$RESOLVED_PROJECT_PATH" \
     --upload-version "$VERSION" \
     --qr-format image \
     --qr-output "$AUTO_PREVIEW_CHECK_QR" \
     --compile-condition '{}' \
-    --robot 1 \
-    --port "$PORT" >"$PREVIEW_CHECK_LOG" 2>&1
+    --robot 1
   PREVIEW_CHECK_STATUS=$?
   popd >/dev/null
   set -e
@@ -459,10 +610,9 @@ if [[ "$WX_PREVIEW_ACTION" == "auto-preview" ]]; then
   CLI_LOG="$(mktemp -t wx-auto-preview-cli)"
   set +e
   pushd "$RESOLVED_PROJECT_PATH" >/dev/null
-  "$CLI_BIN" auto-preview \
+  _run_wx_cli_with_port_recovery "$CLI_LOG" auto-preview \
     --project "$RESOLVED_PROJECT_PATH" \
-    --info-output "$AUTO_PREVIEW_INFO_OUTPUT" \
-    --port "$PORT" >"$CLI_LOG" 2>&1
+    --info-output "$AUTO_PREVIEW_INFO_OUTPUT"
   CLI_STATUS=$?
   popd >/dev/null
   set -e
@@ -501,14 +651,13 @@ echo "[信息] 生成预览，项目：${RESOLVED_PROJECT_PATH}，版本：${VER
 CLI_LOG="$(mktemp -t wx-preview-cli)"
 set +e
 pushd "$RESOLVED_PROJECT_PATH" >/dev/null
-"$CLI_BIN" preview \
+_run_wx_cli_with_port_recovery "$CLI_LOG" preview \
   --project "$RESOLVED_PROJECT_PATH" \
   --upload-version "$VERSION" \
   --qr-format image \
   --qr-output "$OUTPUT_QR" \
   --compile-condition '{}' \
-  --robot 1 \
-  --port "$PORT" >"$CLI_LOG" 2>&1
+  --robot 1
 CLI_STATUS=$?
 popd >/dev/null
 set -e

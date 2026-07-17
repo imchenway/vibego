@@ -623,3 +623,15 @@ def test_select_wx_remote_debug_auto_retry_port_uses_existing_recovery_rules(tmp
         34724,
         "端口不匹配，已自动改用 IDE 当前端口",
     )
+
+
+def test_select_wx_preview_auto_retry_port_skips_when_script_already_retried(tmp_path: Path):
+    command = _build_project_preview_command(tmp_path)
+    stderr = "\n".join(
+        [
+            "VIBEGO_WX_PORT_RETRY_USED=1",
+            "IDE server has started on http://127.0.0.1:34724 and must be restarted on port 64701 first",
+        ]
+    )
+
+    assert bot._select_wx_devtools_auto_retry_port(command, 255, stderr) == (None, None)

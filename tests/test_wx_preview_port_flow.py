@@ -512,6 +512,196 @@ def test_gen_preview_normalizes_symlink_output_dir(tmp_path: Path) -> None:
     assert output_capture_file.read_text(encoding="utf-8") == str((real_output_dir / "qr.jpg").resolve())
 
 
+def _run_gen_preview_port_drift_case(
+    tmp_path: Path,
+    *,
+    behavior: str,
+    make_config_unwritable: bool = False,
+) -> tuple[subprocess.CompletedProcess[bytes], Path, Path, Path]:
+    bash_bin = shutil.which("bash")
+    if bash_bin is None:
+        pytest.skip("未检测到 bash")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "gen_preview.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls_file = tmp_path / "calls.txt"
+
+    fake_cli = bin_dir / "fake-wx-cli-port-drift"
+    fake_cli.write_text(
+        dedent(
+            """\
+            #!/bin/bash
+            set -euo pipefail
+
+            output=""
+            port=""
+            while [[ $# -gt 0 ]]; do
+              case "$1" in
+                --qr-output)
+                  output="$2"
+                  shift 2
+                  ;;
+                --port)
+                  port="$2"
+                  shift 2
+                  ;;
+                *)
+                  shift
+                  ;;
+              esac
+            done
+            printf '%s\n' "$port" >> "${FAKE_WX_CLI_CALLS_FILE:?}"
+
+            case "${FAKE_WX_CLI_BEHAVIOR:?}" in
+              success_after_mismatch)
+                if [[ "$port" == "39198" ]]; then
+                  echo "✖ IDE server has started on http://127.0.0.1:11620 and must be restarted on port 39198 first" >&2
+                  exit 255
+                fi
+                ;;
+              always_mismatch)
+                echo "✖ IDE server has started on http://127.0.0.1:11620 and must be restarted on port ${port} first" >&2
+                exit 255
+                ;;
+              unrecognized)
+                echo "initialize failed for unknown reason" >&2
+                exit 255
+                ;;
+              invalid_mismatch)
+                echo "IDE server has started on http://127.0.0.1:70000 and must be restarted on port 39198 first" >&2
+                exit 255
+                ;;
+              different_requested_port)
+                echo "IDE server has started on http://127.0.0.1:11620 and must be restarted on port 49011 first" >&2
+                exit 255
+                ;;
+            esac
+
+            mkdir -p "$(dirname "$output")"
+            printf 'fake-jpg' > "$output"
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_cli.chmod(0o755)
+
+    project_root = tmp_path / "mini"
+    project_root.mkdir()
+    (project_root / "app.json").write_text("{}", encoding="utf-8")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    ports_file = config_dir / "wx_devtools_ports.json"
+    ports_file.write_text(
+        json.dumps(
+            {
+                "projects": {"fawnstudio": 39198, "unrelated": 45462},
+                "paths": {str(project_root.resolve()): 39198, "/tmp/unrelated": 45462},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    output_qr = tmp_path / "output" / "qr.jpg"
+
+    env = os.environ.copy()
+    env["CLI_BIN"] = str(fake_cli)
+    env["PYTHON_BIN"] = sys.executable
+    env["PROJECT_PATH"] = str(project_root)
+    env["PROJECT_BASE"] = str(project_root)
+    env["OUTPUT_QR"] = str(output_qr)
+    env["WX_DEVTOOLS_PORTS_FILE"] = str(ports_file)
+    env["FAKE_WX_CLI_CALLS_FILE"] = str(calls_file)
+    env["FAKE_WX_CLI_BEHAVIOR"] = behavior
+    env.pop("PORT", None)
+    env.pop("PROJECT_NAME", None)
+    env.pop("PROJECT_SLUG", None)
+
+    if make_config_unwritable:
+        config_dir.chmod(0o500)
+    try:
+        proc = subprocess.run(
+            [bash_bin, str(script_path)],
+            check=False,
+            capture_output=True,
+            env=env,
+            cwd=str(tmp_path),
+        )
+    finally:
+        if make_config_unwritable:
+            config_dir.chmod(0o700)
+    return proc, calls_file, ports_file, output_qr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-preview 脚本依赖 bash/Posix 环境")
+def test_gen_preview_recovers_from_port_drift_once_and_updates_mapping(tmp_path: Path) -> None:
+    proc, calls_file, ports_file, output_qr = _run_gen_preview_port_drift_case(
+        tmp_path,
+        behavior="success_after_mismatch",
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    assert proc.returncode == 0, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert calls_file.read_text(encoding="utf-8").splitlines() == ["39198", "11620"]
+    assert output_qr.is_file()
+    assert "VIBEGO_WX_PORT_RETRY_USED=1" in stderr
+    mapping = json.loads(ports_file.read_text(encoding="utf-8"))
+    assert mapping["paths"][str((tmp_path / "mini").resolve())] == 11620
+    assert mapping["projects"]["fawnstudio"] == 11620
+    assert mapping["projects"]["unrelated"] == 45462
+    assert mapping["paths"]["/tmp/unrelated"] == 45462
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-preview 脚本依赖 bash/Posix 环境")
+def test_gen_preview_port_drift_retry_is_limited_to_one(tmp_path: Path) -> None:
+    proc, calls_file, _ports_file, output_qr = _run_gen_preview_port_drift_case(
+        tmp_path,
+        behavior="always_mismatch",
+    )
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    assert proc.returncode == 255
+    assert calls_file.read_text(encoding="utf-8").splitlines() == ["39198", "11620"]
+    assert not output_qr.exists()
+    assert stderr.count("VIBEGO_WX_PORT_RETRY_USED=1") == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-preview 脚本依赖 bash/Posix 环境")
+@pytest.mark.parametrize("behavior", ["unrecognized", "invalid_mismatch", "different_requested_port"])
+def test_gen_preview_does_not_retry_untrusted_cli_error(tmp_path: Path, behavior: str) -> None:
+    proc, calls_file, ports_file, output_qr = _run_gen_preview_port_drift_case(
+        tmp_path,
+        behavior=behavior,
+    )
+
+    assert proc.returncode == 255
+    assert calls_file.read_text(encoding="utf-8").splitlines() == ["39198"]
+    assert not output_qr.exists()
+    mapping = json.loads(ports_file.read_text(encoding="utf-8"))
+    assert mapping["projects"]["fawnstudio"] == 39198
+
+
+@pytest.mark.skipif(os.name != "posix", reason="wx-dev-preview 脚本依赖 bash/Posix 环境")
+def test_gen_preview_retries_when_port_mapping_write_fails(tmp_path: Path) -> None:
+    proc, calls_file, ports_file, output_qr = _run_gen_preview_port_drift_case(
+        tmp_path,
+        behavior="success_after_mismatch",
+        make_config_unwritable=True,
+    )
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    assert proc.returncode == 0, f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+    assert calls_file.read_text(encoding="utf-8").splitlines() == ["39198", "11620"]
+    assert output_qr.is_file()
+    assert "端口映射写入失败" in stderr
+    mapping = json.loads(ports_file.read_text(encoding="utf-8"))
+    assert mapping["projects"]["fawnstudio"] == 39198
+
+
 @pytest.mark.skipif(os.name != "posix", reason="wx-auto-preview 脚本依赖 bash/Posix 环境")
 def test_gen_preview_auto_preview_mode_uses_auto_preview_without_qr(tmp_path: Path) -> None:
     """手机自动预览模式应调用 CLI auto-preview，不生成二维码回传标记。"""
