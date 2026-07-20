@@ -60,7 +60,7 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
     TelegramForbiddenError,
 )
-from aiohttp import BasicAuth, ClientError
+from aiohttp import ClientError
 
 from logging_setup import create_logger
 from codex_trust import ensure_codex_project_trust
@@ -130,6 +130,13 @@ from parallel_runtime import (
     merge_parallel_repos,
     normalize_parallel_branch_prefix,
     prepare_parallel_workspace,
+)
+from telegram_proxy import (
+    TelegramProxyConfigError,
+    TelegramProxyDNSError,
+    configure_aiogram_session,
+    install_telegram_api_dns_override,
+    resolve_telegram_proxy,
 )
 
 # Python 3.10 才支持 dataclass slots，这里动态传参以兼容旧版本。
@@ -339,7 +346,6 @@ TMUX_SESSION = os.environ.get("TMUX_SESSION", "vibe")
 TMUX_LOG = os.environ.get("TMUX_LOG", str(Path(__file__).resolve().parent / "vibe.out.log"))
 IDLE_SECONDS = float(os.environ.get("IDLE_SECONDS", "3"))
 MAX_RETURN_CHARS = int(os.environ.get("MAX_RETURN_CHARS", "200000"))  # 超大文本转附件
-TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip()        # 可选代理 URL
 CODEX_WORKDIR = os.environ.get("CODEX_WORKDIR", "").strip()
 CODEX_SESSION_FILE_PATH = os.environ.get("CODEX_SESSION_FILE_PATH", "").strip()
 CODEX_CONFIG_PATH = Path(os.environ.get("CODEX_CONFIG_PATH", str(Path.home() / ".codex" / "config.toml"))).expanduser()
@@ -801,61 +807,29 @@ def _mask_proxy(url: str) -> str:
     return f"{parsed.scheme}://***:***@{host}{port}"
 
 
-def _detect_proxy() -> tuple[Optional[str], Optional[BasicAuth], Optional[str]]:
-    """优先使用 TELEGRAM_PROXY，否则回落到常见环境变量"""
-    candidates = [
-        ("TELEGRAM_PROXY", TELEGRAM_PROXY),
-        ("https_proxy", os.environ.get("https_proxy")),
-        ("HTTPS_PROXY", os.environ.get("HTTPS_PROXY")),
-        ("http_proxy", os.environ.get("http_proxy")),
-        ("HTTP_PROXY", os.environ.get("HTTP_PROXY")),
-        ("all_proxy", os.environ.get("all_proxy")),
-        ("ALL_PROXY", os.environ.get("ALL_PROXY")),
-    ]
+def _detect_proxy() -> tuple[Optional[str], None, Optional[str]]:
+    """解析 Telegram 专用代理；不继承终端 HTTP/HTTPS 代理。"""
 
-    proxy_raw: Optional[str] = None
-    source: Optional[str] = None
-    for key, value in candidates:
-        if value:
-            proxy_raw = value.strip()
-            source = key
-            break
-
+    resolved = resolve_telegram_proxy()
+    proxy_raw = resolved.url
     if not proxy_raw:
         return None, None, None
 
-    parsed = urlparse(proxy_raw)
-    auth: Optional[BasicAuth] = None
-    if parsed.username:
-        password = parsed.password or ""
-        auth = BasicAuth(parsed.username, password)
-        netloc = parsed.hostname or ""
-        if parsed.port:
-            netloc += f":{parsed.port}"
-        proxy_raw = parsed._replace(netloc=netloc, path="", params="", query="", fragment="").geturl()
-
-    worker_log.info("使用代理(%s): %s", source, _mask_proxy(proxy_raw))
-    return proxy_raw, auth, source
+    worker_log.info("使用代理(%s): %s", resolved.source, _mask_proxy(proxy_raw))
+    return proxy_raw, None, resolved.source
 
 # 统一以 IPv4 访问 Telegram，避免部分网络环境下 IPv6 连接被丢弃
 def build_bot() -> Bot:
     """按照网络环境与代理配置创建 aiogram Bot。"""
 
-    proxy_url, proxy_auth, _ = _detect_proxy()
+    proxy_url, _, _ = _detect_proxy()
     session_kwargs = {
         "proxy": proxy_url,
         "timeout": 60,
         "limit": 100,
     }
-    if proxy_auth is not None:
-        session_kwargs["proxy_auth"] = proxy_auth
-
     session = AiohttpSession(**session_kwargs)
-    # 内部 `_connector_init` 控制 TCPConnector 创建参数，此处强制 IPv4
-    session._connector_init.update({  # type: ignore[attr-defined]
-        "family": socket.AF_INET,
-        "ttl_dns_cache": 60,
-    })
+    configure_aiogram_session(session, proxy_url)
     return Bot(token=BOT_TOKEN, session=session)
 
 def current_bot() -> Bot:
@@ -27692,6 +27666,17 @@ async def main():
     global _bot, CHAT_LONG_POLL_LOCK
     # 初始化长轮询锁
     CHAT_LONG_POLL_LOCK = asyncio.Lock()
+    proxy_url, _, _ = _detect_proxy()
+    if proxy_url:
+        try:
+            resolved_ip = await install_telegram_api_dns_override(proxy_url)
+            if resolved_ip:
+                worker_log.info("Telegram Bot API 已启用 SOCKS5 受保护 DNS")
+        except TelegramProxyDNSError as exc:
+            worker_log.warning(
+                "Telegram Bot API 受保护 DNS 启用失败，将使用系统解析: %s",
+                exc,
+            )
     _bot = build_bot()
     connectivity_retry_task: Optional[asyncio.Task[None]] = None
     telegram_ready = True
@@ -27748,4 +27733,8 @@ async def main():
             await _bot.session.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except TelegramProxyConfigError as exc:
+        worker_log.error("Telegram 代理配置错误: %s", exc)
+        raise SystemExit(1) from exc

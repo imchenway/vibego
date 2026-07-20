@@ -30,6 +30,7 @@ from command_center import (
     resolve_global_command_db,
 )
 from project_repository import ProjectRepository
+from telegram_proxy import resolve_telegram_proxy
 
 
 TOKEN_PATTERN = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{20,}$")
@@ -303,7 +304,13 @@ def command_init(args: argparse.Namespace) -> None:
     env_values.setdefault("MASTER_WHITELIST", "")
     env_values["MASTER_CONFIG_ROOT"] = str(config.CONFIG_ROOT)
     env_values.setdefault("MASTER_ADMINS", "")
-    env_values.setdefault("TELEGRAM_PROXY", "")
+    telegram_proxy = getattr(args, "telegram_proxy", None)
+    if telegram_proxy is not None:
+        configured_proxy = telegram_proxy.strip()
+        resolve_telegram_proxy({"TELEGRAM_PROXY": configured_proxy})
+        env_values["TELEGRAM_PROXY"] = configured_proxy
+    else:
+        env_values.setdefault("TELEGRAM_PROXY", "")
 
     config.dump_env_file(config.ENV_FILE, env_values)
     _ensure_projects_assets()
@@ -709,6 +716,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="初始化配置目录与 master token")
     init_parser.add_argument("--token", help="直接传入 master bot token，避免交互输入")
+    init_parser.add_argument(
+        "--telegram-proxy",
+        help="Telegram 专用代理：system、完整 SOCKS/HTTP URL，或空值直连",
+    )
     init_parser.add_argument("--force", action="store_true", help="覆盖已有 .env 配置")
     init_parser.set_defaults(func=command_init)
 

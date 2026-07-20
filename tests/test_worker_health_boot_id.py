@@ -434,7 +434,7 @@ async def test_health_failure_log_tail_scoped_to_current_boot_id(
             [
                 stale_lines,
                 boot_token,
-                "2026-06-29 14:09:29 [INFO] [worker] [test] : 使用代理(https_proxy): http://127.0.0.1:6152",
+                "2026-06-29 14:09:29 [INFO] [worker] [test] : 使用代理(TELEGRAM_PROXY): socks5://127.0.0.1:19080",
                 "2026-06-29 14:09:59 [ERROR] [worker] [test] : Telegram 连通性检查失败：在 30.0 秒内未能与 Telegram 成功握手",
             ]
         ),

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiohttp import BasicAuth, ClientError
+from aiohttp import ClientError
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -86,6 +86,13 @@ from command_center import (
 from command_center.prompts import build_field_prompt_text
 from vibego_cli import __version__
 from vibego_cli.agents_sync import AgentsSyncError, sync_agents
+from telegram_proxy import (
+    TelegramProxyConfigError,
+    TelegramProxyDNSError,
+    configure_aiogram_session,
+    install_telegram_api_dns_override,
+    resolve_telegram_proxy,
+)
 
 try:
     from packaging.version import Version, InvalidVersion
@@ -1768,39 +1775,15 @@ async def _periodic_update_check(bot: Bot) -> None:
         await asyncio.sleep(int(UPDATE_CHECK_INTERVAL.total_seconds()))
 
 
-def _detect_proxy() -> Tuple[Optional[str], Optional[BasicAuth], Optional[str]]:
-    """从环境变量解析可用的代理配置。"""
+def _detect_proxy() -> Tuple[Optional[str], None, Optional[str]]:
+    """解析 Telegram 专用代理；不继承终端 HTTP/HTTPS 代理。"""
 
-    candidates = [
-        ("TELEGRAM_PROXY", os.environ.get("TELEGRAM_PROXY")),
-        ("https_proxy", os.environ.get("https_proxy")),
-        ("HTTPS_PROXY", os.environ.get("HTTPS_PROXY")),
-        ("http_proxy", os.environ.get("http_proxy")),
-        ("HTTP_PROXY", os.environ.get("HTTP_PROXY")),
-        ("all_proxy", os.environ.get("all_proxy")),
-        ("ALL_PROXY", os.environ.get("ALL_PROXY")),
-    ]
-    proxy_raw: Optional[str] = None
-    source: Optional[str] = None
-    for key, value in candidates:
-        if value:
-            proxy_raw = value.strip()
-            source = key
-            break
+    resolved = resolve_telegram_proxy()
+    proxy_raw = resolved.url
     if not proxy_raw:
         return None, None, None
-    from urllib.parse import urlparse
-    parsed = urlparse(proxy_raw)
-    auth: Optional[BasicAuth] = None
-    if parsed.username:
-        password = parsed.password or ""
-        auth = BasicAuth(parsed.username, password)
-        netloc = parsed.hostname or ""
-        if parsed.port:
-            netloc += f":{parsed.port}"
-        proxy_raw = parsed._replace(netloc=netloc, path="", params="", query="", fragment="").geturl()
-    log.info("使用代理(%s): %s", source, _mask_proxy(proxy_raw))
-    return proxy_raw, auth, source
+    log.info("使用代理(%s): %s", resolved.source, _mask_proxy(proxy_raw))
+    return proxy_raw, None, resolved.source
 
 
 def _sanitize_slug(text: str) -> str:
@@ -5505,19 +5488,20 @@ async def main() -> None:
         log.error("MASTER_BOT_TOKEN 未设置")
         sys.exit(1)
 
-    proxy_url, proxy_auth, _ = _detect_proxy()
+    proxy_url, _, _ = _detect_proxy()
+    if proxy_url:
+        try:
+            resolved_ip = await install_telegram_api_dns_override(proxy_url)
+            if resolved_ip:
+                log.info("Telegram Bot API 已启用 SOCKS5 受保护 DNS")
+        except TelegramProxyDNSError as exc:
+            log.warning("Telegram Bot API 受保护 DNS 启用失败，将使用系统解析: %s", exc)
     session_kwargs = {}
     if proxy_url:
         session_kwargs["proxy"] = proxy_url
-    if proxy_auth:
-        session_kwargs["proxy_auth"] = proxy_auth
     session = AiohttpSession(**session_kwargs)
     bot = Bot(token=master_token, session=session)
-    if proxy_url:
-        session._connector_init.update({  # type: ignore[attr-defined]
-            "family": __import__('socket').AF_INET,
-            "ttl_dns_cache": 60,
-        })
+    configure_aiogram_session(session, proxy_url)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     dp.startup.register(_notify_restart_success)
@@ -5572,5 +5556,8 @@ if __name__ == "__main__":
     _terminate_other_master_processes()
     try:
         asyncio.run(main())
+    except TelegramProxyConfigError as exc:
+        log.error("Telegram 代理配置错误: %s", exc)
+        raise SystemExit(1) from exc
     except KeyboardInterrupt:
         log.info("Master 停止")

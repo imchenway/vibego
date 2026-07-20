@@ -209,7 +209,13 @@ Telegram 命令菜单可通过 `/plan_mode` 切换 Copilot 的 `interactive / pl
 - `MASTER_BOT_TOKEN`：master bot 的 Token，由 `vibego init` 引导输入，启动时必须存在。
 - `MASTER_CHAT_ID` / `MASTER_USER_ID`：首次在 Telegram 与 master 交互时自动写入，表示已授权的管理员账号。
 - `MASTER_WHITELIST`：逗号分隔的 chat_id 列表，留空表示不限制；若与自动写入冲突以最新值为准。
-- 其他可选变量（代理、日志级别、默认模型等）可按需新增，未设置时脚本使用默认值。
+- `TELEGRAM_PROXY`：Telegram 专用代理，不继承终端的 `http_proxy` / `https_proxy`：
+  - `system`：每次启动读取用户当前 macOS SOCKS5 主机和端口；Vibego 不提供默认端口。
+  - `socks5://<主机>:<用户端口>`：显式 SOCKS5；也支持完整的 `socks4://` 或 `http://` URL。
+  - 留空：直连 Telegram，不自动回退到终端代理。
+- 初始化时可直接指定：`vibego init --telegram-proxy system`，或传入完整代理 URL。
+- SOCKS5 模式会通过同一代理执行 Telegram Bot API 的受保护 DNS 查询，只覆盖 `api.telegram.org`，不修改系统 DNS。
+- 其他可选变量（日志级别、默认模型等）可按需新增，未设置时脚本使用默认值。
 
 - 项目配置持久化在 `~/.config/vibego/config/master.db`（SQLite），对应的 JSON 镜像为
   `~/.config/vibego/config/projects.json`。如需离线编辑，可参考仓库内的 `config/projects.json.example` 模板。
