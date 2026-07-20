@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "contract_version": "1",
+  "sequence_exclusions": [
+    "code-sequence/async-callback-sequence.html",
+    "code-sequence/participant-timeline.html",
+    "code-sequence/retry-exception-sequence.html",
+    "code-sequence/transaction-boundary-sequence.html",
+    "fault-debugging/debugging-sequence.html",
+    "feature-iteration/current-target-sequence.html"
+  ],
+  "migration_batches": {
+    "B01": [
+      "business-flow/swimlane-flow.html",
+      "decision-communication/option-matrix-path.html"
+    ],
+    "B02": [
+      "business-flow/bpmn-light-flow.html",
+      "business-flow/exception-branch-flow.html",
+      "business-flow/stage-track.html"
+    ],
+    "B03": [
+      "state-data-model/data-flow-model.html",
+      "state-data-model/er-lite.html",
+      "state-data-model/lifecycle-track.html",
+      "state-data-model/state-event-matrix.html",
+      "state-data-model/state-machine.html"
+    ],
+    "B04": [
+      "business-architecture/capability-domain-map.html",
+      "business-architecture/participant-boundary.html",
+      "business-architecture/rule-constraint-heatmap.html",
+      "business-architecture/value-chain-map.html"
+    ],
+    "B05": [
+      "technical-design/api-contract-swimlane.html",
+      "technical-design/data-consistency-boundary.html",
+      "technical-design/module-contract-data-topology.html",
+      "technical-design/release-switch-track.html"
+    ],
+    "B06": [
+      "fault-debugging/before-after-flow.html",
+      "fault-debugging/bpmn-debug-flow.html",
+      "fault-debugging/causal-chain.html",
+      "fault-debugging/state-data-breakpoint.html"
+    ],
+    "B07": [
+      "feature-iteration/current-target-flow.html",
+      "feature-iteration/diff-heatmap.html",
+      "feature-iteration/release-rollback-track.html"
+    ],
+    "B08": [
+      "decision-communication/decision-tree.html",
+      "decision-communication/recommended-path.html",
+      "decision-communication/tradeoff-quadrant.html"
+    ],
+    "B09": [
+      "delivery-acceptance/acceptance-ledger.html",
+      "delivery-acceptance/delivery-timeline.html",
+      "delivery-acceptance/evidence-swimlane.html",
+      "delivery-acceptance/risk-action-board.html"
+    ],
+    "B10": [
+      "page-mockup/artboard-filmstrip.html",
+      "page-mockup/artboard-wireframe.html",
+      "page-mockup/primary-path-page-flow.html",
+      "page-mockup/responsive-state-board.html"
+    ],
+    "B11": [
+      "system-architecture/component-breakdown.html",
+      "system-architecture/deployment-topology.html",
+      "system-architecture/logical-layering.html",
+      "system-architecture/network-topology.html",
+      "system-architecture/system-context.html",
+      "system-architecture/workload-overview.html"
+    ],
+    "B12": [
+      "system-architecture/api-integration.html",
+      "system-architecture/data-architecture.html",
+      "system-architecture/data-flow.html",
+      "system-architecture/event-driven.html",
+      "system-architecture/router-v6.html"
+    ],
+    "B13": [
+      "system-architecture/delivery-pipeline.html",
+      "system-architecture/identity-access.html",
+      "system-architecture/observability-view.html",
+      "system-architecture/resilience-view.html",
+      "system-architecture/security-view.html"
+    ]
+  },
+  "families": {
+    "business-architecture": {
+      "limits": {"nodes": 32, "relations": 40, "groups": 10, "details": 8},
+      "templates": {
+        "capability-domain-map": {"profile": "graph", "limits": {}},
+        "participant-boundary": {"profile": "graph", "limits": {}},
+        "rule-constraint-heatmap": {"profile": "matrix", "limits": {}},
+        "value-chain-map": {"profile": "graph", "limits": {}}
+      }
+    },
+    "business-flow": {
+      "limits": {"nodes": 30, "relations": 36, "groups": 10, "details": 8},
+      "templates": {
+        "bpmn-light-flow": {"profile": "graph", "limits": {}},
+        "exception-branch-flow": {"profile": "graph", "limits": {}},
+        "stage-track": {"profile": "timeline", "limits": {}},
+        "swimlane-flow": {"profile": "graph", "limits": {"nodes": 24}}
+      }
+    },
+    "decision-communication": {
+      "limits": {"nodes": 28, "relations": 32, "groups": 8, "details": 8},
+      "templates": {
+        "decision-tree": {"profile": "graph", "limits": {}},
+        "option-matrix-path": {"profile": "matrix", "limits": {}},
+        "recommended-path": {"profile": "graph", "limits": {}},
+        "tradeoff-quadrant": {"profile": "matrix", "limits": {}}
+      }
+    },
+    "delivery-acceptance": {
+      "limits": {"nodes": 36, "relations": 42, "groups": 10, "details": 10},
+      "templates": {
+        "acceptance-ledger": {"profile": "ledger", "limits": {}},
+        "delivery-timeline": {"profile": "timeline", "limits": {}},
+        "evidence-swimlane": {"profile": "graph", "limits": {}},
+        "risk-action-board": {"profile": "ledger", "limits": {}}
+      }
+    },
+    "fault-debugging": {
+      "limits": {"nodes": 32, "relations": 40, "groups": 10, "details": 10},
+      "templates": {
+        "before-after-flow": {"profile": "graph", "limits": {}},
+        "bpmn-debug-flow": {"profile": "graph", "limits": {}},
+        "causal-chain": {"profile": "graph", "limits": {}},
+        "state-data-breakpoint": {"profile": "matrix", "limits": {}}
+      }
+    },
+    "feature-iteration": {
+      "limits": {"nodes": 30, "relations": 36, "groups": 10, "details": 8},
+      "templates": {
+        "current-target-flow": {"profile": "graph", "limits": {}},
+        "diff-heatmap": {"profile": "matrix", "limits": {}},
+        "release-rollback-track": {"profile": "timeline", "limits": {}}
+      }
+    },
+    "page-mockup": {
+      "limits": {"nodes": 32, "relations": 28, "groups": 12, "details": 8},
+      "templates": {
+        "artboard-filmstrip": {"profile": "artboard", "limits": {}},
+        "artboard-wireframe": {"profile": "artboard", "limits": {}},
+        "primary-path-page-flow": {"profile": "graph", "limits": {}},
+        "responsive-state-board": {"profile": "artboard", "limits": {}}
+      }
+    },
+    "state-data-model": {
+      "limits": {"nodes": 34, "relations": 44, "groups": 10, "details": 8},
+      "templates": {
+        "data-flow-model": {"profile": "graph", "limits": {}},
+        "er-lite": {"profile": "graph", "limits": {}},
+        "lifecycle-track": {"profile": "timeline", "limits": {}},
+        "state-event-matrix": {"profile": "matrix", "limits": {}},
+        "state-machine": {"profile": "graph", "limits": {}}
+      }
+    },
+    "system-architecture": {
+      "limits": {"nodes": 40, "relations": 52, "groups": 12, "details": 10},
+      "templates": {
+        "api-integration": {"profile": "graph", "limits": {}},
+        "component-breakdown": {"profile": "graph", "limits": {}},
+        "data-architecture": {"profile": "graph", "limits": {}},
+        "data-flow": {"profile": "graph", "limits": {}},
+        "delivery-pipeline": {"profile": "timeline", "limits": {}},
+        "deployment-topology": {"profile": "graph", "limits": {}},
+        "event-driven": {"profile": "graph", "limits": {}},
+        "identity-access": {"profile": "graph", "limits": {}},
+        "logical-layering": {"profile": "graph", "limits": {}},
+        "network-topology": {"profile": "graph", "limits": {}},
+        "observability-view": {"profile": "graph", "limits": {}},
+        "resilience-view": {"profile": "graph", "limits": {}},
+        "router-v6": {"profile": "graph", "limits": {}},
+        "security-view": {"profile": "graph", "limits": {}},
+        "system-context": {"profile": "graph", "limits": {}},
+        "workload-overview": {"profile": "graph", "limits": {}}
+      }
+    },
+    "technical-design": {
+      "limits": {"nodes": 34, "relations": 44, "groups": 10, "details": 8},
+      "templates": {
+        "api-contract-swimlane": {"profile": "graph", "limits": {}},
+        "data-consistency-boundary": {"profile": "graph", "limits": {}},
+        "module-contract-data-topology": {"profile": "graph", "limits": {}},
+        "release-switch-track": {"profile": "timeline", "limits": {}}
+      }
+    }
+  }
+}

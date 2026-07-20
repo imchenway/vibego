@@ -1,0 +1,25 @@
+{
+  "author": {
+    "name": "imchenway"
+  },
+  "description": "Create polished, self-contained HTML diagrams.",
+  "interface": {
+    "brandColor": "#1F6FB2",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "category": "Developer Tools",
+    "defaultPrompt": [
+      "Use Vibe Diagram to create a self-contained HTML diagram for this request."
+    ],
+    "developerName": "imchenway",
+    "displayName": "Vibe Diagram",
+    "longDescription": "Turn architecture, workflows, sequences, state, debugging, design, decisions, and delivery acceptance into self-contained HTML diagrams.",
+    "shortDescription": "Self-contained HTML diagrams for complex ideas"
+  },
+  "license": "Apache-2.0",
+  "name": "vibe-diagram",
+  "skills": "./skills/",
+  "version": "0.1.3"
+}

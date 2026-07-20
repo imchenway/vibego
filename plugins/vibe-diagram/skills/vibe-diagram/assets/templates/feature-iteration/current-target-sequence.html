@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{title}}</title>
+  <style>
+    :root {
+      --ink: #102033;
+      --muted: #5a6c80;
+      --paper: #fbfdff;
+      --panel: rgba(255,255,255,.9);
+      --line: #8db3d8;
+      --blue: #1f6fb2;
+      --blue-soft: #e8f3ff;
+      --green: #17785a;
+      --green-soft: #e9f8f2;
+      --amber: #986506;
+      --amber-soft: #fff6de;
+      --red: #a63a3a;
+      --red-soft: #fff0f0;
+      --violet: #6254ad;
+      --violet-soft: #f1efff;
+      --shadow: 0 16px 42px rgba(20, 57, 92, .085);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: light; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 18% 3%, rgba(214,233,255,.78), transparent 30rem),
+        radial-gradient(circle at 78% 6%, rgba(228,246,239,.8), transparent 28rem),
+        linear-gradient(rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(93,133,173,.045) 1px, transparent 1px),
+        linear-gradient(180deg, #fff 0%, #f7fbff 54%, #fbfdff 100%);
+      background-size: auto, auto, 28px 28px, 28px 28px, auto;
+      overflow-x: clip;
+    }
+    main {
+      width: min(72rem, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 48px;
+    }
+    h1 {
+      max-width: 24ch;
+      margin: 0 0 10px;
+      font-size: clamp(24px, 2.8vw, 32px);
+      line-height: 1.18;
+      letter-spacing: -.025em;
+    }
+    .summary {
+      max-width: 70ch;
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.65;
+    }
+    .current-target-sequence {
+      --sequence-natural-width: 39rem;
+      --sequence-participant-count: 3;
+      --sequence-call: var(--blue);
+      --sequence-return: var(--green);
+      --sequence-error: var(--red);
+      display: grid;
+      gap: 18px;
+      border: 0;
+      background: transparent;
+    }
+    .current-target-sequence [data-participant-id$="user"] { --participant-accent: var(--violet); }
+    .current-target-sequence [data-participant-id$="api"] { --participant-accent: var(--blue); }
+    .current-target-sequence [data-participant-id$="service"] { --participant-accent: var(--green); }
+    .current-target-sequence [data-participant-id$="orchestrator"] { --participant-accent: var(--amber); }
+    .current-target-sequence [data-participant-id] {
+      position: relative;
+      min-height: 68px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 3px;
+      border: 1px solid color-mix(in srgb, var(--participant-accent, var(--blue)) 42%, transparent);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: rgba(251, 253, 255, .98);
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+    .current-target-sequence [data-participant-id]::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 100%;
+      width: 1px;
+      height: var(--sequence-stage-height, 36rem);
+      background: linear-gradient(var(--participant-accent, var(--line)), rgba(141, 179, 216, .15));
+      pointer-events: none;
+    }
+    .current-target-sequence [data-participant-id] strong { font-size: 16px; line-height: 1.25; }
+    .current-target-sequence [data-participant-id] span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .current-target-sequence [data-sequence-message] {
+      --message-color: var(--sequence-call);
+      position: relative;
+      grid-column: var(--sequence-start, 1) / span var(--sequence-span, 2);
+      min-height: 86px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-areas: "kind route" "description description";
+      align-content: start;
+      gap: 4px 8px;
+      padding: 8px 18px 26px;
+      color: var(--ink);
+    }
+    .current-target-sequence [data-message-kind="return"] { --message-color: var(--sequence-return); }
+    .current-target-sequence [data-message-kind="error"] { --message-color: var(--sequence-error); }
+    .current-target-sequence [data-message-kind="async"] { --message-color: var(--violet); }
+    .current-target-sequence [data-message-kind="self"] { --message-color: var(--amber); }
+    .current-target-sequence [data-sequence-message]::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 16px;
+      height: 2px;
+      background: var(--message-color);
+    }
+    .current-target-sequence [data-sequence-message]::after {
+      content: "";
+      position: absolute;
+      right: 13px;
+      bottom: 11px;
+      border-left: 9px solid var(--message-color);
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+    }
+    .current-target-sequence [data-sequence-message][data-direction="reverse"]::after {
+      left: 13px;
+      right: auto;
+      border-right: 9px solid var(--message-color);
+      border-left: 0;
+    }
+    .current-target-sequence [data-sequence-variant="current"] {
+      --sequence-call: var(--red);
+      background: rgba(255, 240, 240, .7);
+    }
+    .current-target-sequence [data-sequence-variant="target"] {
+      --sequence-call: var(--green);
+      background: rgba(233, 248, 242, .72);
+    }
+    .current-target-sequence [data-sequence-comparison-id]::before {
+      content: attr(data-sequence-variant);
+      display: block;
+      padding: 9px 14px 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .current-target-sequence .comparison-participant-note {
+      margin: 10px 14px 0;
+      border-left: 3px solid var(--violet);
+      padding: 7px 10px;
+      color: var(--muted);
+      background: rgba(241, 239, 255, .5);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .current-target-sequence [data-sequence-route] {
+      grid-area: route;
+      align-self: center;
+      min-width: 0;
+      font-size: 16px;
+      font-weight: 750;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+    .current-target-sequence [data-sequence-kind] {
+      grid-area: kind;
+      align-self: center;
+      width: max-content;
+      border: 1px solid color-mix(in srgb, var(--message-color) 42%, transparent);
+      border-radius: 999px;
+      padding: 2px 7px;
+      color: var(--message-color);
+      background: rgba(251, 253, 255, .98);
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+    .current-target-sequence [data-sequence-description] {
+      grid-area: description;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    @media (max-width: 780px) {
+      .current-target-sequence [data-participant-id]::after { display: none; }
+      .current-target-sequence [data-sequence-message] {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-areas: "kind route" "description description";
+        min-height: 0;
+        margin: 0 0 10px;
+        border: 1px solid rgba(141, 179, 216, .5);
+        border-radius: 12px;
+        padding: 12px;
+        background: rgba(251, 253, 255, .98);
+      }
+      .current-target-sequence [data-sequence-message]::before,
+      .current-target-sequence [data-sequence-message]::after { display: none; }
+    }
+    .notes {
+      max-width: 70ch;
+      margin-top: 20px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+      overflow-wrap: anywhere;
+    }
+  </style>
+  <style data-sequence-kernel="1">
+    [data-sequence-canvas] {
+      --sequence-lane-min: 13rem;
+      --sequence-min-readable-font: 16px;
+      --sequence-page-gutter: clamp(16px, 3vw, 48px);
+      position: relative;
+      width: 100%;
+      border: 1px solid rgba(141, 179, 216, .54);
+      border-radius: var(--radius, 20px);
+      background: rgba(251, 253, 255, .94);
+      box-shadow: var(--shadow, 0 16px 42px rgba(20, 57, 92, .085));
+      overflow: visible;
+    }
+    [data-sequence-canvas][data-sequence-wide="true"] {
+      width: calc(100vw - (2 * var(--sequence-page-gutter)));
+      max-width: none;
+      margin-left: calc(50% - 50vw + var(--sequence-page-gutter));
+    }
+    [data-sequence-toolbar] {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 48px;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(141, 179, 216, .42);
+      background: rgba(232, 243, 255, .74);
+    }
+    [data-sequence-toolbar][hidden] { display: none !important; }
+    [data-sequence-toolbar] button {
+      min-width: 44px;
+      min-height: 32px;
+      border: 1px solid rgba(31, 111, 178, .32);
+      border-radius: 9px;
+      padding: 5px 10px;
+      color: var(--ink, #102033);
+      background: rgba(251, 253, 255, .96);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    [data-sequence-toolbar] button:hover { background: var(--blue-soft, #e8f3ff); }
+    [data-sequence-toolbar] button[aria-pressed="true"] {
+      border-color: var(--blue, #1f6fb2);
+      color: var(--blue, #1f6fb2);
+      background: var(--blue-soft, #e8f3ff);
+    }
+    [data-sequence-toolbar] button:focus-visible,
+    [data-sequence-viewport]:focus-visible {
+      outline: 3px solid rgba(31, 111, 178, .44);
+      outline-offset: 2px;
+    }
+    [data-sequence-scale-status] {
+      min-width: 3.5rem;
+      margin-left: auto;
+      color: var(--muted, #5a6c80);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    [data-sequence-viewport] {
+      position: relative;
+      width: 100%;
+      overflow: visible;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+    }
+    [data-sequence-canvas][data-sequence-overflow-x="true"] [data-sequence-viewport] {
+      overflow-x: auto;
+      overflow-y: visible;
+    }
+    [data-sequence-canvas][data-sequence-long="true"] [data-sequence-viewport] {
+      max-height: clamp(520px, 75vh, 900px);
+      overflow-y: auto;
+      scroll-padding-top: var(--sequence-sticky-header-height, 0px);
+    }
+    [data-sequence-message] {
+      scroll-margin-top: var(--sequence-sticky-header-height, 0px);
+    }
+    [data-sequence-stage] {
+      position: relative;
+      min-width: max(100%, var(--sequence-natural-width, 100%));
+      padding: 14px 16px 24px;
+      background:
+        linear-gradient(rgba(38, 102, 154, .043) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(38, 102, 154, .043) 1px, transparent 1px);
+      background-size: 22px 22px;
+      transform-origin: top left;
+    }
+    [data-sequence-stage] [data-participant-id] strong,
+    [data-sequence-stage] [data-participant-id] span,
+    [data-sequence-stage] [data-sequence-route],
+    [data-sequence-stage] [data-sequence-kind],
+    [data-sequence-stage] [data-sequence-description],
+    [data-sequence-stage] [data-sequence-phase-label] {
+      font-size: max(var(--sequence-min-readable-font), 1em);
+    }
+    [data-sequence-participants] {
+      position: relative;
+      z-index: 4;
+      display: grid;
+      grid-template-columns: repeat(var(--sequence-participant-count, 4), minmax(var(--sequence-lane-min), 1fr));
+      gap: 12px;
+      padding: 4px 0 14px;
+      background: rgba(251, 253, 255, .98);
+    }
+    [data-sequence-canvas][data-sequence-long="true"] [data-sequence-participants] {
+      position: sticky;
+      top: 0;
+      box-shadow: 0 12px 22px rgba(20, 57, 92, .07);
+    }
+    .sequence-messages { position: relative; z-index: 2; }
+    [data-sequence-phase-id] {
+      display: grid;
+      grid-template-columns: repeat(var(--sequence-participant-count, 4), minmax(var(--sequence-lane-min), 1fr));
+      gap: 0 12px;
+      padding: 16px 0 8px;
+      border-top: 1px dashed rgba(141, 179, 216, .6);
+    }
+    [data-sequence-phase-label] {
+      grid-column: 1 / -1;
+      width: max-content;
+      max-width: 100%;
+      margin: -16px 0 8px 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      color: var(--muted, #5a6c80);
+      background: var(--paper, #fbfdff);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    @media (max-width: 780px) {
+      [data-sequence-canvas],
+      [data-sequence-canvas][data-sequence-wide="true"] {
+        width: 100%;
+        margin-left: 0;
+      }
+      [data-sequence-toolbar] { display: none !important; }
+      [data-sequence-viewport],
+      [data-sequence-canvas][data-sequence-overflow-x="true"] [data-sequence-viewport],
+      [data-sequence-canvas][data-sequence-long="true"] [data-sequence-viewport] {
+        max-height: none;
+        overflow: visible;
+        scroll-padding-top: 0 !important;
+      }
+      [data-sequence-message] { scroll-margin-top: 0 !important; }
+      [data-sequence-stage] {
+        min-width: 0 !important;
+        width: 100% !important;
+        padding: 12px;
+        zoom: 1 !important;
+      }
+      [data-sequence-participants] {
+        position: static !important;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        box-shadow: none !important;
+      }
+      [data-sequence-phase-id] {
+        display: block;
+        padding: 20px 0 4px;
+      }
+    }
+    @media print {
+      [data-sequence-canvas] { --sequence-lane-min: 0px; }
+      [data-sequence-canvas],
+      [data-sequence-canvas][data-sequence-wide="true"] {
+        width: 100%;
+        margin: 0;
+        border: 1px solid #8db3d8;
+        box-shadow: none;
+      }
+      [data-sequence-toolbar] { display: none !important; }
+      [data-sequence-viewport],
+      [data-sequence-canvas][data-sequence-overflow-x="true"] [data-sequence-viewport],
+      [data-sequence-canvas][data-sequence-long="true"] [data-sequence-viewport] {
+        max-height: none;
+        overflow: visible;
+        scroll-padding-top: 0 !important;
+      }
+      [data-sequence-message] { scroll-margin-top: 0 !important; }
+      [data-sequence-stage] {
+        position: static;
+        width: auto !important;
+        min-width: 0 !important;
+        height: auto !important;
+        zoom: 1 !important;
+      }
+      [data-sequence-participants] { position: static !important; box-shadow: none !important; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      [data-sequence-canvas] *, [data-sequence-canvas] *::before, [data-sequence-canvas] *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+        animation: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+<main data-diagram-type="feature-iteration"
+      data-template-family="feature-iteration"
+      data-template-id="current-target-sequence"
+      data-template-layout="current-target-sequence">
+  <h1 data-slot="title">{{title}}</h1>
+  <p class="summary" data-slot="summary">{{summary}}</p>
+
+  <section class="template-layout current-target-sequence" aria-label="Current and target sequence comparison">
+    <section class="sequence-canvas" data-sequence-canvas data-sequence-contract="1"
+             data-sequence-id="current-sequence" data-sequence-role="standalone"
+             data-sequence-variant="current" data-sequence-comparison-id="request-path"
+             data-sequence-width="contained" data-sequence-height="flow">
+      <div class="sequence-toolbar" data-sequence-toolbar hidden aria-label="Current sequence scale controls">
+        <button type="button" data-sequence-scale="fit" aria-pressed="true">Fit width</button>
+        <button type="button" data-sequence-scale="0.75" aria-pressed="false">75%</button>
+        <button type="button" data-sequence-scale="0.9" aria-pressed="false">90%</button>
+        <button type="button" data-sequence-scale="1" aria-pressed="false">100%</button>
+        <output data-sequence-scale-status aria-live="polite">100%</output>
+      </div>
+      <div class="sequence-viewport" data-sequence-viewport tabindex="0" aria-label="Current sequence">
+        <div class="sequence-stage" data-sequence-stage>
+          <header class="sequence-participants" data-sequence-participants>
+            <div data-participant-id="current-user" data-slot="seq-party-1"><strong>User</strong><span>{{seq-party-1}}</span></div>
+            <div data-participant-id="current-api" data-slot="seq-party-2"><strong>API</strong><span>{{seq-party-2}}</span></div>
+            <div data-participant-id="current-service" data-slot="seq-party-3"><strong>Legacy service</strong><span>{{seq-party-3}}</span></div>
+          </header>
+          <p class="comparison-participant-note" data-slot="seq-party-4">
+            Target-only participant: {{seq-party-4}}
+          </p>
+          <div class="sequence-messages">
+            <section data-sequence-phase-id="current-request">
+              <span data-sequence-phase-label>Current path</span>
+              <article data-sequence-message data-from="current-user" data-to="current-api"
+                       data-message-kind="sync" data-semantic="current-request"
+                       style="--sequence-start:1;--sequence-span:2" data-slot="current-call">
+                <span data-sequence-route>User → API</span><span data-sequence-kind>sync</span>
+                <span data-sequence-description>{{current-call}}</span>
+              </article>
+              <article data-sequence-message data-from="current-api" data-to="current-service"
+                       data-message-kind="sync" data-semantic="current-dispatch"
+                       style="--sequence-start:2;--sequence-span:2">
+                <span data-sequence-route>API → Legacy service</span><span data-sequence-kind>sync</span>
+                <span data-sequence-description>Forward through the existing coupling.</span>
+              </article>
+              <article data-sequence-message data-from="current-service" data-to="current-user"
+                       data-message-kind="error" data-semantic="current-failure"
+                       data-direction="reverse" style="--sequence-start:1;--sequence-span:3">
+                <span data-sequence-route>Legacy service → User</span><span data-sequence-kind>error</span>
+                <span data-sequence-description>Expose the current failure path.</span>
+              </article>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sequence-canvas" data-sequence-canvas data-sequence-contract="1"
+             data-sequence-id="target-sequence" data-sequence-role="standalone"
+             data-sequence-variant="target" data-sequence-comparison-id="request-path"
+             data-sequence-width="contained" data-sequence-height="flow">
+      <div class="sequence-toolbar" data-sequence-toolbar hidden aria-label="Target sequence scale controls">
+        <button type="button" data-sequence-scale="fit" aria-pressed="true">Fit width</button>
+        <button type="button" data-sequence-scale="0.75" aria-pressed="false">75%</button>
+        <button type="button" data-sequence-scale="0.9" aria-pressed="false">90%</button>
+        <button type="button" data-sequence-scale="1" aria-pressed="false">100%</button>
+        <output data-sequence-scale-status aria-live="polite">100%</output>
+      </div>
+      <div class="sequence-viewport" data-sequence-viewport tabindex="0" aria-label="Target sequence">
+        <div class="sequence-stage" data-sequence-stage>
+          <header class="sequence-participants" data-sequence-participants>
+            <div data-participant-id="target-user"><strong>User</strong><span>Starts the same request.</span></div>
+            <div data-participant-id="target-orchestrator"><strong>Orchestrator</strong><span>Coordinates the target request path.</span></div>
+            <div data-participant-id="target-service"><strong>Focused service</strong><span>Owns one clear responsibility.</span></div>
+          </header>
+          <div class="sequence-messages">
+            <section data-sequence-phase-id="target-request">
+              <span data-sequence-phase-label>Target path</span>
+              <article data-sequence-message data-from="target-user" data-to="target-orchestrator"
+                       data-message-kind="sync" data-semantic="target-request"
+                       style="--sequence-start:1;--sequence-span:2" data-slot="target-call">
+                <span data-sequence-route>User → Orchestrator</span><span data-sequence-kind>sync</span>
+                <span data-sequence-description>{{target-call}}</span>
+              </article>
+              <article data-sequence-message data-from="target-orchestrator" data-to="target-service"
+                       data-message-kind="async" data-semantic="target-dispatch"
+                       style="--sequence-start:2;--sequence-span:2">
+                <span data-sequence-route>Orchestrator → Focused service</span><span data-sequence-kind>async</span>
+                <span data-sequence-description>Dispatch through the target contract.</span>
+              </article>
+              <article data-sequence-message data-from="target-service" data-to="target-user"
+                       data-message-kind="return" data-semantic="target-result"
+                       data-direction="reverse" style="--sequence-start:1;--sequence-span:3">
+                <span data-sequence-route>Focused service → User</span><span data-sequence-kind>return</span>
+                <span data-sequence-description>Return an explicit target result.</span>
+              </article>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <section class="notes" data-slot="evidence-and-notes">{{evidence_and_notes}}</section>
+</main>
+
+<script data-sequence-kernel="1">
+  (function () {
+    "use strict";
+    var sequenceScaleModes = new WeakMap();
+    var sequenceViewportAnchors = new WeakMap();
+
+    function sequenceCenterRatio(viewport) {
+      var width = Math.max(viewport.scrollWidth, 1);
+      return (viewport.scrollLeft + viewport.clientWidth / 2) / width;
+    }
+
+    function rememberSequenceAnchor(viewport) {
+      sequenceViewportAnchors.set(viewport, sequenceCenterRatio(viewport));
+    }
+
+    function preserveSequenceAnchor(viewport, mutate, preservedCenterRatio) {
+      var centerRatio = Number.isFinite(preservedCenterRatio)
+        ? preservedCenterRatio
+        : sequenceCenterRatio(viewport);
+      var focusedMessage = viewport.querySelector("[data-sequence-message]:focus");
+      mutate();
+      requestAnimationFrame(function () {
+        var nextWidth = Math.max(viewport.scrollWidth, 1);
+        viewport.scrollLeft = Math.max(0, centerRatio * nextWidth - viewport.clientWidth / 2);
+        rememberSequenceAnchor(viewport);
+        if (focusedMessage) {
+          focusedMessage.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }
+      });
+    }
+
+    function applySequenceScale(canvas, mode, preservedCenterRatio) {
+      var viewport = canvas.querySelector("[data-sequence-viewport]");
+      var stage = canvas.querySelector("[data-sequence-stage]");
+      var status = canvas.querySelector("[data-sequence-scale-status]");
+      if (!viewport || !stage || !CSS.supports("zoom", "1")) return;
+      preserveSequenceAnchor(viewport, function () {
+        var naturalWidth = Math.max(
+          Number(canvas.dataset.sequenceNaturalWidth) || 0,
+          stage.scrollWidth || 1
+        );
+        var requested = mode === "fit"
+          ? Math.min(1, Math.max(0.75, viewport.clientWidth / naturalWidth))
+          : Math.min(1, Math.max(0.75, Number(mode) || 1));
+        stage.style.zoom = String(requested);
+        canvas.dataset.sequenceScale = String(requested);
+        sequenceScaleModes.set(canvas, mode);
+        canvas.querySelectorAll("[data-sequence-scale]").forEach(function (button) {
+          button.setAttribute("aria-pressed", String(button.dataset.sequenceScale === mode));
+        });
+        if (status) status.value = Math.round(requested * 100) + "%";
+      }, preservedCenterRatio);
+    }
+
+    function measureSequenceCanvas(canvas, preservedCenterRatio) {
+      var viewport = canvas.querySelector("[data-sequence-viewport]");
+      var stage = canvas.querySelector("[data-sequence-stage]");
+      var participants = canvas.querySelectorAll("[data-participant-id]");
+      var participantHeader = canvas.querySelector("[data-sequence-participants]");
+      var toolbar = canvas.querySelector("[data-sequence-toolbar]");
+      if (!viewport || !stage || participants.length === 0) return;
+
+      delete canvas.dataset.sequenceWide;
+      var laneValue = getComputedStyle(canvas).getPropertyValue("--sequence-lane-min").trim();
+      var laneNumber = parseFloat(laneValue) || 13;
+      var rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      var laneMinimum = laneValue.endsWith("rem") ? laneNumber * rootFontSize : laneNumber;
+      var naturalWidth = Math.ceil(participants.length * laneMinimum);
+      var contentWidth = canvas.parentElement ? canvas.parentElement.clientWidth : canvas.clientWidth;
+      var widthMode = canvas.dataset.sequenceWidth;
+      var shouldBreakOut = widthMode === "wide" || (widthMode === "auto" && naturalWidth > contentWidth);
+      if (shouldBreakOut) canvas.dataset.sequenceWide = "true";
+      stage.style.setProperty("--sequence-natural-width", naturalWidth + "px");
+      stage.style.setProperty("--sequence-participant-count", String(participants.length));
+      canvas.dataset.sequenceNaturalWidth = String(naturalWidth);
+
+      requestAnimationFrame(function () {
+        var supportsZoom = CSS.supports("zoom", "1");
+        var overflowX = stage.scrollWidth > viewport.clientWidth + 1;
+        canvas.dataset.sequenceOverflowX = String(overflowX);
+        if (toolbar) toolbar.hidden = !overflowX || !supportsZoom;
+        if (!supportsZoom) {
+          stage.style.zoom = "1";
+          canvas.dataset.sequenceScale = "1";
+        }
+
+        delete canvas.dataset.sequenceLong;
+        var heightMode = canvas.dataset.sequenceHeight;
+        var longThreshold = Math.min(900, Math.max(520, window.innerHeight * 0.75));
+        if (heightMode === "scroll" || (heightMode === "auto" && stage.scrollHeight > longThreshold)) {
+          canvas.dataset.sequenceLong = "true";
+        }
+        var stickyHeaderHeight = canvas.dataset.sequenceLong === "true" && participantHeader
+          ? Math.ceil(participantHeader.getBoundingClientRect().height)
+          : 0;
+        canvas.style.setProperty("--sequence-sticky-header-height", stickyHeaderHeight + "px");
+        stage.style.setProperty("--sequence-stage-height", Math.max(stage.scrollHeight, 320) + "px");
+        var activeScaleMode = sequenceScaleModes.get(canvas) || "fit";
+        if (overflowX && supportsZoom) {
+          applySequenceScale(canvas, activeScaleMode, preservedCenterRatio);
+        } else {
+          rememberSequenceAnchor(viewport);
+        }
+      });
+    }
+
+    function initSequenceCanvas(canvas) {
+      try {
+        var viewport = canvas.querySelector("[data-sequence-viewport]");
+        var stage = canvas.querySelector("[data-sequence-stage]");
+        var participantNodes = Array.prototype.slice.call(canvas.querySelectorAll("[data-participant-id]"));
+        if (!viewport || !stage || participantNodes.length === 0) throw new Error("Incomplete sequence canvas");
+        if (canvas.dataset.sequenceContract !== "1") throw new Error("Unsupported sequence contract");
+        var participantIds = participantNodes.map(function (node) { return node.dataset.participantId; });
+        var messageKinds = new Set(["sync", "return", "async", "self", "error"]);
+        if (participantIds.some(function (id) { return !id; }) || new Set(participantIds).size !== participantIds.length) {
+          throw new Error("Invalid participant identities");
+        }
+        canvas.querySelectorAll("[data-sequence-message]").forEach(function (message) {
+          var source = message.dataset.from;
+          var target = message.dataset.to;
+          var kind = message.dataset.messageKind;
+          if (!participantIds.includes(source) || !participantIds.includes(target)) {
+            throw new Error("Invalid structured sequence endpoint");
+          }
+          if (!messageKinds.has(message.dataset.messageKind)) throw new Error("Invalid message kind");
+          if ((kind === "self") !== (source === target)) throw new Error("Invalid self message endpoints");
+        });
+        canvas.querySelectorAll("[data-sequence-scale]").forEach(function (button) {
+          button.addEventListener("click", function () {
+            applySequenceScale(canvas, button.dataset.sequenceScale || "fit");
+          });
+        });
+        viewport.addEventListener("scroll", function () {
+          rememberSequenceAnchor(viewport);
+        }, { passive: true });
+        rememberSequenceAnchor(viewport);
+        canvas.dataset.enhanced = "true";
+        measureSequenceCanvas(canvas);
+        if ("ResizeObserver" in window) {
+          var observer = new ResizeObserver(function () {
+            measureSequenceCanvas(canvas, sequenceViewportAnchors.get(viewport));
+          });
+          observer.observe(viewport);
+        } else {
+          window.addEventListener("resize", function () {
+            measureSequenceCanvas(canvas, sequenceViewportAnchors.get(viewport));
+          }, { passive: true });
+        }
+      } catch (error) {
+        delete canvas.dataset.enhanced;
+        delete canvas.dataset.sequenceWide;
+        delete canvas.dataset.sequenceOverflowX;
+        delete canvas.dataset.sequenceLong;
+        canvas.style.removeProperty("--sequence-sticky-header-height");
+        var toolbar = canvas.querySelector("[data-sequence-toolbar]");
+        if (toolbar) toolbar.hidden = true;
+      }
+    }
+
+    document.querySelectorAll("[data-sequence-canvas]").forEach(initSequenceCanvas);
+  }());
+</script>
+</body>
+</html>

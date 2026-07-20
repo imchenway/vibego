@@ -1,0 +1,20 @@
+{
+  "interface": {
+    "displayName": "imchenway"
+  },
+  "name": "imchenway",
+  "plugins": [
+    {
+      "category": "Developer Tools",
+      "name": "vibe-diagram",
+      "policy": {
+        "authentication": "ON_INSTALL",
+        "installation": "AVAILABLE"
+      },
+      "source": {
+        "path": "./plugins/vibe-diagram",
+        "source": "local"
+      }
+    }
+  ]
+}

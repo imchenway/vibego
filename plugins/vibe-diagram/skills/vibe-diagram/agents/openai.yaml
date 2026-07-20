@@ -1,0 +1,4 @@
+interface:
+  display_name: "vibe-diagram"
+  short_description: "Create self-contained HTML diagrams for complex ideas."
+  default_prompt: "Use $vibe-diagram to create a self-contained HTML diagram for this request."

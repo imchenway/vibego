@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "vibe-diagram",
+    "version": "0.1.3",
+    "tree_sha256": "8488c39673b7205483056ef48ed5223128d166387b8fa2ee353a50dd4ec49ca6"
+  },
+  "targets": {
+    "builtin_skill": "vibego_cli/data/skills/vibe-diagram",
+    "codex_plugin": "plugins/vibe-diagram",
+    "marketplace_catalog": ".agents/plugins/marketplace.json"
+  },
+  "host_overrides": [],
+  "adapter_extras": [
+    "agents/openai.yaml"
+  ]
+}

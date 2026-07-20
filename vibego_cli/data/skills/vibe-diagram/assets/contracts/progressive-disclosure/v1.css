@@ -1,0 +1,6 @@
+[data-diagram-detail][hidden] { display: none; }
+[data-diagram-detail]:target { display: block; }
+
+@media print {
+  [data-diagram-detail][hidden] { display: block !important; }
+}

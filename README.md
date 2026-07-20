@@ -63,7 +63,7 @@ pipx upgrade vibego
 vibego agents-sync --json
 ```
 
-当前发行包不携带内置 skill；`agents-sync` 在没有内置 skill 时仍会正常同步模板，并清理由上一版本管理、但当前版本已删除的 native skill 投影。
+当前发行包携带受控投影的 `vibe-diagram` 内置 skill；其版本、canonical tree digest、plugin 子树和适配器额外文件由 `vibe_diagram_projection.json` 与投影测试审计。发行包不会在安装或构建时自动写入本机 native skill 目录；只有用户显式执行 `agents-sync` 时才会发布投影。`agents-sync` 在没有内置 skill 时仍会正常同步模板，并清理由上一版本管理、但当前版本已删除的 native skill 投影。
 
 ## 目录结构
 

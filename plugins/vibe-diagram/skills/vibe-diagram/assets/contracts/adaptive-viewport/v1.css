@@ -1,0 +1,37 @@
+[data-diagram-canvas][data-diagram-contract="1"] {
+  --diagram-scale: 1;
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  transform-origin: top left;
+}
+
+[data-diagram-width="contained"] { inline-size: min(100%, 72rem); margin-inline: auto; }
+[data-diagram-width="auto"] { inline-size: 100%; }
+[data-diagram-width="wide"] { inline-size: max-content; min-inline-size: 100%; }
+[data-diagram-height="flow"] { block-size: auto; }
+[data-diagram-height="auto"] { max-block-size: clamp(32.5rem, 75vh, 56.25rem); overflow: auto; }
+[data-diagram-height="scroll"] { max-block-size: clamp(32.5rem, 75vh, 56.25rem); overflow: auto; }
+[data-diagram-scaled="true"] > [data-diagram-stage] {
+  transform: scale(var(--diagram-scale));
+  transform-origin: top left;
+}
+[data-diagram-controls] { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 0 1rem; }
+[data-diagram-controls] button { min-block-size: 2.75rem; padding-inline: .8rem; }
+[data-diagram-controls] button[aria-pressed="true"] { outline: 2px solid currentColor; }
+.diagram-fallback { display: none; }
+
+@media (max-width: 48rem) {
+  [data-diagram-mobile="stack"] [data-diagram-group-id] { position: static; }
+  [data-diagram-mobile="summary"] + [data-fallback-for] { display: block; }
+}
+
+@media print {
+  [data-diagram-canvas] { max-block-size: none; overflow: visible; transform: none; }
+  [data-diagram-controls] { display: none !important; }
+  .diagram-fallback { display: block; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-diagram-canvas] { scroll-behavior: auto; }
+}
