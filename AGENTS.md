@@ -298,10 +298,13 @@ develop 阶段必须强制执行：
 5. 日志输出应保持上下文字段（agent/project/model/session）。
     - Evidence: `logging_setup.py`（锚点：`LOG_FORMAT`）
 
-6. 公共 API 兼容策略：TODO（未找到 REST API 契约证据）。
-7. 错误码规范：TODO（未找到统一错误码定义证据）。
-8. 配置中心/密钥托管规范：TODO（未定位 nacos/apollo/consul/KMS 接入证据）。
-9. 分层依赖约束文档化规则：TODO（未定位显式架构规则文件）。
+6. 多仓 Git 脚本的默认遍历根是启动脚本时的当前工作目录；显式空 `--dir` 或缺少参数值必须 fail-closed，不得回退到机器级全局目录。
+    - Evidence: `scripts/git_pull_all.sh`、`scripts/git_push_all.sh`、`scripts/git_sync_all.sh`（锚点：`DEFAULT_BASE_DIR`、`--dir 不能为空`）；`tests/test_git_sync_scope.py`。
+
+7. 公共 API 兼容策略：TODO（未找到 REST API 契约证据）。
+8. 错误码规范：TODO（未找到统一错误码定义证据）。
+9. 配置中心/密钥托管规范：TODO（未定位 nacos/apollo/consul/KMS 接入证据）。
+10. 分层依赖约束文档化规则：TODO（未定位显式架构规则文件）。
 
 ### 10.2 Universal Safety Guardrails（通用安全护栏，非仓库事实）
 

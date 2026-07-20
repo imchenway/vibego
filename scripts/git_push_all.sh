@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# 自动遍历脚本所在目录（或指定目录）内的 Git 仓库并执行自动提交与推送。
+# 自动遍历当前工作目录（或指定目录）内的 Git 仓库并执行自动提交与推送。
 
 set -uo pipefail
 
 SCRIPT_NAME=$(basename "$0")
-DEFAULT_BASE_DIR="/Users/david/hypha" # 默认扫描根目录
+DEFAULT_BASE_DIR=$(pwd -P) # 默认扫描启动脚本时的当前工作目录
 
 print_usage() {
   cat <<'USAGE'
 用法: push-all.sh [--dir 目录] [--max-depth 层级] [--dry-run] [--help]
 
 参数说明:
-  --dir         指定遍历的起始目录，默认为脚本所在目录。
+  --dir         指定遍历的起始目录，默认为当前工作目录。
   --max-depth   限制遍历深度，默认为 4。
   --dry-run     仅输出将执行的操作，不实际修改任何仓库。
   -h, --help    显示本帮助信息。
@@ -37,8 +37,12 @@ DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir)
-      shift || { error "--dir 需要一个参数"; exit 1; }
-      BASE_DIR="$1"
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        error "--dir 不能为空"
+        exit 1
+      fi
+      BASE_DIR="$2"
+      shift
       ;;
     --max-depth)
       shift || { error "--max-depth 需要一个数字"; exit 1; }

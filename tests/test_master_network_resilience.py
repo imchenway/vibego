@@ -146,6 +146,59 @@ def test_master_polling_retries_after_startup_network_timeout(monkeypatch):
     assert sleep_calls == [0.01]
 
 
+def test_master_polling_retries_after_raw_aiohttp_socks_proxy_timeout(monkeypatch):
+    """aiohttp-socks 未包装的代理超时也必须保活并重试。"""
+
+    class ProxyTimeoutError(Exception):
+        """模拟 aiohttp_socks._errors.ProxyTimeoutError 的独立异常层级。"""
+
+    ProxyTimeoutError.__module__ = "aiohttp_socks._errors"
+
+    class DummyDispatcher:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def start_polling(self, bot):
+            self.calls += 1
+            if self.calls == 1:
+                raise ProxyTimeoutError("Proxy connection timed out: 60")
+            return None
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(master, "MASTER_POLLING_RETRY_DELAY", 0.01)
+    monkeypatch.setattr(master.asyncio, "sleep", fake_sleep)
+    dispatcher = DummyDispatcher()
+
+    asyncio.run(master._run_master_polling(dispatcher, object()))
+
+    assert dispatcher.calls == 2
+    assert sleep_calls == [0.01]
+
+
+def test_master_polling_propagates_non_network_error(monkeypatch):
+    """非网络异常必须继续失败，避免重试循环掩盖程序错误。"""
+
+    class DummyDispatcher:
+        async def start_polling(self, bot):
+            raise RuntimeError("programming error")
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(master.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="programming error"):
+        asyncio.run(master._run_master_polling(DummyDispatcher(), object()))
+
+    assert sleep_calls == []
+
+
 def test_run_action_ack_before_run_worker(repo: ProjectRepository, tmp_path: Path, monkeypatch):
     """
     TDD 场景：点击项目启动时应先回调应答，再执行耗时启动。

@@ -6,7 +6,7 @@ set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PULL_SCRIPT="$SCRIPT_DIR/git_pull_all.sh"
 PUSH_SCRIPT="$SCRIPT_DIR/git_push_all.sh"
-DEFAULT_BASE_DIR="/Users/david/hypha" # 默认扫描根目录
+DEFAULT_BASE_DIR=$(pwd -P) # 默认扫描启动脚本时的当前工作目录
 KEEP_LOG_ALWAYS=${SYNC_ALL_KEEP_LOG:-0}
 declare -a ALL_REPOS=()
 
@@ -15,6 +15,7 @@ print_usage() {
 用法: sync-all.sh [--dir 目录] [--max-depth 层级] [--dry-run] [--parallel 并行数] [--help]
 
 脚本会先执行 git_pull_all.sh，再执行 git_push_all.sh，参数会分别传递给对应脚本，并在结束时输出仓库同步清单。
+未指定 --dir 时，默认遍历当前工作目录。
 USAGE
 }
 
@@ -36,8 +37,12 @@ PARALLEL=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir)
-      shift || { echo "[ERROR] --dir 需要一个参数" >&2; exit 1; }
-      BASE_DIR="$1"
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "[ERROR] --dir 不能为空" >&2
+        exit 1
+      fi
+      BASE_DIR="$2"
+      shift
       ;;
     --max-depth)
       shift || { echo "[ERROR] --max-depth 需要一个数字" >&2; exit 1; }
@@ -63,13 +68,17 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-pull_args=()
-push_args=()
-
-if [[ -n "$BASE_DIR" ]]; then
-  pull_args+=("--dir" "$BASE_DIR")
-  push_args+=("--dir" "$BASE_DIR")
+if [[ -z "$BASE_DIR" ]]; then
+  BASE_DIR="$DEFAULT_BASE_DIR"
 fi
+
+if ! BASE_DIR=$(cd "$BASE_DIR" 2>/dev/null && pwd -P); then
+  echo "[ERROR] 无法进入目录: $BASE_DIR" >&2
+  exit 1
+fi
+
+pull_args=("--dir" "$BASE_DIR")
+push_args=("--dir" "$BASE_DIR")
 
 if [[ -n "$MAX_DEPTH" ]]; then
   pull_args+=("--max-depth" "$MAX_DEPTH")
@@ -134,10 +143,6 @@ fi
 push_rc=$?
 
 BASE_DIR_USED="$BASE_DIR"
-if [[ -z "$BASE_DIR_USED" ]]; then
-  BASE_DIR_USED="$DEFAULT_BASE_DIR"
-fi
-BASE_DIR_USED=$(cd "$BASE_DIR_USED" && pwd)
 MAX_DEPTH_VALUE=${MAX_DEPTH:-4}
 
 collect_repos() {

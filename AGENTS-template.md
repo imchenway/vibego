@@ -12,4 +12,4 @@
 - 用户提供任务编号时，文档命名为 docs/任务编号_任务描述.md；未提供时命名为 docs/TASK_YYYYMMDD_XXX_任务描述.md，XXX 为当天递增编号。
 
 ## Skill routing
-- 任何用户意图被完全澄清之前必须使用 skill： `grilling` + `domain-modeling`，其组合语义等价于 `grill-with-docs`；将已确定结论直接供后续设计、计划和实现复用。
+- 每个新任务都必须无条件先执行 `grilling` + `domain-modeling`，不得因自行判断用户意图已经清晰而跳过；必须完成这两个 skill 规定的澄清与用户确认流程后，才能进入设计、计划或实现。

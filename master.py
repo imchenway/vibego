@@ -5539,15 +5539,33 @@ async def _run_master_polling(dp: Dispatcher, bot: Bot) -> None:
         try:
             await dp.start_polling(bot)
             return
-        except TelegramNetworkError as exc:
+        except Exception as exc:  # noqa: BLE001 - 仅重试下方白名单内的传输异常
+            if not _is_retryable_telegram_polling_error(exc):
+                raise
             # bot.me()/getUpdates 在代理或 Telegram 瞬时不可达时可能于启动阶段抛出；
             # master 进程应保持存活并重试，而不是让 `vibego start` 后直接退出。
             log.warning(
-                "Master Telegram polling 网络异常，%.1f 秒后重试: %s",
+                "Master Telegram polling 网络异常(%s)，%.1f 秒后重试: %s",
+                type(exc).__name__,
                 MASTER_POLLING_RETRY_DELAY,
                 exc,
             )
             await asyncio.sleep(MASTER_POLLING_RETRY_DELAY)
+
+
+def _is_retryable_telegram_polling_error(exc: Exception) -> bool:
+    """识别 aiogram 未包装的 HTTP/SOCKS 传输异常。"""
+
+    if isinstance(exc, (TelegramNetworkError, ClientError, TimeoutError)):
+        return True
+
+    exc_type = type(exc)
+    proxy_module = exc_type.__module__.split(".", 1)[0]
+    return proxy_module in {"aiohttp_socks", "python_socks"} and exc_type.__name__ in {
+        "ProxyConnectionError",
+        "ProxyError",
+        "ProxyTimeoutError",
+    }
 
 
 if __name__ == "__main__":
